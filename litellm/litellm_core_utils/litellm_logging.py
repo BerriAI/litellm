@@ -36,17 +36,19 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm._uuid import uuid
-from litellm.batches.batch_utils import _handle_completed_batch
+from litellm.batches.batch_utils import _handle_completed_batch, batch_cost_is_final
 from litellm.caching.caching import DualCache, InMemoryCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    PROVIDER_REQUEST_ID_HEADERS,
     SENTRY_DENYLIST,
     SENTRY_PII_DENYLIST,
 )
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
+    ResponsesWebSocketTokenUsageProcessor,
     _select_model_name_for_cost_calc,
 )
 from litellm.exceptions import (
@@ -200,6 +202,7 @@ if TYPE_CHECKING:
     from mcp.types import EmbeddedResource, ImageContent, TextContent
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
@@ -254,6 +257,30 @@ else:
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = frozenset(StandardLoggingMetadata.__annotations__.keys())
+
+
+def _get_provider_request_id(original_exception: Exception) -> str | None:
+    try:
+        error_response: Final = getattr(original_exception, "response", None)
+        header_sources: Final = (
+            _get_response_headers(original_exception),
+            getattr(error_response, "headers", None),
+            getattr(original_exception, "litellm_response_headers", None),
+        )
+        return next(
+            (
+                str(value)
+                for expected_header_name in PROVIDER_REQUEST_ID_HEADERS
+                for headers in header_sources
+                if isinstance(headers, Mapping)
+                for header_name, value in headers.items()
+                if isinstance(header_name, str) and header_name.lower() == expected_header_name and value
+            ),
+            None,
+        )
+    except Exception:
+        return None
+
 
 ### GLOBAL VARIABLES ###
 
@@ -420,6 +447,13 @@ def _resolve_vertex_location_for_cost(
 def _provider_response_id(source: object) -> str | None:
     candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
     return candidate if isinstance(candidate, str) and candidate else None
+
+
+def mask_api_base_credentials(api_base: str) -> str:
+    if "key=" not in api_base:
+        return api_base
+    key_end: Final = api_base.find("key=") + 4
+    return api_base[:key_end] + "*" * 5 + api_base[-4:]
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -1164,14 +1198,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return data
 
     def _get_masked_api_base(self, api_base: str) -> str:
-        if "key=" in api_base:
-            # Find the position of "key=" in the string
-            key_index: Final = api_base.find("key=") + 4
-            # Mask the last 5 characters after "key="
-            masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
-        else:
-            masked_api_base = api_base
-        return str(masked_api_base)
+        return str(mask_api_base_credentials(api_base))
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
@@ -2001,6 +2028,17 @@ class Logging(LiteLLMLoggingBaseClass):
             logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
                 usage=combined_usage_object,
                 results=result,
+            )
+
+        elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+            combined_ws_usage: Final = (
+                ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
+                    results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                )
+            )
+            logging_result = LiteLLMRealtimeStreamLoggingObject(
+                usage=combined_ws_usage,
+                results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
             )
 
         elif (
@@ -2899,13 +2937,6 @@ class Logging(LiteLLMLoggingBaseClass):
             ):  # polling job will query these frequently, don't spam db logs
                 return
 
-            from litellm.proxy.openai_files_endpoints.common_utils import (
-                _is_base64_encoded_unified_file_id,
-            )
-
-            # check if file id is a unified file id
-            is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(result.id)
-
             batch_cost: Final = kwargs.get("batch_cost", None)
             batch_usage = kwargs.get("batch_usage", None)
             batch_models = kwargs.get("batch_models", None)
@@ -2913,15 +2944,26 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_failed_requests: Final = kwargs.get("batch_failed_requests", None)
             has_explicit_batch_data: Final = all(x is not None for x in (batch_cost, batch_usage, batch_models))
 
-            should_compute_batch_data: Final = (
-                not is_base64_unified_file_id or not has_explicit_batch_data and result.status == "completed"
-            )
+            should_compute_batch_data: Final = not has_explicit_batch_data and batch_cost_is_final(result)
             if has_explicit_batch_data:
                 result._hidden_params["response_cost"] = batch_cost
                 result._hidden_params["batch_models"] = batch_models
                 result._hidden_params["batch_successful_requests"] = batch_successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same result._hidden_params pattern as response_cost/batch_models above
                 result._hidden_params["batch_failed_requests"] = batch_failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_usage
+                batch_prompt_cost: Final = kwargs.get("batch_prompt_cost", None)
+                batch_completion_cost: Final = kwargs.get("batch_completion_cost", None)
+                if (
+                    isinstance(batch_prompt_cost, float)
+                    and isinstance(batch_completion_cost, float)
+                    and isinstance(batch_cost, float)
+                ):
+                    self.set_cost_breakdown(
+                        input_cost=batch_prompt_cost,
+                        output_cost=batch_completion_cost,
+                        total_cost=batch_cost,
+                        cost_for_built_in_tools_cost_usd_dollar=0.0,
+                    )
 
             elif should_compute_batch_data:
                 batch_result: Final = await _handle_completed_batch(
@@ -2937,6 +2979,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_successful_requests"] = batch_result.successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result._hidden_params["batch_failed_requests"] = batch_result.failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_result.usage
+                self.set_cost_breakdown(
+                    input_cost=batch_result.prompt_cost,
+                    output_cost=batch_result.completion_cost,
+                    total_cost=batch_result.cost,
+                    cost_for_built_in_tools_cost_usd_dollar=0.0,
+                )
 
         self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
             StandardLoggingPayloadSetup.append_system_prompt_messages(
@@ -3918,11 +3966,12 @@ class Logging(LiteLLMLoggingBaseClass):
             LiteLLMResponsesTransformationHandler,
         )
 
+        served_id: Final = _provider_response_id(result)
         try:
-            return LiteLLMResponsesTransformationHandler().transform_response(
+            translated: Final = LiteLLMResponsesTransformationHandler().transform_response(
                 model=self.model,
                 raw_response=result,
-                model_response=litellm.ModelResponse(id=_provider_response_id(result)),
+                model_response=litellm.ModelResponse(id=served_id),
                 logging_obj=self,
                 request_data={},
                 messages=[],
@@ -3930,6 +3979,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_params={},
                 encoding=litellm.encoding,
             )
+            translated.id = served_id or translated.id
+            return translated
         except Exception as e:
             verbose_logger.debug(
                 "Responses API -> ModelResponse translation failed for "
@@ -3937,7 +3988,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "usage-only ModelResponse to keep the spend_logs row.",
                 str(e),
             )
-            model_response: Final = litellm.ModelResponse(id=_provider_response_id(result))
+            model_response: Final = litellm.ModelResponse(id=served_id)
             model_response.model = self.model
             usage: Final = getattr(result, "usage", None)
             if usage is not None and ResponseAPILoggingUtils._is_response_api_usage(usage):
@@ -4800,29 +4851,81 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
 
     Returns ``None`` when V2 is off OR when there's no preset registered for
     ``callback_name`` — callers should then fall through to the legacy path.
+
+    A preset that needs operator credentials it cannot find is allowed to build
+    only when this request has a key/team destination for that backend and another
+    V2 logger is already registered to carry the fan-out. The resulting logger keeps
+    only its credential-gated exporter, while the registered logger owns operator
+    delivery. Without that carrier, a preset that raises or that ends up with nothing
+    but its gated exporter and the default console placeholder returns ``None``, so the
+    caller falls through to the legacy path exactly as before V2 landed.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
     if not is_otel_v2_enabled():
         return None
     from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
+    from litellm.integrations.otel.plumbing.context import destination_backends
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
     preset_fn: Final = PRESET_BY_CALLBACK.get(callback_name)
     if preset_fn is None:
         return None
+    serves_a_destination: Final = callback_name in destination_backends()
+    has_v2_logger: Final = any(isinstance(callback, OpenTelemetryV2) for callback in _in_memory_loggers)
+    carried: Final = serves_a_destination and has_v2_logger
     for callback in _in_memory_loggers:
-        if isinstance(callback, OpenTelemetryV2) and getattr(callback, "callback_name", None) == callback_name:
+        if (
+            isinstance(callback, OpenTelemetryV2)
+            and getattr(callback, "callback_name", None) == callback_name
+            and (serves_a_destination or not _exports_nowhere(callback.config))
+        ):
             return callback
     try:
-        config: Final = preset_fn()
+        built: Final = preset_fn(allow_missing_credentials=carried)
     except Exception:
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
+    gated: Final = _is_credential_gated(built)
+    if gated and not carried and not _has_operator_exporter(built):
+        return None
+    config: Final = _only_the_gated_exporter(built) if gated and carried else built
+    if _exports_nowhere(config):
+        verbose_logger.warning(
+            "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
+            callback_name,
+        )
     v2_logger: Final = build_otel_v2_logger(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger
+
+
+def _exports_nowhere(config: "OpenTelemetryV2Config") -> bool:
+    """Whether every exporter in ``config`` is waiting on credentials it never got."""
+    return all(_is_gated(spec) for spec in config.exporters)
+
+
+def _is_credential_gated(config: "OpenTelemetryV2Config") -> bool:
+    """Whether the preset built without the operator's own credentials for its backend."""
+    return any(_is_gated(spec) for spec in config.exporters)
+
+
+def _has_operator_exporter(config: "OpenTelemetryV2Config") -> bool:
+    """Whether the operator configured somewhere real to export, beyond the default console placeholder."""
+    from litellm.integrations.otel.presets.utils import is_unconfigured_placeholder
+
+    return any(not _is_gated(spec) and not is_unconfigured_placeholder(spec) for spec in config.exporters)
+
+
+def _only_the_gated_exporter(config: "OpenTelemetryV2Config") -> "OpenTelemetryV2Config":
+    return config.model_copy(
+        update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]}  # mutable-ok: model_copy update
+    )
+
+
+def _is_gated(spec: "ExporterSpec") -> bool:
+    return spec.requires_headers and not spec.headers
 
 
 def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list[CustomLogger]) -> None:
@@ -5670,13 +5773,15 @@ class StandardLoggingPayloadSetup:
         rate_limit_category: Final = validate_rate_limit_category(getattr(original_exception, "category", None))
         rate_limit_type: Final = validate_rate_limit_type(getattr(original_exception, "rate_limit_type", None))
         budget_error: Final = original_exception if isinstance(original_exception, BudgetExceededError) else None
+        provider_request_id: Final = _get_provider_request_id(original_exception) if original_exception else None
 
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,
             error_class=error_class,
             llm_provider=_llm_provider_in_exception,
-            traceback=traceback_info,
-            error_message=error_message,
+            traceback=_redact_string(traceback_info),
+            error_message=_redact_string(error_message),
+            error_provider_request_id=provider_request_id,
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
             error_budget_entity_type=budget_error.entity_type if budget_error else None,

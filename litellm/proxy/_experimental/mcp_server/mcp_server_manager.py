@@ -155,6 +155,7 @@ from litellm.proxy._types import (
     MCPTransportType,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    is_per_server_oauth_discovery_eligible,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -162,7 +163,10 @@ from litellm.proxy.common_utils.user_api_key_cache import get_management_object_
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     id_jag_assertion_capture_gap_at_startup,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
+from litellm.proxy.middleware.per_request_root_path_middleware import (
+    get_request_root_path,
+)
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import (
@@ -344,6 +348,7 @@ class MCPServerConfig(TypedDict, total=False):
     token_endpoint_auth_method: MCPTokenEndpointAuthMethod
     scopes: str | Sequence[str]
     dcr_bridge: object
+    per_server_oauth_discovery: ReadOnly[object]
     extra_headers: _StringList
     allowed_tools: _StringList
     disallowed_tools: _StringList
@@ -412,6 +417,31 @@ def _blank_to_none(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def _config_per_server_oauth_discovery(
+    server_config: MCPServerConfig,
+    server_ref: str,
+    auth_type: MCPAuthType | None,
+    oauth2_flow: object,
+) -> bool:
+    match server_config.get("per_server_oauth_discovery", False):
+        case bool() as enabled:
+            pass
+        case other:
+            raise ValueError(
+                f"Invalid config for MCP server '{server_ref}': per_server_oauth_discovery must be a boolean "
+                f"(got {other!r})."
+            )
+    relay_eligible: Final = is_per_server_oauth_discovery_eligible(
+        auth_type, oauth2_flow, server_config.get("delegate_auth_to_upstream", False)
+    )
+    if enabled and not relay_eligible:
+        raise ValueError(
+            f"Invalid config for MCP server '{server_ref}': per_server_oauth_discovery is only supported for "
+            "auth_type oauth2 with oauth2_flow authorization_code and without delegate_auth_to_upstream."
+        )
+    return enabled
 
 
 def _pinned_config_server_id(raw_server_id: object, server_name: str) -> str | None:
@@ -2307,6 +2337,9 @@ class MCPServerManager:
                 )
 
             config_dcr_bridge = server_config.get("dcr_bridge", None)
+            config_per_server_oauth_discovery = _config_per_server_oauth_discovery(
+                server_config, server_name or server_id, auth_type, config_oauth2_flow
+            )
             if config_dcr_bridge is not None and not isinstance(config_dcr_bridge, bool):
                 raise ValueError(
                     f"Invalid config for MCP server '{server_name or server_id}': dcr_bridge "
@@ -2378,6 +2411,7 @@ class MCPServerManager:
                 delegate_auth_to_upstream=bool(server_config.get("delegate_auth_to_upstream", False)),
                 oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
                 dcr_bridge=config_dcr_bridge,
+                per_server_oauth_discovery=config_per_server_oauth_discovery,
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -2903,6 +2937,7 @@ class MCPServerManager:
             delegate_auth_to_upstream=bool(getattr(mcp_server, "delegate_auth_to_upstream", False)),
             oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
             dcr_bridge=getattr(mcp_server, "dcr_bridge", None),
+            per_server_oauth_discovery=bool(getattr(mcp_server, "per_server_oauth_discovery", False)),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
@@ -3826,7 +3861,7 @@ class MCPServerManager:
                 if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):
                     # authorization_code's missing per-user token -> the per-server browser-OAuth
                     # challenge, built here where the full MCPServer is in hand.
-                    raise_user_oauth_challenge(server, root_path=get_server_root_path())
+                    raise_user_oauth_challenge(server, root_path=get_request_root_path())
                 if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728 challenge
                     # pointing at the IdP the client must SSO with to obtain one, rather than an opaque
@@ -3834,7 +3869,7 @@ class MCPServerManager:
                     # Access) threads its claims blob into the challenge for the client to satisfy.
                     raise_token_exchange_challenge(
                         server,
-                        root_path=get_server_root_path(),
+                        root_path=get_request_root_path(),
                         claims=err.unauthorized.claims,
                     )
                 raise_public(err)
@@ -3882,7 +3917,7 @@ class MCPServerManager:
         if spec is None or not isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
             return
         if subject_token is None and isinstance(spec.config, TokenExchangeConfig):
-            raise_token_exchange_challenge(resolved_server, root_path=get_server_root_path())
+            raise_token_exchange_challenge(resolved_server, root_path=get_request_root_path())
         match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
             case Ok(_):
                 return
@@ -3890,7 +3925,7 @@ class MCPServerManager:
                 if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     raise_token_exchange_challenge(
                         resolved_server,
-                        root_path=get_server_root_path(),
+                        root_path=get_request_root_path(),
                         claims=err.unauthorized.claims,
                     )
                 raise_public(err)
@@ -6237,8 +6272,7 @@ class MCPServerManager:
                 ]
             }
         )
-        db_mcp_servers: Final = [LiteLLM_MCPServerTable.model_validate(r.model_dump()) for r in raw_rows]
-        verbose_logger.info("Found %s MCP servers in database", len(db_mcp_servers))
+        verbose_logger.info("Found %s MCP servers in database", len(raw_rows))
 
         previous_registry: Final = self.registry
         new_registry: Final[dict[str, MCPServer]] = {}
@@ -6246,8 +6280,9 @@ class MCPServerManager:
         # Stage one: build every server.  Stage two assigns short prefixes
         # against the *full* set so dedup is deterministic regardless of
         # iteration order.
-        for server in db_mcp_servers:
+        for row in raw_rows:
             try:
+                server = LiteLLM_MCPServerTable.model_validate(row.model_dump())
                 existing_server = previous_registry.get(server.server_id)
 
                 if (
@@ -6285,8 +6320,8 @@ class MCPServerManager:
             except Exception as e:
                 verbose_logger.exception(
                     "Skipping MCP server %s (%s) during DB reload: %s",
-                    server.server_id,
-                    getattr(server, "alias", None),
+                    getattr(row, "server_id", None),
+                    getattr(row, "alias", None),
                     e,
                 )
 
@@ -6692,6 +6727,7 @@ class MCPServerManager:
             registration_url=server.configured_registration_url or server.registration_url,
             oauth2_flow=server.oauth2_flow,
             dcr_bridge=server.dcr_bridge,
+            per_server_oauth_discovery=server.per_server_oauth_discovery,
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,
             subject_token_type=server.subject_token_type,
@@ -6810,6 +6846,7 @@ class MCPServerManager:
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
             oauth_passthrough=getattr(server, "oauth_passthrough", False),
             dcr_bridge=server.dcr_bridge,
+            per_server_oauth_discovery=server.per_server_oauth_discovery,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

@@ -601,6 +601,12 @@ class CustomGuardrail(CustomLogger):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None,
         supported_event_hooks: list[GuardrailEventHooks],
     ) -> None:
+        allowed_hooks: Final = frozenset(supported_event_hooks) | (
+            frozenset((GuardrailEventHooks.logging_only,))
+            if self.uses_apply_guardrail_interface() and not self.use_native_lifecycle_hooks
+            else frozenset()
+        )
+
         def _validate_event_hook_list_is_in_supported_event_hooks(
             event_hook: list[GuardrailEventHooks] | list[str],
             supported_event_hooks: list[GuardrailEventHooks],
@@ -608,7 +614,7 @@ class CustomGuardrail(CustomLogger):
             for hook in event_hook:
                 if isinstance(hook, str):
                     hook = GuardrailEventHooks(hook)
-                if hook not in supported_event_hooks:
+                if hook not in allowed_hooks:
                     raise ValueError(f"Event hook {hook} is not in the supported event hooks {supported_event_hooks}")
 
         if event_hook is None:
@@ -629,7 +635,7 @@ class CustomGuardrail(CustomLogger):
                 default_list = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
                 _validate_event_hook_list_is_in_supported_event_hooks(default_list, supported_event_hooks)
         elif isinstance(event_hook, GuardrailEventHooks):
-            if event_hook not in supported_event_hooks:
+            if event_hook not in allowed_hooks:
                 raise ValueError(f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}")
 
     @staticmethod
@@ -773,7 +779,7 @@ class CustomGuardrail(CustomLogger):
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
-    def _deployment_pre_call_target(self) -> "CustomLogger":
+    def _deployment_hook_target(self) -> "CustomLogger":
         if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
         try:
@@ -802,7 +808,7 @@ class CustomGuardrail(CustomLogger):
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
-            target: Final = self._deployment_pre_call_target()
+            target: Final = self._deployment_hook_target()
             if target is not self:
                 kwargs["guardrail_to_apply"] = self
             result: Final = await target.async_pre_call_hook(
@@ -845,7 +851,9 @@ class CustomGuardrail(CustomLogger):
             return None
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
-        result: Final = await self.async_post_call_success_hook(
+        target: Final = self._deployment_hook_target()
+        hook_request_data: Final = {**request_data, "guardrail_to_apply": self} if target is not self else request_data
+        result: Final = await target.async_post_call_success_hook(
             user_api_key_dict=UserAPIKeyAuth(
                 user_id=request_data.get("user_api_key_user_id"),
                 team_id=request_data.get("user_api_key_team_id"),
@@ -853,7 +861,7 @@ class CustomGuardrail(CustomLogger):
                 api_key=request_data.get("user_api_key_hash"),
                 request_route=request_data.get("user_api_key_request_route"),
             ),
-            data=request_data,
+            data=hook_request_data,
             response=response,
         )
 

@@ -35,7 +35,6 @@ import litellm
 
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     HeadroomGuardrail,
-    extract_hashes_from_messages,
     has_headroom_retrieve_tool,
     HEADROOM_RETRIEVE_TOOL_NAME,
 )
@@ -93,7 +92,11 @@ def _make_guardrail(**kwargs) -> HeadroomGuardrail:
     return HeadroomGuardrail(**defaults)
 
 
-def _make_compress_response(messages: list, status: int = 200) -> MagicMock:
+def _make_compress_response(
+    messages: list,
+    status: int = 200,
+    ccr_hashes: list[str] | None = None,
+) -> MagicMock:
     mock = MagicMock()
     mock.status_code = status
     mock.json.return_value = {
@@ -102,6 +105,7 @@ def _make_compress_response(messages: list, status: int = 200) -> MagicMock:
         "tokens_after": 100,
         "compression_ratio": 0.1,
         "transforms_applied": ["router:smart_crusher:0.35"],
+        **({} if ccr_hashes is None else {"ccr_hashes": ccr_hashes}),
     }
     mock.text = ""
     return mock
@@ -335,7 +339,7 @@ async def test_apply_guardrail_injects_retrieve_tool_when_hashes_present(
         texts=["A" * 5000],
         structured_messages=ORIGINAL_MESSAGES,
     )
-    mock_response = _make_compress_response(COMPRESSED_MESSAGES_WITH_HASH)
+    mock_response = _make_compress_response(COMPRESSED_MESSAGES_WITH_HASH, ccr_hashes=["b573993006976af767214fac"])
 
     with patch.object(
         guardrail.async_handler,
@@ -390,7 +394,7 @@ async def test_apply_guardrail_preserves_existing_tools_when_injecting(
         structured_messages=ORIGINAL_MESSAGES,
         tools=[existing_tool],
     )
-    mock_response = _make_compress_response(COMPRESSED_MESSAGES_WITH_HASH)
+    mock_response = _make_compress_response(COMPRESSED_MESSAGES_WITH_HASH, ccr_hashes=["b573993006976af767214fac"])
 
     with patch.object(
         guardrail.async_handler,
@@ -489,17 +493,18 @@ async def test_async_build_agentic_loop_plan_calls_retrieve_and_builds_messages(
     original_content = "This is the full compressed content."
     mock_retrieve = _make_retrieve_response(original_content)
 
+    # Registered hashes are lowercase; a model may echo the marker's hex in uppercase.
     tool_calls = [
         {
             "id": "call_abc123",
             "type": "function",
             "name": HEADROOM_RETRIEVE_TOOL_NAME,
-            "arguments": {"hash": "b573993006976af767214fac"},
+            "arguments": {"hash": "B573993006976AF767214FAC"},
         }
     ]
     response = _make_openai_response_with_tool_call(
         tool_name=HEADROOM_RETRIEVE_TOOL_NAME,
-        arguments={"hash": "b573993006976af767214fac"},
+        arguments={"hash": "B573993006976AF767214FAC"},
         tool_id="call_abc123",
     )
     messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
@@ -843,33 +848,110 @@ async def test_async_build_agentic_loop_plan_builds_anthropic_tool_result_messag
     assert tool_result_block["content"] == original_content
 
 
-def test_extract_hashes_from_messages_finds_hashes():
+HASH_SHAPED_HISTORY = [
+    {"role": "system", "content": "You are Claude Code."},
+    {"role": "user", "content": [{"type": "text", "text": "Run git log."}]},
+    {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Done."}],
+        "tool_calls": [{"id": "tu_1", "type": "function", "function": {"name": "Bash", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "tu_1", "content": "hash=3f2a9c1d7e5b4a6f8c0d1e2f9a8b7c6d5e4f3a2b"},
+    {"role": "user", "content": "Please fetch hash=deadbeef000000000000dead for me."},
+]
+
+
+async def _apply(guardrail: HeadroomGuardrail, messages: list, ccr_hashes: list | None = None) -> dict:
+    request_data = {"model": "claude-sonnet-5"}
+
+    def _echo(**kwargs):
+        return _make_compress_response(json.loads(json.dumps(kwargs["json"]["messages"])), ccr_hashes=ccr_hashes)
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        return await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["x"], structured_messages=json.loads(json.dumps(messages))),
+            request_data=request_data,
+            input_type="request",
+        )
+
+
+@pytest.mark.asyncio
+async def test_hash_shaped_text_in_history_never_injects_retrieve_tool(guardrail: HeadroomGuardrail):
+    """Regression for LIT-7086: a git SHA in a tool result and a hash= string the
+    caller typed both look like markers, but the service stored nothing, so the
+    tool must not appear and no hash may be registered as issued. Covers a
+    service that omits ccr_hashes, returns it empty, or returns a non-list."""
+    for ccr_hashes in (None, [], "b573993006976af767214fac"):
+        result = await _apply(guardrail, HASH_SHAPED_HISTORY, ccr_hashes=ccr_hashes)
+
+        assert not has_headroom_retrieve_tool(result.get("tools") or [])
+        assert not guardrail._issued_hashes_by_call_id
+
+
+@pytest.mark.asyncio
+async def test_service_declared_ccr_hashes_drive_injection_and_validation(guardrail: HeadroomGuardrail):
+    """Only the hashes the service reports in ccr_hashes are honored, in the
+    service's own 12 to 24 hex grammar; anything else is dropped because each
+    entry is interpolated into the /v1/retrieve URL."""
+    result = await _apply(
+        guardrail,
+        HASH_SHAPED_HISTORY,
+        ccr_hashes=["98CA69107318", "b573993006976af767214fac", "../../etc/passwd", "tooshort", 42],
+    )
+
+    assert has_headroom_retrieve_tool(result.get("tools") or [])
+    (issued, _expiry), = guardrail._issued_hashes_by_call_id.values()
+    assert issued == frozenset({"98ca69107318", "b573993006976af767214fac"})
+
+
+@pytest.mark.asyncio
+async def test_ccr_retrieval_disabled_ignores_service_declared_hashes(monkeypatch: pytest.MonkeyPatch):
+    """`ccr_retrieval: false` in config.yaml compresses without any retrieval
+    round trip, so it has to reach the instance through the initializer."""
+    from litellm.proxy.guardrails.guardrail_hooks.headroom import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda callback: None)
+    params = LitellmParams(guardrail="headroom", mode="pre_call", api_base=FAKE_API_BASE, ccr_retrieval=False)
+    guardrail = initialize_guardrail(params, {"guardrail_name": "headroom", "litellm_params": params})
+
+    result = await _apply(guardrail, HASH_SHAPED_HISTORY, ccr_hashes=["b573993006976af767214fac"])
+
+    assert result["structured_messages"][-1] == HASH_SHAPED_HISTORY[-1]
+    assert not has_headroom_retrieve_tool(result.get("tools") or [])
+    assert not guardrail._issued_hashes_by_call_id
+
+
+@pytest.mark.asyncio
+async def test_anthropic_assistant_history_never_reaches_compression_service(guardrail: HeadroomGuardrail):
+    """The public Anthropic handler translates assistant content blocks to a
+    string before Headroom sees them, so model-authored rows must be excluded
+    from the compression payload rather than protected by their content shape."""
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    table = "| Guardrail | Model |\n|---|---|\n" + "\n".join(f"| gr-{i} | model-{i} |" for i in range(40))
     messages = [
-        {"role": "user", "content": "Retrieve more: hash=b573993006976af767214fac"},
-        {"role": "assistant", "content": "Also: hash=aabbccdd001122334455aabb"},
+        {"role": "user", "content": [{"type": "text", "text": "List the guardrails."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": table}]},
+        {"role": "user", "content": [{"type": "text", "text": "Earlier follow-up. " + "B" * 5000}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Noted."}]},
+        {"role": "user", "content": "Re-print the table."},
     ]
-    hashes = extract_hashes_from_messages(messages)
-    assert "b573993006976af767214fac" in hashes
-    assert "aabbccdd001122334455aabb" in hashes
+    sent: dict = {}
 
+    def _echo(**kwargs):
+        sent["messages"] = kwargs["json"]["messages"]
+        return _make_compress_response(json.loads(json.dumps(sent["messages"])))
 
-def test_extract_hashes_from_messages_ignores_short_hashes():
-    messages = [{"role": "user", "content": "hash=tooshort"}]
-    hashes = extract_hashes_from_messages(messages)
-    assert not hashes
+    data = {"model": "claude-sonnet-5", "messages": json.loads(json.dumps(messages))}
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        result = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
 
+    assert [row["role"] for row in sent["messages"]] == ["user", "user"]
+    assert sent["messages"][1]["content"] == "Earlier follow-up. " + "B" * 5000
+    assert table not in json.dumps(sent["messages"])
+    assert result["messages"][1]["content"] == [{"type": "text", "text": table}]
 
-def test_extract_hashes_from_list_content_blocks():
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "hash=b573993006976af767214fac found here"},
-            ],
-        }
-    ]
-    hashes = extract_hashes_from_messages(messages)
-    assert "b573993006976af767214fac" in hashes
 
 
 def test_has_headroom_retrieve_tool_recognizes_anthropic_native_shape():
@@ -1001,7 +1083,7 @@ async def test_responses_request_sends_compressed_input_and_retrieve_tool_upstre
         guardrail.async_handler,
         "post",
         new_callable=AsyncMock,
-        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH),
+        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH, ccr_hashes=["b573993006976af767214fac"]),
     ):
         result = await OpenAIResponsesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -1793,7 +1875,7 @@ async def test_apply_guardrail_restores_rewritten_all_text_row(
     )
     compressed = _echo_wire_view()
     compressed[0]["content"] = "compressed history. Retrieve more: hash=b573993006976af767214fac"
-    mock_response = _make_compress_response(compressed)
+    mock_response = _make_compress_response(compressed, ccr_hashes=["b573993006976af767214fac"])
 
     with patch.object(
         guardrail.async_handler,
@@ -1819,7 +1901,7 @@ async def test_apply_guardrail_restores_rewritten_all_text_row(
     assert history_content[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     # Mixed row passes through byte-identical.
     assert messages[2]["content"] == PARTS_MESSAGES[2]["content"]
-    # Hashes inside restored parts still drive retrieve-tool injection.
+    # The service-declared hash still drives retrieve-tool injection on a restored row.
     assert has_headroom_retrieve_tool(result.get("tools") or [])
 
 
@@ -2159,7 +2241,7 @@ async def test_pre_call_deployment_hook_converts_stream_after_deployment_level_c
         guardrail.async_handler,
         "post",
         new_callable=AsyncMock,
-        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH),
+        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH, ccr_hashes=["b573993006976af767214fac"]),
     ):
         result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
 
@@ -2345,7 +2427,11 @@ def test_sync_streaming_responses_resolves_ccr_retrieval_end_to_end(
 AGENTIC_MESSAGES = [
     {"role": "system", "content": "You are Claude Code. " + "S" * 5000},
     {"role": "user", "content": "H" * 5000},
-    {"role": "assistant", "content": "Older answer. " + "O" * 5000},
+    {
+        "role": "assistant",
+        "content": "Older answer. " + "O" * 5000,
+        "tool_calls": [{"id": "old_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+    },
     {"role": "tool", "tool_call_id": "old_1", "content": "older tool output " + "T" * 5000},
     {
         "role": "assistant",
@@ -2420,23 +2506,21 @@ async def test_history_is_still_compressed(guardrail: HeadroomGuardrail):
     """Negative control: protection must not turn compression into a no-op."""
     compressed_history = [
         {"role": "user", "content": "hist. hash=b573993006976af767214fac"},
-        {"role": "assistant", "content": "older. hash=a73993006976af767214fac1"},
         {"role": "tool", "tool_call_id": "old_1", "content": "older tool. hash=c73993006976af767214fac2"},
     ]
     wire, result = await _wire_and_result(guardrail, AGENTIC_MESSAGES, returned=compressed_history)
 
-    # Exactly the three history rows go to the service, in order.
-    assert [row["role"] for row in wire] == ["user", "assistant", "tool"]
+    # Older user and tool rows go to the service, in order. Every assistant row
+    # stays out, but the tool results those turns asked for remain compressible.
+    assert [row["role"] for row in wire] == ["user", "tool"]
     assert wire[0]["content"] == "H" * 5000
-    assert wire[2]["tool_call_id"] == "old_1"
+    assert wire[1]["tool_call_id"] == "old_1"
 
     messages = result["structured_messages"]
     assert len(messages) == len(AGENTIC_MESSAGES)
     assert messages[1] == compressed_history[0]
-    assert messages[2] == compressed_history[1]
-    assert messages[3] == compressed_history[2]
-    # Hashes in the compressed history still drive retrieve-tool injection.
-    assert has_headroom_retrieve_tool(result.get("tools") or [])
+    assert messages[2] == AGENTIC_MESSAGES[2]
+    assert messages[3] == compressed_history[1]
 
 
 # ---------------------------------------------------------------------------

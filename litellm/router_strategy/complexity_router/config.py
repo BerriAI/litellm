@@ -5,12 +5,20 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
-from collections.abc import Mapping
+import math
+import re
+import warnings
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    import sre_constants
+    import sre_parse
 
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
@@ -21,6 +29,7 @@ from .tier_predictor import TrainedTierArtifact
 class ComplexityTier(str, Enum):
     """Complexity tiers for routing decisions."""
 
+    NON_REASONING = "NON_REASONING"
     SIMPLE = "SIMPLE"
     MEDIUM = "MEDIUM"
     COMPLEX = "COMPLEX"
@@ -53,6 +62,16 @@ TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.COMPLEX,
     ComplexityTier.REASONING,
 )
+
+NON_REASONING_TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
+    ComplexityTier.NON_REASONING,
+    *TIER_SEVERITY_ORDER,
+)
+
+
+def tier_severity_order(non_reasoning_enabled: bool) -> tuple[ComplexityTier, ...]:
+    return NON_REASONING_TIER_SEVERITY_ORDER if non_reasoning_enabled else TIER_SEVERITY_ORDER
+
 
 DEFAULT_TIER_DISTANCE_PENALTY: Final[float] = 0.5
 
@@ -134,6 +153,9 @@ def normalize_classification_examples(value: str | None) -> str | None:
     return _normalize_operator_section(value, "classification_examples", MAX_CLASSIFICATION_EXAMPLES_CHARS)
 
 
+_BUILT_IN_TIER_NAMES: Final[str] = ", ".join(ComplexityTier.__members__)
+
+
 class TierDefinition(BaseModel):
     """An operator-defined tier: the name the LLM classifier must return and its rubric description."""
 
@@ -144,7 +166,7 @@ class TierDefinition(BaseModel):
         default=None,
         description=(
             "What belongs in this tier; rendered as this tier's bullet in the classifier rubric. "
-            "Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which "
+            f"Required unless the name is a built-in tier ({_BUILT_IN_TIER_NAMES}), which "
             "inherits the built-in criteria when omitted"
         ),
     )
@@ -166,7 +188,7 @@ class TierDefinition(BaseModel):
         if description is None and name.upper() not in ComplexityTier.__members__:
             raise ValueError(
                 f"tier_definitions entry {name!r} must have a description: only the built-in tiers "
-                "(SIMPLE, MEDIUM, COMPLEX, REASONING) carry one the rubric can inherit"
+                f"({_BUILT_IN_TIER_NAMES}) carry one the rubric can inherit"
             )
         rendered_on_one_line: Final = (name, description or "")
         if any("\n" in part or "\r" in part for part in rendered_on_one_line):
@@ -569,6 +591,125 @@ class ClassifierLLMConfig(BaseModel):
         return self
 
 
+MAX_CUSTOM_PATTERN_REPEAT: Final[int] = 64
+MAX_CUSTOM_PATTERN_WORK: Final[int] = 2048
+MAX_CUSTOM_DIMENSIONS_WORK: Final[int] = 8192
+MAX_CUSTOM_PATTERN_DEPTH: Final[int] = 16
+CUSTOM_PATTERN_SCAN_CHARS: Final[int] = 2048
+
+_ATOM_OPCODES: Final = frozenset(
+    {sre_constants.LITERAL, sre_constants.NOT_LITERAL, sre_constants.ANY, sre_constants.IN, sre_constants.CATEGORY}
+)
+_REPEAT_OPCODES: Final = frozenset({sre_constants.MAX_REPEAT, sre_constants.MIN_REPEAT})
+
+
+class _PatternCost(NamedTuple):
+    paths: int
+    steps: int
+
+
+def _atom_steps(node: object) -> int:
+    if isinstance(node, tuple) and len(node) == 2 and node[0] is sre_constants.IN:
+        return 1 + len(node[1])
+    return 1
+
+
+def _repeat_cost(argument: object) -> _PatternCost | str:
+    if not isinstance(argument, tuple) or len(argument) != 3:
+        return "unsupported repeat structure"
+    low, high, body = argument
+    if high > MAX_CUSTOM_PATTERN_REPEAT or len(body) != 1 or body[0][0] not in _ATOM_OPCODES:
+        return "requires a single character or class repeated at most 64 times; use {n,m} instead of *, + or {n,}"
+    choices: Final = high - low + 1
+    return _PatternCost(choices, 1 + high * _atom_steps(body[0]) + choices)
+
+
+def _node_cost(node: object, depth: int) -> _PatternCost | str:
+    if not isinstance(node, tuple) or len(node) != 2:
+        return "unsupported regex structure"
+    opcode, argument = node
+    if opcode in _ATOM_OPCODES or opcode is sre_constants.AT:
+        return _PatternCost(1, _atom_steps(node))
+    if opcode is sre_constants.SUBPATTERN:
+        return _sequence_cost(argument[-1], depth + 1)
+    if opcode is sre_constants.BRANCH:
+        costs: Final = tuple(_sequence_cost(branch, depth + 1) for branch in argument[1])
+        refused: Final = next((cost for cost in costs if isinstance(cost, str)), None)
+        if refused is not None:
+            return refused
+        return _PatternCost(
+            sum(cost.paths for cost in costs if isinstance(cost, _PatternCost)),
+            len(costs) + sum(cost.steps for cost in costs if isinstance(cost, _PatternCost)),
+        )
+    if opcode in _REPEAT_OPCODES:
+        return _repeat_cost(argument)
+    return "contains an unsupported regex construct"
+
+
+def _sequence_cost(nodes: Iterable[object], depth: int) -> _PatternCost | str:
+    if depth > MAX_CUSTOM_PATTERN_DEPTH:
+        return "nests deeper than 16 levels"
+    costs: Final = tuple(_node_cost(node, depth) for node in nodes)
+    refused: Final = next((cost for cost in costs if isinstance(cost, str)), None)
+    if refused is not None:
+        return refused
+    valid: Final = tuple(cost for cost in costs if isinstance(cost, _PatternCost))
+    # Choices multiply across a sequence; every continuation can execute once per preceding path.
+    total: Final = _PatternCost(
+        math.prod(cost.paths for cost in valid),
+        1 + sum(cost.steps * math.prod(prior.paths for prior in valid[:index]) for index, cost in enumerate(valid)),
+    )
+    if total.steps > MAX_CUSTOM_PATTERN_WORK:
+        return "exceeds the per-pattern regex work budget"
+    return total
+
+
+def custom_pattern_work(pattern: str) -> int | str:
+    try:
+        re.compile(pattern, re.IGNORECASE)
+        parsed: Final = sre_parse.parse(pattern, re.IGNORECASE)
+    except (re.error, RecursionError, OverflowError):
+        return "is not a valid regex"
+    cost: Final = _sequence_cost(tuple(parsed), 0)
+    return cost if isinstance(cost, str) else cost.steps
+
+
+class CustomDimension(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
+    weight: float = Field(gt=0, le=1, allow_inf_nan=False)
+    keywords: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=32)
+    patterns: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=32)
+    scoring_mode: Literal["binary", "match_count"] = Field(
+        default="binary",
+        description=(
+            "'binary' scores 1 when any matcher hits. 'match_count' scores 0.5 when one distinct matcher hits and 1 "
+            "when two or more do; repeated occurrences of one matcher never raise it. Keywords are distinct "
+            "case-insensitively, patterns by source, and a keyword and a pattern are always distinct from each other."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_matchers(self) -> "CustomDimension":
+        matchers: Final = (*self.keywords, *self.patterns)
+        if not matchers or any(not matcher.strip() for matcher in matchers):
+            raise ValueError("custom dimensions require nonblank keywords and/or patterns")
+        if len(matchers) > 32 or sum(map(len, matchers)) > 4096:
+            raise ValueError("custom dimensions allow at most 32 matchers and 4096 matcher characters each")
+        costs: Final = tuple((pattern, custom_pattern_work(pattern)) for pattern in self.patterns)
+        rejected: Final = tuple(f"pattern {pattern!r} {work}" for pattern, work in costs if isinstance(work, str))
+        if rejected:
+            raise ValueError("custom dimension " + "; ".join(rejected))
+        return self
+
+    def pattern_work(self) -> int:
+        """Combined work estimate of the validated patterns."""
+        return sum(
+            work for work in (custom_pattern_work(pattern) for pattern in self.patterns) if isinstance(work, int)
+        )
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -582,6 +723,20 @@ class ComplexityRouterConfig(BaseModel):
     )
     tier_model_configs: Mapping[str, tuple[ComplexityTierModel, ...]] = Field(
         default_factory=dict,
+    )
+
+    enable_non_reasoning_tier: bool = Field(
+        default=False,
+        description=(
+            "Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic "
+            "that relays or reformats information rather than reasoning about it. Off by default: "
+            "turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's "
+            "rubric, and a value the classifier may return, all of which move tier decisions and "
+            "spend on an already-deployed router. Requires an LLM classifier or a custom classifier "
+            "plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` "
+            "under the NON_REASONING key. Escalation still walks up from it, and it is never the "
+            "savings baseline or a `heuristic_v2` prediction."
+        ),
     )
 
     tier_definitions: tuple[TierDefinition, ...] | None = Field(
@@ -669,6 +824,20 @@ class ComplexityRouterConfig(BaseModel):
     dimension_weights: dict[str, float] = Field(
         default_factory=lambda: DEFAULT_DIMENSION_WEIGHTS.copy(),
         description="Weights for each scoring dimension",
+    )
+
+    custom_dimensions: tuple[CustomDimension, ...] = Field(
+        default=(),
+        max_length=16,
+        description=(
+            "Named dimensions added to the heuristic-v1 score. Each contributes its inline weight once "
+            "when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters; "
+            "scoring_mode 'match_count' instead grades half weight for one distinct matcher and full for two or more. "
+            "Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, "
+            "backreferences and lookarounds are rejected. Conservative work limits include alternation paths, "
+            "repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. "
+            "Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota."
+        ),
     )
 
     # Keyword lists (overridable)
@@ -946,6 +1115,20 @@ class ComplexityRouterConfig(BaseModel):
             "Additional case-sensitive literal sentinels that mark a request as plan mode, on "
             "top of the built-in Claude Code and Copilot ones. For clients whose plan-mode "
             "wording the built-ins don't cover, or after a client release changes its strings."
+        ),
+    )
+    max_tokens_from_tier_model: bool = Field(
+        default=True,
+        description=(
+            "Set max_tokens on every routed request to the output ceiling of the tier model it "
+            "lands on, replacing whatever the caller sent. A caller behind an auto-router cannot "
+            "pick one value that fits every tier: the smallest tier's ceiling starves a bigger "
+            "tier's thinking budget, and a bigger tier's ceiling is rejected by the smallest. The "
+            "ceiling is the smallest max_output_tokens across the tier model's deployments, read "
+            "from each deployment's model_info and then the model cost map; a tier model with a "
+            "deployment whose ceiling is unknown keeps the caller's value. A max_tokens, "
+            "max_completion_tokens or max_output_tokens in the tier's own litellm_params still "
+            "wins. Set false to forward the caller's value unchanged."
         ),
     )
     route_housekeeping_to_cheapest_tier: bool = Field(
@@ -1245,6 +1428,27 @@ class ComplexityRouterConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_custom_dimensions(self) -> "ComplexityRouterConfig":
+        if not self.custom_dimensions:
+            return self
+        if self.classifier_type not in ("heuristic", "heuristic_first", "hybrid"):
+            raise ValueError("custom_dimensions requires classifier_type heuristic, heuristic_first or hybrid")
+        names: Final = tuple(dimension.name.casefold() for dimension in self.custom_dimensions)
+        reserved: Final = frozenset(name.casefold() for name in DEFAULT_DIMENSION_WEIGHTS)
+        weighted: Final = frozenset(name.casefold() for name in self.dimension_weights)
+        if len(frozenset(names)) != len(names) or frozenset(names) & reserved:
+            raise ValueError("custom dimension names must be unique and must not shadow built-in dimensions")
+        if frozenset(names) & weighted:
+            raise ValueError("custom dimension weights must be inline, not in dimension_weights")
+        work: Final = sum(dimension.pattern_work() for dimension in self.custom_dimensions)
+        if work > MAX_CUSTOM_DIMENSIONS_WORK:
+            raise ValueError(
+                f"custom_dimensions regex work estimate is {work}; the limit across the router is "
+                f"{MAX_CUSTOM_DIMENSIONS_WORK}"
+            )
+        return self
+
     @field_validator("heuristic_first_max_tier", mode="before")
     @classmethod
     def _coerce_heuristic_first_max_tier(cls, value: object) -> object:
@@ -1338,11 +1542,15 @@ class ComplexityRouterConfig(BaseModel):
         which still makes it a dependency on every one of those requests."""
         return self.classifier_type in LLM_CLASSIFIER_TYPES
 
+    def active_tier_severity_order(self) -> tuple[ComplexityTier, ...]:
+        """This router's built-in ladder, ascending; not meaningful for a custom tier set."""
+        return tier_severity_order(self.enable_non_reasoning_tier)
+
     def tier_names(self) -> tuple[str, ...]:
         """The active tier names: the defined names, or the built-in set in severity order."""
         if self.tier_definitions is not None:
             return tuple(definition.name for definition in self.tier_definitions)
-        return tuple(tier.value for tier in TIER_SEVERITY_ORDER)
+        return tuple(tier.value for tier in self.active_tier_severity_order())
 
     def classifier_wire_labels(self) -> tuple[str, ...]:
         """The tier names the classifier is told to emit: defined names, or the display labels."""
@@ -1435,6 +1643,36 @@ class ComplexityRouterConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_non_reasoning_tier(self) -> "ComplexityRouterConfig":
+        """Require a classifier that can emit the opt-in tier and a model to route it to."""
+        non_reasoning_key: Final = ComplexityTier.NON_REASONING.value
+        if not self.enable_non_reasoning_tier:
+            if not self.has_custom_tiers and non_reasoning_key in self.tiers:
+                raise ValueError(
+                    f"tiers names {non_reasoning_key} but enable_non_reasoning_tier is False, so no request "
+                    "can route there; set enable_non_reasoning_tier: true or drop the tier"
+                )
+            return self
+        if self.has_custom_tiers:
+            raise ValueError(
+                "enable_non_reasoning_tier cannot be combined with tier_definitions: a custom tier set "
+                f"replaces the built-in ladder, so name a tier {non_reasoning_key} in tier_definitions instead"
+            )
+        if self.classifier_type not in ("llm", "custom"):
+            raise ValueError(
+                f"enable_non_reasoning_tier requires classifier_type 'llm' or 'custom', got "
+                f"{self.classifier_type!r}: the heuristic scorers only produce the four tiers from SIMPLE up, "
+                f"so nothing would ever classify as {non_reasoning_key}"
+            )
+        if not self.tiers.get(non_reasoning_key):
+            raise ValueError(
+                f"enable_non_reasoning_tier requires tiers to map {non_reasoning_key} to at least one model: "
+                "the tier exists to send operational traffic somewhere cheaper, and an unconfigured tier "
+                "would fall through to the default model"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_tier_definitions(self) -> "ComplexityRouterConfig":
         if self.tier_definitions is None:
             if self.fallback_tier is not None:
@@ -1456,7 +1694,7 @@ class ComplexityRouterConfig(BaseModel):
         if self.classifier_type in ("heuristic", "heuristic_v2", "heuristic_first", "hybrid"):
             raise ValueError(
                 "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
-                "produces the four built-in tiers, as does heuristic_v2"
+                "produces the built-in tiers from SIMPLE up, as does heuristic_v2"
             )
         conflicts: Final = self._tier_definition_conflicts()
         if conflicts:
@@ -1610,7 +1848,7 @@ class ComplexityRouterConfig(BaseModel):
 
     def labeled_tiers(self) -> tuple[tuple[ComplexityTier, str], ...]:
         """Every tier paired with its display name, in ascending severity order."""
-        return tuple((tier, self.tier_label(tier)) for tier in TIER_SEVERITY_ORDER)
+        return tuple((tier, self.tier_label(tier)) for tier in self.active_tier_severity_order())
 
     def tier_for_label(self, label: str) -> ComplexityTier | None:
         """Resolve a display name back to its tier, case-insensitively, then canonical names."""
@@ -1618,7 +1856,7 @@ class ComplexityRouterConfig(BaseModel):
         labeled: Final = self.labeled_tiers()
         return next(
             (tier for tier, tier_label in labeled if tier_label.casefold() == folded),
-            next((tier for tier in TIER_SEVERITY_ORDER if tier.value.casefold() == folded), None),
+            next((tier for tier, _ in labeled if tier.value.casefold() == folded), None),
         )
 
 
