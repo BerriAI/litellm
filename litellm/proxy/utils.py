@@ -91,7 +91,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
-from litellm.litellm_core_utils.call_custom_hook import call_custom_hook
+from litellm.litellm_core_utils.call_custom_hook import call_custom_hook, should_run_hook_for_callback
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     independent_snapshot,
@@ -3321,6 +3321,14 @@ class ProxyLogging:
                     is not True
                 ):
                     continue
+            if not should_run_hook_for_callback(
+                resolved_callback,
+                "async_post_call_streaming_iterator_hook",
+                model=request_data.get("model"),
+                key_alias=user_api_key_dict.key_alias,
+                request_tags=_get_request_tags_for_hook_filters(request_data),
+            ):
+                continue
             effective_kind = (
                 "apply_guardrail"
                 if (

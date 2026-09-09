@@ -698,3 +698,69 @@ async def test_post_call_response_headers_hook_runs_when_hook_filters_model_matc
     )
     assert len(calls) == 1
     assert out == {"x-test": "1"}
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_streaming_iterator_hook_skipped_when_hook_filters_model_excludes(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+
+    class _IterOverride(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, **kwargs):  # type: ignore[override]
+            async for ch in kwargs["response"]:
+                yield ch + "*"
+
+    cb = _IterOverride()
+    cb.hook_filters = parse_hook_filters(
+        "cb", {"async_post_call_streaming_iterator_hook": {"models": ["claude-*"]}}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    async def gen():
+        for ch in ("a", "b"):
+            yield ch
+
+    out: List[str] = []
+    async for ch in proxy_logging.async_post_call_streaming_iterator_hook(
+        response=gen(),
+        user_api_key_dict=make_user_api_key_auth(),
+        request_data={"model": "gpt-4o"},
+    ):
+        out.append(ch)
+    assert out == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_streaming_iterator_hook_runs_when_hook_filters_model_matches(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+
+    class _IterOverride(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, **kwargs):  # type: ignore[override]
+            async for ch in kwargs["response"]:
+                yield ch + "*"
+
+    cb = _IterOverride()
+    cb.hook_filters = parse_hook_filters(
+        "cb", {"async_post_call_streaming_iterator_hook": {"models": ["gpt-4o*"]}}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    async def gen():
+        for ch in ("a", "b"):
+            yield ch
+
+    out: List[str] = []
+    async for ch in proxy_logging.async_post_call_streaming_iterator_hook(
+        response=gen(),
+        user_api_key_dict=make_user_api_key_auth(),
+        request_data={"model": "gpt-4o"},
+    ):
+        out.append(ch)
+    assert out == ["a*", "b*"]

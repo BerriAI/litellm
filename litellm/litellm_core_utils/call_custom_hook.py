@@ -5,15 +5,23 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.hook_filter_utils import should_run_hook_for_filters
 
 
-def _should_run(
+def should_run_hook_for_callback(
     callback: CustomLogger,
     hook_name: str,
     *,
     model: str | None,
-    key_alias: str | None,
-    model_tags: tuple[str, ...],
-    request_tags: tuple[str, ...],
+    key_alias: str | None = None,
+    model_tags: tuple[str, ...] = (),
+    request_tags: tuple[str, ...] = (),
 ) -> bool:
+    """
+    Whether ``hook_name`` on ``callback`` should run for this request, per
+    ``callback``'s own ``hook_filters`` config. Exposed publicly (not just used
+    internally by ``call_custom_hook``) for hook shapes that don't fit that
+    dispatcher's await-a-coroutine signature -- e.g. an async-generator-returning
+    hook, where the caller must skip invoking the callback entirely rather than
+    await its result.
+    """
     if not litellm.enable_hook_filters:
         return True
     hook_filter: Final = None if callback.hook_filters is None else callback.hook_filters.get(hook_name)
@@ -44,7 +52,7 @@ async def call_custom_hook(
     differs from the one holding the config: ProxyLogging's unified-guardrail
     wrapper. It defaults to ``callback`` itself.
     """
-    if not _should_run(
+    if not should_run_hook_for_callback(
         callback, hook_name, model=model, key_alias=key_alias, model_tags=model_tags, request_tags=request_tags
     ):
         return None
@@ -66,7 +74,7 @@ def call_custom_hook_sync(
     **hook_kwargs: object,  # kwargs-ok: forwards arbitrary, hook-specific kwargs to the named hook method
 ) -> object:
     """Sync counterpart to call_custom_hook, for the sync hook methods (log_success_event, logging_hook)."""
-    if not _should_run(
+    if not should_run_hook_for_callback(
         callback, hook_name, model=model, key_alias=key_alias, model_tags=model_tags, request_tags=request_tags
     ):
         return None
