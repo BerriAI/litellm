@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
+import { makeAnthropicMessagesRequest } from "../../llm_calls/anthropic_messages";
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
@@ -12,6 +13,10 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
 
 vi.mock("@/components/llm_calls/chat_completion", () => ({
   makeOpenAIChatCompletionRequest: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../../llm_calls/anthropic_messages", () => ({
+  makeAnthropicMessagesRequest: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/components/networking", () => ({
@@ -32,6 +37,8 @@ beforeEach(() => {
 
 const CHAT_REQUEST_ARG_COUNT = 26;
 const STREAMING_ENABLED_ARG_INDEX = 25;
+const MESSAGES_REQUEST_ARG_COUNT = 19;
+const MESSAGES_STREAMING_ENABLED_ARG_INDEX = 18;
 
 async function openComboboxByPlaceholder(placeholder: string) {
   const user = userEvent.setup();
@@ -376,6 +383,52 @@ describe("ChatUI", () => {
     const requestArgs = vi.mocked(makeOpenAIChatCompletionRequest).mock.calls[0];
     expect(requestArgs).toHaveLength(CHAT_REQUEST_ARG_COUNT);
     expect(requestArgs[STREAMING_ENABLED_ARG_INDEX]).toBe(false);
+  });
+
+  it("should send the /v1/messages request non-streaming after Stream responses is unchecked", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    await selectComboboxOption("Select an endpoint", "/v1/messages");
+    await selectComboboxOption("Select a Model", "Model 1");
+
+    await user.click(await screen.findByTestId("model-settings-button"));
+
+    const streamingCheckbox = await screen.findByRole("checkbox", { name: /Stream responses/i });
+    expect(streamingCheckbox).toBeChecked();
+    await user.click(streamingCheckbox);
+
+    await waitFor(() => {
+      expect(screen.getByRole("checkbox", { name: /Stream responses/i })).not.toBeChecked();
+    });
+
+    const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+    await act(async () => {
+      fireEvent.change(messageInput, { target: { value: "hello" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+    });
+
+    await waitFor(() => {
+      expect(makeAnthropicMessagesRequest).toHaveBeenCalledTimes(1);
+    });
+
+    const requestArgs = vi.mocked(makeAnthropicMessagesRequest).mock.calls[0];
+    expect(requestArgs).toHaveLength(MESSAGES_REQUEST_ARG_COUNT);
+    expect(requestArgs[MESSAGES_STREAMING_ENABLED_ARG_INDEX]).toBe(false);
   });
 
   it("should force streaming in simplified mode even when the playground setting is off", async () => {
