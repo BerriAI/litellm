@@ -15,6 +15,7 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     SETTINGS_FILE_OWNERS,
     ClaudeSettingsError,
     SettingsFileOwner,
+    lite_api_key_helper_configured,
     resolve_api_key_helper,
     write_claude_settings,
 )
@@ -357,3 +358,45 @@ class TestDoesNotDestroyUserOwnedStructure:
             write_claude_settings("https://proxy.example.com", settings_path, _owners(backup_path))
 
         assert json.loads(settings_path.read_text())["env"] == "not-an-object"
+
+
+class TestLiteApiKeyHelperConfigured:
+    def _settings(self, tmp_path, payload):
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(payload)
+        return settings_path
+
+    def test_recognises_the_helper_lite_login_wrote_for_this_proxy(self, tmp_path, lite_on_path):
+        settings_path = tmp_path / "settings.json"
+        write_claude_settings("https://proxy.example.com/", settings_path, ())
+
+        assert lite_api_key_helper_configured("https://proxy.example.com/", settings_path) is True
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is True
+
+    def test_a_helper_for_another_proxy_does_not_count(self, tmp_path, lite_on_path):
+        settings_path = tmp_path / "settings.json"
+        write_claude_settings("https://other.example.com", settings_path, ())
+
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False
+
+    def test_a_hand_written_helper_does_not_count(self, tmp_path, lite_on_path):
+        settings_path = self._settings(tmp_path, json.dumps({"apiKeyHelper": "cat ~/.my-proxy-key"}))
+
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False
+
+    def test_missing_or_helperless_settings_do_not_count(self, tmp_path, lite_on_path):
+        assert lite_api_key_helper_configured("https://proxy.example.com", tmp_path / "absent.json") is False
+        helperless = json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://proxy.example.com"}})
+        settings_path = self._settings(tmp_path, helperless)
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False
+
+    def test_unreadable_settings_fall_back_to_false(self, tmp_path, lite_on_path):
+        settings_path = self._settings(tmp_path, "{not json")
+
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False
+
+    def test_lite_missing_from_path_falls_back_to_false(self, tmp_path):
+        helper = "/usr/local/bin/lite --base-url https://proxy.example.com auth print-token"
+        settings_path = self._settings(tmp_path, json.dumps({"apiKeyHelper": helper}))
+        with patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value=None):
+            assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False

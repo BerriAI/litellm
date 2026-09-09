@@ -121,6 +121,19 @@ def resolve_api_key_helper(base_url: str, platform: str = sys.platform) -> str:
     return " ".join(quote(token) for token in (lite_path, "--base-url", base_url, "auth", "print-token"))
 
 
+def lite_api_key_helper_configured(base_url: str, settings_path: Path) -> bool:
+    """Whether settings_path already carries the apiKeyHelper `lite login --config-claude` writes for base_url.
+
+    Only an exact match counts: a helper for another proxy, a hand-written one, or
+    settings that cannot be read leave the caller on the env-token path.
+    """
+    try:
+        configured_helper: Final = load_json_or_empty(settings_path).get(API_KEY_HELPER_KEY)
+        return configured_helper == resolve_api_key_helper(base_url.rstrip("/"))
+    except ClaudeSettingsError:
+        return False
+
+
 def write_claude_settings(base_url: str, settings_path: Path, owners: Sequence[SettingsFileOwner]) -> None:
     """Persistently point Claude Code at base_url, preserving every unrelated setting.
 
@@ -169,6 +182,7 @@ __all__ = (
     "SETTINGS_FILE_OWNERS",
     "ClaudeSettingsError",
     "SettingsFileOwner",
+    "lite_api_key_helper_configured",
     "load_json_or_empty",
     "merge_claude_settings",
     "resolve_api_key_helper",
