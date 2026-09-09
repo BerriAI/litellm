@@ -415,13 +415,16 @@ def poll_until_guardrail_applied(
     sleep: Callable[[float], None] = time.sleep,
 ) -> StreamingResponse:
     deadline: Final = now() + timeout
+    if not (result := call()).ok:
+        return result
     while (
-        (result := call()).ok
-        and guardrail_name
+        guardrail_name
         not in (name.strip() for name in result.headers.get("x-litellm-applied-guardrails", "").split(","))
         and (remaining := deadline - now()) > 0
     ):
         sleep(min(interval, remaining))
+        if now() >= deadline or not (result := call()).ok:
+            break
     return result
 
 

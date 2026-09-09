@@ -40,13 +40,16 @@ def test_waits_for_requested_guardrail_after_an_unrelated_global_guardrail() -> 
 def test_missing_exact_guardrail_returns_failure_evidence_at_deadline(applied: str) -> None:
     clock: Final = Clock()
     missing: Final = _response(applied)
+    responses: Final = iter((missing, missing, missing))
 
     result: Final = poll_until_guardrail_applied(
-        lambda: missing, "tool-permission", timeout=5, interval=2, now=clock.now, sleep=clock.sleep
+        lambda: next(responses), "tool-permission", timeout=5, interval=2, now=clock.now, sleep=clock.sleep
     )
 
     assert result is missing
     assert clock.elapsed == 5
+    with pytest.raises(StopIteration):
+        next(responses)
 
 
 @pytest.mark.parametrize("status", (400, 401, 429, 500))
