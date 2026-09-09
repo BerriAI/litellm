@@ -32,6 +32,7 @@ from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.rust_bridge.bindings import native_exception_types
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CustomPricingLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -171,6 +172,7 @@ def _prepare_ocr_request(
         litellm_params={
             "litellm_call_id": litellm_call_id,
             "api_base": api_base,
+            **litellm_params.model_dump(include=frozenset(CustomPricingLiteLLMParams.model_fields), exclude_none=True),
         },
         custom_llm_provider=custom_llm_provider,
     )
