@@ -1004,7 +1004,7 @@ class TestPasswordResetRequiredSessionMinting:
 
     async def _login(self, mock_prisma_client) -> tuple[LoginResult, dict]:
         with patch.dict(os.environ, _DB_LOGIN_ENV):
-            with patch(
+            with patch(  # test-quality-ok: asserting the minted key's restriction requires seeing its kwargs
                 "litellm.proxy.auth.login_utils.generate_key_helper_fn",
                 new_callable=AsyncMock,
                 return_value={"token": "session-token"},
