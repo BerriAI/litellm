@@ -18,10 +18,17 @@ pyo3::create_exception!(
 
 pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     match err.kind() {
-        ErrorKind::Auth | ErrorKind::InvalidProvider | ErrorKind::InvalidRequest
-        | ErrorKind::InvalidType | ErrorKind::MissingField => PyValueError::new_err(err.to_string()),
-        ErrorKind::InvalidResponse | ErrorKind::Http | ErrorKind::Network | ErrorKind::Connect
-        | ErrorKind::Routing | ErrorKind::Unsupported => PyRuntimeError::new_err(err.to_string()),
+        ErrorKind::Auth
+        | ErrorKind::InvalidProvider
+        | ErrorKind::InvalidRequest
+        | ErrorKind::InvalidType
+        | ErrorKind::MissingField => PyValueError::new_err(err.to_string()),
+        ErrorKind::InvalidResponse
+        | ErrorKind::Http
+        | ErrorKind::Network
+        | ErrorKind::Connect
+        | ErrorKind::Routing
+        | ErrorKind::Unsupported => PyRuntimeError::new_err(err.to_string()),
     }
 }
 
@@ -36,9 +43,14 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
         return RustUpstreamError::new_err((status, format!("{status}: {body}")));
     }
     match err.kind() {
-        ErrorKind::Unsupported | ErrorKind::Auth | ErrorKind::InvalidProvider
-        | ErrorKind::InvalidRequest | ErrorKind::InvalidType | ErrorKind::MissingField
-        | ErrorKind::Routing | ErrorKind::Connect => RustBridgeDeclined::new_err(err.to_string()),
+        ErrorKind::Unsupported
+        | ErrorKind::Auth
+        | ErrorKind::InvalidProvider
+        | ErrorKind::InvalidRequest
+        | ErrorKind::InvalidType
+        | ErrorKind::MissingField
+        | ErrorKind::Routing
+        | ErrorKind::Connect => RustBridgeDeclined::new_err(err.to_string()),
         ErrorKind::Http | ErrorKind::Network | ErrorKind::InvalidResponse => {
             RustUpstreamError::new_err((0u16, err.to_string()))
         }
@@ -54,9 +66,9 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
     match err {
         Error::MissingField("document_url" | "image_url")
-        | Error::OcrRequest(litellm_core::ocr::error::OcrRequestError::MissingField("document_url" | "image_url")) => {
-            PyValueError::new_err("Document URL is required")
-        }
+        | Error::OcrRequest(litellm_core::ocr::error::OcrRequestError::MissingField(
+            "document_url" | "image_url",
+        )) => PyValueError::new_err("Document URL is required"),
         Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
         other => core_error_to_pyerr(other),
     }
@@ -108,8 +120,11 @@ mod chat_error_tests {
                 let mapped = chat_completions_error_to_pyerr(error.into());
                 assert!(mapped.is_instance_of::<RustUpstreamError>(py));
                 assert!(!mapped.is_instance_of::<RustBridgeDeclined>(py));
-                let (status, _): (u16, String) = mapped.value(py).getattr("args")
-                    .and_then(|args| args.extract()).expect("upstream error arguments");
+                let (status, _): (u16, String) = mapped
+                    .value(py)
+                    .getattr("args")
+                    .and_then(|args| args.extract())
+                    .expect("upstream error arguments");
                 assert_eq!(status, 0);
             }
             let mapped = chat_completions_error_to_pyerr(ChatRequestError::EmptyMessages.into());

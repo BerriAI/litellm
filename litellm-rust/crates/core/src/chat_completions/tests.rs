@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use crate::error::{AuthError, Error};
+use crate::error::Error;
 
 use super::prepare::{prepare_provider_request, resolve_request};
 use super::transformation::ChatCompletionsAuth;
@@ -800,14 +800,17 @@ mod round_trip {
 
     #[test]
     fn response_error_preserves_its_cause_and_post_send_classification() {
-        use std::error::Error as _;
         use crate::chat_completions::error::ChatResponseError;
         use crate::error::ErrorKind;
+        use std::error::Error as _;
 
         let error = Error::from(ChatResponseError::MissingField("usage"));
         assert_eq!(error.kind(), ErrorKind::InvalidResponse);
-        assert_eq!(error.source().and_then(|source| source.downcast_ref::<ChatResponseError>()),
-            Some(&ChatResponseError::MissingField("usage")));
+        assert_eq!(
+            error
+                .source()
+                .and_then(|source| source.downcast_ref::<ChatResponseError>()),
+            Some(&ChatResponseError::MissingField("usage"))
+        );
     }
-
 }

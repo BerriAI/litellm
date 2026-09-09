@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
@@ -10,18 +12,16 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, HeaderName};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{Sink, SinkExt, Stream, StreamExt};
 
 use litellm_core::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
 use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
 use litellm_core::{AuthError, Error};
 
-use crate::io::tls::connect_upstream;
 use crate::constants::{
     DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS, DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS,
 };
+use crate::io::tls::connect_upstream;
 
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
@@ -120,7 +120,9 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(AuthError::MissingCredential(MissingCredential::OpenAiResponsesApiKey)))
+        .ok_or(Error::Auth(AuthError::MissingCredential(
+            MissingCredential::OpenAiResponsesApiKey,
+        )))
 }
 
 async fn dial_upstream(

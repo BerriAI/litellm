@@ -1,5 +1,5 @@
-use crate::chat_completions::error::{ChatRequestError, ChatResponseError};
 use crate::Error;
+use crate::chat_completions::error::{ChatRequestError, ChatResponseError};
 use serde_json::{Map, Value};
 
 use super::types::{

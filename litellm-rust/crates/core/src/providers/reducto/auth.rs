@@ -32,7 +32,9 @@ pub fn resolve_api_key(
                 .map(|key| key.trim().to_string())
                 .filter(|key| !key.is_empty())
         })
-        .ok_or_else(|| AuthError::MissingCredential(MissingCredential::ReductoApiKey))
+        .ok_or(AuthError::MissingCredential(
+            MissingCredential::ReductoApiKey,
+        ))
 }
 
 pub fn validate_environment(
@@ -45,9 +47,7 @@ pub fn validate_environment(
     }
     let credential =
         ResolvedCredential::Static(SecretValue::new(resolve_api_key(api_key, env_lookup)?));
-    AUTH_POLICY
-        .apply(headers, CredentialPlanKind::Static, &credential)
-        
+    AUTH_POLICY.apply(headers, CredentialPlanKind::Static, &credential)
 }
 
 #[cfg(test)]

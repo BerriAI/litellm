@@ -160,7 +160,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         let body = response
             .body
             .as_object()
-            .ok_or_else(|| ChatResponseError::NotObject { api: "messages" })?;
+            .ok_or(ChatResponseError::NotObject { api: "messages" })?;
 
         let content = body
             .get("content")

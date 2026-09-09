@@ -22,9 +22,9 @@ pub fn resolve_anthropic_api_key(
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| {
-            Error::Auth(AuthError::MissingCredential(MissingCredential::AnthropicApiKey))
-        })
+        .ok_or(Error::Auth(AuthError::MissingCredential(
+            MissingCredential::AnthropicApiKey,
+        )))
 }
 
 pub fn complete_anthropic_url(

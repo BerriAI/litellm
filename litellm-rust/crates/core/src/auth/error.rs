@@ -69,41 +69,55 @@ pub enum AuthConfigurationError {
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum MissingCredential {
-    #[error("Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY environment variable")]
+    #[error(
+        "Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY environment variable"
+    )]
     AnthropicApiKey,
     #[error("Missing Azure API Key - Set `api_key` or the AZURE_API_KEY environment variable")]
     AzureApiKey,
-    #[error("Missing Azure API Base - Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic")]
+    #[error(
+        "Missing Azure API Base - Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
+    )]
     AzureApiBase,
-    #[error("Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()")]
+    #[error(
+        "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
+    )]
     ReductoApiKey,
-    #[error("Missing OpenAI API Key - a realtime call is being made but no key was passed via params or the OPENAI_API_KEY environment variable")]
+    #[error(
+        "Missing OpenAI API Key - a realtime call is being made but no key was passed via params or the OPENAI_API_KEY environment variable"
+    )]
     OpenAiRealtimeApiKey,
-    #[error("Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable")]
+    #[error(
+        "Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable"
+    )]
     OpenAiResponsesApiKey,
-    #[error("invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID")]
+    #[error(
+        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
+    )]
     AzureAi,
-    #[error("invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID")]
+    #[error(
+        "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
+    )]
     AzureDocumentIntelligence,
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum AwsAuthError {
-    #[error("AWS profile credentials failed: {0}") ]
+    #[error("AWS profile credentials failed: {0}")]
     Profile(String),
-    #[error("AWS default credentials failed: {0}") ]
+    #[error("AWS default credentials failed: {0}")]
     DefaultChain(String),
-    #[error("AWS role credentials failed: {0}") ]
+    #[error("AWS role credentials failed: {0}")]
     AssumeRole(String),
-    #[error("AWS web identity credentials failed: {0}") ]
+    #[error("AWS web identity credentials failed: {0}")]
     WebIdentity(String),
-    #[error("AWS web identity expiration was invalid: {0}") ]
+    #[error("AWS web identity expiration was invalid: {0}")]
     WebIdentityExpiration(String),
-    #[error("AWS signing parameters failed: {0}") ]
+    #[error("AWS signing parameters failed: {0}")]
     SigningParameters(String),
-    #[error("AWS signable request failed: {0}") ]
+    #[error("AWS signable request failed: {0}")]
     SignableRequest(String),
-    #[error("AWS request signing failed: {0}") ]
+    #[error("AWS request signing failed: {0}")]
     Signing(String),
     #[error("AWS web identity response had no credentials")]
     MissingWebIdentityCredentials,

@@ -18,9 +18,8 @@ pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
     let request = prepare_provider_request(request)?;
-    let body = serde_json::to_vec(&request.body).map_err(|err| {
-        ChatRequestError::Serialization(err.to_string())
-    })?;
+    let body = serde_json::to_vec(&request.body)
+        .map_err(|err| ChatRequestError::Serialization(err.to_string()))?;
     let headers = signed_headers(&request, &body).await?;
 
     let mut request_builder = http_client().post(&request.url).body(body);
@@ -31,7 +30,9 @@ pub(super) async fn execute_chat_completions_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = http_request(request_builder).await.map_err(TransportError::before_request)?;
+    let response = http_request(request_builder)
+        .await
+        .map_err(TransportError::before_request)?;
 
     let status = response.status();
     let text = response
@@ -46,9 +47,8 @@ pub(super) async fn execute_chat_completions_provider_call(
         });
     }
 
-    let body: Value = serde_json::from_str(&text).map_err(|err| {
-        ChatResponseError::InvalidJson(err.to_string())
-    })?;
+    let body: Value = serde_json::from_str(&text)
+        .map_err(|err| ChatResponseError::InvalidJson(err.to_string()))?;
     request
         .config
         .transform_response(&request.model, ProviderChatResponseData { body })

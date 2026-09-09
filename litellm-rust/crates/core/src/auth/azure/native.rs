@@ -246,7 +246,11 @@ fn build_credential(
         NativeAzureRequest::DeveloperTools { .. } => DeveloperToolsCredential::new(None)
             .map(|credential| credential as Arc<dyn TokenCredential>),
     }
-    .map_err(|error| AuthError::Configuration(AuthConfigurationError::AzureCredentialInitialization(error.to_string())))
+    .map_err(|error| {
+        AuthError::Configuration(AuthConfigurationError::AzureCredentialInitialization(
+            error.to_string(),
+        ))
+    })
 }
 
 fn client_options(

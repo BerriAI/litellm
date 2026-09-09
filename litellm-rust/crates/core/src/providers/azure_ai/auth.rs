@@ -1,5 +1,5 @@
-use crate::auth::error::MissingCredential;
 use crate::auth::error::AuthConfigurationError;
+use crate::auth::error::MissingCredential;
 use std::sync::OnceLock;
 
 use crate::auth::azure::{AzureAuthInputs, AzureAuthService};
@@ -192,17 +192,16 @@ async fn authenticate_with_policy(
             }
             CredentialPlanKind::Entra => resolve_entra_credential(auth_inputs, env_lookup).await?,
             CredentialPlanKind::Caller => {
-                return Err(AuthError::Configuration(AuthConfigurationError::MissingCallerInputs)
-                .into());
+                return Err(AuthError::Configuration(
+                    AuthConfigurationError::MissingCallerInputs,
+                ));
             }
         };
         if let Some(credential) = credential {
-            return policy
-                .apply(headers, rule.kind, &credential)
-                ;
+            return policy.apply(headers, rule.kind, &credential);
         }
     }
-    Err(AuthError::MissingCredential(missing_credential).into())
+    Err(AuthError::MissingCredential(missing_credential))
 }
 
 async fn resolve_entra_credential(

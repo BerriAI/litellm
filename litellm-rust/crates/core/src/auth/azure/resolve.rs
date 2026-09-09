@@ -1,5 +1,5 @@
-use crate::auth::error::AuthConfigurationError;
 use crate::AuthError;
+use crate::auth::error::AuthConfigurationError;
 use crate::auth::{
     CredentialFileRef, CredentialLookup, CredentialRef, ResolvedCredential, SecretValue,
     TokenCallerHandle,
@@ -62,9 +62,7 @@ impl AzureAuthService {
             } => {
                 let assertion = resolve_reference(inputs, env_lookup, &reference)
                     .await?
-                    .ok_or_else(|| {
-                        AuthError::UnresolvedOidcReference
-                    })?;
+                    .ok_or(AuthError::UnresolvedOidcReference)?;
                 self.native
                     .acquire(NativeAzureRequest::ClientAssertion {
                         tenant_id,
@@ -112,9 +110,7 @@ pub(crate) fn select_auth_plan(
     let selector = configured_string(&inputs.azure_credential, AZURE_CREDENTIAL_ENV, env_lookup)
         .map(|value| value.parse::<AzureCredentialType>())
         .transpose()
-        .map_err(|_| {
-            AuthError::Configuration(AuthConfigurationError::InvalidAzureSelector)
-        })?;
+        .map_err(|_| AuthError::Configuration(AuthConfigurationError::InvalidAzureSelector))?;
     let federated_token_file = configured_string(
         &inputs.federated_token_file,
         AZURE_FEDERATED_TOKEN_FILE_ENV,
@@ -196,7 +192,9 @@ fn select_native_plan(
     });
 
     match selected {
-        AzureCredentialType::ClientSecretCredential => Err(AuthError::Configuration(AuthConfigurationError::MissingClientSecretFields)),
+        AzureCredentialType::ClientSecretCredential => Err(AuthError::Configuration(
+            AuthConfigurationError::MissingClientSecretFields,
+        )),
         AzureCredentialType::WorkloadIdentityCredential => Ok(AzureCredentialPlan::Native(
             workload_request(tenant_id, client_id, federated_token_file, scope, authority)?,
         )),
@@ -268,15 +266,15 @@ fn workload_request(
     authority: Option<String>,
 ) -> Result<NativeAzureRequest, AuthError> {
     Ok(NativeAzureRequest::WorkloadIdentity {
-        tenant_id: tenant_id.ok_or_else(|| {
-            AuthError::Configuration(AuthConfigurationError::MissingWorkloadTenant)
-        })?,
-        client_id: client_id.ok_or_else(|| {
-            AuthError::Configuration(AuthConfigurationError::MissingWorkloadClient)
-        })?,
-        token_file_path: token_file_path.ok_or_else(|| {
-            AuthError::Configuration(AuthConfigurationError::MissingWorkloadTokenFile)
-        })?,
+        tenant_id: tenant_id.ok_or(AuthError::Configuration(
+            AuthConfigurationError::MissingWorkloadTenant,
+        ))?,
+        client_id: client_id.ok_or(AuthError::Configuration(
+            AuthConfigurationError::MissingWorkloadClient,
+        ))?,
+        token_file_path: token_file_path.ok_or(AuthError::Configuration(
+            AuthConfigurationError::MissingWorkloadTokenFile,
+        ))?,
         scope,
         authority,
     })
@@ -323,9 +321,12 @@ async fn resolve_reference(
             .map_or(CredentialLookup::Missing, CredentialLookup::Found),
         CredentialRef::None => return Ok(None),
         CredentialRef::File(_) | CredentialRef::Request(_) | CredentialRef::Host(_) => {
-            let resolver = inputs.credential_resolver.as_ref().ok_or_else(|| {
-                AuthError::Configuration(AuthConfigurationError::MissingHostResolver)
-            })?;
+            let resolver = inputs
+                .credential_resolver
+                .as_ref()
+                .ok_or(AuthError::Configuration(
+                    AuthConfigurationError::MissingHostResolver,
+                ))?;
             resolver.resolve(reference).await?
         }
     };
@@ -356,14 +357,18 @@ fn oidc_reference(token: &Option<SecretValue>) -> Result<Option<CredentialRef>, 
         ))));
     }
     if value.starts_with("oidc/") {
-        return Err(AuthError::Configuration(AuthConfigurationError::UnsupportedOidcReference));
+        return Err(AuthError::Configuration(
+            AuthConfigurationError::UnsupportedOidcReference,
+        ));
     }
     Ok(None)
 }
 
 fn non_empty_reference(value: &str, kind: &str) -> Result<String, AuthError> {
     if value.is_empty() {
-        return Err(AuthError::Configuration(AuthConfigurationError::EmptyReference(kind.to_string())));
+        return Err(AuthError::Configuration(
+            AuthConfigurationError::EmptyReference(kind.to_string()),
+        ));
     }
     Ok(value.to_string())
 }

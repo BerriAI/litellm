@@ -149,9 +149,7 @@ mod tests {
 
     impl CredentialResolver for FailingResolver {
         fn resolve<'a>(&'a self, _reference: &'a CredentialRef) -> CredentialLookupFuture<'a> {
-            Box::pin(async {
-                Err(AuthError::UnresolvedOidcReference)
-            })
+            Box::pin(async { Err(AuthError::UnresolvedOidcReference) })
         }
     }
 
@@ -165,9 +163,6 @@ mod tests {
             .await
             .expect_err("acquisition errors cannot become fallback");
 
-        assert_eq!(
-            error,
-            AuthError::UnresolvedOidcReference
-        );
+        assert_eq!(error, AuthError::UnresolvedOidcReference);
     }
 }

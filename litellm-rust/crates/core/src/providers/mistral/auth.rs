@@ -42,9 +42,7 @@ pub fn validate_environment(
     }
     let credential =
         ResolvedCredential::Static(SecretValue::new(resolve_api_key(api_key, env_lookup)?));
-    AUTH_POLICY
-        .apply(headers, CredentialPlanKind::Static, &credential)
-        
+    AUTH_POLICY.apply(headers, CredentialPlanKind::Static, &credential)
 }
 
 #[cfg(test)]

@@ -34,7 +34,6 @@ use crate::io::tls::connect_upstream;
 /// Environment variable holding the OpenAI API key (last-resort fallback).
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
-
 /// Default **idle** timeout: if neither side sends a frame for this long, the
 /// session is reaped. It resets on any activity, so it does not cap a healthy
 /// (continuously streaming) session — it only frees a stalled one (e.g. a
@@ -60,7 +59,9 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|key| !key.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(AuthError::MissingCredential(MissingCredential::OpenAiRealtimeApiKey)))
+        .ok_or(Error::Auth(AuthError::MissingCredential(
+            MissingCredential::OpenAiRealtimeApiKey,
+        )))
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.

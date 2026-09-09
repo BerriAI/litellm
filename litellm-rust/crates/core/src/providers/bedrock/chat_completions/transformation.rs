@@ -229,7 +229,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         let body = response
             .body
             .as_object()
-            .ok_or_else(|| ChatResponseError::NotObject { api: "converse" })?;
+            .ok_or(ChatResponseError::NotObject { api: "converse" })?;
 
         let content = body
             .get("output")

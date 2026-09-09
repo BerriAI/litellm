@@ -262,7 +262,9 @@ pub async fn resolve_credentials(
                         .build()
                         .await;
                 let credentials = provider.provide_credentials().await.map_err(|error| {
-                    Error::Auth(AuthError::Aws(AwsAuthError::DefaultChain(error.to_string())))
+                    Error::Auth(AuthError::Aws(AwsAuthError::DefaultChain(
+                        error.to_string(),
+                    )))
                 })?;
                 set_cached_credentials(
                     key,
@@ -329,11 +331,13 @@ pub async fn resolve_credentials(
                 .map_err(|error| {
                     Error::Auth(AuthError::Aws(AwsAuthError::WebIdentity(error.to_string())))
                 })?;
-            let credentials = response.credentials().ok_or_else(|| {
-                Error::Auth(AuthError::Aws(AwsAuthError::MissingWebIdentityCredentials))
-            })?;
+            let credentials = response.credentials().ok_or(Error::Auth(AuthError::Aws(
+                AwsAuthError::MissingWebIdentityCredentials,
+            )))?;
             let expiration = SystemTime::try_from(*credentials.expiration()).map_err(|error| {
-                Error::Auth(AuthError::Aws(AwsAuthError::WebIdentityExpiration(error.to_string())))
+                Error::Auth(AuthError::Aws(AwsAuthError::WebIdentityExpiration(
+                    error.to_string(),
+                )))
             })?;
             Ok(Credentials::new(
                 credentials.access_key_id(),
@@ -353,7 +357,9 @@ pub async fn resolve_credentials(
                     .build()
                     .await;
             let credentials = provider.provide_credentials().await.map_err(|error| {
-                Error::Auth(AuthError::Aws(AwsAuthError::DefaultChain(error.to_string())))
+                Error::Auth(AuthError::Aws(AwsAuthError::DefaultChain(
+                    error.to_string(),
+                )))
             })?;
             set_cached_credentials(
                 key,
@@ -451,19 +457,21 @@ pub fn sign_bedrock_post(
         .build()
         .map(SigningParams::from)
         .map_err(|error| {
-            Error::Auth(AuthError::Aws(AwsAuthError::SigningParameters(error.to_string())))
+            Error::Auth(AuthError::Aws(AwsAuthError::SigningParameters(
+                error.to_string(),
+            )))
         })?;
     let header_refs = headers
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()));
     let request = SignableRequest::new("POST", url, header_refs, SignableBody::Bytes(body))
         .map_err(|error| {
-            Error::Auth(AuthError::Aws(AwsAuthError::SignableRequest(error.to_string())))
+            Error::Auth(AuthError::Aws(AwsAuthError::SignableRequest(
+                error.to_string(),
+            )))
         })?;
     let (instructions, _) = sign(request, &params)
-        .map_err(|error| {
-            Error::Auth(AuthError::Aws(AwsAuthError::Signing(error.to_string())))
-        })?
+        .map_err(|error| Error::Auth(AuthError::Aws(AwsAuthError::Signing(error.to_string()))))?
         .into_parts();
     Ok(instructions
         .headers()
