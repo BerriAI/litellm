@@ -6390,6 +6390,9 @@ class BaseLLMHTTPHandler:
           - sdp: the SDP offer (text)
           - session: JSON string with {"type": "realtime", "model": "...", ...}
         """
+        from litellm.llms.chatgpt.common_utils import without_oauth_identity_headers
+        from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.OPENAI,
@@ -6407,7 +6410,11 @@ class BaseLLMHTTPHandler:
             }
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(
+                without_oauth_identity_headers(extra_headers)
+                if isinstance(provider_config, ChatGPTRealtimeHTTPConfig)
+                else extra_headers
+            )
 
         # Build multipart form data: sdp + session JSON
         session_data: Final = session_config or {}
@@ -6641,9 +6648,9 @@ class BaseLLMHTTPHandler:
     @staticmethod
     def _image_extra_headers(custom_llm_provider: str, headers: Mapping[str, object]) -> Mapping[str, object]:
         if custom_llm_provider == "chatgpt":
-            from litellm.llms.chatgpt.images import without_image_identity_headers
+            from litellm.llms.chatgpt.common_utils import without_oauth_identity_headers
 
-            return without_image_identity_headers(headers)
+            return without_oauth_identity_headers(headers)
         return headers
 
     def image_edit_handler(

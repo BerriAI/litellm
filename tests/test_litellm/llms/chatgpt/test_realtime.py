@@ -27,7 +27,12 @@ async def test_chatgpt_call_keeps_oauth_and_frameless_session(chatgpt_tokens, ap
         sdp_body=b"v=0\r\n",
         session={"model": "chatgpt/gpt-live-1-codex", "audio": {"output": {"voice": "sol"}}},
         extra_query={"intent": "quicksilver", "architecture": "avas"},
-        extra_headers={"openai-alpha": "quicksilver=v2"},
+        extra_headers={
+            "openai-alpha": "quicksilver=v2",
+            "x-gateway-route": "voice",
+            "aUtHoRiZaTiOn": "Bearer wrong",
+            "CHATGPT-ACCOUNT-ID": "wrong",
+        },
         client=client,
     )
     assert response.extensions["chatgpt_realtime"]["api_base"] == (api_base or "https://api.openai.com/v1")
@@ -36,11 +41,40 @@ async def test_chatgpt_call_keeps_oauth_and_frameless_session(chatgpt_tokens, ap
     assert requests[0].url.path == "/backend-api/codex/realtime/calls"
     assert requests[0].url.params["architecture"] == "avas"
     assert requests[0].headers["authorization"] == "Bearer test-token-" + "default"
+    assert requests[0].headers["chatgpt-account-id"] == "test-account-default"
+    assert requests[0].headers["openai-alpha"] == "quicksilver=v2"
+    assert requests[0].headers["x-gateway-route"] == "voice"
     assert json.loads(requests[0].content) == {
         "sdp": "v=0\r\n",
         "session": {"model": "gpt-live-1-codex", "audio": {"output": {"voice": "sol"}}},
     }
     await client.client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openai_call_preserves_explicit_identity_headers():
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(201, text="v=0\r\n")
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        response = await litellm.arealtime_calls(
+            model="openai/gpt-realtime-1.5",
+            openai_ephemeral_key="original-key",
+            sdp_body=b"v=0\r\n",
+            extra_headers={"Authorization": "Bearer explicit-key", "chatgpt-account-id": "custom-account"},
+            client=client,
+        )
+        assert response.status_code == 201
+        assert requests[0].headers["authorization"] == "Bearer explicit-key"
+        assert requests[0].headers["chatgpt-account-id"] == "custom-account"
+        assert requests[0].headers["content-type"].startswith("multipart/form-data")
+    finally:
+        await client.client.aclose()
 
 
 @pytest.mark.parametrize("model,endpoint", [("gpt-realtime-1.5", "realtime"), ("gpt-live-1-codex", "live")])
