@@ -368,26 +368,91 @@ class AnthropicChatCompletion(BaseLLM):
         if config is None:
             raise ValueError(f"Provider config not found for model: {model} and provider: {custom_llm_provider}")
 
-        def build_request() -> tuple[dict, dict]:  # mutable-ok: rewritten in place downstream
-            """Translate the request the Python way, returning `(headers, data)`.
+        transform_params: Final = {**optional_params, "is_vertex_request": is_vertex_request}
+
+        def finish_request(request_data: dict) -> tuple[dict, dict]:  # mutable-ok: rewritten in place downstream
+            """Filter beta headers and emit pre_call, returning `(headers, data)`.
 
             The pair stays mutable because the streaming path rewrites it in
-            place (`data["stream"] = True`) before sending.
-
-            Shared by the normal path and by the Rust path's fallback, which
-            builds it only when the Rust call did not serve the request.
+            place (`data["stream"] = True`) before sending. A Rust attempt that
+            declined already emitted pre_call for this request, so skip it there.
             """
-            request_data: Final = config.transform_request(
-                model=model,
-                messages=messages,
-                optional_params={**optional_params, "is_vertex_request": is_vertex_request},
-                litellm_params=litellm_params,
-                headers=headers,
-            )
-            return update_request_with_filtered_beta(
+            request_headers, data = update_request_with_filtered_beta(
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
+            )
+            if not serves_via_rust:
+                logging_obj.pre_call(
+                    input=messages,
+                    api_key=api_key,
+                    additional_args={
+                        "complete_input_dict": data,
+                        "api_base": api_base,
+                        "headers": request_headers,
+                    },
+                )
+            print_verbose(f"_is_function_call: {_is_function_call}")
+            return request_headers, data
+
+        async def acompletion_dispatch() -> "ModelResponse | CustomStreamWrapper":
+            """Translate then send, so the provider config can inline remote media off the event loop."""
+            request_headers, data = finish_request(
+                await config.async_transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=transform_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
+            )
+            if (
+                stream is True
+            ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
+                print_verbose("makes async anthropic streaming POST request")
+                data["stream"] = stream
+                return await self.acompletion_stream_function(
+                    model=model,
+                    messages=messages,
+                    data=data,
+                    api_base=api_base,
+                    custom_prompt_dict=custom_prompt_dict,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    encoding=encoding,
+                    api_key=api_key,
+                    logging_obj=logging_obj,
+                    optional_params=optional_params,
+                    stream=stream,
+                    _is_function_call=_is_function_call,
+                    json_mode=json_mode,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    headers=request_headers,
+                    timeout=timeout,
+                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
+                )
+            return await self.acompletion_function(
+                model=model,
+                messages=messages,
+                data=data,
+                api_base=api_base,
+                custom_prompt_dict=custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                api_key=api_key,
+                provider_config=config,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=stream,
+                _is_function_call=_is_function_call,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                headers=request_headers,
+                client=client,
+                json_mode=json_mode,
+                timeout=timeout,
             )
 
         # The Rust core owns the whole call for the subset it accepts, so ask
@@ -424,35 +489,6 @@ class AnthropicChatCompletion(BaseLLM):
                 additional_args=rust_logging_args,
             )
             if acompletion is True:
-
-                async def python_fallback() -> "ModelResponse | CustomStreamWrapper":
-                    # pre_call already fired for this request above. The Rust
-                    # path only declines before the provider is called, so this
-                    # is the same attempt continuing, not a second one.
-                    fallback_headers, fallback_data = build_request()
-                    return await self.acompletion_function(
-                        model=model,
-                        messages=messages,
-                        data=fallback_data,
-                        api_base=api_base,
-                        custom_prompt_dict=custom_prompt_dict,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        encoding=encoding,
-                        api_key=api_key,
-                        provider_config=config,
-                        logging_obj=logging_obj,
-                        optional_params=optional_params,
-                        stream=stream,
-                        _is_function_call=_is_function_call,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        headers=fallback_headers,
-                        client=client,
-                        json_mode=json_mode,
-                        timeout=timeout,
-                    )
-
                 return rust_chat_completions_bridge.achat_completions_or_fallback(
                     model=model,
                     messages=messages,
@@ -464,7 +500,7 @@ class AnthropicChatCompletion(BaseLLM):
                     extra_headers=headers,
                     timeout=timeout,
                     on_response=log_rust_post_call,
-                    python_fallback=python_fallback,
+                    python_fallback=acompletion_dispatch,
                 )
             rust_response: Final = rust_chat_completions_bridge.chat_completions(
                 model=model,
@@ -481,74 +517,18 @@ class AnthropicChatCompletion(BaseLLM):
             if rust_response is not None:
                 return rust_response
 
-        headers, data = build_request()
-
-        ## LOGGING
-        # Reaching here with `serves_via_rust` set means the Rust attempt
-        # declined at call time, before the provider was called, and already
-        # logged this request. That is the same attempt continuing.
-        if not serves_via_rust:
-            logging_obj.pre_call(
-                input=messages,
-                api_key=api_key,
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": api_base,
-                    "headers": headers,
-                },
-            )
-        print_verbose(f"_is_function_call: {_is_function_call}")
         if acompletion is True:
-            if (
-                stream is True
-            ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
-                print_verbose("makes async anthropic streaming POST request")
-                data["stream"] = stream
-                return self.acompletion_stream_function(
-                    model=model,
-                    messages=messages,
-                    data=data,
-                    api_base=api_base,
-                    custom_prompt_dict=custom_prompt_dict,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    encoding=encoding,
-                    api_key=api_key,
-                    logging_obj=logging_obj,
-                    optional_params=optional_params,
-                    stream=stream,
-                    _is_function_call=_is_function_call,
-                    json_mode=json_mode,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    headers=headers,
-                    timeout=timeout,
-                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
-                )
-            else:
-                return self.acompletion_function(
-                    model=model,
-                    messages=messages,
-                    data=data,
-                    api_base=api_base,
-                    custom_prompt_dict=custom_prompt_dict,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    encoding=encoding,
-                    api_key=api_key,
-                    provider_config=config,
-                    logging_obj=logging_obj,
-                    optional_params=optional_params,
-                    stream=stream,
-                    _is_function_call=_is_function_call,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    headers=headers,
-                    client=client,
-                    json_mode=json_mode,
-                    timeout=timeout,
-                )
+            return acompletion_dispatch()
         else:
+            headers, data = finish_request(
+                config.transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=transform_params,
+                    litellm_params=litellm_params,
+                    headers=headers,
+                )
+            )
             ## COMPLETION CALL
             if (
                 stream is True
