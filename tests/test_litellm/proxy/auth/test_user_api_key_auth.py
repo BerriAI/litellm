@@ -7133,3 +7133,44 @@ def test_user_api_key_auth_opens_a_datadog_span_for_accepted_and_rejected_keys(t
     assert report["outcomes"] == ["accepted", "rejected"]
     auth_span = "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
     assert [span for span in report["spans"] if span == auth_span] == [auth_span, auth_span]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attachment", ["path", "query"])
+@pytest.mark.parametrize("credential", ["authorization", "api-key", "subprotocol"])
+@pytest.mark.parametrize("query_model", [b"", b"model=unbudgeted"])
+async def test_sideband_auth_uses_encrypted_model_for_budget_checks(monkeypatch, attachment, credential, query_model):
+    import hashlib
+    import importlib
+    import time
+    from unittest.mock import AsyncMock
+    from fastapi import WebSocket
+    from litellm.llms.chatgpt.codex import CodexRealtimeCall
+    from litellm.proxy.realtime_endpoints.call_sessions import encode_call
+
+    auth_module = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-sideband-budget-salt")
+    token = encode_call(CodexRealtimeCall(
+        call_id="rtc_test", model="gpt-live-1-codex", alias="budgeted-voice",
+        owner=hashlib.sha256(b"Bearer owner").hexdigest(), expires_at=time.time() + 300,
+    ))
+    seen = []
+
+    async def authenticate(request, api_key):
+        seen.append((await request.json(), api_key))
+        return "authenticated-with-model"
+
+    monkeypatch.setattr(auth_module, "user_api_key_auth", authenticate)
+    websocket = WebSocket({
+        "type": "websocket", "scheme": "ws", "server": ("localhost", 4000),
+        "path": "/v1/live/" + token if attachment == "path" else "/v1/realtime",
+        "path_params": {"call_id": token} if attachment == "path" else {},
+        "query_string": query_model + (b"&call_id=" + token.encode() if attachment == "query" else b""),
+        "headers": {
+            "authorization": [(b"authorization", b"Bearer owner")],
+            "api-key": [(b"api-key", b"owner")],
+            "subprotocol": [(b"sec-websocket-protocol", b"realtime, openai-insecure-api-key.owner")],
+        }[credential],
+    }, AsyncMock(), AsyncMock())
+    assert await auth_module.user_api_key_auth_websocket(websocket) == "authenticated-with-model"
+    assert seen == [({"model": "budgeted-voice"}, "Bearer owner")]

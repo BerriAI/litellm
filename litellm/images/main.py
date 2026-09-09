@@ -402,6 +402,7 @@ def image_generation(
                 model=model,
                 prompt=prompt,
                 image_generation_provider_config=image_generation_config,
+                extra_headers=extra_headers,
                 image_generation_optional_request_params=optional_params,
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params_dict,

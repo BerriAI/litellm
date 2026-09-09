@@ -508,15 +508,6 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     request._url = websocket.url
 
-    query_params: Final = websocket.query_params
-
-    model: Final = query_params.get("model")
-
-    async def return_body():
-        return _realtime_request_body(model)
-
-    request.body = return_body
-
     authorization: Final = websocket.headers.get("authorization")
     # If no Authorization header, try the api-key header
     if not authorization:
@@ -542,6 +533,19 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
     try:
+        from litellm.proxy.realtime_endpoints.call_sessions import decode_call
+
+        call_token: Final = websocket.path_params.get("call_id") or websocket.query_params.get("call_id")
+        model: Final = (
+            decode_call(call_token, f"Bearer {api_key}").alias
+            if call_token is not None
+            else websocket.query_params.get("model")
+        )
+
+        async def return_body():
+            return _realtime_request_body(model)
+
+        request.body = return_body
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
         if is_invalid_virtual_key_error(e):
