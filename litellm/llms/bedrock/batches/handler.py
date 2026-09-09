@@ -283,7 +283,7 @@ class BedrockBatchesHandler:
                 ``aws_session_token``, ``aws_profile_name``,
                 ``aws_role_name``, ``aws_session_name``,
                 ``aws_web_identity_token``, ``aws_sts_endpoint``,
-                ``aws_external_id``). Unknown keys are ignored.
+                ``aws_external_id``, ``aws_session_tags``). Unknown keys are ignored.
 
         Returns:
             ``LiteLLMBatch`` shaped like an OpenAI Batch resource.
@@ -317,6 +317,7 @@ class BedrockBatchesHandler:
             aws_web_identity_token=kwargs.get("aws_web_identity_token"),
             aws_sts_endpoint=kwargs.get("aws_sts_endpoint"),
             aws_external_id=kwargs.get("aws_external_id"),
+            aws_session_tags=kwargs.get("aws_session_tags"),
         )
 
         client: Final = boto3.client(
