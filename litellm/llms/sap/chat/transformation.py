@@ -393,7 +393,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        final_result = self._normalize_reasoning_content(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(final_result)
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
@@ -405,6 +406,38 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 response = self._strip_markdown_json(response)
 
         return response
+
+    @staticmethod
+    def _normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]: # mutable-ok: generic types
+        """Normalize list-shaped reasoning_content to the string field litellm expects.
+
+        SAP AI Core forwards reasoning tokens from Gemini and other thinking models as:
+          message.reasoning_content = [{"content": "...", "signature": "..."}, ...]
+
+        ModelResponse.reasoning_content is typed Optional[str], so model_validate
+        raises a ValidationError on a list. Map the blocks to thinking_blocks
+        (already typed for this shape) and set reasoning_content to the concatenated
+        text so callers that read the string field still get something useful.
+        """
+        for choice in raw.get("choices", []):  # mutable-ok: sentinel default, never mutated
+            msg = choice.get("message", {})  # mutable-ok: sentinel default, never mutated
+            rc = msg.get("reasoning_content")
+            if not isinstance(rc, list):
+                continue
+            thinking_blocks = [  # mutable-ok: local accumulator built once and assigned
+                {  # mutable-ok: each block dict constructed fresh per item
+                    "type": "thinking",
+                    "thinking": item.get("content", ""),
+                    "signature": item.get("signature"),
+                }
+                for item in rc
+                if isinstance(item, dict)
+            ]
+            msg["thinking_blocks"] = thinking_blocks
+            msg["reasoning_content"] = (
+                "\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None
+            )
+        return raw
 
     def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
         """Strip markdown code block wrapper from JSON content if present.
