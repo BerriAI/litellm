@@ -1894,6 +1894,71 @@ async def test_summary_model_rate_limit_check_names_each_counter_once():
     ), f"descriptor population handed to the limiter: {population}"
 
 
+class _FakeRateLimiterWithoutCollapse(_FakeRateLimiter):
+    """A limiter from before the collapse existed: the same descriptor-build and
+    read-only check surface, but no usable ``_deduplicate_descriptors``.
+
+    ``None`` stands in for the attribute being absent -- the editor reaches for
+    it with ``getattr(..., None)`` and branches on ``is not None``, so both
+    reach the fallback by the same route.
+    """
+
+    _deduplicate_descriptors = None
+
+
+async def test_summary_model_rate_limit_checked_uncollapsed_without_the_collapse():
+    """A limiter that cannot collapse is still checked, against the descriptor
+    population as assembled.
+
+    The collapse is the limiter's, so a limiter predating it has none to offer.
+    The fallback is deliberately not the ``return True`` the missing read-only
+    surface gets: this check reads without incrementing, so a repeated pair
+    costs a redundant read and nothing else, and dropping the check instead
+    would let a caller already at their limit drive an extra summary call --
+    the hole this gate exists to close. Assert the repeat is what shows up,
+    since that is the fallback actually being exercised rather than a collapse
+    quietly still happening.
+    """
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+
+    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
+    limiter = _FakeRateLimiterWithoutCollapse("OK")
+    proxy_logging = MagicMock()
+    proxy_logging.max_parallel_request_limiter = limiter
+
+    with (
+        patch(  # test-quality-ok: the summary model is proxy general_settings, which no proxy is running here to hold
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),  # test-quality-ok: puts the input over the compaction trigger without shipping a 200k-token fixture
+        patch(  # test-quality-ok: the assertion is about the descriptors assembled before this call, which must not be made
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: this module global is the seam the editor looks the limiter up through
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    assert limiter.read_only_checked is True, "the check must still run without the collapse"
+    population = Counter((d["key"], d["value"]) for d in limiter.descriptors_checked)
+    assert population == Counter(
+        {
+            ("api_key", "hashed-token"): 1,
+            ("model_per_team", "team-id:claude-haiku-4-5"): 2,
+        }
+    ), f"descriptor population handed to the limiter: {population}"
+    assert not result.applied_edits[0].get("error")
+
+
 async def test_summary_model_rate_limit_skipped_for_legacy_limiter():
     """A limiter without the v3 read-only check surface fails open so the summary
     call still proceeds (its usage is still charged post-call)."""
