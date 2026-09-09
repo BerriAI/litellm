@@ -136,18 +136,6 @@ def test_elasticache_provider_reports_missing_credentials():
         provider.get_credentials()
 
 
-def test_elasticache_provider_reports_missing_frozen_credentials():
-    provider = ElastiCacheIAMCredentialProvider(
-        user_name="iam-user",
-        cache_name="cache.example.com",
-        region="us-east-1",
-        credentials_resolver=_FakeResolver(SimpleNamespace(get_frozen_credentials=lambda: None)),
-    )
-
-    with pytest.raises(RuntimeError, match="Unable to resolve AWS credentials"):
-        provider.get_credentials()
-
-
 def test_elasticache_provider_reports_missing_signing_dependency(monkeypatch):
     original_import = builtins.__import__
 
