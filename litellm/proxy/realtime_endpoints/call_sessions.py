@@ -10,6 +10,8 @@ from fastapi import HTTPException, Request, Response, WebSocket
 from starlette.types import Message
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.chatgpt.codex import (
     CodexRealtimeCall,
@@ -60,12 +62,12 @@ async def process_codex_request(
     auth: UserAPIKeyAuth,
     model: str,
     route_type: Literal["arealtime_calls", "_arealtime"],
-) -> dict[str, object]:  # mutable-ok: common request processor returns enriched routing arguments
+) -> tuple[dict[str, object], Logging]:  # mutable-ok: common request processor returns enriched routing arguments
     from litellm.proxy import proxy_server as server
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-    processed, _ = await processor.common_processing_pre_call_logic(
+    processed, logging_obj = await processor.common_processing_pre_call_logic(
         request=request,
         general_settings=server.general_settings,
         user_api_key_dict=auth,
@@ -80,7 +82,7 @@ async def process_codex_request(
         model=model,
         route_type=route_type,
     )
-    return processed
+    return processed, logging_obj
 
 
 async def create_codex_realtime_call(request: Request) -> Response:
@@ -110,7 +112,7 @@ async def create_codex_realtime_call(request: Request) -> Response:
             llm_router=server.llm_router,
         )
         data: Final = build_call_request(offer, request.query_params, request.headers)
-        processed: Final = await process_codex_request(request, data, auth, model, "arealtime_calls")
+        processed, _ = await process_codex_request(request, data, auth, model, "arealtime_calls")
         result: Final = await server.route_request(
             data=processed,
             route_type="arealtime_calls",
@@ -156,6 +158,7 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
         (p.removeprefix("openai-insecure-api-key.") for p in protocols if p.startswith("openai-insecure-api-key.")), ""
     )
     authorization: Final = websocket.headers.get("authorization") or f"Bearer {alternate_key}"
+    logging_obj: Logging | None = None  # rebind-ok: cleanup needs the logger only after pre-call succeeds
     try:
         try:
             call: Final = decode_call(token, authorization)
@@ -194,7 +197,7 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
             ],
         }
         try:
-            processed: Final = await process_codex_request(request, data, auth, call.alias, "_arealtime")
+            processed, logging_obj = await process_codex_request(request, data, auth, call.alias, "_arealtime")
         except Exception:  # noqa: BLE001  # custom hook exceptions must reject the connection
             verbose_proxy_logger.exception("Realtime sideband pre-call rejected")
             await websocket.close(code=1008, reason="Realtime pre-call rejected")
@@ -211,4 +214,5 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
             }
         )
     finally:
-        await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)
+        if logging_obj is None or not logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
+            await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)

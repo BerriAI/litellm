@@ -99,7 +99,11 @@ def _get_realtime_http_provider_config(
             provider=LlmProviders(custom_llm_provider),
         )
 
-    raw_api_base: Final = dynamic_api_base or litellm_params.api_base
+    raw_api_base: Final = (
+        litellm_params.api_base or dynamic_api_base
+        if custom_llm_provider == "chatgpt"
+        else dynamic_api_base or litellm_params.api_base
+    )
     raw_api_key: Final = dynamic_api_key or litellm_params.api_key
 
     if provider_config is not None:
@@ -303,6 +307,7 @@ async def arealtime_calls(
         response.extensions["chatgpt_realtime"] = MappingProxyType(
             {
                 "model": model_name,
+                "api_base": litellm_params.api_base,
             }
         )
     return response

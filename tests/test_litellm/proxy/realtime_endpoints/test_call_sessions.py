@@ -1,5 +1,6 @@
 import hashlib
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, WebSocket
@@ -8,6 +9,41 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.realtime_endpoints import call_sessions as codex
 from litellm.llms.chatgpt.codex import CodexRealtimeCall
 from litellm.proxy.realtime_endpoints.call_sessions import decode_call, encode_call
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("logged_success", [False, True])
+@pytest.mark.parametrize("disconnect_error", [False, True])
+async def test_sideband_preserves_pending_cost_reconciliation(monkeypatch, logged_success, disconnect_error):
+    import litellm
+    from unittest.mock import AsyncMock
+    from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-salt-for-codex-realtime")
+    call = CodexRealtimeCall(call_id="rtc_test", model="gpt-live-1-codex", alias="voice",
+        owner=hashlib.sha256(b"Bearer owner").hexdigest(), expires_at=time.time()+300)
+    auth = UserAPIKeyAuth()
+    auth.budget_reservation = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    logger = SimpleNamespace(model_call_details={})
+    monkeypatch.setattr(codex, "can_key_call_resolved_model", AsyncMock())
+    monkeypatch.setattr(codex, "process_codex_request", AsyncMock(return_value=({}, logger)))
+
+    async def forward(**kwargs):
+        if logged_success:
+            logger.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
+        if disconnect_error:
+            raise RuntimeError("Backend disconnected")
+
+    monkeypatch.setattr(litellm, "_arealtime", forward)
+    websocket = WebSocket({"type": "websocket", "path": "/v1/live/opaque", "query_string": b"",
+        "headers": [(b"authorization", b"Bearer owner")]},
+        AsyncMock(return_value={"type": "websocket.connect"}), AsyncMock())
+    if disconnect_error:
+        with pytest.raises(RuntimeError, match="Backend disconnected"):
+            await codex.codex_realtime_sideband(websocket, encode_call(call), auth)
+    else:
+        await codex.codex_realtime_sideband(websocket, encode_call(call), auth)
+    assert auth.budget_reservation["finalized"] is not logged_success
 
 
 def test_sideband_token_binds_owner_and_model(monkeypatch):
@@ -166,7 +202,7 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
 
         async def respond():
             return httpx.Response(201, content=b"v=0\r\nanswer", headers={"Location": "/v1/realtime/calls/rtc_private"},
-                extensions={"chatgpt_realtime": {"model": "gpt-live-1-codex"}})
+                extensions={"chatgpt_realtime": {"model": "gpt-live-1-codex", "api_base": "https://voice.example/codex"}})
         return respond()
 
     monkeypatch.setattr(proxy_server, "route_request", route)
@@ -206,6 +242,7 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
     assert forward.await_args.kwargs["metadata"] == {"guardrails": ["policy-guardrail"], "user_api_key_team_id": "team"}
     assert forward.await_args.kwargs["chatgpt_realtime_call_id"] == "rtc_private"
     assert forward.await_args.kwargs["model"] == "chatgpt/gpt-live-1-codex"
+    assert forward.await_args.kwargs["api_base"] == "https://voice.example/codex"
     assert authorize.await_count == 2
 
 
