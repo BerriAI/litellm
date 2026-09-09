@@ -402,7 +402,9 @@ def _handle_invalid_parallel_tool_calls(
         shift = 0
         for i, replacement in replacements.items():
             tool_calls[:] = tool_calls[: i + shift] + replacement + tool_calls[i + shift + 1 :]
-            shift += len(replacement)
+            # Each splice removes one element and inserts len(replacement), so the
+            # net change to subsequent indices is len(replacement) - 1.
+            shift += len(replacement) - 1
 
         return tool_calls
     except json.JSONDecodeError:
