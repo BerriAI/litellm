@@ -262,6 +262,33 @@ fn ocr_core_error_to_pyerr(py: Python<'_>, error: CoreError, model: &str, provid
     ocr_sdk_error(py, status, model, provider).unwrap_or_else(Into::into)
 }
 
+pub(crate) fn ocr_python_error_to_pyerr(
+    py: Python<'_>,
+    error: PyErr,
+    model: &str,
+    provider: &str,
+    arguments: &Bound<'_, PyDict>,
+) -> PyErr {
+    if !error.is_instance_of::<pyo3::exceptions::PyException>(py) {
+        return error;
+    }
+    let mapped = (|| -> PyResult<PyErr> {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("model", model)?;
+        kwargs.set_item("custom_llm_provider", provider)?;
+        kwargs.set_item("original_exception", error.value(py))?;
+        kwargs.set_item("completion_kwargs", arguments)?;
+        kwargs.set_item("extra_kwargs", arguments)?;
+        py.import("litellm")?
+            .getattr("exception_type")?
+            .call((), Some(&kwargs))
+            .map(PyErr::from_value)
+    })()
+    .unwrap_or_else(|error| error);
+    mapped.set_context(py, Some(error));
+    mapped
+}
+
 pub(crate) fn core_error_to_pyerr(error: CoreError) -> PyErr {
     Error::Core(error).into()
 }
@@ -301,3 +328,34 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 #[path = "../tests/unit/errors.rs"]
 mod tests;
+
+pub(crate) fn ocr_preparation_error_to_pyerr(
+    py: Python<'_>,
+    error: CoreError,
+    auth_error: Option<PyErr>,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+    arguments: &Bound<'_, PyDict>,
+) -> PyErr {
+    let resolved =
+        litellm_core::routing_utils::provider::get_custom_llm_provider(model, custom_llm_provider);
+    let model = resolved.as_ref().map_or(model, |value| value.model);
+    let provider = resolved
+        .as_ref()
+        .map_or("", |value| value.custom_llm_provider);
+    if let Some(error) = auth_error {
+        return ocr_python_error_to_pyerr(py, error, model, provider, arguments);
+    }
+    if provider == "azure_ai" {
+        if let CoreError::InvalidRequest(message) = &error {
+            return ocr_python_error_to_pyerr(
+                py,
+                PyValueError::new_err(message.clone()),
+                model,
+                provider,
+                arguments,
+            );
+        }
+    }
+    ocr_error_to_pyerr(py, error, model, provider)
+}

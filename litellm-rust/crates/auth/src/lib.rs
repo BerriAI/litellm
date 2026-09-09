@@ -1,7 +1,8 @@
 use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
 use std::time::SystemTime;
+
+mod credentials;
+pub use credentials::{AuthServices, AzureCredentialInputs, CallerCredential, CredentialInputs};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretString(String);
@@ -63,11 +64,8 @@ pub trait AuthValueLookup: Send + Sync {
     fn lookup(&self, key: &str) -> Result<Option<SecretString>, AuthServiceError>;
 }
 
-pub type CallerTokenFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<SecretString, AuthServiceError>> + Send + 'a>>;
-
 pub trait CallerTokenProvider: Send + Sync {
-    fn invoke(&self) -> CallerTokenFuture<'_>;
+    fn invoke(&self) -> Result<Option<SecretString>, AuthServiceError>;
 }
 
 pub trait ExecutionHeaders: Send + Sync {
@@ -106,9 +104,9 @@ mod tests {
     }
 
     impl CallerTokenProvider for FixtureProvider {
-        fn invoke(&self) -> CallerTokenFuture<'_> {
+        fn invoke(&self) -> Result<Option<SecretString>, AuthServiceError> {
             self.effects.lock().unwrap().push("caller");
-            Box::pin(std::future::ready(self.result.clone()))
+            self.result.clone().map(Some)
         }
     }
 
@@ -160,8 +158,8 @@ mod tests {
         assert!(!format!("{resolved:?}").contains("never-print-this"));
     }
 
-    #[tokio::test]
-    async fn fixture_preserves_effect_order_and_deferred_header_reads() {
+    #[test]
+    fn fixture_preserves_effect_order_and_deferred_header_reads() {
         let effects = Arc::new(Mutex::new(Vec::new()));
         let lookup = FixtureLookup {
             effects: effects.clone(),
@@ -179,7 +177,7 @@ mod tests {
 
         assert!(effects.lock().unwrap().is_empty());
         let _ = lookup.lookup("credential").unwrap();
-        let token = provider.invoke().await.unwrap();
+        let token = provider.invoke().unwrap().unwrap();
         assert_eq!(effects.lock().unwrap().as_slice(), &["lookup", "caller"]);
         assert_eq!(token.expose(), "caller-token");
 
@@ -202,8 +200,8 @@ mod tests {
         assert_eq!(input.body, body);
     }
 
-    #[tokio::test]
-    async fn lookup_failure_stops_before_caller_invocation() {
+    #[test]
+    fn lookup_failure_stops_before_caller_invocation() {
         let effects = Arc::new(Mutex::new(Vec::new()));
         let lookup = FixtureLookup {
             effects: effects.clone(),
@@ -218,14 +216,14 @@ mod tests {
 
         let result = lookup.lookup("credential");
         if result.is_ok() {
-            let _ = provider.invoke().await;
+            let _ = provider.invoke();
         }
         assert!(matches!(result, Err(AuthServiceError::Lookup { .. })));
         assert_eq!(effects.lock().unwrap().as_slice(), &["lookup"]);
     }
 
-    #[tokio::test]
-    async fn caller_failure_is_not_replaced_by_another_source() {
+    #[test]
+    fn caller_failure_is_not_replaced_by_another_source() {
         let effects = Arc::new(Mutex::new(Vec::new()));
         let lookup = FixtureLookup {
             effects: effects.clone(),
@@ -237,7 +235,7 @@ mod tests {
         };
 
         let _ = lookup.lookup("credential").unwrap();
-        let result = provider.invoke().await;
+        let result = provider.invoke();
         assert_eq!(result, Err(AuthServiceError::CallerToken));
         assert_eq!(effects.lock().unwrap().as_slice(), &["lookup", "caller"]);
     }

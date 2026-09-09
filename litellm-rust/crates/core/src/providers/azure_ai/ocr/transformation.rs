@@ -128,22 +128,28 @@ pub fn validate_azure_ai_environment(
     azure_ad_token: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Vec<(String, String)>, Error> {
-    if crate::http_utils::has_header(&headers, "Authorization")
-        || crate::http_utils::has_header(&headers, "Api-Key")
-    {
+    let key = api_key
+        .map(str::to_owned)
+        .or_else(|| env_lookup(AZURE_AI_API_KEY_ENV));
+    let token = key
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .or(azure_ad_token);
+    let token = token.filter(|value| !value.is_empty()).ok_or_else(|| {
+        Error::InvalidRequest(concat!(
+            "Missing Azure AI credentials - set an API key (`api_key` or AZURE_AI_API_KEY), or Entra ID / OAuth ",
+            "credentials (`tenant_id` + `client_id` + `client_secret`, `azure_ad_token`, an OIDC token, or a managed ",
+            "identity with `litellm.enable_azure_ad_token_refresh = True`)"
+        ).into())
+    })?;
+    if headers.iter().any(|(name, _)| name == "Authorization") {
         return Ok(headers);
     }
-    if let Ok(api_key) = resolve_azure_ai_api_key(api_key, env_lookup) {
-        return Ok(prepend_auth_header(headers, "Api-Key", api_key));
-    }
-    non_empty(azure_ad_token)
-        .map(|token| prepend_auth_header(headers, "Authorization", format!("Bearer {token}")))
-        .ok_or_else(|| {
-            Error::Auth(
-                "Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token"
-                    .to_string(),
-            )
-        })
+    Ok(prepend_auth_header(
+        headers,
+        "Authorization",
+        format!("Bearer {token}"),
+    ))
 }
 
 pub fn validate_document_intelligence_environment(
@@ -502,6 +508,102 @@ fn transform_document_intelligence_response(
 }
 
 impl OcrProviderConfig for AzureAiOcrConfig {
+    fn check_auth_capabilities(
+        &self,
+        request: &crate::ocr::types::OcrAdmissionRequest,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<(), Error> {
+        let key = request
+            .api_key
+            .clone()
+            .or_else(|| env_lookup(AZURE_AI_API_KEY_ENV));
+        if key.is_some_and(|value| !value.is_empty()) {
+            return Ok(());
+        }
+        let options = &request.credentials.azure;
+        let configured = |value: Option<&str>, name: &str| {
+            value.is_some_and(|value| !value.is_empty())
+                || env_lookup(name).is_some_and(|value| !value.is_empty())
+        };
+        let client = configured(options.client_id.as_deref(), "AZURE_CLIENT_ID");
+        let tenant = configured(options.tenant_id.as_deref(), "AZURE_TENANT_ID");
+        let token = request
+            .credentials
+            .azure
+            .token
+            .clone()
+            .filter(|value| !value.is_empty())
+            .or_else(|| env_lookup("AZURE_AD_TOKEN"));
+        let oidc = client
+            && tenant
+            && token
+                .as_deref()
+                .is_some_and(|value| value.starts_with("oidc/"));
+        let acquisition = !options.has_token_provider
+            && (options.refresh
+                || (client
+                    && tenant
+                    && (options.has_client_secret || configured(None, "AZURE_CLIENT_SECRET")))
+                || (client
+                    && (options.has_username || configured(None, "AZURE_USERNAME"))
+                    && (options.has_password || configured(None, "AZURE_PASSWORD"))));
+        if oidc || acquisition {
+            return Err(Error::Unsupported("Azure OCR credential acquisition"));
+        }
+        Ok(())
+    }
+
+    fn prepare_credentials(
+        &self,
+        request: &crate::ocr::types::OcrAdmissionRequest,
+        auth: &dyn litellm_auth::AuthServices,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<(String, String)>, Error> {
+        let key = request
+            .api_key
+            .clone()
+            .or_else(|| env_lookup(AZURE_AI_API_KEY_ENV));
+        if request.api_base.is_none() && env_lookup(AZURE_AI_API_BASE_ENV).is_none() {
+            return Err(Error::InvalidRequest(
+                "Missing Azure AI API Base - Set AZURE_AI_API_BASE environment variable or pass api_base parameter".into(),
+            ));
+        }
+        if let Some(key) = key.as_deref().filter(|value| !value.is_empty()) {
+            return validate_azure_ai_environment(
+                request.extra_headers.clone(),
+                Some(key),
+                None,
+                env_lookup,
+            );
+        }
+        let token = request
+            .credentials
+            .azure
+            .token
+            .clone()
+            .filter(|value| !value.is_empty())
+            .or_else(|| env_lookup("AZURE_AD_TOKEN"));
+        let acquired = match (
+            request.credentials.azure.has_token_provider,
+            auth.token_provider(litellm_auth::CallerCredential::AzureAdToken),
+        ) {
+            (true, Some(provider)) => provider
+                .invoke()
+                .map_err(|_| Error::Auth("caller token failed".into()))?,
+            (true, None) => return Err(Error::Unsupported("Azure OCR token provider runtime")),
+            (false, _) => None,
+        };
+        validate_azure_ai_environment(
+            request.extra_headers.clone(),
+            Some(""),
+            acquired
+                .as_ref()
+                .map(litellm_auth::SecretString::expose)
+                .or(token.as_deref()),
+            env_lookup,
+        )
+    }
+
     fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
         crate::lifecycle::RequestBodyPolicy::StructuredAtSend
     }
@@ -511,12 +613,19 @@ impl OcrProviderConfig for AzureAiOcrConfig {
         request: &crate::ocr::types::OcrAdmissionRequest,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> bool {
-        crate::http_utils::has_header(&request.extra_headers, "api-key")
+        request.credentials.azure.has_token_provider
             || request
-                .azure_ad_token
+                .api_key
                 .as_deref()
-                .is_some_and(|key| !key.trim().is_empty())
-            || env_lookup("AZURE_AI_API_KEY").is_some_and(|key| !key.trim().is_empty())
+                .is_some_and(|key| !key.is_empty())
+            || request
+                .credentials
+                .azure
+                .token
+                .as_deref()
+                .is_some_and(|key| !key.is_empty())
+            || env_lookup("AZURE_AI_API_KEY").is_some_and(|key| !key.is_empty())
+            || env_lookup("AZURE_AD_TOKEN").is_some_and(|key| !key.is_empty())
     }
 
     fn document_projection(&self) -> OcrDocumentProjection {

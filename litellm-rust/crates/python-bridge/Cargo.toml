@@ -24,6 +24,8 @@ trace-parity = [
 ]
 
 [dependencies]
+litellm-auth.workspace = true
+litellm-auth-python.workspace = true
 futures-util.workspace = true
 tokio.workspace = true
 tracing-subscriber = { workspace = true, optional = true }

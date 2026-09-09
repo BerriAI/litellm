@@ -22,6 +22,7 @@ use pyo3::types::PyDict;
 use crate::callbacks::pre_call_args;
 use crate::errors::{Error, Route, core_error_to_pyerr, ocr_error_to_pyerr};
 use crate::retained::{RequestRoots, RetainedCallback};
+use litellm_auth_python::PythonAuth;
 use litellm_python_interop::{run_async_value, run_sync_value};
 
 #[pyclass]
@@ -52,12 +53,15 @@ impl OcrState {
 }
 
 fn scalar(arguments: &Bound<'_, PyDict>, name: &str) -> PyResult<Option<String>> {
+    optional_string(arguments, name).map(|value| value.filter(|value| !value.trim().is_empty()))
+}
+
+fn optional_string(arguments: &Bound<'_, PyDict>, name: &str) -> PyResult<Option<String>> {
     arguments
         .get_item(name)?
         .filter(|value| !value.is_none())
         .map(|value| value.extract::<String>())
         .transpose()
-        .map(|value| value.filter(|value| !value.trim().is_empty()))
 }
 
 fn header_pairs(headers: &Bound<'_, PyDict>) -> PyResult<Vec<(String, String)>> {
@@ -67,7 +71,11 @@ fn header_pairs(headers: &Bound<'_, PyDict>) -> PyResult<Vec<(String, String)>> 
         .collect()
 }
 
-fn decode_request(py: Python<'_>, bag: &Bound<'_, PyDict>) -> PyResult<OcrAdmissionRequest> {
+fn decode_request(
+    py: Python<'_>,
+    bag: &Bound<'_, PyDict>,
+    credentials: litellm_auth::CredentialInputs,
+) -> PyResult<OcrAdmissionRequest> {
     let document = bag
         .get_item("document")?
         .ok_or_else(|| PyValueError::new_err("OCR requires document"))?
@@ -100,13 +108,13 @@ fn decode_request(py: Python<'_>, bag: &Bound<'_, PyDict>) -> PyResult<OcrAdmiss
     Ok(OcrAdmissionRequest {
         model,
         custom_llm_provider,
-        api_key: scalar(bag, "api_key")?,
-        api_base: scalar(bag, "api_base")?,
+        api_key: optional_string(bag, "api_key")?,
+        api_base: optional_string(bag, "api_base")?,
         extra_headers,
         timeout_seconds,
         request_format: scalar(bag, "req_format")?,
         document: from_py(document_input.as_any())?,
-        azure_ad_token: scalar(bag, "azure_ad_token")?,
+        credentials,
         vertex_project: scalar(bag, "vertex_project")?.or(scalar(bag, "vertex_ai_project")?),
         vertex_location: scalar(bag, "vertex_location")?.or(scalar(bag, "vertex_ai_location")?),
         stream: bag
@@ -151,7 +159,8 @@ impl OcrLifecycle {
         asynchronous: bool,
         internal_call: bool,
     ) -> PyResult<Self> {
-        let request = decode_request(py, arguments)?;
+        let auth = PythonAuth::from_arguments(py, arguments)?;
+        let request = decode_request(py, arguments, auth.inputs().clone())?;
         let identity = |name: &str| -> PyResult<Option<String>> {
             if let Some(logger) = logger {
                 match logger.getattr(name) {
@@ -256,13 +265,21 @@ fn build_request(
     asynchronous: bool,
 ) -> PyResult<Py<OcrState>> {
     let bag = arguments.bind(py);
-    let request = decode_request(py, bag)?;
+    let auth = PythonAuth::from_arguments(py, bag)?;
+    let request = decode_request(py, bag, auth.inputs().clone())?;
     let model = request.model.clone();
     let custom_llm_provider = request.custom_llm_provider.clone();
     let pre_call_request = py
-        .detach(|| litellm_core::ocr::request::build_pre_call_request(request))
+        .detach(|| litellm_core::ocr::request::build_pre_call_request_with_auth(request, &auth))
         .map_err(|error| {
-            request_error_to_pyerr(py, error, &model, custom_llm_provider.as_deref())
+            crate::errors::ocr_preparation_error_to_pyerr(
+                py,
+                error,
+                auth.take_error(),
+                &model,
+                custom_llm_provider.as_deref(),
+                bag,
+            )
         })?;
     let document = bag
         .get_item("document")?

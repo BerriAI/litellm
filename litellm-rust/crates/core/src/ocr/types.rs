@@ -10,7 +10,7 @@ pub struct OcrAdmissionRequest {
     pub timeout_seconds: f64,
     pub request_format: Option<String>,
     pub document: OcrDocument,
-    pub azure_ad_token: Option<String>,
+    pub credentials: litellm_auth::CredentialInputs,
     pub vertex_project: Option<String>,
     pub vertex_location: Option<String>,
     pub stream: bool,

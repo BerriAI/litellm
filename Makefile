@@ -322,7 +322,7 @@ test-rust-ocr:
 	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$wheel" && \
 	LITELLM_LOCAL_MODEL_COST_MAP=True "$$temporary/venv/bin/python" -I -c 'from litellm.rust_bridge import _native; assert callable(_native.ocr) and callable(_native.aocr)' && \
-	LITELLM_REQUIRE_NATIVE_OCR=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
+	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib \
 	tests/test_litellm_rust/test_ocr.py tests/test_litellm_rust/test_ocr_callbacks.py -v
 

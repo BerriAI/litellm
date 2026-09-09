@@ -1433,9 +1433,6 @@ dependencies = [
 [[package]]
 name = "litellm-auth"
 version = "0.1.0"
-dependencies = [
- "tokio",
-]
 
 [[package]]
 name = "litellm-auth-aws"
@@ -1451,6 +1448,14 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "veil",
+]
+
+[[package]]
+name = "litellm-auth-python"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth",
+ "pyo3",
 ]
 
 [[package]]
@@ -1471,6 +1476,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
+ "litellm-auth",
  "litellm-auth-aws",
  "rand 0.8.7",
  "reqwest",
@@ -1506,6 +1512,8 @@ dependencies = [
  "criterion",
  "futures-util",
  "litellm-ai-gateway",
+ "litellm-auth",
+ "litellm-auth-python",
  "litellm-core",
  "litellm-python-interop",
  "pyo3",

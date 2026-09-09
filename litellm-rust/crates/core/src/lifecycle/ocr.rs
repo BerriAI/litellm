@@ -177,7 +177,7 @@ mod tests {
             document: OcrDocument::DocumentUrl {
                 document_url: "https://example.test/doc.pdf".into(),
             },
-            azure_ad_token: None,
+            credentials: Default::default(),
             vertex_project: None,
             vertex_location: None,
             stream: false,

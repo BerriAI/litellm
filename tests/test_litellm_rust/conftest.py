@@ -158,3 +158,20 @@ def pytest_collection_modifyitems(items):
         from litellm.rust_bridge import _native  # noqa: F401  # validates the installed extension
     except ImportError as error:
         raise pytest.UsageError("LITELLM_RUST=1 requires a compiled litellm.rust_bridge._native extension") from error
+
+
+@pytest.fixture
+def isolated_azure_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "AZURE_AI_API_KEY",
+        "AZURE_AI_API_BASE",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)

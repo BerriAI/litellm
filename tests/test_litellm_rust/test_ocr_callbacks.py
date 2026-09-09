@@ -324,3 +324,179 @@ def test_ocr_duplicate_callback_registration_dispatches_once(ocr_server: Recordi
     assert recorder.names.count("logging_hook") == 1
     assert recorder.names.count("log_success_event") == 1
     assert "log_failure_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_azure_token_callback_precedes_logger_and_preserves_context(
+    ocr_server: RecordingServer,
+    isolated_azure_auth: None,
+    asynchronous: bool,
+) -> None:
+    from contextvars import ContextVar
+    from tests.test_litellm_rust.contracts import call_aocr as public_aocr, call_ocr as public_ocr
+
+    context: Final = ContextVar("azure-token-context", default="missing")
+    context.set("caller")
+    caller_thread: Final = threading.current_thread()
+    caller_loop: Final = asyncio.get_running_loop()
+    observations: Final = []
+
+    class Provider:
+        def __call__(self) -> str:
+            assert context.get() == "caller"
+            assert threading.current_thread() is caller_thread
+            assert asyncio.get_running_loop() is caller_loop
+            observations.append("token")
+            return "caller-token"
+
+    class Edit(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            assert request_headers(kwargs)["Authorization"] == "Bearer caller-token"
+            observations.append("pre_call")
+            request_headers(kwargs)["Authorization"] = "Bearer edited"
+
+    provider: Final = Provider()
+    arguments: Final = {
+        "model": "azure_ai/mistral-ocr-latest",
+        "api_key": None,
+        "azure_ad_token_provider": provider,
+        "callbacks": [Edit()],
+    }
+    response: Final = (
+        await public_aocr(ocr_server, **arguments) if asynchronous else public_ocr(ocr_server, **arguments)
+    )
+    assert has_rust_response_marker(response)
+    assert observations == ["token", "pre_call"]
+    assert ocr_server.requests[0].headers["authorization"] == "Bearer edited"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_azure_token_callback_can_reenter_native_sdk(
+    ocr_server: RecordingServer,
+    isolated_azure_auth: None,
+    asynchronous: bool,
+) -> None:
+    from tests.test_litellm_rust.contracts import call_aocr as public_aocr, call_ocr as public_ocr
+
+    ocr_server.expected_requests = 2
+    calls: Final = []
+
+    def provider() -> str:
+        calls.append("token")
+        nested: Final = public_ocr(ocr_server)
+        assert has_rust_response_marker(nested)
+        return "outer-token"
+
+    arguments: Final = {
+        "model": "azure_ai/mistral-ocr-latest",
+        "api_key": None,
+        "azure_ad_token_provider": provider,
+    }
+    response: Final = (
+        await public_aocr(ocr_server, **arguments) if asynchronous else public_ocr(ocr_server, **arguments)
+    )
+    assert has_rust_response_marker(response)
+    assert calls == ["token"]
+    assert [request.headers["authorization"] for request in ocr_server.requests] == [
+        "Bearer test-key",
+        "Bearer outer-token",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_azure_token_callbacks_keep_results_and_errors_separate(
+    ocr_server: RecordingServer,
+    isolated_azure_auth: None,
+) -> None:
+    from tests.test_litellm_rust.contracts import call_aocr as public_aocr
+
+    ocr_server.expected_requests = 2
+
+    async def request(token: str, fail: bool) -> object:
+        def provider() -> str:
+            if fail:
+                raise ValueError(token)
+            return token
+
+        return await public_aocr(
+            ocr_server,
+            model="azure_ai/mistral-ocr-latest",
+            api_key=None,
+            azure_ad_token_provider=provider,
+        )
+
+    responses: Final = await asyncio.gather(
+        request("first", False),
+        request("failed", True),
+        request("second", False),
+        return_exceptions=True,
+    )
+    assert has_rust_response_marker(responses[0])
+    assert isinstance(responses[1], litellm.APIConnectionError)
+    assert "Failed to get Azure AD token: failed" in str(responses[1])
+    assert has_rust_response_marker(responses[2])
+    assert sorted(request.headers["authorization"] for request in ocr_server.requests) == [
+        "Bearer first",
+        "Bearer second",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancellation"])
+async def test_azure_token_provider_is_released_after_request(
+    ocr_server: RecordingServer,
+    isolated_azure_auth: None,
+    outcome: str,
+) -> None:
+    import gc
+    import weakref
+    from tests.test_litellm_rust.callback_recorder import drain_logging
+    from tests.test_litellm_rust.contracts import call_aocr as public_aocr
+
+    class Provider:
+        def __call__(self) -> str:
+            if outcome == "failure":
+                raise ValueError("unavailable")
+            return "caller-token"
+
+    async def invoke() -> weakref.ReferenceType[Provider]:
+        provider: Final = Provider()
+        reference: Final = weakref.ref(provider)
+        if outcome == "failure":
+            ocr_server.expected_requests = 0
+            with pytest.raises(litellm.APIConnectionError):
+                await public_aocr(
+                    ocr_server, model="azure_ai/mistral-ocr-latest", api_key=None, azure_ad_token_provider=provider
+                )
+        elif outcome == "cancellation":
+            ocr_server.enqueue(ResponseSpec(body=OCR_RESPONSE, delay=0.1))
+            task: Final = asyncio.create_task(
+                public_aocr(
+                    ocr_server,
+                    model="azure_ai/mistral-ocr-latest",
+                    api_key=None,
+                    azure_ad_token_provider=provider,
+                )
+            )
+            await ocr_server.wait_for_requests(1)
+            assert reference() is provider
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            response: Final = await public_aocr(
+                ocr_server,
+                model="azure_ai/mistral-ocr-latest",
+                api_key=None,
+                azure_ad_token_provider=provider,
+            )
+            assert has_rust_response_marker(response)
+        return reference
+
+    reference: Final = await invoke()
+    await drain_logging()
+    await asyncio.sleep(0)
+    gc.collect()
+    assert reference() is None

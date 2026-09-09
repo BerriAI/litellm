@@ -52,6 +52,7 @@ fn check_admission_capabilities(
     if request.stream {
         return Err(Error::Unsupported("OCR streaming response handling"));
     }
+    config.check_auth_capabilities(request, env_lookup)?;
     if let Some(operation) = config.credential_acquisition_operation() {
         let supplied = request
             .api_key
@@ -67,15 +68,18 @@ fn check_admission_capabilities(
 }
 
 pub fn build_pre_call_request(request: OcrAdmissionRequest) -> Result<OcrPreCallRequest, Error> {
+    build_pre_call_request_with_auth(request, &())
+}
+
+pub fn build_pre_call_request_with_auth(
+    request: OcrAdmissionRequest,
+    auth: &dyn litellm_auth::AuthServices,
+) -> Result<OcrPreCallRequest, Error> {
     let (provider, config) = request_config(&request)?;
     let env_lookup = |key: &str| std::env::var(key).ok();
+    check_admission_capabilities(&request, &env_lookup)?;
     let headers = config
-        .validate_credentials(
-            request.extra_headers.clone(),
-            request.api_key.as_deref(),
-            request.azure_ad_token.as_deref(),
-            &env_lookup,
-        )
+        .prepare_credentials(&request, auth, &env_lookup)
         .map_err(
             |error| match (error, config.credential_acquisition_operation()) {
                 (Error::Auth(_), Some(operation)) => Error::Unsupported(operation),
@@ -142,7 +146,116 @@ pub(super) fn validate_capabilities(config: &dyn OcrProviderConfig) -> Result<()
 mod tests {
     use super::*;
     use crate::ocr::types::OcrDocument;
+    use crate::providers::azure_ai::ocr::transformation::AZURE_AI_OCR_CONFIG;
     use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingTokenProvider(AtomicUsize);
+
+    impl litellm_auth::CallerTokenProvider for CountingTokenProvider {
+        fn invoke(
+            &self,
+        ) -> Result<Option<litellm_auth::SecretString>, litellm_auth::AuthServiceError> {
+            let count = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(Some(litellm_auth::SecretString::new(format!(
+                "token-{count}"
+            ))))
+        }
+    }
+
+    impl litellm_auth::AuthServices for CountingTokenProvider {
+        fn token_provider(
+            &self,
+            _: litellm_auth::CallerCredential,
+        ) -> Option<&dyn litellm_auth::CallerTokenProvider> {
+            Some(self)
+        }
+    }
+
+    fn azure_request() -> OcrAdmissionRequest {
+        OcrAdmissionRequest {
+            model: "azure_ai/mistral-ocr-latest".into(),
+            api_key: None,
+            api_base: Some("https://example.test".into()),
+            credentials: litellm_auth::CredentialInputs {
+                azure: litellm_auth::AzureCredentialInputs {
+                    has_token_provider: true,
+                    ..Default::default()
+                },
+            },
+            document: OcrDocument::ImageUrl {
+                image_url: "data:image/png;base64,AA==".into(),
+            },
+            ..request()
+        }
+    }
+
+    #[test]
+    fn azure_caller_token_is_acquired_only_during_auth_and_never_cached() {
+        let provider = CountingTokenProvider(AtomicUsize::new(0));
+        let request = azure_request();
+        check_admission_capabilities(&request, &|_| None).unwrap();
+        assert_eq!(provider.0.load(Ordering::SeqCst), 0);
+        for count in 1..=2 {
+            let headers = AZURE_AI_OCR_CONFIG
+                .prepare_credentials(&request, &provider, &|_| None)
+                .unwrap();
+            assert_eq!(
+                headers,
+                vec![("Authorization".into(), format!("Bearer token-{count}"))]
+            );
+        }
+        assert_eq!(provider.0.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn azure_key_and_missing_endpoint_do_not_invoke_caller() {
+        let provider = CountingTokenProvider(AtomicUsize::new(0));
+        let request = OcrAdmissionRequest {
+            api_key: Some(" key ".into()),
+            ..azure_request()
+        };
+        assert_eq!(
+            AZURE_AI_OCR_CONFIG
+                .prepare_credentials(&request, &provider, &|_| None)
+                .unwrap(),
+            vec![("Authorization".into(), "Bearer  key ".into())]
+        );
+        let request = OcrAdmissionRequest {
+            api_base: None,
+            ..azure_request()
+        };
+        assert!(matches!(
+            AZURE_AI_OCR_CONFIG.prepare_credentials(&request, &provider, &|_| None),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert_eq!(provider.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn azure_oidc_with_caller_requires_native_exchange_before_admission() {
+        let request = OcrAdmissionRequest {
+            credentials: litellm_auth::CredentialInputs {
+                azure: litellm_auth::AzureCredentialInputs {
+                    token: Some("oidc/assertion".into()),
+                    has_token_provider: true,
+                    client_id: Some("client".into()),
+                    tenant_id: Some("tenant".into()),
+                    ..Default::default()
+                },
+            },
+            ..azure_request()
+        };
+        assert!(matches!(
+            check_admission_capabilities(&request, &|_| None),
+            Err(Error::Unsupported(_))
+        ));
+        let request = OcrAdmissionRequest {
+            api_key: Some("key".into()),
+            ..request
+        };
+        assert!(check_admission_capabilities(&request, &|_| None).is_ok());
+    }
 
     fn request() -> OcrAdmissionRequest {
         OcrAdmissionRequest {
@@ -156,7 +269,7 @@ mod tests {
             document: OcrDocument::DocumentUrl {
                 document_url: "https://example.test/document.pdf".into(),
             },
-            azure_ad_token: None,
+            credentials: Default::default(),
             vertex_project: None,
             vertex_location: None,
             stream: false,
@@ -259,10 +372,10 @@ mod tests {
             check_admission_capabilities(&request, &|_| None),
             Err(Error::Unsupported(_))
         ));
-        assert!(matches!(
-            check_admission_capabilities(&request, &|_| Some(" ".into())),
-            Err(Error::Unsupported(_))
-        ));
+        assert_eq!(
+            check_admission_capabilities(&request, &|_| Some(" ".into())).is_ok(),
+            model.starts_with("azure_ai/")
+        );
         assert!(
             check_admission_capabilities(&request, &|name| (name == env_name)
                 .then(|| "configured".into()))

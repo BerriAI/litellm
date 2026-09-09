@@ -23,7 +23,7 @@ fn request() -> OcrRequest {
         document: OcrDocument::DocumentUrl {
             document_url: "data:application/pdf;base64,cGRm".into(),
         },
-        azure_ad_token: None,
+        credentials: Default::default(),
         vertex_project: Some("test-project".into()),
         vertex_location: Some("us-central1".into()),
         stream: false,
@@ -254,8 +254,8 @@ fn cloud_credentials_use_native_keys_headers_or_narrow_acquisition_stub() {
             (
                 "azure_ai/mistral-ocr-latest",
                 "Azure OCR credential acquisition",
-                "Api-Key",
-                "env-azure",
+                "Authorization",
+                "Bearer env-azure",
             ),
             (
                 "vertex_ai/mistral-ocr-latest",
@@ -276,13 +276,26 @@ fn cloud_credentials_use_native_keys_headers_or_narrow_acquisition_stub() {
             } else {
                 assert!(matches!(result, Err(Error::Unsupported(message)) if message == operation));
             }
-            let built = build_pre_call_request(OcrRequest {
+            let result = build_pre_call_request(OcrRequest {
                 extra_headers: vec![("aUtHoRiZaTiOn".into(), "Bearer supplied".into())],
                 ..make_request()
-            })
-            .unwrap();
+            });
+            if model.starts_with("azure_ai/") {
+                if std::env::var("LITELLM_CLOUD_OCR_ENV_TEST").unwrap() == "present" {
+                    assert_eq!(
+                        result.unwrap().headers,
+                        vec![
+                            ("Authorization".into(), "Bearer env-azure".into()),
+                            ("aUtHoRiZaTiOn".into(), "Bearer supplied".into()),
+                        ]
+                    );
+                } else {
+                    assert!(matches!(result, Err(Error::InvalidRequest(_))));
+                }
+                continue;
+            }
             assert_eq!(
-                built.headers,
+                result.unwrap().headers,
                 vec![("aUtHoRiZaTiOn".into(), "Bearer supplied".into())]
             );
         }
@@ -314,8 +327,8 @@ async fn cloud_providers_use_existing_auth_urls_and_request_response_transforms(
         (
             "azure_ai/mistral-ocr-latest",
             "/providers/mistral/azure/ocr",
-            "api-key",
-            "test-key",
+            "authorization",
+            "Bearer  test-key ",
             false,
         ),
         (

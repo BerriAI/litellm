@@ -25,6 +25,28 @@ pub enum OcrResponseHandling {
 }
 
 pub trait OcrProviderConfig: Sync {
+    fn check_auth_capabilities(
+        &self,
+        _request: &super::types::OcrAdmissionRequest,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn prepare_credentials(
+        &self,
+        request: &super::types::OcrAdmissionRequest,
+        _auth: &dyn litellm_auth::AuthServices,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<(String, String)>, Error> {
+        self.validate_credentials(
+            request.extra_headers.clone(),
+            request.api_key.as_deref(),
+            request.credentials.azure.token.as_deref(),
+            env_lookup,
+        )
+    }
+
     fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy;
 
     fn document_projection(&self) -> OcrDocumentProjection {
