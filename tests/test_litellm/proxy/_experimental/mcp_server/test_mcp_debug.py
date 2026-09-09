@@ -208,20 +208,25 @@ class TestWrapSendWithDebugHeaders:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", tuple(AuthResolution))
-async def test_debug_uses_resolution_recorded_after_response_start(source: AuthResolution) -> None:
+@pytest.mark.parametrize("method", ("GET", "DELETE", "POST"))
+async def test_debug_defers_resolution_until_first_frame_only_for_post(source: AuthResolution, method: str) -> None:
     captured: Final[list[Message]] = []
     diagnostics: Final = MCPAuthDiagnostics()
 
     async def send(message: Message) -> None:
         captured.append(message)
 
-    wrapped: Final = MCPDebug.wrap_send_with_debug_headers(send, {}, diagnostics.headers)
+    wrapped: Final = MCPDebug.wrap_send_with_debug_headers(
+        send, diagnostics.headers(), diagnostics.headers, request_method=method
+    )
     await wrapped({"type": "http.response.start", "status": 200, "headers": []})
-    assert captured == []
+    assert len(captured) == (0 if method == "POST" else 1)
     diagnostics.record("s1", source)
     body: Final[Message] = {"type": "http.response.body", "body": b"data: pong\n\n", "more_body": True}
     await wrapped(body)
-    assert dict(captured[0]["headers"])[b"x-mcp-debug-auth-resolution"] == source.value.encode()
+    assert dict(captured[0]["headers"])[b"x-mcp-debug-auth-resolution"] == (
+        source.value.encode() if method == "POST" else b"unresolved"
+    )
     assert captured[1] == body
 
 
@@ -233,7 +238,7 @@ async def test_early_stream_frame_reports_unresolved_without_waiting() -> None:
     async def send(message: Message) -> None:
         captured.append(message)
 
-    wrapped: Final = MCPDebug.wrap_send_with_debug_headers(send, {}, diagnostics.headers)
+    wrapped: Final = MCPDebug.wrap_send_with_debug_headers(send, {}, diagnostics.headers, request_method="POST")
     await wrapped({"type": "http.response.start", "status": 200, "headers": []})
     await wrapped({"type": "http.response.body", "body": b": ping\n\n", "more_body": True})
     diagnostics.record("s1", AuthResolution.stored_user_token)

@@ -4482,7 +4482,9 @@ if MCP_AVAILABLE:
             diagnostics: Final = MCPAuthDiagnostics() if _debug_headers else None
             if diagnostics is not None:
                 scope[MCP_AUTH_DIAGNOSTICS_SCOPE_KEY] = diagnostics
-                send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers, diagnostics.headers)
+                send = MCPDebug.wrap_send_with_debug_headers(
+                    send, _debug_headers, diagnostics.headers, request_method=scope.get("method")
+                )
 
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
