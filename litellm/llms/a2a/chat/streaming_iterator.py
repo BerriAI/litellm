@@ -131,6 +131,11 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         Handles both streaming styles: servers that send deltas ("O", "K") and servers that
         send growing snapshots ("O", "OK") collapse to the same output.
 
+        A snapshot need not repeat the whole stream. An agent that delegates reports
+        sub-agent progress into the same task before answering, so its closing events carry
+        only its own answer, extending nothing. Text that merely repeats the tail of what has
+        been delivered is therefore read as a snapshot as well.
+
         A2A marks no event as delta-or-snapshot, so an event whose text equals everything
         emitted so far is necessarily ambiguous. It is read as a snapshot, because servers
         repeating the whole reply at the end of a stream are common while a delta that
@@ -155,6 +160,15 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             suffix: Final = tail[already_sent:]
             self._emitted_text += suffix
             return suffix
+
+        if emitted_key and text_key and emitted_key.endswith(text_key):
+            # A terminal snapshot that repeats only the agent's own answer instead of the
+            # whole stream. A delegating agent reports sub-agent progress into the same task
+            # before answering, so its closing ``status-update`` and ``artifact-update`` carry
+            # just the answer: that extends nothing already emitted and so escapes the
+            # prefix test above, and would be forwarded twice more. Everything such a
+            # snapshot carries has already been delivered, so emit nothing.
+            return ""
 
         self._emitted_text += text
         return text
