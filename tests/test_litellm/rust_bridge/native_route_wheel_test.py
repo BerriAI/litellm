@@ -229,53 +229,175 @@ def restore_ocr_context(logger: object) -> None:
     pass
 
 
-def drive_ocr_sync(arguments: dict[str, object], bindings: object) -> object:
-    logger: Final = initialize_ocr_logging(arguments, False)
-    try:
-        state: Final = bindings.build_request(arguments, logger, False)
-    except RuntimeError as error:
-        raise NotImplementedError(str(error)) from error
-    bindings.pre_call(state)
-    return bindings.send_sync(state)
-
-
-async def drive_ocr_async(arguments: dict[str, object], bindings: object) -> object:
-    logger: Final = initialize_ocr_logging(arguments, True)
-    try:
-        state: Final = bindings.build_request(arguments, logger, True)
-    except RuntimeError as error:
-        raise NotImplementedError(str(error)) from error
-    bindings.pre_call(state)
-    return bindings.finish(await bindings.send(state))
-
-
 class MessagesLogging:
     def pre_call(self, **_kwargs: object) -> None:
         pass
 
 
+class WheelRouteHost:
+    def __init__(self, route: str, arguments: dict[str, object], asynchronous: bool, bindings: object) -> None:
+        self.route = route
+        self.arguments = arguments
+        self.asynchronous = asynchronous
+        self.bindings = bindings
+        self.logger: object | None = arguments.get("litellm_logging_obj")
+        self.machine = self.create_machine()
+        self.state: object | None = None
+        self.response: object = None
+        self.error: BaseException | None = None
+
+    def create_machine(self) -> object:
+        if self.route == "ocr":
+            return self.bindings.Lifecycle(self.arguments, self.logger, self.asynchronous, False)
+        if self.route == "messages":
+            return self.bindings.Lifecycle(self.asynchronous, False)
+        return self.bindings.Lifecycle(self.arguments, self.asynchronous, False)
+
+    def invoke(self) -> tuple[bool, object]:
+        return self.bindings.invoke(self.machine, self)
+
+    def setup(self) -> None:
+        self.logger = (
+            initialize_ocr_logging(self.arguments, self.asynchronous) if self.route == "ocr" else MessagesLogging()
+        )
+        self.arguments["litellm_logging_obj"] = self.logger
+
+    async def deployment_pre(self) -> None:
+        if self.route == "ocr":
+            self.arguments = await pre_ocr_deployment(self.arguments, "aocr")
+
+    def build_request(self) -> None:
+        if self.logger is None:
+            raise RuntimeError("wheel route logging was not initialized")
+        try:
+            self.state = (
+                self.bindings.build_request(self.machine, self.arguments, self.logger, self.asynchronous)
+                if self.route == "ocr"
+                else self.bindings.build_request(self.machine, self.arguments, self.logger)
+            )
+        except RuntimeError as error:
+            if self.route == "ocr":
+                raise NotImplementedError(str(error)) from error
+            raise
+
+    def pre_call(self) -> None:
+        self.bindings.pre_call(self.state)
+
+    def send_sync(self) -> None:
+        self.response = self.bindings.send_sync(self.machine, self.state)
+
+    async def send(self) -> None:
+        response: Final = await (
+            self.bindings.send(self.machine, self.state, self)
+            if self.route == "messages"
+            else self.bindings.send(self.machine, self.state)
+        )
+        self.response = self.bindings.finish(response) if self.route == "ocr" else response
+
+    async def deployment_success(self) -> None:
+        if self.route == "ocr":
+            self.response = await post_ocr_deployment(self.arguments, self.response, "aocr")
+
+    async def deployment_failure(self) -> None:
+        if self.route == "ocr":
+            await observe_ocr_failure(self.arguments, self.error, "aocr")
+
+    def terminal(self, action: str) -> Awaitable[None] | None:
+        if self.route != "ocr" or self.logger is None:
+            return None
+        if isinstance(self.logger, OCRLogging) and self.logger.calls != ("update", "pre"):
+            return None
+        return invoke_ocr_terminal(action, (self.arguments, self.state), self.logger, self.error, object(), object())
+
+    def sync_success(self) -> Awaitable[None] | None:
+        return self.terminal("sync_success")
+
+    def async_success(self) -> Awaitable[None] | None:
+        return self.terminal("async_success")
+
+    def sync_success_if_needed(self) -> Awaitable[None] | None:
+        return self.terminal("sync_success_if_needed")
+
+    def sync_failure(self) -> Awaitable[None] | None:
+        return self.terminal("sync_failure")
+
+    async def async_failure(self) -> None:
+        result: Final = self.terminal("async_failure")
+        if isinstance(result, Awaitable):
+            await result
+
+    def restore(self) -> None:
+        restore_ocr_context(self.logger)
+
+    def advance(self, outcome: int, error: BaseException | None = None) -> None:
+        replace: Final = self.machine.advance(outcome, self.logger is not None, False)
+        if replace:
+            self.error = error
+
+    def result(self) -> object:
+        if self.machine.complete():
+            return self.response
+        if self.error is None:
+            raise RuntimeError("wheel route failed without retaining its error")
+        raise self.error
+
+
+def drive_route_sync(route: str, arguments: dict[str, object], bindings: object) -> object:
+    host: Final = WheelRouteHost(route, arguments, False, bindings)
+    while host.machine.complete() is None:
+        try:
+            awaiting, _value = host.invoke()
+            if awaiting:
+                raise RuntimeError("synchronous wheel lifecycle selected an awaited operation")
+        except Exception as error:
+            host.advance(1, error)
+        except BaseException as error:
+            host.advance(2, error)
+        else:
+            host.advance(0)
+    return host.result()
+
+
+async def drive_route_async(route: str, arguments: dict[str, object], bindings: object) -> object:
+    host: Final = WheelRouteHost(route, arguments, True, bindings)
+    while host.machine.complete() is None:
+        try:
+            awaiting, value = host.invoke()
+            if awaiting:
+                if not isinstance(value, Awaitable):
+                    raise TypeError("asynchronous wheel lifecycle returned a non-awaitable")
+                await value
+        except Exception as error:
+            host.advance(1, error)
+        except BaseException as error:
+            host.advance(2, error)
+        else:
+            host.advance(0)
+    return host.result()
+
+
+def drive_ocr_sync(arguments: dict[str, object], bindings: object) -> object:
+    return drive_route_sync("ocr", arguments, bindings)
+
+
+async def drive_ocr_async(arguments: dict[str, object], bindings: object) -> object:
+    return await drive_route_async("ocr", arguments, bindings)
+
+
 def drive_messages_sync(arguments: dict[str, object], bindings: object) -> object:
-    state: Final = bindings.build_request(arguments, MessagesLogging())
-    bindings.pre_call(state)
-    return bindings.send_sync(state)
+    return drive_route_sync("messages", arguments, bindings)
 
 
 async def drive_messages_async(arguments: dict[str, object], bindings: object) -> object:
-    state: Final = bindings.build_request(arguments, MessagesLogging())
-    bindings.pre_call(state)
-    return await bindings.send(state)
+    return await drive_route_async("messages", arguments, bindings)
 
 
 def drive_chat_sync(arguments: dict[str, object], bindings: object) -> object:
-    state: Final = bindings.build_request(arguments, MessagesLogging())
-    bindings.pre_call(state)
-    return bindings.send_sync(state)
+    return drive_route_sync("chat_completions", arguments, bindings)
 
 
 async def drive_chat_async(arguments: dict[str, object], bindings: object) -> object:
-    state: Final = bindings.build_request(arguments, MessagesLogging())
-    bindings.pre_call(state)
-    return await bindings.send(state)
+    return await drive_route_async("chat_completions", arguments, bindings)
 
 
 class WheelCallTypes:
@@ -479,6 +601,7 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
             "litellm.llms.base_llm.ocr",
         )
     }
+    packages["litellm"].enable_azure_ad_token_refresh = False
     with patch.dict(
         sys.modules,
         packages
