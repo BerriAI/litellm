@@ -1319,6 +1319,43 @@ class Router:
         if isinstance(litellm.input_callback, list):
             litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
 
+    def _apply_updated_routing_strategy_args(self) -> None:
+        """
+        Re-link the default group's selector to the current `routing_strategy_args`.
+
+        Selectors freeze their `RoutingArgs` at construction, so a runtime args
+        update would otherwise keep serving the boot-time values until restart.
+        Latency/usage state survives the rebuild: it lives in the shared router
+        cache, not on the selector.
+        """
+        strategy: Final = self._normalize_strategy(self.routing_strategy)
+        if strategy == "lar1":
+            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
+
+            apply_lar1_routing_strategy(self, self.routing_strategy_args)
+            return
+
+        attr: Final = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy or "")
+        current: Final = getattr(self, attr, None) if attr is not None else None
+        if attr is None or current is None:
+            return
+
+        try:
+            rebuilt: Final = self._build_strategy_selector(
+                strategy=strategy or "",
+                routing_strategy_args=self.routing_strategy_args,
+            )
+        except (TypeError, ValidationError):
+            verbose_router_logger.exception(
+                "Invalid routing_strategy_args %s for '%s'; keeping the previous ones",
+                self.routing_strategy_args,
+                strategy,
+            )
+            return
+
+        self._unregister_router_selectors((current,))
+        setattr(self, attr, rebuilt)
+
     def routing_strategy_init(self, routing_strategy: RoutingStrategy | str, routing_strategy_args: dict):
         verbose_router_logger.info("Routing strategy: %s", routing_strategy)
         self._validate_routing_strategy(routing_strategy)
@@ -11115,6 +11152,40 @@ class Router:
 
         return ids
 
+    def get_candidate_model_ids_for_route(self, model: str, team_id: str | None = None) -> frozenset[str]:
+        """
+        Deployment ids that could serve ``model`` for ``team_id``, unioned across the paths
+        the router resolves a route through: ``model_group_alias``, a routing group, the
+        ``model_name`` and team indexes, and wildcard pattern routes. Read-only and
+        side-effect-free, unlike ``_common_checks_available_deployment`` which also applies
+        fallbacks and can raise. Lets a pre-call check tell a genuine cross-group route from
+        same-group unavailability without re-deriving that precedence at the call site, and
+        without leaking deployment ids into request kwargs bound for the provider.
+        """
+        resolved: Final = self._get_model_from_alias(model=model) or model
+        routing_group_members: Final = self._get_routing_group_deployments(model=resolved, team_id=team_id)
+        if routing_group_members is not None:
+            return self._deployment_ids(routing_group_members)
+        if resolved in self.model_names:
+            return self._deployment_ids(self._get_all_deployments(model_name=resolved, team_id=team_id))
+        team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
+        return self._deployment_ids(
+            (
+                *self._get_all_deployments(model_name=resolved, team_id=team_id),
+                *(self.pattern_router.route(resolved) or ()),
+                *((team_router.route(resolved) or ()) if team_router is not None else ()),
+            )
+        )
+
+    @staticmethod
+    def _deployment_ids(deployments: Sequence[Mapping[str, object]]) -> frozenset[str]:
+        return frozenset(
+            str(model_info["id"])
+            for deployment in deployments
+            for model_info in (deployment.get("model_info"),)
+            if isinstance(model_info, Mapping) and model_info.get("id") is not None
+        )
+
     def has_model_id(self, candidate_id: str) -> bool:
         """
         O(1) membership check for a deployment ID without allocating large lists.
@@ -11832,7 +11903,7 @@ class Router:
 
         _existing_router_settings: Final = self.get_settings()
         rebuild_routing_groups = False
-        relink_lar1_from_args = False
+        routing_args_updated = False
         for var in kwargs:
             if var in RUNTIME_UPDATABLE_ROUTER_SETTINGS:
                 if var in _int_settings:
@@ -11871,15 +11942,13 @@ class Router:
                                 )
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
-                        relink_lar1_from_args = True
+                        routing_args_updated = True
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting %s is not allowed", var)
 
-        if relink_lar1_from_args and self._normalize_strategy(self.routing_strategy) == "lar1":
-            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
-
-            apply_lar1_routing_strategy(self, self.routing_strategy_args)
+        if routing_args_updated:
+            self._apply_updated_routing_strategy_args()
 
         if rebuild_routing_groups:
             self._init_routing_groups(self._routing_groups_input)
