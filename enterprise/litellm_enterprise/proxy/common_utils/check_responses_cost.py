@@ -178,16 +178,12 @@ class CheckResponsesCost:
                 f"so its cost will not be retried: {db_err}"
             )
 
-    async def _persist_terminal_response(
-        self, job: "LiteLLM_ManagedObjectTable", response: ResponsesAPIResponse
-    ) -> None:
-        """Store the finished response on its managed row and retire the row from polling.
+    async def _mark_job_completed(self, job: "LiteLLM_ManagedObjectTable") -> None:
+        """Retire a billed row from polling, per job so one failure can't strand the rest.
 
-        The row is the only copy of a background generation's usage that outlives the poll, so
-        ``GET /v1/responses/{id}`` can serve a terminal job from here instead of re-reading it
-        from the provider. Every provider re-read replays the same usage and hands back a
-        freshly encoded id, which is what made this route bill per read and defeated id-based
-        dedup in the first place.
+        Only ``status`` is written. The generation's usage and spend already land in
+        ``LiteLLM_SpendLogs`` unconditionally, so copying the response body onto this row would
+        duplicate content the provider still serves, on a table nothing ever deletes from.
 
         ``status`` stays the literal "completed" for every terminal provider status, matching
         what this poller has always written, so stale-row expiry keeps skipping these rows.
@@ -195,11 +191,11 @@ class CheckResponsesCost:
         try:
             await self.prisma_client.db.litellm_managedobjecttable.update_many(
                 where={"id": job.id},
-                data={"status": "completed", "file_object": response.model_dump_json()},
+                data={"status": "completed"},
             )
         except Exception as db_err:
             verbose_proxy_logger.error(
-                f"CheckResponsesCost: failed to persist terminal response for job {job.id}: {db_err}"
+                f"CheckResponsesCost: failed to mark job {job.id} completed: {db_err}"
             )
 
     async def check_responses_cost(self):
@@ -293,10 +289,10 @@ class CheckResponsesCost:
             verbose_proxy_logger.info(
                 f"Response {unified_object_id} has terminal status {response.status}, marking as complete"
             )
-            completed_jobs.append((job, response))
+            completed_jobs.append(job)
 
-        for job, response in completed_jobs:
-            await self._persist_terminal_response(job, response)
+        for job in completed_jobs:
+            await self._mark_job_completed(job)
 
         if len(completed_jobs) > 0:
             verbose_proxy_logger.info(
