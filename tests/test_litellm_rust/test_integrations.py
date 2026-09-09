@@ -9,7 +9,7 @@ from litellm.integrations.generic_api.generic_api_callback import GenericAPILogg
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.proxy.guardrails.guardrail_registry import guardrail_initializer_registry
-from litellm.rust_bridge.provenance import has_native_response_marker
+from litellm.rust_bridge.provenance import has_rust_response_marker
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 from tests.test_litellm_rust.callback_recorder import (
     LiveReferenceLogger,
@@ -76,7 +76,7 @@ async def observe_backend(route: Route, backend: Backend) -> RunObservation:
                 response_cost=payload["response_cost"],
                 response_text=route.response_text(response),
                 provider_body=provider_body,
-                native_dispatch=has_native_response_marker(response),
+                rust_dispatch=has_rust_response_marker(response),
             )
 
 
@@ -134,8 +134,8 @@ async def test_public_sdk_python_rust_composition_parity(route: Route) -> None:
     python_body: Final = {**python.provider_body, "stream": python.provider_body.get("stream", False)}
     rust_body: Final = {**rust.provider_body, "stream": rust.provider_body.get("stream", False)}
     assert python_body == rust_body
-    assert python.native_dispatch is False
-    assert rust.native_dispatch is True
+    assert python.rust_dispatch is False
+    assert rust.rust_dispatch is True
 
 
 @pytest.mark.asyncio
@@ -151,7 +151,7 @@ async def test_terminal_callbacks_share_live_objects_within_one_run(backend: Bac
             second_event: Final = (await second.wait_for_async())[0]
             assert first_event.kwargs is second_event.kwargs
             assert first_event.response is second_event.response
-            assert has_native_response_marker(response) is (backend == "rust")
+            assert has_rust_response_marker(response) is (backend == "rust")
             first.release()
             second.release()
 
@@ -235,7 +235,7 @@ async def test_gcs_literalai_serialization_schedule(
                 assert generation["tools"] == MESSAGES_TOOLS
                 assert len(harness.storage.posts) == 1
                 assert len(harness.literal_sink.posts) == 1
-                assert has_native_response_marker(response) is (backend == "rust")
+                assert has_rust_response_marker(response) is (backend == "rust")
 
 
 @pytest.mark.asyncio
@@ -248,7 +248,7 @@ async def test_interrupted_stream_emits_terminal_only_when_consumer_closes(backe
             first_chunk: Final = await anext(stream)
             await drain_logging()
             assert otel.spans() == ()
-            assert has_native_response_marker(stream) is (backend == "rust")
+            assert has_rust_response_marker(stream) is (backend == "rust")
             await stream.aclose()
             await drain_logging()
             assert first_chunk is not None

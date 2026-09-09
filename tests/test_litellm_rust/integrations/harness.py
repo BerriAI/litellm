@@ -31,7 +31,7 @@ class RunObservation:
     response_cost: float
     response_text: str
     provider_body: Mapping[str, object]
-    native_dispatch: bool
+    rust_dispatch: bool
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 import pytest
 
 import litellm
-from litellm.rust_bridge.provenance import has_native_response_marker
+from litellm.rust_bridge.provenance import has_rust_response_marker
 from tests.test_litellm_rust.contracts import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
 from tests.test_litellm_rust.recording_server import RecordedRequest, RecordingServer, ResponseSpec
 
@@ -60,7 +60,7 @@ def test_public_ocr_entrypoint_uses_native_transport_when_enabled(ocr_server: Re
     )
 
     assert response.pages[0].markdown == "native OCR response"
-    assert has_native_response_marker(response)
+    assert has_rust_response_marker(response)
 
 
 @pytest.mark.asyncio
@@ -73,7 +73,7 @@ async def test_public_aocr_entrypoint_uses_native_transport_when_enabled(ocr_ser
     )
 
     assert response.pages[0].markdown == "native OCR response"
-    assert has_native_response_marker(response)
+    assert has_rust_response_marker(response)
 
 
 def test_public_ocr_falls_back_when_native_transport_declines(ocr_server: RecordingServer) -> None:
@@ -85,7 +85,7 @@ def test_public_ocr_falls_back_when_native_transport_declines(ocr_server: Record
     )
 
     assert response.pages[0].markdown == "native OCR response"
-    assert not has_native_response_marker(response)
+    assert not has_rust_response_marker(response)
 
 
 def test_public_ocr_uses_python_transport_when_disabled(ocr_server: RecordingServer) -> None:
@@ -99,7 +99,7 @@ def test_public_ocr_uses_python_transport_when_disabled(ocr_server: RecordingSer
     )
 
     assert response.pages[0].markdown == "native OCR response"
-    assert not has_native_response_marker(response)
+    assert not has_rust_response_marker(response)
 
 
 def test_native_ocr_requests_an_uncompressed_response(ocr_server: RecordingServer) -> None:

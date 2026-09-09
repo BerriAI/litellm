@@ -8,7 +8,7 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import configuration
-from litellm.rust_bridge.provenance import has_native_response_marker
+from litellm.rust_bridge.provenance import has_rust_response_marker
 from litellm.types.router import GenericLiteLLMParams
 
 rust_messages = importlib.import_module("litellm.rust_bridge.messages")
@@ -148,7 +148,7 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
 
     assert response is not None
     assert response["id"] == FAKE_MESSAGES_RESPONSE["id"]
-    assert has_native_response_marker(response)
+    assert has_rust_response_marker(response)
     assert bridge.calls[0] == {
         "_rust_lifecycle_owner": "bridge",
         "model": "claude-sonnet-4-5",
@@ -179,7 +179,7 @@ async def test_amessages_wrapper_forwards_args():
 
     assert response is not None
     assert response["id"] == FAKE_MESSAGES_RESPONSE["id"]
-    assert has_native_response_marker(response)
+    assert has_rust_response_marker(response)
     assert bridge.calls[0]["model"] == "claude-sonnet-4-5"
     assert bridge.calls[0]["timeout_seconds"] == 12.5
 

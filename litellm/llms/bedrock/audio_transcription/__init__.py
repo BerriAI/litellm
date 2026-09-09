@@ -5,7 +5,7 @@ import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import transcription as rust_transcription_bridge
-from litellm.rust_bridge.provenance import mark_native_response
+from litellm.rust_bridge.provenance import mark_rust_response
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 
@@ -56,7 +56,7 @@ class BedrockAudioTranscriptionRustDispatch:
         )
         if rust_response is None:
             raise RuntimeError("Rust audio transcription bridge is unavailable")
-        return mark_native_response(TranscriptionResponse(**rust_response))
+        return mark_rust_response(TranscriptionResponse(**rust_response))
 
     async def async_audio_transcriptions(
         self,
@@ -82,4 +82,4 @@ class BedrockAudioTranscriptionRustDispatch:
         )
         if rust_response is None:
             raise RuntimeError("Rust audio transcription bridge is unavailable")
-        return mark_native_response(TranscriptionResponse(**rust_response))
+        return mark_rust_response(TranscriptionResponse(**rust_response))

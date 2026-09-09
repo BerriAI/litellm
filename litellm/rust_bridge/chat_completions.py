@@ -56,7 +56,7 @@ from litellm.rust_bridge._lifecycle import (
 )
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.loader import get_native_bridge
-from litellm.rust_bridge.provenance import mark_native_response, native_response_hidden_params
+from litellm.rust_bridge.provenance import mark_rust_response, rust_response_hidden_params
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.utils import ModelResponse
 
@@ -360,7 +360,7 @@ def build_model_response(
     built: Final = convert_to_model_response_object(
         response_object=dict(rust_response),  # mutable-ok: the converter takes a real dict and rewrites it
         model_response_object=model_response,
-        hidden_params=native_response_hidden_params(),  # mutable-ok: rewritten by the converter
+        hidden_params=rust_response_hidden_params(),  # mutable-ok: rewritten by the converter
     )
     if not isinstance(built, ModelResponse):
         raise TypeError(f"expected a ModelResponse from the rust path, got {type(built).__name__}")
@@ -410,7 +410,7 @@ def chat_completions(
                 RustChatCompletions, rust_chat_completions
             )
             rust_result: Final = argument_bag_call(call_arguments)
-            return mark_native_response(rust_result)
+            return mark_rust_response(rust_result)
         if _STATE.chat_completions is not None:
             legacy: Final = cast(  # cast-ok: signature inspection selected the legacy injected callable
                 LegacyRustChatCompletions, rust_chat_completions
@@ -429,7 +429,7 @@ def chat_completions(
                 on_response(rust_response)
             return build_model_response(rust_response, model_response)
         native_call: Final = cast(RustChatCompletions, rust_chat_completions)  # cast-ok: native ABI uses argument bag
-        return mark_native_response(native_call(call_arguments))
+        return mark_rust_response(native_call(call_arguments))
     except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
         _reraise_or_decline(
             rust_error,
@@ -484,7 +484,7 @@ async def achat_completions(
                 RustAchatCompletions, rust_achat_completions
             )
             rust_result: Final = await argument_bag_call(call_arguments)
-            return mark_native_response(rust_result)
+            return mark_rust_response(rust_result)
         if _STATE.achat_completions is not None:
             legacy: Final = cast(  # cast-ok: signature inspection selected the legacy injected callable
                 LegacyRustAchatCompletions, rust_achat_completions
@@ -505,7 +505,7 @@ async def achat_completions(
         native_call: Final = cast(  # cast-ok: native ABI uses argument bag
             RustAchatCompletions, rust_achat_completions
         )
-        return mark_native_response(await native_call(call_arguments))
+        return mark_rust_response(await native_call(call_arguments))
     except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
         _reraise_or_decline(
             rust_error,

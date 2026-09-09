@@ -12,7 +12,7 @@ from litellm.integrations.rubrik import RubrikLogger
 from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import AzureContentSafetyTextModerationGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr import CrowdStrikeAIDRHandler
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
-from litellm.rust_bridge.provenance import has_native_response_marker
+from litellm.rust_bridge.provenance import has_rust_response_marker
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.callback_recorder import RecordingLogger, drain_logging
@@ -110,7 +110,7 @@ async def test_crowdstrike_redaction_reaches_native_chat_provider_and_exporter(
         ]
         assert provider.requests[0].body["system"] == [{"type": "text", "text": "Keep the answer short"}]
         assert exported_messages == CHAT_MESSAGES
-        assert has_native_response_marker(response)
+        assert has_rust_response_marker(response)
 
 
 @pytest.mark.asyncio
@@ -158,7 +158,7 @@ async def test_rubrik_block_preserves_context_for_error_exporters(
                         callbacks=[generic_api_export.logger, recorder],
                         guardrails=[rubrik.guardrail_name],
                     )
-                assert has_native_response_marker(raised.value.original_response) is (backend == "rust")
+                assert has_rust_response_marker(raised.value.original_response) is (backend == "rust")
                 await drain_logging()
                 await rubrik.flush_queue()
 
@@ -223,7 +223,7 @@ async def test_purview_audit_retains_payload_after_sdk_response(
                 assert CHAT_MESSAGES[-1]["content"] in json.dumps(audits[0].body)
                 assert "Handled safely" in json.dumps(audits[1].body)
                 assert generic_api_export.exports[0].body["status"] == "success"
-                assert has_native_response_marker(response) is (backend == "rust")
+                assert has_rust_response_marker(response) is (backend == "rust")
             finally:
                 purview.graph.release.set()
                 if not request_task.done():
@@ -267,7 +267,7 @@ async def test_purview_sync_audit_runs_without_caller_event_loop(
                 assert "Handled safely" in json.dumps(audits[1].body)
                 assert sink.requests[0].path == "/api/graphql"
                 assert "Handled safely" in json.dumps(sink.requests[0].body["variables"]["generation_0"])
-                assert has_native_response_marker(response) is (backend == "rust")
+                assert has_rust_response_marker(response) is (backend == "rust")
             finally:
                 purview.graph.release.set()
 

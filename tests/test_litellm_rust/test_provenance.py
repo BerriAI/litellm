@@ -2,8 +2,8 @@ from typing import Final
 
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.provenance import (
-    NATIVE_NON_RESPONSE_ENTRYPOINTS,
-    NATIVE_RESPONSE_ENTRYPOINTS,
+    RUST_NON_RESPONSE_ENTRYPOINTS,
+    RUST_RESPONSE_ENTRYPOINTS,
 )
 
 MARKER_CONTRACT_ENTRYPOINTS: Final = frozenset(
@@ -29,8 +29,8 @@ def test_native_route_catalogue_matches_extension_exports() -> None:
         if not name.startswith("_") and name[0].islower()
     )
 
-    assert route_exports == NATIVE_RESPONSE_ENTRYPOINTS | NATIVE_NON_RESPONSE_ENTRYPOINTS
+    assert route_exports == RUST_RESPONSE_ENTRYPOINTS | RUST_NON_RESPONSE_ENTRYPOINTS
 
 
 def test_every_response_entrypoint_has_marker_contract_coverage() -> None:
-    assert MARKER_CONTRACT_ENTRYPOINTS == NATIVE_RESPONSE_ENTRYPOINTS
+    assert MARKER_CONTRACT_ENTRYPOINTS == RUST_RESPONSE_ENTRYPOINTS

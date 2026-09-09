@@ -242,7 +242,7 @@ async def aocr(
     """
     from litellm.rust_bridge import ocr as rust_ocr_bridge
     from litellm.rust_bridge.configuration import rust_enabled
-    from litellm.rust_bridge.provenance import mark_native_response
+    from litellm.rust_bridge.provenance import mark_rust_response
 
     if not rust_enabled() or rust_ocr_bridge.load_rust_aocr() is None:
         return await _legacy_aocr(
@@ -259,7 +259,7 @@ async def aocr(
         "extra_headers": extra_headers,
     }
     try:
-        return mark_native_response(await rust_ocr_bridge.aocr(arguments))
+        return mark_rust_response(await rust_ocr_bridge.aocr(arguments))
     except NotImplementedError:
         if "litellm_logging_obj" in arguments:
             raise
@@ -537,7 +537,7 @@ def ocr(
     """
     from litellm.rust_bridge import ocr as rust_ocr_bridge
     from litellm.rust_bridge.configuration import rust_enabled
-    from litellm.rust_bridge.provenance import mark_native_response
+    from litellm.rust_bridge.provenance import mark_rust_response
 
     if not rust_enabled() or kwargs.get("aocr") is True or rust_ocr_bridge.load_rust_ocr() is None:
         return _legacy_ocr(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs)
@@ -552,7 +552,7 @@ def ocr(
         "extra_headers": extra_headers,
     }
     try:
-        return mark_native_response(rust_ocr_bridge.ocr(arguments))
+        return mark_rust_response(rust_ocr_bridge.ocr(arguments))
     except NotImplementedError:
         if "litellm_logging_obj" in arguments:
             raise

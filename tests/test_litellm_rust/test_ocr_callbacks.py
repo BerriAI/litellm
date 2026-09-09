@@ -8,7 +8,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.rust_bridge.provenance import has_native_response_marker
+from litellm.rust_bridge.provenance import has_rust_response_marker
 from tests.test_litellm_rust.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.contracts import (
     OCR_DOCUMENT,
@@ -98,12 +98,12 @@ def test_pre_call_header_edits_reach_later_callbacks_and_provider(ocr_server: Re
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("rust_enabled", [False, True])
 @pytest.mark.parametrize("asynchronous", [False, True])
 async def test_pre_call_nested_mutation_updates_retained_references(
-    ocr_server: RecordingServer, native: bool, asynchronous: bool
+    ocr_server: RecordingServer, rust_enabled: bool, asynchronous: bool
 ) -> None:
-    litellm.rust(native)
+    litellm.rust(rust_enabled)
     original: Final = dict(OCR_DOCUMENT)
     replacement_url: Final = "data:application/pdf;base64,ZGVm"
     retained: Final = []
@@ -129,7 +129,7 @@ async def test_pre_call_nested_mutation_updates_retained_references(
     assert retained[0]["document_url"] == replacement_url
     assert original["document_url"] == replacement_url
     assert ocr_server.requests[0].body["document"]["document_url"] == replacement_url
-    assert has_native_response_marker(response) is native
+    assert has_rust_response_marker(response) is rust_enabled
 
 
 def test_pre_call_field_replacement_preserves_original_references(ocr_server: RecordingServer) -> None:
