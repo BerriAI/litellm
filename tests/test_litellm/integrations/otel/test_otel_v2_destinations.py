@@ -1828,9 +1828,6 @@ class TestTenantConfigAgreement:
         assert [d.endpoint for d in destinations] == ["http://key.local/api/public/otel"]
 
     def test_a_failure_entry_still_wins_the_merge_next_to_a_success_entry(self):
-        """The sibling parser merges every entry's vars last-wins whatever its
-        ``callback_type``, so the backend receives the failure entry's account for
-        this request; the destination must name that same account."""
         entries = [
             {**self._entry("http://team.local"), "callback_type": "success"},
             {

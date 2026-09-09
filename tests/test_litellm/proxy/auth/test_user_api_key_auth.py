@@ -7110,10 +7110,6 @@ _DDTRACE_AUTH_PROBE = dedent(
 
 
 def test_user_api_key_auth_opens_a_datadog_span_for_accepted_and_rejected_keys(tmp_path: Path):
-    """With ``USE_DDTRACE=true`` the whole auth call runs inside one Datadog span,
-    which is what makes auth latency and auth failures visible in APM. The
-    decorator is applied at import time off ``ddtrace.tracer``, so the check runs
-    in a subprocess against a recording ``ddtrace`` package on ``PYTHONPATH``."""
     stub_root = tmp_path / "site"
     (stub_root / "ddtrace").mkdir(parents=True)
     (stub_root / "ddtrace" / "__init__.py").write_text(_RECORDING_DDTRACE)
