@@ -1,12 +1,7 @@
-import os
-import sys
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.watsonx.common_utils import generate_iam_token
 
@@ -129,11 +124,7 @@ class TestGenerateIAMToken:
             mock_client.reset_mock()
             mock_cache.reset_mock()
 
-            # Configure mock to return values based on env_keys
-            def get_secret_side_effect(key):
-                return env_keys.get(key)
-
-            mock_get_secret_str.side_effect = get_secret_side_effect
+            mock_get_secret_str.side_effect = env_keys.get
 
             mock_response = MagicMock()
             mock_response.json.return_value = {

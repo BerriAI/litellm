@@ -6,8 +6,6 @@ including the logging handler, cost tracking, and WebSocket message processing.
 """
 
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import Dict, List, Any, Optional
@@ -16,7 +14,6 @@ import pytest
 import httpx
 
 # Add the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
     VertexAILivePassthroughLoggingHandler,

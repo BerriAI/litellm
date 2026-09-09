@@ -6,9 +6,11 @@ import os
 import sys
 import tracemalloc
 from collections import Counter
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, NamedTuple, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from typing_extensions import ReadOnly
 
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
@@ -194,6 +196,42 @@ async def memory_usage_in_mem_cache_items(
     }
 
 
+class _ProcessMemoryInfo(Protocol):
+    """The resident and virtual sizes psutil reports for a process."""
+
+    @property
+    def rss(self) -> int: ...
+
+    @property
+    def vms(self) -> int: ...
+
+
+class _ProcessHandle(Protocol):
+    """The psutil process handle members this module reads."""
+
+    def memory_info(self) -> _ProcessMemoryInfo: ...
+
+    def memory_percent(self) -> float: ...
+
+
+class _ProcessMemoryUsage(NamedTuple):
+    """Memory usage of a single worker process."""
+
+    resident_megabytes: float
+    virtual_megabytes: float
+    percent: float
+
+
+def _process_memory_usage(process: _ProcessHandle) -> _ProcessMemoryUsage:
+    """Read resident/virtual megabytes and system memory share for ``process``."""
+    memory_info: Final = process.memory_info()
+    return _ProcessMemoryUsage(
+        resident_megabytes=memory_info.rss / (1024 * 1024),
+        virtual_megabytes=memory_info.vms / (1024 * 1024),
+        percent=process.memory_percent(),
+    )
+
+
 @router.get("/debug/memory/summary", include_in_schema=False)
 async def get_memory_summary(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -227,10 +265,9 @@ async def get_memory_summary(
     try:
         import psutil
 
-        process: Final = psutil.Process()
-        memory_info: Final = process.memory_info()
-        memory_mb: Final = memory_info.rss / (1024 * 1024)
-        memory_percent: Final = process.memory_percent()
+        usage: Final = _process_memory_usage(psutil.Process())
+        memory_mb: Final = usage.resident_megabytes
+        memory_percent: Final = usage.percent
 
         process_memory = {
             "summary": f"{memory_mb:.1f} MB ({memory_percent:.1f}% of system memory)",
@@ -252,7 +289,7 @@ async def get_memory_summary(
         process_memory["error"] = str(e)
 
     # Get cache information
-    caches: Final[dict[str, Any]] = {}
+    caches: Final[dict[str, object]] = {}
     total_cache_items = 0
 
     try:
@@ -313,7 +350,7 @@ async def get_memory_summary(
     }
 
 
-def _get_gc_statistics() -> dict[str, Any]:
+def _get_gc_statistics() -> Mapping[str, object]:
     """Get garbage collector statistics."""
     return {
         "enabled": gc.isenabled(),
@@ -341,30 +378,42 @@ def _get_gc_statistics() -> dict[str, Any]:
     }
 
 
-def _get_object_type_counts(top_n: int) -> tuple[int, list[dict[str, Any]]]:
+class _ObjectTypeCount(TypedDict):
+    """One row of the tracked-object histogram."""
+
+    type: ReadOnly[str]
+    count: ReadOnly[int]
+    count_readable: ReadOnly[str]
+
+
+def _type_name_counts(objects: Sequence[object]) -> Counter[str]:
+    """Count ``objects`` by the name of their type."""
+    return Counter(type(obj).__name__ for obj in objects)
+
+
+def _get_object_type_counts(top_n: int) -> tuple[int, list[_ObjectTypeCount]]:
     """Count objects by type and return total count and top N types."""
-    type_counts: Final[Counter] = Counter()
-    total_objects = 0
+    type_counts: Final = _type_name_counts(gc.get_objects())
 
-    for obj in gc.get_objects():
-        total_objects += 1
-        obj_type = type(obj).__name__
-        type_counts[obj_type] += 1
-
-    top_object_types: Final = [
+    top_object_types: Final[list[_ObjectTypeCount]] = [
         {"type": obj_type, "count": count, "count_readable": f"{count:,}"}
         for obj_type, count in type_counts.most_common(top_n)
     ]
 
-    return total_objects, top_object_types
+    return sum(type_counts.values()), top_object_types
 
 
-def _get_uncollectable_objects_info() -> dict[str, Any]:
+def _type_names(objects: Sequence[object]) -> Sequence[str]:
+    """The type name of each object in ``objects``."""
+    return [type(obj).__name__ for obj in objects]
+
+
+def _get_uncollectable_objects_info() -> Mapping[str, object]:
     """Get information about uncollectable objects (potential memory leaks)."""
     uncollectable: Final = gc.garbage
     return {
         "count": len(uncollectable),
-        "sample_types": [type(obj).__name__ for obj in uncollectable[:10]],
+        "sample_types": _type_names(uncollectable[:10]),
         "warning": (
             "If count > 0, you may have reference cycles preventing garbage collection"
             if len(uncollectable) > 0
@@ -373,9 +422,11 @@ def _get_uncollectable_objects_info() -> dict[str, Any]:
     }
 
 
-def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache) -> dict[str, Any]:
+def _get_cache_memory_stats(
+    user_api_key_cache, llm_router, proxy_logging_obj, redis_usage_cache
+) -> Mapping[str, object]:
     """Calculate memory usage for all caches."""
-    cache_stats: Final[dict[str, Any]] = {}
+    cache_stats: Final[dict[str, object]] = {}
     try:
         # User API key cache
         user_cache_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.cache_dict)
@@ -439,9 +490,9 @@ def _get_cache_memory_stats(user_api_key_cache, llm_router, proxy_logging_obj, r
     return cache_stats
 
 
-def _get_router_memory_stats(llm_router) -> dict[str, Any]:
+def _get_router_memory_stats(llm_router) -> Mapping[str, object]:
     """Get memory usage statistics for LiteLLM router."""
-    litellm_router_memory: dict[str, Any] = {}
+    litellm_router_memory: dict[str, object] = {}
     try:
         if llm_router is not None:
             # Model list memory size
@@ -505,7 +556,7 @@ def _get_router_memory_stats(llm_router) -> dict[str, Any]:
     return litellm_router_memory
 
 
-def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> dict[str, Any] | None:
+def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> Mapping[str, object] | None:
     """Get process-level memory information using psutil."""
     if not include_process_info:
         return None
@@ -514,10 +565,10 @@ def _get_process_memory_info(worker_pid: int, include_process_info: bool) -> dic
         import psutil
 
         process: Final = psutil.Process()
-        memory_info: Final = process.memory_info()
-        ram_usage_mb: Final = round(memory_info.rss / (1024 * 1024), 2)
-        virtual_memory_mb: Final = round(memory_info.vms / (1024 * 1024), 2)
-        memory_percent: Final = round(process.memory_percent(), 2)
+        usage: Final = _process_memory_usage(process)
+        ram_usage_mb: Final = round(usage.resident_megabytes, 2)
+        virtual_memory_mb: Final = round(usage.virtual_megabytes, 2)
+        memory_percent: Final = round(usage.percent, 2)
 
         return {
             "pid": worker_pid,

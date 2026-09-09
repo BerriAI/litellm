@@ -1,19 +1,22 @@
 "use client";
 
-import { useState } from "react";
 import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllModelsTab";
+import { ALL_MODEL_GROUPS_VALUE } from "@/app/(dashboard)/models-and-endpoints/components/AllModelsTable";
 import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/useModelDashboardData";
-import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
+import {
+  useModelDetailRouting,
+  useModelGroupFilterRouting,
+} from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
 
 export default function AllModelsPanel() {
-  const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
+  const { modelGroup, setModelGroup } = useModelGroupFilterRouting();
   const { availableModelGroups, availableModelAccessGroups } = useModelDashboardData();
   const { openModel, openTeam } = useModelDetailRouting();
 
   return (
     <AllModelsTab
-      selectedModelGroup={selectedModelGroup}
-      setSelectedModelGroup={setSelectedModelGroup}
+      selectedModelGroup={modelGroup}
+      setSelectedModelGroup={(group) => setModelGroup(group === ALL_MODEL_GROUPS_VALUE ? null : group)}
       availableModelGroups={availableModelGroups}
       availableModelAccessGroups={availableModelAccessGroups}
       setSelectedModelId={openModel}

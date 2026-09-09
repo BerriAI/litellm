@@ -19,6 +19,15 @@ describe("CreatedKeyDisplay", () => {
     expect(screen.getByText("sk-test-123")).toBeInTheDocument();
   });
 
+  it("should theme the key box with tokens instead of a hardcoded light background", () => {
+    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
+
+    const keyBox = screen.getByText("sk-test-123").parentElement as HTMLElement;
+
+    expect(keyBox).not.toHaveAttribute("style");
+    expect(keyBox).toHaveClass("bg-muted");
+  });
+
   it("should display the security warning", () => {
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
     expect(screen.getByText(/you will not be able to view it again/i)).toBeInTheDocument();

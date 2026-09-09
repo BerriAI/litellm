@@ -280,3 +280,27 @@ def test_a_dockerfile_directory_entry_is_stale_because_only_an_exact_path_exempt
         dockerfiles=("docker/Dockerfile.database",),
     )
     assert [f.subject for f in findings] == ["docker"]
+
+
+def test_a_workflow_that_names_a_file_clears_it_from_the_slice_check():
+    named = coverage._workflow_named_tokens()
+    assert named, "the workflows must name some test paths or the check proves nothing"
+    assert any(
+        coverage._token_covers(token, "tests/local_testing/test_caching_handler.py")
+        for token in named
+    )
+
+
+def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
+    named = coverage._workflow_named_tokens()
+    circleci_only = "tests/proxy_admin_ui_tests"
+    assert not any(coverage._token_covers(token, f"{circleci_only}/test_key_management.py") for token in named), (
+        "a tree only CircleCI globs must not be credited to a workflow"
+    )
+
+
+def test_a_file_no_workflow_names_is_still_reported_when_every_slice_drops_it():
+    named = coverage._workflow_named_tokens()
+    assert not any(
+        coverage._token_covers(token, "tests/local_testing/test_caching.py") for token in named
+    ), "test_caching.py is allowlisted, not run; crediting it would hide a real gap"

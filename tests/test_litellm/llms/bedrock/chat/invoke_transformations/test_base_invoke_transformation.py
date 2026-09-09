@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
@@ -182,3 +177,16 @@ def test_guardrail_config_flows_to_headers_not_request_body(model):
     assert headers["X-Amzn-Bedrock-GuardrailIdentifier"] == "ff6ujrregl1q"
     assert headers["X-Amzn-Bedrock-GuardrailVersion"] == "DRAFT"
     assert headers["X-Amzn-Bedrock-Trace"] == "DISABLED"
+
+
+def test_get_error_class_preserves_provider_headers():
+    """The invoke handler path hands real provider headers to get_error_class (LIT-5428)."""
+    error = AmazonInvokeConfig().get_error_class(
+        error_message="Amazon Bedrock is unable to process your request.",
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-invoke-500"},
+    )
+
+    assert isinstance(error, BedrockError)
+    assert error.headers == {"x-amzn-RequestId": "req-invoke-500"}
+    assert error.response.headers["x-amzn-requestid"] == "req-invoke-500"

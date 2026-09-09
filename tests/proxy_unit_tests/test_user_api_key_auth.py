@@ -1,13 +1,10 @@
 # What is this?
 ## Unit tests for user_api_key_auth helper functions
 
-import os
-import sys
 
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Dict, List, Optional
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -157,6 +154,7 @@ async def test_team_object_has_object_permission_id():
         token=hashed_key,
         last_refreshed_at=time.time(),
         team_object_permission_id=permission_id,
+        team_models=["gpt-4o"],
     )
     user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
 
@@ -245,6 +243,7 @@ async def test_aaauser_personal_budgets(key_ownership):
             user_id=_user_id,
             team_id="my-special-team",
             team_max_budget=100,
+            team_models=["gpt-4o"],
             spend=20,
         )
 

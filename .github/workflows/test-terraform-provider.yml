@@ -114,4 +114,4 @@ jobs:
 
       - name: Audit provider endpoints against the schema
         working-directory: terraform/provider
-        run: go run ./tools/endpointaudit -provider-dir ./litellm -spec "${RUNNER_TEMP}/openapi.json"
+        run: go run ./tools/endpointaudit -provider-dir ./litellm -spec "${RUNNER_TEMP}/openapi.json" -coverage-allowlist ./tools/endpointaudit/coverage_allowlist.txt

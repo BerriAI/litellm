@@ -101,16 +101,27 @@ class _ResolvedKey:
     key: "UserAPIKeyAuth"
 
 
-_KeyResolutionFailure = Literal["no_active_key", "unavailable", "unresolvable"]
+_KeyResolutionFailure = Literal["no_active_key", "unavailable", "faulted", "unresolvable"]
 """Why a token request yielded no active litellm key, kept distinct so a caller statuses each truthfully
 instead of blaming the client for a gateway problem:
 - ``no_active_key``: none was presented, or the presented key is unknown / blocked / expired (the
   caller's request is at fault)
 - ``unavailable``: the auth database was transiently unreachable while resolving (retryable)
+- ``faulted``: the auth database's query engine reported a fault that retrying will not clear (still a
+  503, but the wording must not tell the operator to wait)
 - ``unresolvable``: the gateway cannot resolve identity right now (no DB connection, or an unexpected
   error) -- a gateway fault, not the caller's
 The classification mirrors admission's ``_reload_admitted_key`` so the mint (ingress) and admission
 (egress) never disagree on the status of the same outage."""
+
+
+def _database_failure(exc: Exception) -> Literal["unavailable", "faulted"]:
+    from litellm.proxy.db.exception_handler import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        PrismaDBExceptionHandler,
+    )
+
+    fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(exc) or exc
+    return "faulted" if PrismaDBExceptionHandler.is_permanent_database_fault(fault) else "unavailable"
 
 
 async def _resolve_active_litellm_key(request: Request) -> "_ResolvedKey | _KeyResolutionFailure":
@@ -170,7 +181,7 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
         return "no_active_key"
     except Exception as exc:  # noqa: BLE001  # classify: a DB outage is retryable, anything else is an opaque gateway fault
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(exc):
-            return "unavailable"
+            return _database_failure(exc)
         verbose_logger.debug(
             "_reload_active_key_by_hash: unexpected key-resolution error (%s)",
             type(exc).__name__,
@@ -225,8 +236,9 @@ async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResol
     except (ProxyException, HTTPException):
         return "no_active_key"
     except Exception as exc:  # noqa: BLE001  # a DB outage is retryable; a missing user (get_user_object's wrapped ValueError) or any other resolution failure fails closed as no_active_key, never a 500
-        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
-            return "unavailable"
+        outage: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(exc)
+        if outage is not None:
+            return _database_failure(outage)
         verbose_logger.debug("_reload_active_user_by_id: user-resolution error (%s)", type(exc).__name__)
         return "no_active_key"
     if user_object is None:
@@ -306,15 +318,15 @@ _UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]
 - ``expired_lifetime``: the response reports a parseable, non-positive ``expires_in``, i.e. an upstream
   token that is already dead, so sealing it would forward a bearer the edge cannot use
 An absent or unparseable ``expires_in`` is NOT a rejection; the lifetime is merely unknown and the
-envelope caps it, the by-design behaviour for an upstream that omits the field."""
+envelope uses its fallback lifetime, the by-design behaviour for an upstream that omits the field."""
 
 
 def _classify_upstream_lifetime(raw_expires_in: object) -> "int | Literal['unspecified', 'expired']":
     """Classify an upstream ``expires_in`` into a positive number of seconds, ``"unspecified"`` (absent
-    or unparseable, so the envelope caps it), or ``"expired"`` (a non-positive value the upstream reports
+    or unparseable, so the envelope uses its fallback), or ``"expired"`` (a non-positive value the upstream reports
     as already elapsed). Telling "we do not know the lifetime" apart from "the upstream says it is
-    already dead" is what stops an explicitly-expired token from silently receiving the envelope's 1h
-    cap. The expired decision is made on the parsed numeric value, not on ``int(...)`` of it, so a
+    already dead" is what stops an explicitly-expired token from silently receiving the envelope's
+    one-hour fallback. The expired decision is made on the parsed numeric value, not on ``int(...)`` of it, so a
     positive sub-second lifetime in ``(0, 1)`` is not truncated to ``0`` and misread as elapsed; the
     envelope works in whole seconds, so such a lifetime clamps up to its 1s floor. ``bool`` is excluded
     (an ``int`` subclass but never a real lifetime), and the conversions can raise on ``NaN`` /
@@ -335,7 +347,7 @@ def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenG
     """Validate an upstream OAuth token response into a typed grant, or say why it cannot back an
     envelope. Each field is isinstance-checked so nothing untyped from ``response.json()`` reaches the
     grant. ``expires_in`` is read three ways (see :func:`_classify_upstream_lifetime`): an unknown
-    lifetime leaves the grant ``expires_in`` ``None`` for the envelope to cap, a positive value is
+    lifetime leaves the grant ``expires_in`` ``None`` for the envelope fallback, a positive value is
     honoured, and an explicit already-elapsed value is a rejection rather than a silent fall-through to
     the cap."""
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
@@ -357,8 +369,8 @@ def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenG
         token_type=token_type if isinstance(token_type, str) and token_type else "Bearer",
         # The upstream refresh_token is deliberately NOT sealed: the edge never consumes it (it forwards
         # only token_type + access_token), so it would be dead weight embedding a long-lived upstream
-        # credential in the client-held bearer, and it enlarges the envelope. Refresh support is a
-        # follow-up (a dedicated refresh-envelope); the client re-runs authorization_code at the cap.
+        # credential in the client-held bearer, and it enlarges the envelope. The dedicated refresh
+        # envelope carries that credential separately.
         refresh_token=None,
         scope=scope if isinstance(scope, str) and scope else None,
         expires_in=lifetime if isinstance(lifetime, int) else None,
@@ -383,10 +395,12 @@ _BridgeMintError = Literal[
     "no_identity",
     "invalid_refresh",
     "identity_unavailable",
+    "identity_faulted",
     "identity_unresolvable",
     "not_configured",
     "no_upstream_token",
     "upstream_token_expired",
+    "upstream_lifetime_unrepresentable",
     "too_large",
 ]
 
@@ -432,6 +446,13 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
                 "temporarily_unavailable",
                 "the authentication database is temporarily unreachable; retry shortly",
             )
+        case "identity_faulted":
+            status, code, desc = (
+                503,
+                "temporarily_unavailable",
+                "the authentication database reported a fault that is not a transient outage; "
+                "retrying will not help until the gateway deployment is repaired",
+            )
         case "identity_unresolvable":
             status, code, desc = (
                 500,
@@ -456,6 +477,12 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
                 "server_error",
                 "the upstream token response reports an already-expired lifetime",
             )
+        case "upstream_lifetime_unrepresentable":
+            status, code, desc = (
+                502,
+                "server_error",
+                "the upstream token response reports an unrepresentable lifetime",
+            )
         case "too_large":
             status, code, desc = (
                 502,
@@ -478,6 +505,8 @@ def _key_resolution_failure_to_mint_error(failure: _KeyResolutionFailure) -> _Br
             return "no_identity"
         case "unavailable":
             return "identity_unavailable"
+        case "faulted":
+            return "identity_faulted"
         case "unresolvable":
             return "identity_unresolvable"
         case _:
@@ -562,6 +591,8 @@ def _refresh_key_failure_to_mint_error(failure: _KeyResolutionFailure) -> _Bridg
             return "invalid_refresh"
         case "unavailable":
             return "identity_unavailable"
+        case "faulted":
+            return "identity_faulted"
         case "unresolvable":
             return "identity_unresolvable"
         case _:
@@ -619,6 +650,7 @@ def _finish_bridge_mint(
         build_bridge_token_response,
     )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        EnvelopeLifetimeUnrepresentable,
         SealedEnvelope,
         UpstreamTokenGrant,
     )
@@ -627,6 +659,8 @@ def _finish_bridge_mint(
     if not isinstance(grant, UpstreamTokenGrant):
         return _upstream_rejection_to_mint_error(grant)
     sealed: Final = build_bridge_token_response(ready.identity, grant, ready.keys, now)
+    if isinstance(sealed, EnvelopeLifetimeUnrepresentable):
+        return "upstream_lifetime_unrepresentable"
     if not isinstance(sealed, SealedEnvelope):
         return "too_large"
     # Report expires_in from the JWT's own second-truncated exp, rounding the elapsed portion up, so the

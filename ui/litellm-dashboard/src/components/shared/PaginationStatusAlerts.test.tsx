@@ -1,4 +1,4 @@
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import PaginationStatusAlerts from "./PaginationStatusAlerts";
@@ -6,7 +6,7 @@ import PaginationStatusAlerts from "./PaginationStatusAlerts";
 describe("PaginationStatusAlerts", () => {
   it("shows page progress and wires the Stop button while fetching", () => {
     const cancel = vi.fn();
-    const { getByRole, getByText } = render(
+    render(
       <PaginationStatusAlerts
         isFetchingMore={true}
         cancelled={false}
@@ -15,13 +15,13 @@ describe("PaginationStatusAlerts", () => {
       />,
     );
 
-    expect(getByText(/Currently fetching spend data: fetched 7 \/ 42 pages/)).toBeInTheDocument();
-    fireEvent.click(getByRole("button", { name: "Stop" }));
+    expect(screen.getByText(/Currently fetching spend data: fetched 7 \/ 42 pages/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("shows the partial-data notice after a cancel, frozen at the last fetched page", () => {
-    const { getByText } = render(
+    render(
       <PaginationStatusAlerts
         isFetchingMore={false}
         cancelled={true}
@@ -30,11 +30,11 @@ describe("PaginationStatusAlerts", () => {
       />,
     );
 
-    expect(getByText("Showing partial spend data (7/42 pages loaded)")).toBeInTheDocument();
+    expect(screen.getByText("Showing partial spend data (7/42 pages loaded)")).toBeInTheDocument();
   });
 
   it("names the subject it is fetching", () => {
-    const { getByText } = render(
+    render(
       <PaginationStatusAlerts
         isFetchingMore={true}
         cancelled={false}
@@ -44,7 +44,7 @@ describe("PaginationStatusAlerts", () => {
       />,
     );
 
-    expect(getByText(/Currently fetching agent data: fetched 1 \/ 3 pages/)).toBeInTheDocument();
+    expect(screen.getByText(/Currently fetching agent data: fetched 1 \/ 3 pages/)).toBeInTheDocument();
   });
 
   it("renders nothing when idle", () => {

@@ -2,12 +2,10 @@
 ## This tests the llm guard integration
 
 import asyncio
-import os
 import random
 
 # What is this?
 ## Unit test for presidio pii masking
-import sys
 import time
 import traceback
 from datetime import datetime
@@ -16,9 +14,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 from fastapi import Request, Response
 from starlette.datastructures import URL

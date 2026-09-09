@@ -21,6 +21,11 @@ from litellm.integrations.otel.presets.langfuse import (
 )
 from litellm.integrations.otel.presets.langtrace import langtrace_preset
 from litellm.integrations.otel.presets.levo import levo_preset
+from litellm.integrations.otel.presets.newrelic import (
+    newrelic_dynamic_endpoint,
+    newrelic_dynamic_headers,
+    newrelic_preset,
+)
 from litellm.integrations.otel.presets.phoenix import (
     phoenix_preset,
     phoenix_project_headers,
@@ -30,25 +35,45 @@ from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Callback name → preset. The ``Preset`` annotation makes mypy verify every
 #: registered value matches the preset interface.
-PRESET_BY_CALLBACK: Final[dict[str, Preset]] = {
-    "agentops": agentops_preset,
-    "arize": arize_preset,
-    "arize_phoenix": phoenix_preset,
-    "langfuse_otel": langfuse_preset,
-    "langtrace": langtrace_preset,
-    "levo": levo_preset,
-    "weave_otel": weave_preset,
-}
+PRESET_BY_CALLBACK: Final[Mapping[str, Preset]] = MappingProxyType(
+    {
+        "agentops": agentops_preset,
+        "arize": arize_preset,
+        "arize_phoenix": phoenix_preset,
+        "langfuse_otel": langfuse_preset,
+        "langtrace": langtrace_preset,
+        "levo": levo_preset,
+        "newrelic": newrelic_preset,
+        "weave_otel": weave_preset,
+    }
+)
 
 #: Callback name → per-request OTLP header builder (team/key multi-tenant
 #: routing). Only integrations that support dynamic credentials appear here —
 #: Arize-Phoenix/Langtrace/Levo/AgentOps don't, so they use the logger's
 #: default tracer.
-DYNAMIC_HEADERS_BY_CALLBACK: Final[dict[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]]] = {
-    "arize": arize_dynamic_headers,
-    "langfuse_otel": langfuse_dynamic_headers,
-    "weave_otel": weave_dynamic_headers,
-}
+DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]]] = (
+    MappingProxyType(
+        {
+            "arize": arize_dynamic_headers,
+            "langfuse_otel": langfuse_dynamic_headers,
+            "newrelic": newrelic_dynamic_headers,
+            "weave_otel": weave_dynamic_headers,
+        }
+    )
+)
+
+#: Callback name → per-request OTLP endpoint resolver. Only integrations whose
+#: destination host varies per tenant (from a fixed region table, never a
+#: caller-supplied URL) appear here; for everyone else the preset's endpoint is
+#: authoritative.
+DYNAMIC_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], str | None]]] = (
+    MappingProxyType(
+        {
+            "newrelic": newrelic_dynamic_endpoint,
+        }
+    )
+)
 
 
 #: Callback name → per-request *routing* header builder, sourced from the key/team
@@ -98,17 +123,34 @@ def project_routing_headers(
     return builder(auth_metadata)
 
 
+def dynamic_otlp_endpoint(
+    callback_name: str | None,
+    dynamic_params: StandardCallbackDynamicParams | None,
+) -> str | None:
+    """Per-request OTLP endpoint for ``callback_name``, or ``None`` if N/A.
+
+    ``None`` means "keep the preset's own endpoint".
+    """
+    resolver: Final = DYNAMIC_ENDPOINT_BY_CALLBACK.get(callback_name or "")
+    if resolver is None or not dynamic_params:
+        return None
+    return resolver(dynamic_params)
+
+
 __all__ = [
+    "DYNAMIC_ENDPOINT_BY_CALLBACK",
     "DYNAMIC_HEADERS_BY_CALLBACK",
     "PRESET_BY_CALLBACK",
     "PROJECT_HEADERS_BY_CALLBACK",
     "Preset",
     "agentops_preset",
     "arize_preset",
+    "dynamic_otlp_endpoint",
     "dynamic_otlp_headers",
     "langfuse_preset",
     "langtrace_preset",
     "levo_preset",
+    "newrelic_preset",
     "phoenix_preset",
     "project_routing_headers",
     "weave_preset",

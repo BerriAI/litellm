@@ -1,6 +1,5 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -11,6 +10,7 @@ import {
 import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { getBreadcrumb } from "@/components/leftnav";
 import { BlogDropdown } from "@/components/Navbar/BlogDropdown/BlogDropdown";
+import { DocsLink } from "@/components/Navbar/DocsLink/DocsLink";
 import { CommunityEngagementButtons } from "@/components/Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NotificationsBell } from "@/components/Navbar/NotificationsBell/NotificationsBell";
 import ViewSwitcher from "@/components/Navbar/ViewSwitcher";
@@ -20,15 +20,12 @@ import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
-
-interface DashboardHeaderProps {
-  page: string;
-}
+import { usePathname } from "next/navigation";
 
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
-export function DashboardHeader({ page }: DashboardHeaderProps) {
-  const { title } = getBreadcrumb(page);
+export function DashboardHeader() {
+  const { title } = getBreadcrumb(usePathname());
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
   const hideCommunityLinks = useDisableShowPrompts();
@@ -62,15 +59,7 @@ export function DashboardHeader({ page }: DashboardHeaderProps) {
             <ToolbarSeparator />
           </>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          nativeButton={false}
-          render={<a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" />}
-          className="text-muted-foreground"
-        >
-          Docs
-        </Button>
+        <DocsLink />
         <BlogDropdown />
         {!hideCommunityLinks && <CommunityEngagementButtons />}
         <ToolbarSeparator />

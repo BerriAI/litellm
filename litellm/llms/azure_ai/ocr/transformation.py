@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.secret_managers.main import get_secret_str
@@ -47,16 +48,11 @@ class AzureAIOCRConfig(MistralOCRConfig):
         """
         Validate environment and return headers for Azure AI OCR.
 
-        Azure AI uses Bearer token authentication with AZURE_AI_API_KEY.
+        Authenticates with AZURE_AI_API_KEY, or with an Entra ID / OAuth token when no key is set.
         """
         # Get API key from environment if not provided
         if api_key is None:
             api_key = get_secret_str(AZURE_AI_OCR_API_KEY_ENV_VAR)
-
-        if api_key is None:
-            raise ValueError(
-                "Missing Azure AI API Key - A call is being made to Azure AI but no key is set either in the environment variables or via params"
-            )
 
         # Validate API base is provided
         if api_base is None:
@@ -68,7 +64,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             )
 
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            **get_azure_ai_auth_headers(api_key=api_key, litellm_params=litellm_params),
             "Content-Type": "application/json",
             **headers,
         }

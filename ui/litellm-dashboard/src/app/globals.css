@@ -27,6 +27,30 @@
   }
 }
 
+/* The only z-index values in the dashboard. Portalled popups (src/components/ui) own the top of the
+   scale; everything else must sit below them. Enforced by the local/no-ad-hoc-z-index ESLint rule. */
+@utility z-raised {
+  z-index: 1;
+}
+@utility z-chrome {
+  z-index: 10;
+}
+@utility z-sticky {
+  z-index: 20;
+}
+@utility z-sticky-pinned {
+  z-index: 25;
+}
+@utility z-floating {
+  z-index: 30;
+}
+@utility z-overlay {
+  z-index: 40;
+}
+@utility z-popup {
+  z-index: 50;
+}
+
 /* Verbatim end-edge subset of the shadcn scroll-fade utility (shadcn@4.17.0 dist/tailwind.css),
    vendored so the CLI package is not a build dependency. Re-copy from upstream to update. */
 @property --scroll-fade-e {
@@ -116,6 +140,7 @@
   --sidebar-border: oklch(0.928 0.006 264.531);
   --sidebar-ring: oklch(0.707 0.022 261.325);
   --neutral-border: #dcddeb;
+  --logo-surface: oklch(1 0 0);
 }
 
 .dark {
@@ -203,6 +228,7 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-logo-surface: var(--logo-surface);
 }
 
 @layer base {

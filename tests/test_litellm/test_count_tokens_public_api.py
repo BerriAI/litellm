@@ -4,10 +4,8 @@ Tests for litellm.acount_tokens() public API.
 
 import asyncio
 import os
-import sys
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.types.utils import TokenCountResponse

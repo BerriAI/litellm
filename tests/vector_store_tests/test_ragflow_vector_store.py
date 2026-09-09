@@ -3,13 +3,11 @@ Test RAGFlow Vector Store helper functions and transformation.
 """
 
 import os
-import sys
 import json
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 import httpx
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 
 from tests.vector_store_tests.base_vector_store_test import BaseVectorStoreTest

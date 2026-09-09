@@ -2,14 +2,11 @@
 #    This tests if get_optional_params works as expected
 import asyncio
 import inspect
-import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock, patch
 
 import litellm

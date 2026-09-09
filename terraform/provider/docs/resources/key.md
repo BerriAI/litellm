@@ -93,6 +93,24 @@ The following arguments are supported:
 
 * `tags` - (Optional) List of tags associated with this key. This can be used for organization and filtering of keys.
 
+* `budget_id` - (Optional) ID of a shared budget (created via `litellm_budget`) to attach to this key.
+
+* `enforced_params` - (Optional) List of request parameters that callers must supply when using this key (for example `user`).
+
+* `allowed_routes` - (Optional) List of proxy routes this key is allowed to call.
+
+* `allowed_passthrough_routes` - (Optional) List of pass-through routes this key is allowed to call.
+
+* `rpm_limit_type` - (Optional) How the RPM limit is enforced. One of `guaranteed_throughput`, `best_effort_throughput` or `dynamic`.
+
+* `tpm_limit_type` - (Optional) How the TPM limit is enforced. One of `guaranteed_throughput`, `best_effort_throughput` or `dynamic`.
+
+* `prompts` - (Optional) List of prompt IDs this key is allowed to use.
+
+* `organization_id` - (Optional) ID of the organization this key belongs to.
+
+* `project_id` - (Optional) ID of the project this key belongs to. Changing this forces a new key to be created.
+
 ## Attribute Reference
 
 In addition to all arguments above, the following attributes are exported:

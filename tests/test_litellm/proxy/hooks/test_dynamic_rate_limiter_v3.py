@@ -6,14 +6,12 @@ Core tests to validate that priority weights are respected (0.9/0.1) instead of 
 
 import asyncio
 import os
-import sys
 import time
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm import DualCache, Router

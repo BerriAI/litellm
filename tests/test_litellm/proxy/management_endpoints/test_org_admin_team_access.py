@@ -7,14 +7,11 @@ Covers:
 - _user_is_org_admin route-level check (no privilege escalation)
 """
 
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../"))
 
 from litellm.proxy._types import (
     LiteLLM_OrganizationMembershipTable,

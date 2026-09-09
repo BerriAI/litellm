@@ -10,7 +10,6 @@ Tests the SDK-level skills methods when using the LiteLLM database backend:
 """
 
 import os
-import sys
 import zipfile
 from contextlib import contextmanager
 from io import BytesIO
@@ -18,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.caching.caching import DualCache

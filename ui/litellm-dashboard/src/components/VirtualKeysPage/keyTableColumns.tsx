@@ -32,6 +32,14 @@ const SPEND_BUDGET_SORT_FIELDS: DataTableSortField[] = [
   { id: "max_budget", label: "Budget" },
 ];
 
+export const KEY_TABLE_SORT_FIELDS: readonly string[] = [
+  "key_alias",
+  "token",
+  "created_at",
+  "updated_at",
+  ...SPEND_BUDGET_SORT_FIELDS.map((field) => field.id),
+];
+
 const getKeyStatus = (key: KeyResponse): KeyStatus => {
   if (key.blocked === true) {
     const isScimBlocked = (key.metadata as Record<string, unknown> | null | undefined)?.scim_blocked === true;

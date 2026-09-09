@@ -1,17 +1,14 @@
 import asyncio
 import os
 import subprocess
-import sys
 import traceback
 from typing import Any
 
-from openai import AuthenticationError, BadRequestError, OpenAIError, RateLimitError
+import httpx
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AuthenticationError, AzureOpenAI, BadRequestError, OpenAIError, RateLimitError
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
@@ -63,23 +60,38 @@ async def test_content_policy_exception_azure():
 
 @pytest.mark.asyncio
 async def test_content_policy_exception_openai():
-    # this is ony a test - we needed some way to invoke the exception :(
-    litellm.set_verbose = True
+    def reject_as_safety_system(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=400,
+            json={
+                "error": {
+                    "message": "Your request was rejected as a result of our safety system.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "content_policy_violation",
+                }
+            },
+            request=request,
+        )
 
-    async def stream_response():
+    async def stream_response(rejecting_client: AsyncOpenAI):
         response = await litellm.acompletion(
             model="gpt-3.5-turbo",
             stream=True,
-            messages=[
-                {"role": "user", "content": "Gimme the lyrics to Don't Stop Me Now"}
-            ],
+            messages=[{"role": "user", "content": "Gimme the lyrics to Don't Stop Me Now"}],
+            client=rejecting_client,
         )
         async for chunk in response:
             print(chunk)
 
-    with pytest.raises(litellm.ContentPolicyViolationError) as exc_info:
-        await stream_response()
+    async with AsyncOpenAI(
+        api_key="sk-test",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(reject_as_safety_system)),
+    ) as rejecting_client:
+        with pytest.raises(litellm.ContentPolicyViolationError) as exc_info:
+            await stream_response(rejecting_client)
     assert exc_info.value.llm_provider == "openai"
+    assert exc_info.value.status_code == 400
 
 
 # Test 1: Context Window Errors
@@ -871,7 +883,7 @@ def test_anthropic_tool_calling_exception():
 
 from typing import Optional, Union
 
-from openai import AsyncOpenAI, OpenAI
+from openai import OpenAI
 
 
 def _pre_call_utils(
@@ -883,7 +895,12 @@ def _pre_call_utils(
 ):
     if call_type == "embedding":
         data["input"] = "Hello world!"
-        mapped_target: Any = client.embeddings.with_raw_response
+        if isinstance(client, (AzureOpenAI, AsyncAzureOpenAI)):
+            mapped_target: Any = client.embeddings.with_raw_response
+            patched_attr = "create"
+        else:
+            mapped_target = client
+            patched_attr = "post"
         if sync_mode:
             original_function = litellm.embedding
         else:
@@ -893,6 +910,7 @@ def _pre_call_utils(
         if streaming is True:
             data["stream"] = True
         mapped_target = client.chat.completions.with_raw_response  # type: ignore
+        patched_attr = "create"
         if sync_mode:
             original_function = litellm.completion
         else:
@@ -902,12 +920,13 @@ def _pre_call_utils(
         if streaming is True:
             data["stream"] = True
         mapped_target = client.completions.with_raw_response  # type: ignore
+        patched_attr = "create"
         if sync_mode:
             original_function = litellm.text_completion
         else:
             original_function = litellm.atext_completion
 
-    return data, original_function, mapped_target
+    return data, original_function, mapped_target, patched_attr
 
 
 def _pre_call_utils_httpx(
@@ -991,7 +1010,7 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
             )
 
     data = {"model": model}
-    data, original_function, mapped_target = _pre_call_utils(
+    data, original_function, mapped_target, patched_attr = _pre_call_utils(
         call_type=call_type,
         data=data,
         client=openai_client,
@@ -1037,7 +1056,7 @@ async def test_exception_with_headers(sync_mode, provider, model, call_type, str
 
     with patch.object(
         mapped_target,
-        "create",
+        patched_attr,
         side_effect=_return_exception,
     ):
         new_retry_after_mock_client = MagicMock(return_value=-1)

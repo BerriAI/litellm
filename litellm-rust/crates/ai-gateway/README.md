@@ -6,23 +6,29 @@ dials OpenAI upstream, and splices the two sockets frame-by-frame.
 
 ## Crates
 
-`litellm-rust` is exactly three crates (a crate is a **layer**, not a route):
+`litellm-rust` has five crates. A crate is a layer or shared foundation, not a route:
 
 | Crate | Role |
 |-------|------|
 | litellm-core | The LiteLLM SDK in Rust — per-route entrypoints (`messages::messages()`) that resolve the provider, transform, and make the call; plus types, provider transforms, and the router. |
+| litellm-config | Config-loading boundary. Returns resolved deployments and optionally delegates loading to Python. |
 | litellm-ai-gateway | The Axum server (behind the `server` feature) and WebSocket hosts. Translates HTTP/WS to core entrypoints; no provider handlers. |
-| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — marshals Python objects and calls core entrypoints. |
+| litellm-python-interop | Domain-neutral PyO3 foundation for GIL handling and typed Python/Serde conversion. |
+| litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. |
 
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+Dependency direction is acyclic: config depends on core, the gateway depends on config and core, and the Python bridge depends on the domain layers and Python interop.
 
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)
-- **Health:** `GET /health/readiness`, `GET /health/liveness`, `GET /health/gil`
+- **Health:** `GET /health/readiness`, `GET /health/liveness`
 - **Request logs:** POSTed to a LiteLLM proxy at `/v1/rust_control_plane/logs` (see [Request logging](#request-logging))
 
 > **Realtime serving is pure Rust.** Python is used at **load time only** — to
 > read the config once at boot. The realtime hot path never touches Python.
+
+The former `/health/gil` route and its acquisition counter were removed. They
+only observed the single startup config load and did not prove that every GIL
+acquisition was instrumented
 
 ## Configuration (config.yaml)
 
@@ -42,9 +48,10 @@ model_list:
 LITELLM_CONFIG_PATH=./config.yaml ./litellm-ai-gateway
 ```
 
-At boot the gateway calls into `litellm.proxy.read_model_list`, which reuses the
-**real proxy config reader** (`ProxyConfig.get_config`). That means everything
-the proxy supports in config.yaml works here too:
+At boot `litellm-config` calls into `litellm.proxy.read_model_list` and returns
+resolved deployments to the gateway, which constructs the router. The Python
+backend still reuses the **real proxy config reader** (`ProxyConfig.get_config`),
+so everything the proxy supports in config.yaml works here too:
 
 - `include:` to merge in other config files,
 - `os.environ/VAR` secret references (resolved via the secret manager, never
@@ -81,8 +88,8 @@ stand-in built from the environment:
 |---|---|---|
 | `OPENAI_REALTIME_MODEL` | `gpt-realtime` | The single deployment's model name (also the `?model=` clients pass). |
 
-This mode links no libpython and needs no config file, but it only supports one
-hard-coded OpenAI deployment. **config.yaml is the recommended path** — use the
+The default workspace build links no libpython and needs no config file. This
+fallback mode only supports one hard-coded OpenAI deployment. **config.yaml is the recommended path** — use the
 stand-in only for the leanest possible build.
 
 ## Request logging
@@ -99,7 +106,7 @@ Worker tuning, rarely needed: `LITELLM_LOG_CHANNEL_CAPACITY` (4096),
 
 ## Build & run with Docker
 
-The image is built `--features python-config` and installs litellm **from this
+The image is built `--features server,python-config` and installs litellm **from this
 repo's source** (the config reader is newer than any PyPI release), so the build
 **context is the repo root**:
 
@@ -134,10 +141,10 @@ docker run --rm -p 4001:4001 \
 ```bash
 # config.yaml mode — needs litellm importable in the active python env
 LITELLM_CONFIG_PATH=./crates/ai-gateway/config.yaml \
-  cargo run --release -p litellm-ai-gateway --features python-config
+  cargo run --release -p litellm-ai-gateway --features server,python-config
 
 # env stand-in mode — no python, no config
-cargo run --release -p litellm-ai-gateway
+cargo run --release -p litellm-ai-gateway --features server
 ```
 
 ## Deploy on Render

@@ -4,10 +4,7 @@ Test A2A provider registry lookup functionality.
 Maps to: litellm/llms/a2a/chat/transformation.py
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import pytest
 
