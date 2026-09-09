@@ -1,8 +1,8 @@
-use super::transformation::AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG as CONFIG;
+use super::transformation::AZURE_DOCUMENT_INTELLIGENCE_OCR_BACKEND as CONFIG;
 use crate::ocr::prepare::OcrProviderKind;
 use crate::ocr::tests::perform_ocr;
 use crate::ocr::tests::{MockResponse, body, mock_server, params, transform, wire_request};
-use crate::ocr::transformation::OcrProviderConfig;
+use crate::ocr::transformation::{OcrBackend, OcrFormat};
 use crate::ocr::types::OcrConnection;
 use crate::ocr::wire::decode_params;
 use rstest::rstest;
@@ -57,7 +57,7 @@ fn invalid_page_types_return_typed_errors(#[case] pages: Value) {
 #[case(json!(["1-2-3"]))]
 fn invalid_page_values_never_panic(#[case] pages: Value) {
     let input = serde_json::from_value(json!({"pages":pages})).unwrap();
-    assert!(CONFIG.map_ocr_params(input).is_err());
+    assert!(CONFIG.format().map_ocr_params(input).is_err());
 }
 #[test]
 fn document_intelligence_page_mapping_omits_empty_list() {
@@ -88,6 +88,7 @@ fn document_intelligence_maps_features(#[case] features: Value, #[case] expected
 fn document_intelligence_rejects_invalid_features(#[case] features: Value) {
     assert!(
         CONFIG
+            .format()
             .map_ocr_params(serde_json::from_value(json!({"features":features})).unwrap())
             .is_err()
     );

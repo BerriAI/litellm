@@ -410,7 +410,7 @@ pub fn reducto_page<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option
 pub(crate) fn decode_deepseek_content(
     text: &str,
 ) -> Result<
-    Option<crate::providers::vertex_ai::ocr::deepseek::types::DeepSeekOcrResult>,
+    Option<crate::providers::vertex_ai::deepseek::ocr::types::DeepSeekOcrResult>,
     OcrResponseError,
 > {
     match serde_json::from_str::<Value>(text) {

@@ -129,7 +129,7 @@ fn optional_string(
 fn required_provider(
     provider: Option<&Arc<dyn TokenProvider>>,
 ) -> Result<&Arc<dyn TokenProvider>, AuthError> {
-    provider.ok_or_else(|| AuthError::MissingApiKey {
+    provider.ok_or(AuthError::MissingApiKey {
         provider: "Vertex AI",
     })
 }

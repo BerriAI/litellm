@@ -9,7 +9,7 @@ use super::wire::DecodedOcrResponse;
 use crate::Error;
 use serde::{Serialize, de::DeserializeOwned};
 
-pub trait OcrProviderConfig: Send + Sync + Sized + 'static {
+pub trait OcrFormat: Send + Sync + Sized + 'static {
     type InputParams: Clone + Serialize + DeserializeOwned + Send + Sync;
     type MappedParams: Clone + Serialize + Send + Sync + Into<Self::InputParams>;
     type PreparedDocument: Send;
@@ -32,11 +32,21 @@ pub trait OcrProviderConfig: Send + Sync + Sized + 'static {
         response: Self::ResponseBody,
         params: &Self::MappedParams,
     ) -> Result<OcrResponseData, OcrResponseError>;
+}
+
+pub trait OcrBackend: Send + Sync + Sized + 'static {
+    type Format: OcrFormat;
+    const FORMAT: Self::Format;
+
+    fn format(&self) -> Self::Format {
+        Self::FORMAT
+    }
+
     fn complete_url(
         &self,
         connection: &OcrConnection,
         model: &str,
-        params: &Self::MappedParams,
+        params: &<Self::Format as OcrFormat>::MappedParams,
     ) -> Result<String, OcrError>;
     fn authenticate(
         &self,
@@ -48,8 +58,11 @@ pub trait OcrProviderConfig: Send + Sync + Sized + 'static {
         document: OcrDocument,
         connection: &OcrConnection,
         headers: &[(String, String)],
-    ) -> impl Future<Output = Result<Self::PreparedDocument, OcrError>> + Send;
-    fn preserve_native_response(&self, _params: &Self::MappedParams) -> bool {
+    ) -> impl Future<Output = Result<<Self::Format as OcrFormat>::PreparedDocument, OcrError>> + Send;
+    fn preserve_native_response(
+        &self,
+        _params: &<Self::Format as OcrFormat>::MappedParams,
+    ) -> bool {
         false
     }
     fn guard_document_before_preparation(&self) -> bool {
@@ -63,8 +76,10 @@ pub trait OcrProviderConfig: Send + Sync + Sized + 'static {
         _url: &str,
         _headers: &[(String, String)],
         _connection: &OcrConnection,
-        params: &Self::MappedParams,
-    ) -> impl Future<Output = Result<DecodedOcrResponse<Self::ResponseBody>, OcrError>> + Send {
+        params: &<Self::Format as OcrFormat>::MappedParams,
+    ) -> impl Future<
+        Output = Result<DecodedOcrResponse<<Self::Format as OcrFormat>::ResponseBody>, OcrError>,
+    > + Send {
         super::wire::read_json_response(response, self.preserve_native_response(params))
     }
 }

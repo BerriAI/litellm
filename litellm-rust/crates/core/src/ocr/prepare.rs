@@ -1,10 +1,10 @@
-use super::transformation::OcrProviderConfig;
+use super::transformation::{OcrBackend, OcrFormat};
 use super::types::{OcrConnection, OcrDocument};
 use crate::Error;
 use crate::providers::azure_ai::ocr::document_intelligence::types::DocumentIntelligenceInputParams;
 use crate::providers::mistral::ocr::types::MistralOcrParams;
 use crate::providers::reducto::ocr::types::{ReductoLegacyParams, ReductoV3Params};
-use crate::providers::vertex_ai::ocr::deepseek::types::DeepSeekOcrParams;
+use crate::providers::vertex_ai::deepseek::ocr::types::DeepSeekOcrParams;
 use serde::Serialize;
 use strum::EnumString;
 
@@ -104,25 +104,25 @@ pub fn ocr_provider_config(provider: OcrProvider, model: &OcrModel) -> OcrProvid
     }
 }
 
-pub(crate) struct PreparedOcrRequest<C: OcrProviderConfig> {
-    pub config: C,
+pub(crate) struct PreparedOcrRequest<C: OcrBackend> {
+    pub backend: C,
     pub model: String,
     pub document: OcrDocument,
-    pub params: C::MappedParams,
+    pub params: <C::Format as OcrFormat>::MappedParams,
     pub connection: OcrConnection,
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(crate) fn prepare_ocr_call<C: OcrProviderConfig>(
-    config: C,
+pub(crate) fn prepare_ocr_call<C: OcrBackend>(
+    backend: C,
     model: String,
     document: OcrDocument,
-    params: C::InputParams,
+    params: <C::Format as OcrFormat>::InputParams,
     connection: OcrConnection,
 ) -> Result<PreparedOcrRequest<C>, Error> {
-    let params = config.map_ocr_params(params)?;
+    let params = backend.format().map_ocr_params(params)?;
     Ok(PreparedOcrRequest {
-        config,
+        backend,
         model,
         document,
         params,

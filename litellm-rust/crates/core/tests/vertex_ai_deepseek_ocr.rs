@@ -1,4 +1,4 @@
-use super::transformation::VERTEX_AI_DEEPSEEK_OCR_CONFIG as CONFIG;
+use super::transformation::VERTEX_DEEPSEEK_OCR_BACKEND as CONFIG;
 use crate::ocr::tests::{body, transform};
 use rstest::rstest;
 use serde_json::json;

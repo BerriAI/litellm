@@ -9,7 +9,7 @@ Rules for adding or changing an LLM provider/route in `litellm-rust`. `messages`
 
 ## Transforms and the base config
 
-3. Every route defines a base config trait with `transform_request` + `transform_response` (+ `complete_url`, `supported_params`), living in `core/src/<route>/transformation.rs` (e.g. `AnthropicMessagesProviderConfig`, mirroring `OcrProviderConfig`).
+3. Every route defines a base config trait with `transform_request` + `transform_response` (+ `complete_url`, `supported_params`), living in `core/src/<route>/transformation.rs` (e.g. `AnthropicMessagesProviderConfig`).
 4. Each provider implements that trait as a `const <PROVIDER>_<ROUTE>_CONFIG` in `core/src/providers/<provider>/<route>/transformation.rs`, mirroring the Python provider tree.
 5. Individual configs implement only the request/response transforms. Shared behavior (param filtering, defaults) stays as trait default methods so future providers inherit existing logic instead of reimplementing it.
 6. Prefer composition: a provider that extends another reuses the base trait's defaults or wraps another config; don't copy transform bodies between providers.
@@ -51,3 +51,5 @@ Rules for adding or changing an LLM provider/route in `litellm-rust`. `messages`
 
 25. Run, and keep green, the commands under "Checks" in `litellm-rust/CLAUDE.md`.
     That list is the single source of truth and matches what GitHub Actions runs.
+
+OCR separates API formats from hosting integrations in `core/src/ocr/transformation.rs`: `OcrFormat` owns typed parameters and request/response transforms, and `OcrBackend` selects a format and owns auth, URLs, document preparation, and response retrieval. Direct Mistral, Vertex Mistral, and Azure Mistral share `MistralOcrFormat`. Hosted integrations live under `providers/<host>/<publisher>/ocr/`; shared host helpers stay under the host. Uploads, polling, and lifecycle hooks stay outside format transforms

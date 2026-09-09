@@ -1,15 +1,14 @@
 use super::types::{MistralOcrParams, MistralOcrRequest, MistralOcrResponse};
 use crate::auth::AuthError;
 use crate::constants::MISTRAL_OCR_API_BASE;
-use crate::ocr::error::OcrError;
 use crate::ocr::error::OcrRequestError;
-use crate::ocr::error::OcrResponseError;
-use crate::ocr::transformation::OcrProviderConfig;
+use crate::ocr::error::{OcrError, OcrResponseError};
+use crate::ocr::transformation::{OcrBackend, OcrFormat};
 use crate::ocr::types::{OcrConnection, OcrDocument, OcrResponseData};
 use crate::providers::mistral::auth;
 
-pub struct MistralOcrConfig;
-pub const MISTRAL_OCR_CONFIG: MistralOcrConfig = MistralOcrConfig;
+pub struct MistralOcrBackend;
+pub const MISTRAL_OCR_BACKEND: MistralOcrBackend = MistralOcrBackend;
 
 pub fn complete_url(api_base: Option<&str>) -> String {
     let base = api_base
@@ -24,7 +23,9 @@ pub fn complete_url(api_base: Option<&str>) -> String {
     }
 }
 
-impl OcrProviderConfig for MistralOcrConfig {
+pub struct MistralOcrFormat;
+
+impl OcrFormat for MistralOcrFormat {
     type InputParams = MistralOcrParams;
     type MappedParams = MistralOcrParams;
     type PreparedDocument = OcrDocument;
@@ -69,6 +70,11 @@ impl OcrProviderConfig for MistralOcrConfig {
             )
         })
     }
+}
+
+impl OcrBackend for MistralOcrBackend {
+    type Format = MistralOcrFormat;
+    const FORMAT: Self::Format = MistralOcrFormat;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(

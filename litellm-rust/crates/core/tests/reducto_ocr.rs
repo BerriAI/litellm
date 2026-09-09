@@ -1,4 +1,6 @@
-use super::transformation::{REDUCTO_PARSE_LEGACY_CONFIG as LEGACY, REDUCTO_PARSE_V3_CONFIG as V3};
+use super::transformation::{
+    REDUCTO_PARSE_LEGACY_BACKEND as LEGACY, REDUCTO_PARSE_V3_BACKEND as V3,
+};
 use crate::ocr::tests::{MockResponse, body, mock_server, perform_ocr, transform, wire_request};
 use rstest::rstest;
 use serde_json::json;

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use super::transformation::OcrProviderConfig;
+use super::transformation::{OcrBackend, OcrFormat};
 use super::types::OcrConnection;
 use super::wire::{OcrWireRequest, decode_request, decode_response};
 use super::{OcrRequest, perform_ocr as run_ocr};
@@ -22,33 +22,43 @@ pub(crate) async fn perform_ocr(
     run_ocr(&http_client(), request).await
 }
 
-pub(crate) fn params<C: OcrProviderConfig>(config: &C, value: Value) -> C::MappedParams {
+pub(crate) fn params<C: OcrBackend>(
+    config: &C,
+    value: Value,
+) -> <C::Format as OcrFormat>::MappedParams {
     config
+        .format()
         .map_ocr_params(serde_json::from_value(value).unwrap())
         .unwrap()
 }
-pub(crate) fn transform<C: OcrProviderConfig>(
+pub(crate) fn transform<C: OcrBackend>(
     config: &C,
     model: &str,
     value: Value,
     options: Value,
 ) -> Result<Value, OcrError> {
-    let params = config.map_ocr_params(serde_json::from_value(options).unwrap())?;
+    let params = config
+        .format()
+        .map_ocr_params(serde_json::from_value(options).unwrap())?;
     let decoded = decode_response(
         &serde_json::to_vec(&value).unwrap(),
         config.preserve_native_response(&params),
     )?;
-    let mut response = config.transform_ocr_response(model, decoded.data, &params)?;
+    let mut response = config
+        .format()
+        .transform_ocr_response(model, decoded.data, &params)?;
     response.provider_native_response = decoded.native;
     Ok(response.into_json())
 }
-pub(crate) async fn body<C: OcrProviderConfig>(
+pub(crate) async fn body<C: OcrBackend>(
     config: &C,
     model: &str,
     document: Value,
     options: Value,
 ) -> Result<Value, OcrError> {
-    let params = config.map_ocr_params(serde_json::from_value(options).unwrap())?;
+    let params = config
+        .format()
+        .map_ocr_params(serde_json::from_value(options).unwrap())?;
     let http_client = http_client();
     let document = config
         .prepare_document(
@@ -58,7 +68,12 @@ pub(crate) async fn body<C: OcrProviderConfig>(
             &[],
         )
         .await?;
-    Ok(serde_json::to_value(config.transform_ocr_request(model, document, &params)?).unwrap())
+    Ok(serde_json::to_value(
+        config
+            .format()
+            .transform_ocr_request(model, document, &params)?,
+    )
+    .unwrap())
 }
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> OcrRequest {
     decode_request(OcrWireRequest {
@@ -146,13 +161,20 @@ pub(crate) async fn mock_server(
     (base, requests, task)
 }
 
+#[rstest::rstest]
+#[case("mistral/model", "/v1/ocr")]
+#[case(
+    "vertex_ai/model",
+    "/v1/projects/test-project/locations/us-central1/publishers/mistralai/models/model:rawPredict"
+)]
+#[case("azure_ai/model", "/providers/mistral/azure/ocr")]
 #[tokio::test]
-async fn performs_mistral_ocr_from_typed_request() {
+async fn performs_mistral_ocr_across_backends(#[case] model: &str, #[case] path: &str) {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[{"index":0,"markdown":"hello","custom":"preserved"}],"usage_info":{"pages_processed":1}}))]).await;
     let result = perform_ocr(wire_request(
-        "mistral/model",
+        model,
         &base,
-        json!({"extract_header":true,"unknown":"ignored"}),
+        json!({"extract_header":true,"unknown":"ignored", "vertex_project":"test-project", "vertex_location":"us-central1"}),
     ))
     .await
     .unwrap();
@@ -160,10 +182,23 @@ async fn performs_mistral_ocr_from_typed_request() {
     assert_eq!(result.pages[0].markdown, "hello");
     assert_eq!(result.pages[0].extra_fields["custom"], "preserved");
     let request = seen.lock().unwrap();
-    assert!(request[0].starts_with("POST /v1/ocr "));
+    assert!(request[0].starts_with(&format!("POST {path} ")));
+    assert!(
+        request[0]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-key\r\n")
+    );
     let body: Value = serde_json::from_str(request[0].split_once("\r\n\r\n").unwrap().1).unwrap();
-    assert_eq!(body["extract_header"], true);
-    assert!(body.get("unknown").is_none());
+    assert_eq!(
+        body,
+        json!({
+            "model": "model",
+            "document": {"type":"document_url", "document_url":"data:application/pdf;base64,YWJj"},
+            "extract_header": true
+        })
+    );
+    assert_eq!(result.model, "model");
+    assert_eq!(result.usage_info.unwrap().pages_processed, Some(1));
 }
 
 #[tokio::test]

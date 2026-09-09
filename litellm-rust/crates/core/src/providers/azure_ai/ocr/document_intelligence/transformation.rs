@@ -11,7 +11,7 @@ use super::types::*;
 use crate::constants::{
     AZURE_DI_API_VERSION, AZURE_DI_DEFAULT_DPI, AZURE_DI_DEFAULT_HEIGHT, AZURE_DI_DEFAULT_WIDTH,
 };
-use crate::ocr::transformation::OcrProviderConfig;
+use crate::ocr::transformation::{OcrBackend, OcrFormat};
 use crate::ocr::types::{
     OcrConnection, OcrDocument, OcrPage, OcrPageDimensions, OcrRequestFormat, OcrResponseData,
     OcrUsageInfo,
@@ -19,9 +19,9 @@ use crate::ocr::types::{
 use crate::ocr::wire::{DecodedOcrResponse, encode_model_id};
 use crate::providers::azure_ai::auth;
 
-pub struct AzureDocumentIntelligenceOcrConfig;
-pub const AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG: AzureDocumentIntelligenceOcrConfig =
-    AzureDocumentIntelligenceOcrConfig;
+pub struct AzureDocumentIntelligenceOcrBackend;
+pub const AZURE_DOCUMENT_INTELLIGENCE_OCR_BACKEND: AzureDocumentIntelligenceOcrBackend =
+    AzureDocumentIntelligenceOcrBackend;
 
 fn pages_token_is_valid(token: &str) -> bool {
     let mut parts = token.split('-');
@@ -150,7 +150,9 @@ fn transform_azure_page(page: AzureDocumentIntelligencePage) -> Result<OcrPage, 
     })
 }
 
-impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
+pub struct AzureDocumentIntelligenceOcrFormat;
+
+impl OcrFormat for AzureDocumentIntelligenceOcrFormat {
     type InputParams = DocumentIntelligenceInputParams;
     type MappedParams = DocumentIntelligenceParams;
     type PreparedDocument = OcrDocument;
@@ -175,44 +177,6 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
                 .flatten(),
             request_format: params.req_format.unwrap_or_default(),
         })
-    }
-
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn complete_url(
-        &self,
-        connection: &OcrConnection,
-        model: &str,
-        params: &Self::MappedParams,
-    ) -> Result<String, OcrError> {
-        let endpoint = auth::resolve_document_intelligence_endpoint(
-            connection.api_base.as_deref(),
-            &|name| std::env::var(name).ok(),
-        )?;
-        let mut url = format!(
-            "{}/documentintelligence/documentModels/{}:analyze?api-version={}",
-            endpoint.trim_end_matches('/'),
-            encode_model_id(model)?,
-            AZURE_DI_API_VERSION
-        );
-        if let Some(pages) = &params.pages {
-            url.push_str("&pages=");
-            url.push_str(&pages.0);
-        }
-        if let Some(features) = &params.features {
-            url.push_str("&features=");
-            url.push_str(&features.0);
-        }
-        Ok(url)
-    }
-
-    async fn prepare_document(
-        &self,
-        _http_client: &reqwest::Client,
-        document: OcrDocument,
-        _connection: &OcrConnection,
-        _headers: &[(String, String)],
-    ) -> Result<OcrDocument, OcrError> {
-        Ok(document)
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -267,8 +231,51 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
             ..OcrResponseData::new(model.to_string(), pages)
         })
     }
+}
 
-    fn preserve_native_response(&self, params: &Self::MappedParams) -> bool {
+impl OcrBackend for AzureDocumentIntelligenceOcrBackend {
+    type Format = AzureDocumentIntelligenceOcrFormat;
+    const FORMAT: Self::Format = AzureDocumentIntelligenceOcrFormat;
+
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    fn complete_url(
+        &self,
+        connection: &OcrConnection,
+        model: &str,
+        params: &<Self::Format as OcrFormat>::MappedParams,
+    ) -> Result<String, OcrError> {
+        let endpoint = auth::resolve_document_intelligence_endpoint(
+            connection.api_base.as_deref(),
+            &|name| std::env::var(name).ok(),
+        )?;
+        let mut url = format!(
+            "{}/documentintelligence/documentModels/{}:analyze?api-version={}",
+            endpoint.trim_end_matches('/'),
+            encode_model_id(model)?,
+            AZURE_DI_API_VERSION
+        );
+        if let Some(pages) = &params.pages {
+            url.push_str("&pages=");
+            url.push_str(&pages.0);
+        }
+        if let Some(features) = &params.features {
+            url.push_str("&features=");
+            url.push_str(&features.0);
+        }
+        Ok(url)
+    }
+
+    async fn prepare_document(
+        &self,
+        _http_client: &reqwest::Client,
+        document: OcrDocument,
+        _connection: &OcrConnection,
+        _headers: &[(String, String)],
+    ) -> Result<OcrDocument, OcrError> {
+        Ok(document)
+    }
+
+    fn preserve_native_response(&self, params: &<Self::Format as OcrFormat>::MappedParams) -> bool {
         params.request_format == OcrRequestFormat::Native
     }
 
@@ -279,8 +286,8 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         url: &str,
         headers: &[(String, String)],
         connection: &OcrConnection,
-        params: &Self::MappedParams,
-    ) -> Result<DecodedOcrResponse<Self::ResponseBody>, OcrError> {
+        params: &<Self::Format as OcrFormat>::MappedParams,
+    ) -> Result<DecodedOcrResponse<<Self::Format as OcrFormat>::ResponseBody>, OcrError> {
         super::polling::read_operation_response(
             http_client,
             response,

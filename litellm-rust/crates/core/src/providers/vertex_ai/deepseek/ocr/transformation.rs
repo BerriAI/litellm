@@ -1,17 +1,19 @@
-use super::super::transformation::{authenticate_vertex, location, project};
 use super::types::*;
 use crate::auth::AuthError;
 use crate::constants::VERTEX_DEEPSEEK_API_BASE;
 use crate::ocr::error::OcrError;
 use crate::ocr::error::OcrRequestError;
 use crate::ocr::error::OcrResponseError;
-use crate::ocr::transformation::OcrProviderConfig;
+use crate::ocr::transformation::{OcrBackend, OcrFormat};
 use crate::ocr::types::{OcrConnection, OcrDocument, OcrPage, OcrResponseData};
+use crate::providers::vertex_ai::ocr::{authenticate_vertex, location, project};
 
-pub struct VertexAiDeepSeekOcrConfig;
-pub const VERTEX_AI_DEEPSEEK_OCR_CONFIG: VertexAiDeepSeekOcrConfig = VertexAiDeepSeekOcrConfig;
+pub struct VertexDeepSeekOcrBackend;
+pub const VERTEX_DEEPSEEK_OCR_BACKEND: VertexDeepSeekOcrBackend = VertexDeepSeekOcrBackend;
 
-impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
+pub struct DeepSeekOcrFormat;
+
+impl OcrFormat for DeepSeekOcrFormat {
     type InputParams = DeepSeekOcrParams;
     type MappedParams = DeepSeekOcrParams;
     type PreparedDocument = OcrDocument;
@@ -103,13 +105,18 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
             ..OcrResponseData::new(result.model.unwrap_or_else(|| model.to_string()), pages)
         })
     }
+}
+
+impl OcrBackend for VertexDeepSeekOcrBackend {
+    type Format = DeepSeekOcrFormat;
+    const FORMAT: Self::Format = DeepSeekOcrFormat;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,
         connection: &OcrConnection,
         _model: &str,
-        _params: &Self::MappedParams,
+        _params: &<Self::Format as OcrFormat>::MappedParams,
     ) -> Result<String, OcrError> {
         let base = connection
             .api_base

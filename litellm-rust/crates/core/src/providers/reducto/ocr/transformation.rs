@@ -7,14 +7,14 @@ use std::collections::BTreeMap;
 use super::types::*;
 use crate::constants::{REDUCTO_ID_PREFIX, REDUCTO_OCR_API_BASE};
 use crate::ocr::document::InlineDocument;
-use crate::ocr::transformation::OcrProviderConfig;
+use crate::ocr::transformation::{OcrBackend, OcrFormat};
 use crate::ocr::types::{OcrConnection, OcrDocument, OcrPage, OcrResponseData, OcrUsageInfo};
 use crate::providers::reducto::auth;
 
-pub struct ReductoParseV3Config;
-pub struct ReductoParseLegacyConfig;
-pub const REDUCTO_PARSE_V3_CONFIG: ReductoParseV3Config = ReductoParseV3Config;
-pub const REDUCTO_PARSE_LEGACY_CONFIG: ReductoParseLegacyConfig = ReductoParseLegacyConfig;
+pub struct ReductoParseV3Backend;
+pub struct ReductoParseLegacyBackend;
+pub const REDUCTO_PARSE_V3_BACKEND: ReductoParseV3Backend = ReductoParseV3Backend;
+pub const REDUCTO_PARSE_LEGACY_BACKEND: ReductoParseLegacyBackend = ReductoParseLegacyBackend;
 
 pub fn normalize_api_base(api_base: Option<&str>) -> &str {
     api_base
@@ -136,7 +136,9 @@ fn transform_reducto_response(model: &str, response: ReductoResponse) -> OcrResp
     }
 }
 
-impl OcrProviderConfig for ReductoParseV3Config {
+pub struct ReductoParseV3Format;
+
+impl OcrFormat for ReductoParseV3Format {
     type InputParams = ReductoV3Params;
     type MappedParams = ReductoV3Params;
     type PreparedDocument = ReductoFileId;
@@ -173,13 +175,18 @@ impl OcrProviderConfig for ReductoParseV3Config {
     ) -> Result<OcrResponseData, OcrResponseError> {
         Ok(transform_reducto_response(model, response))
     }
+}
+
+impl OcrBackend for ReductoParseV3Backend {
+    type Format = ReductoParseV3Format;
+    const FORMAT: Self::Format = ReductoParseV3Format;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,
         connection: &OcrConnection,
         _model: &str,
-        _params: &Self::MappedParams,
+        _params: &<Self::Format as OcrFormat>::MappedParams,
     ) -> Result<String, OcrError> {
         Ok(format!(
             "{}/parse",
@@ -200,7 +207,10 @@ impl OcrProviderConfig for ReductoParseV3Config {
     fn guard_document_before_preparation(&self) -> bool {
         true
     }
-    fn preserve_native_response(&self, _params: &Self::MappedParams) -> bool {
+    fn preserve_native_response(
+        &self,
+        _params: &<Self::Format as OcrFormat>::MappedParams,
+    ) -> bool {
         true
     }
 
@@ -216,7 +226,9 @@ impl OcrProviderConfig for ReductoParseV3Config {
     }
 }
 
-impl OcrProviderConfig for ReductoParseLegacyConfig {
+pub struct ReductoParseLegacyFormat;
+
+impl OcrFormat for ReductoParseLegacyFormat {
     type InputParams = ReductoLegacyParams;
     type MappedParams = ReductoLegacyParams;
     type PreparedDocument = ReductoFileId;
@@ -253,13 +265,18 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
     ) -> Result<OcrResponseData, OcrResponseError> {
         Ok(transform_reducto_response(model, response))
     }
+}
+
+impl OcrBackend for ReductoParseLegacyBackend {
+    type Format = ReductoParseLegacyFormat;
+    const FORMAT: Self::Format = ReductoParseLegacyFormat;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,
         connection: &OcrConnection,
         _model: &str,
-        _params: &Self::MappedParams,
+        _params: &<Self::Format as OcrFormat>::MappedParams,
     ) -> Result<String, OcrError> {
         Ok(format!(
             "{}/parse",
@@ -280,7 +297,10 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
     fn guard_document_before_preparation(&self) -> bool {
         true
     }
-    fn preserve_native_response(&self, _params: &Self::MappedParams) -> bool {
+    fn preserve_native_response(
+        &self,
+        _params: &<Self::Format as OcrFormat>::MappedParams,
+    ) -> bool {
         true
     }
 

@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use super::prepare::PreparedOcrRequest;
-use super::transformation::OcrProviderConfig;
+use super::transformation::{OcrBackend, OcrFormat};
 use super::types::{OcrDocument, OcrResponseData};
 use crate::Error;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
@@ -63,13 +63,13 @@ pub trait OcrHooks: Send + Sync {
 pub struct NoopOcrHooks;
 impl OcrHooks for NoopOcrHooks {}
 
-pub(crate) struct OcrLifecycleHooks<C: OcrProviderConfig> {
+pub(crate) struct OcrLifecycleHooks<C: OcrBackend> {
     pub hooks: Arc<dyn OcrHooks>,
     pub provider_name: String,
     pub marker: std::marker::PhantomData<C>,
 }
 
-impl<C: OcrProviderConfig>
+impl<C: OcrBackend>
     CallLifecycleHooks<Result<PreparedOcrRequest<C>, Error>, PreparedOcrRequest<C>, OcrResponseData>
     for OcrLifecycleHooks<C>
 {
@@ -101,12 +101,14 @@ impl<C: OcrProviderConfig>
                     })?,
                 })
                 .await?;
-            let params = request
-                .config
-                .map_ocr_params(super::wire::decode_request_value(
-                    changed.optional_params,
-                    "guardrail.optional_params",
-                )?)?;
+            let params =
+                request
+                    .backend
+                    .format()
+                    .map_ocr_params(super::wire::decode_request_value(
+                        changed.optional_params,
+                        "guardrail.optional_params",
+                    )?)?;
             Ok(Ok(PreparedOcrRequest {
                 document: changed.document,
                 params,
