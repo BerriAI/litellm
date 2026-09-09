@@ -2,6 +2,7 @@
 Pulls the cost + context window + provider route for known models from https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
 
 This can be disabled by setting the LITELLM_LOCAL_MODEL_COST_MAP environment variable to True.
+The ``lite`` and ``litellm-proxy`` CLI entry points also use the bundled map without fetching.
 
 ```
 export LITELLM_LOCAL_MODEL_COST_MAP=True
@@ -13,12 +14,14 @@ import hashlib
 import json
 import os
 import random
+import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib.resources import files
+from pathlib import Path
 from typing import Final, Protocol
 
 import httpx
@@ -34,6 +37,12 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
+_CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
+
+
+def _is_cli_process() -> bool:
+    return Path(sys.argv[0]).stem in _CLI_ENTRYPOINT_NAMES
+
 
 # Reserved top-level keys that are not model entries. They must be excluded
 # from the model-count integrity check so a real upstream shrink can't be masked.
@@ -600,8 +609,12 @@ def get_model_cost_map(
     """
     Public entry point — returns the model cost map dict.
 
-    1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set, uses the local backup only.
-    2. Otherwise fetches from ``url``, retrying transient errors in a background thread.
+    1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set or this is a ``lite`` /
+       ``litellm-proxy`` CLI process, uses the local backup only.
+    2. Otherwise fetches from ``url``, retrying transient HTTP errors
+       (429/5xx/transport) with Retry-After-aware backoff in a background
+       thread, validates integrity, and falls back to the local backup on any
+       failure.
 
     Only the backup model count is cached (a single int) for validation.
     The full backup dict is only parsed when it must be *returned* as a
@@ -610,7 +623,7 @@ def get_model_cost_map(
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
-    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
         _cost_map_source_info.source = "local"
         _cost_map_source_info.url = None
         _cost_map_source_info.is_env_forced = True
