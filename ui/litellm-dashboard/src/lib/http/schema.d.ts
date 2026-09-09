@@ -23708,6 +23708,15 @@ export interface components {
             /** @description The decision record this request would have written to its log row */
             routing_decision: components["schemas"]["StandardLoggingRoutingDecision"];
         };
+        /** AwsSessionTag */
+        AwsSessionTag: {
+            /** Key */
+            Key: string;
+            /** Value */
+            Value: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** BaseLitellmParams */
         BaseLitellmParams: {
             /**
@@ -29426,6 +29435,8 @@ export interface components {
             aws_secret_access_key?: string | null;
             /** Aws Session Name */
             aws_session_name?: string | null;
+            /** Aws Session Tags */
+            aws_session_tags?: components["schemas"]["AwsSessionTag"][] | null;
             /** Aws Session Token */
             aws_session_token?: string | null;
             /** Aws Sts Endpoint */
@@ -39617,6 +39628,8 @@ export interface components {
             aws_secret_access_key?: string | null;
             /** Aws Session Name */
             aws_session_name?: string | null;
+            /** Aws Session Tags */
+            aws_session_tags?: components["schemas"]["AwsSessionTag"][] | null;
             /** Aws Session Token */
             aws_session_token?: string | null;
             /** Aws Sts Endpoint */
