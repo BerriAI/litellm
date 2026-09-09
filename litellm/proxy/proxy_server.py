@@ -17590,7 +17590,8 @@ def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) ->
         if name in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
     )
     configured_modules: Final = frozenset(name.rsplit(".", 1)[0] for name in configured_callback_names if "." in name)
-    return frozenset(
+    internal_callback_strings: Final = frozenset({"cache"})
+    return internal_callback_strings | frozenset(
         callback_name
         for callback_name, callback in litellm.logging_callback_manager.get_callback_objects()
         if isinstance(callback, CustomGuardrail)

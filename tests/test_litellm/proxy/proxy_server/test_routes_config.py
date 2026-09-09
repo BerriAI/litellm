@@ -1306,6 +1306,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
         pass
 
     router = Router(model_list=[])
+    monkeypatch.setattr(litellm, "input_callback", [])
     monkeypatch.setattr(litellm, "success_callback", [LangsmithLogger(), router.sync_deployment_callback_on_success])
     monkeypatch.setattr(litellm, "_async_success_callback", [router.deployment_callback_on_success])
     monkeypatch.setattr(litellm, "failure_callback", [user_code_function])
@@ -1321,6 +1322,8 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
             _UserCodeLogger(),
         ],
     )
+    monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+    assert "cache" in litellm.success_callback and "cache" in litellm._async_success_callback
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/get/config/callbacks")
