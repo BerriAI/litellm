@@ -138,6 +138,7 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
         "anthropic_keycloak_client_secret_ref": Unplanted(),
         "anthropic_keycloak_scope": NotSecret("OAuth scope string"),
         "openai_identity_token_file": Unplanted(),
+        "adept_router_pg_password": Unplanted(),
     }
 )
 
@@ -156,6 +157,7 @@ REQUEST_BODY_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = Mapping
         "litellm_credential_name": NotSecret("name of a credentials table entry, not a credential"),
         "default_api_key_tpm_limit": NotSecret("rate limit number"),
         "default_api_key_rpm_limit": NotSecret("rate limit number"),
+        "adept_router_pg_password": Unplanted(),
     }
 )
 

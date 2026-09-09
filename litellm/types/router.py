@@ -625,7 +625,24 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         setattr(self, key, value)
 
 
-class LiteLLM_Params(GenericLiteLLMParams):
+class AdeptRouterLiteLLMParams(LiteLLMBaseModel):  # frozen-ok: mixed into the mutable LiteLLM_Params
+    """ADEPT router params, deployment-scoped: they configure a router deployment, never a single call,
+    so they sit beside `model` rather than on the generic per-call param bag."""
+
+    adept_router_default_model: str | None = None
+    adept_router_tag_prefix: str | None = None
+    adept_router_seed_config: list[dict[str, object]] | None = None  # mutable-ok: pydantic config field
+    adept_router_conversations_threshold: int | None = None
+    adept_router_trainer_url: str | None = None
+    adept_router_pg_host: str | None = None
+    adept_router_pg_port: int | None = None
+    adept_router_pg_database: str | None = None
+    adept_router_pg_user: str | None = None
+    adept_router_pg_password: str | None = None
+    adept_router_pg_ssl_mode: str | None = None
+
+
+class LiteLLM_Params(GenericLiteLLMParams, AdeptRouterLiteLLMParams):
     """
     LiteLLM Params with 'model' requirement - used for completions
     """
@@ -654,7 +671,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         setattr(self, key, value)
 
 
-class updateLiteLLMParams(GenericLiteLLMParams):
+class updateLiteLLMParams(GenericLiteLLMParams, AdeptRouterLiteLLMParams):
     # This class is used to update the LiteLLM_Params
     # only differece is model is optional
     if TYPE_CHECKING:
