@@ -17027,6 +17027,134 @@
             "mcp_app"
           ]
         }
+      },
+      "/mcp/proxy": {
+        "delete": {
+          "description": "Serve the fixed three-tool MCP proxy surface.",
+          "operationId": "proxy_mcp_route_mcp_proxy_delete",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "get": {
+          "description": "Serve the fixed three-tool MCP proxy surface.",
+          "operationId": "proxy_mcp_route_mcp_proxy_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "head": {
+          "description": "Serve the fixed three-tool MCP proxy surface.",
+          "operationId": "proxy_mcp_route_mcp_proxy_head",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "options": {
+          "description": "Serve the fixed three-tool MCP proxy surface.",
+          "operationId": "proxy_mcp_route_mcp_proxy_options",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "patch": {
+          "description": "Serve the fixed three-tool MCP proxy surface.",
+          "operationId": "proxy_mcp_route_mcp_proxy_patch",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "post": {
+          "description": "Serve the fixed three-tool MCP proxy surface.",
+          "operationId": "proxy_mcp_route_mcp_proxy_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        },
+        "put": {
+          "description": "Serve the fixed three-tool MCP proxy surface.",
+          "operationId": "proxy_mcp_route_mcp_proxy_put",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "summary": "Proxy Mcp Route",
+          "tags": [
+            "mcp_app"
+          ]
+        }
       }
     }
   },

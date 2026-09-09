@@ -15,7 +15,7 @@ import types
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -47,6 +47,7 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
     _mcp_gateway_server_name,
+    _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # server-owned request mode
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
@@ -537,10 +538,21 @@ if MCP_AVAILABLE:
         notification_options: NotificationOptions | None = None,
         experimental_capabilities: dict[str, dict[str, object]] | None = None,
     ) -> InitializationOptions:
-        opts: Final = Server.create_initialization_options(
+        base_options: Final = Server.create_initialization_options(
             self,
             notification_options=notification_options,
             experimental_capabilities=experimental_capabilities or {},
+        )
+        opts: Final = (
+            base_options.model_copy(
+                update={  # mutable-ok: Pydantic update payload
+                    "capabilities": base_options.capabilities.model_copy(
+                        update={"prompts": None, "resources": None}  # mutable-ok: Pydantic update payload
+                    )
+                }
+            )
+            if _mcp_proxy_mode.get()
+            else base_options
         )
         updates: Final[dict[str, str]] = {}
         merged: Final = _mcp_gateway_initialize_instructions.get()
@@ -822,17 +834,20 @@ if MCP_AVAILABLE:
                 "MCP list_tools - MCP server auth headers: %s",
                 list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None,
             )
+            from mcp.types import Tool
+
+            from litellm.proxy._experimental.mcp_server.tool_search import (
+                get_mcp_proxy_tool_definitions,
+                get_virtual_tool_definitions,
+            )
+
+            if _mcp_proxy_mode.get():
+                return [Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()]  # mutable-ok: MCP SDK list
             if getattr(
                 getattr(user_api_key_auth, "object_permission", None),
                 "mcp_tool_search_enabled",
                 False,
             ):
-                from mcp.types import Tool
-
-                from litellm.proxy._experimental.mcp_server.tool_search import (
-                    get_virtual_tool_definitions,
-                )
-
                 return [Tool.model_validate(d) for d in get_virtual_tool_definitions()]
 
             # Get mcp_servers from context variable
@@ -906,6 +921,12 @@ if MCP_AVAILABLE:
         verbose_logger.debug("Host progressToken captured: %s...", str(host_token)[:8])
         return forward_progress
 
+    def _reject_mcp_proxy_operation() -> NoReturn:
+        from mcp.shared.exceptions import McpError
+        from mcp.types import METHOD_NOT_FOUND, ErrorData
+
+        raise McpError(ErrorData(code=METHOD_NOT_FOUND, message="Operation unavailable on /mcp/proxy"))
+
     async def _build_virtual_call_logging_obj(
         name: str,
         arguments: dict[str, object],
@@ -961,15 +982,52 @@ if MCP_AVAILABLE:
         from litellm.proxy._experimental.mcp_server.tool_search import (
             AGENT_SEARCH_TOOL_NAME,
             DEFAULT_AGENT_SEARCH_TOP_K,
+            MCP_PROXY_CALL_TOOL_NAME,
+            MCP_PROXY_TOOL_NAMES,
             MCP_TOOL_SEARCH_TOOL_NAME,
             SKILL_SEARCH_TOOL_NAME,
             VIRTUAL_TOOL_NAMES,
             coerce_top_k,
             handle_agent_search,
+            handle_mcp_proxy_tool,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
             handle_skill_search,
         )
+
+        if _mcp_proxy_mode.get() and name not in MCP_PROXY_TOOL_NAMES:
+            return CallToolResult(
+                content=[  # mutable-ok: MCP result content
+                    TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")
+                ],
+                isError=True,
+            )
+
+        if _mcp_proxy_mode.get() and name in MCP_PROXY_TOOL_NAMES:
+            assert user_api_key_auth is not None
+            proxy_logging_obj: Final = (
+                await _build_virtual_call_logging_obj(
+                    name=name,
+                    arguments=arguments or {},  # mutable-ok: logging pipeline payload
+                    user_api_key_auth=user_api_key_auth,
+                    raw_headers=raw_headers,
+                    client_ip=client_ip,
+                )
+                if name == MCP_PROXY_CALL_TOOL_NAME
+                else None
+            )
+            return await handle_mcp_proxy_tool(
+                name=name,
+                arguments=arguments or {},  # mutable-ok: proxy handler payload
+                user_api_key_dict=user_api_key_auth,
+                client_ip=client_ip,
+                mcp_servers=mcp_servers,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                litellm_logging_obj=proxy_logging_obj,
+            )
 
         if name not in VIRTUAL_TOOL_NAMES:
             return None
@@ -1216,6 +1274,8 @@ if MCP_AVAILABLE:
         """
         List all available prompts
         """
+        if _mcp_proxy_mode.get():
+            _reject_mcp_proxy_operation()
         from mcp.server.lowlevel.server import request_ctx
 
         req_ctx: Final = request_ctx.get(None)
@@ -1273,8 +1333,8 @@ if MCP_AVAILABLE:
         Returns:
             GetPromptResult: Getting prompt execution results
         """
-
-        # Validate arguments
+        if _mcp_proxy_mode.get():
+            _reject_mcp_proxy_operation()
         from mcp.server.lowlevel.server import request_ctx
 
         req_ctx: Final = request_ctx.get(None)
@@ -1311,6 +1371,8 @@ if MCP_AVAILABLE:
     @server.list_resources()
     async def list_resources() -> list[Resource]:
         """List all available resources."""
+        if _mcp_proxy_mode.get():
+            _reject_mcp_proxy_operation()
         from mcp.server.lowlevel.server import request_ctx
 
         req_ctx: Final = request_ctx.get(None)
@@ -1355,6 +1417,8 @@ if MCP_AVAILABLE:
     @server.list_resource_templates()
     async def list_resource_templates() -> list[ResourceTemplate]:
         """List all available resource templates."""
+        if _mcp_proxy_mode.get():
+            _reject_mcp_proxy_operation()
         from mcp.server.lowlevel.server import request_ctx
 
         req_ctx: Final = request_ctx.get(None)
@@ -1400,6 +1464,8 @@ if MCP_AVAILABLE:
 
     @server.read_resource()
     async def read_resource(url: AnyUrl) -> list[ReadResourceContents]:
+        if _mcp_proxy_mode.get():
+            _reject_mcp_proxy_operation()
         from mcp.server.lowlevel.server import request_ctx
 
         req_ctx: Final = request_ctx.get(None)
@@ -1998,6 +2064,7 @@ if MCP_AVAILABLE:
         litellm_trace_id: str | None = None,
         request_tags: list[str] | None = None,
         client_ip: str | None = None,
+        mcp_proxy_mode: bool = False,
     ) -> AggregateToolListing:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -2177,9 +2244,14 @@ if MCP_AVAILABLE:
                         user_api_key_auth=user_api_key_auth,
                     )
 
-                    # Apply display-name/description overrides last so that
-                    # permission filtering always works against original names.
-                    filtered_tools = apply_tool_overrides(filtered_tools, server)
+                    if mcp_proxy_mode:
+                        from litellm.proxy._experimental.mcp_server.tool_search import with_mcp_proxy_identity
+
+                        filtered_tools = [  # mutable-ok: MCP tool pipeline
+                            with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools
+                        ]
+                    else:
+                        filtered_tools = apply_tool_overrides(filtered_tools, server)
 
                     verbose_logger.debug(
                         "Successfully fetched %s tools from server %s, %s after filtering",
@@ -2491,6 +2563,7 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: str | None = None,
         client_ip: str | None = None,
+        mcp_proxy_mode: bool = False,
     ) -> AggregateToolListing:
         """
         List all available MCP tools.
@@ -2520,6 +2593,7 @@ if MCP_AVAILABLE:
                 log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
                 list_tools_log_source=list_tools_log_source,
                 client_ip=client_ip,
+                mcp_proxy_mode=mcp_proxy_mode,
             )
             verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
             return listing

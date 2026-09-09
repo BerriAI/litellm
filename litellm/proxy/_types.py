@@ -502,6 +502,7 @@ class LiteLLMRoutes(enum.Enum):
     mcp_inference_routes = [
         "/mcp",
         "/mcp/",
+        "/mcp/proxy",
         "/mcp/{subpath}",
         "/mcp/tools",
         "/mcp/tools/list",

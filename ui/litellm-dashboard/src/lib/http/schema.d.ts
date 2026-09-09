@@ -8542,6 +8542,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mcp/proxy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        get: operations["proxy_mcp_route_mcp_proxy_get"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        put: operations["proxy_mcp_route_mcp_proxy_put"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        post: operations["proxy_mcp_route_mcp_proxy_post"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        delete: operations["proxy_mcp_route_mcp_proxy_delete"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        options: operations["proxy_mcp_route_mcp_proxy_options"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        head: operations["proxy_mcp_route_mcp_proxy_head"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        patch: operations["proxy_mcp_route_mcp_proxy_patch"];
+        trace?: never;
+    };
     "/memory-usage-in-mem-cache": {
         parameters: {
             query?: never;
@@ -50979,6 +51023,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
