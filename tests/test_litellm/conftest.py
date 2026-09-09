@@ -332,6 +332,7 @@ def isolate_litellm_state():
         "default_internal_user_params",
         "default_team_params",
         "prometheus_emit_stream_label",
+        "prometheus_emit_input_sequence_length_label",
         "vector_store_registry",
         "model_cost",
         "cost_margin_config",
