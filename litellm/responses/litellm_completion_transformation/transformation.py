@@ -27,9 +27,10 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 )
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
+from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -272,13 +273,21 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _transform_tool_choice_for_responses_api_response(tool_choice: object) -> ToolChoice:
-        normalized: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
-        match normalized:
-            case None:
-                return "auto"
-            case {"type": "function", "function": {"name": str(function_name)}}:
+        if tool_choice is None:
+            return "auto"
+        try:
+            return _RESPONSES_API_TOOL_CHOICE_ADAPTER.validate_python(tool_choice)
+        except ValidationError:
+            return LiteLLMCompletionResponsesConfig._chat_tool_choice_as_responses_api_tool_choice(tool_choice)
+
+    @staticmethod
+    def _chat_tool_choice_as_responses_api_tool_choice(tool_choice: object) -> ToolChoice:
+        match tool_choice, LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice):
+            case {"type": "custom"}, {"function": {"name": str(custom_name)}}:
+                return ToolChoiceCustomParam(type="custom", name=custom_name)
+            case _, {"type": "function", "function": {"name": str(function_name)}}:
                 return ToolChoiceFunctionParam(type="function", name=function_name)
-            case _:
+            case _, normalized:
                 return _RESPONSES_API_TOOL_CHOICE_ADAPTER.validate_python(normalized)
 
     @staticmethod

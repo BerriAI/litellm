@@ -11,6 +11,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -657,8 +658,8 @@ def _tool_call_chunk(finish_reason: str | None = None) -> ModelResponseStream:
     )
 
 
-def test_streamed_named_tool_choice_is_echoed_in_responses_api_shape():
-    iterator = LiteLLMCompletionStreamingIterator(
+def test_streamed_named_tool_choice_is_echoed_in_responses_api_shape() -> None:
+    iterator: Final = LiteLLMCompletionStreamingIterator(
         model="claude-haiku-4-5",
         litellm_custom_stream_wrapper=_FakeStreamWrapper([_tool_call_chunk(finish_reason="tool_calls")]),
         request_input="Run the command pwd.",
@@ -670,9 +671,9 @@ def test_streamed_named_tool_choice_is_echoed_in_responses_api_shape():
         litellm_metadata={},
     )
 
-    events = list(iterator)
+    events: Final = list(iterator)
 
-    response_events = [event for event in events if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES]
+    response_events: Final = [event for event in events if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES]
     assert [event.type for event in response_events] == [
         "response.created",
         "response.in_progress",

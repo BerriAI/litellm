@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 import pytest
 
@@ -1426,7 +1427,9 @@ class TestToolChoiceTransformation:
         [
             ({"type": "function", "name": "run_command"}, {"type": "function", "name": "run_command"}),
             ({"type": "function", "function": {"name": "run_command"}}, {"type": "function", "name": "run_command"}),
-            ({"type": "custom", "name": "ApplyPatch"}, {"type": "function", "name": "ApplyPatch"}),
+            ({"type": "custom", "name": "ApplyPatch"}, {"type": "custom", "name": "ApplyPatch"}),
+            ({"type": "custom", "custom": {"name": "ApplyPatch"}}, {"type": "custom", "name": "ApplyPatch"}),
+            ({"type": "function"}, "required"),
             ({"type": "tool"}, "required"),
             ({"type": "auto"}, "auto"),
             ("required", "required"),
@@ -1434,14 +1437,16 @@ class TestToolChoiceTransformation:
             (None, "auto"),
         ],
     )
-    def test_transform_tool_choice_for_responses_api_response(self, request_tool_choice, expected):
-        result = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+    def test_transform_tool_choice_for_responses_api_response(
+        self, request_tool_choice: object, expected: str | dict[str, str]
+    ) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
             request_tool_choice
         )
         assert result == expected
 
-    def test_non_streamed_response_echoes_named_tool_choice_in_responses_api_shape(self):
-        chat_completion_response = ModelResponse(
+    def test_non_streamed_response_echoes_named_tool_choice_in_responses_api_shape(self) -> None:
+        chat_completion_response: Final = ModelResponse(
             id="chatcmpl-named-tool-choice",
             created=1748575031,
             model="claude-haiku-4-5",
@@ -1465,7 +1470,7 @@ class TestToolChoiceTransformation:
             ],
         )
 
-        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        responses_api_response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
             request_input="Run the command pwd.",
             responses_api_request={"tool_choice": {"type": "function", "name": "run_command"}},
             chat_completion_response=chat_completion_response,
