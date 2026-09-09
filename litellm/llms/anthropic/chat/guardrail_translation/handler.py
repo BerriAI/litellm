@@ -13,7 +13,7 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, repeat
@@ -1262,7 +1262,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _write_ended_stream_text_rewrite(
-        responses_so_far: list[Any],  # mutable-ok: rewrites the caller's buffered chunks in place
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
         rewritten_text: str,
     ) -> None:
         """Deliver an ended-stream guardrail text rewrite by rewriting the
@@ -1284,7 +1284,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     @classmethod
     def _write_ended_stream_tool_call_rewrites(
         cls,
-        responses_so_far: list[Any],  # mutable-ok: rewrites the caller's buffered chunks in place
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
         *,
         pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
         post_guardrail_tool_calls: tuple[_ToolCallShape, ...],
@@ -1346,7 +1346,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _rewrite_ended_stream_events(
-        responses_so_far: list[Any],  # mutable-ok: rewrites the caller's buffered chunks in place
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
         rewrite_event: _SSEEventRewriter,
     ) -> None:
         """Replace every buffered event ``rewrite_event`` returns a rewrite for, in
