@@ -5,6 +5,11 @@ from typing import Final
 from prometheus_client import REGISTRY, CollectorRegistry
 
 
+def clear_prometheus_registry() -> None:
+    for collector in tuple(REGISTRY._collector_to_names):  # pyright: ignore[reportPrivateUsage]  # prometheus_client has no public collector enumeration
+        REGISTRY.unregister(collector)
+
+
 @contextmanager
 def isolated_prometheus_registry(registry: CollectorRegistry = REGISTRY) -> Iterator[None]:
     original: Final = tuple(registry._collector_to_names)  # pyright: ignore[reportPrivateUsage]  # prometheus_client has no public collector enumeration

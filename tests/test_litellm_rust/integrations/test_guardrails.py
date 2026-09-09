@@ -174,6 +174,12 @@ def azure_text_moderation(server: RecordingServer) -> AzureContentSafetyTextMode
     )
 
 
+async def _observed_stream(source: AsyncIterator[object], first_chunk: asyncio.Event) -> AsyncIterator[object]:
+    async for chunk in source:
+        first_chunk.set()
+        yield chunk
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ("python", "rust"))
 async def test_stream_masking_reaches_client_loggers_and_exporters(
@@ -358,13 +364,7 @@ async def test_guarded_stream_cancel_drains_and_releases_roots(backend: Backend)
                 metadata={"retained": root},
             )
             first_chunk: Final = asyncio.Event()
-
-            async def observed_source() -> AsyncIterator[bytes]:
-                async for chunk in source:
-                    first_chunk.set()
-                    yield chunk
-
-            guarded = arm_guarded_stream(observed_source(), request_data, logger)
+            guarded = arm_guarded_stream(_observed_stream(source, first_chunk), request_data, logger)
             del root
             task: Final = asyncio.create_task(anext(guarded))
             await provider.wait_for_requests(1)
