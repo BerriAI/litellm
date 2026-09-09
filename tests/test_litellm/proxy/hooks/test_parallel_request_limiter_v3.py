@@ -6391,3 +6391,53 @@ def test_deduplicate_descriptors_stays_quiet_for_identical_repeats_v3():
 
     assert len(deduped) == 1
     mock_warning.assert_not_called()
+
+
+def test_team_model_assembly_sites_build_the_same_descriptor_v3():
+    """
+    The two sites that append the team per-model descriptor must build the
+    *same* descriptor, limits included -- not merely one entry after the
+    collapse.
+
+    Cardinality alone cannot say this: `Counter(...) == 1` reads the same
+    whether the two sites agreed or one silently won the collapse, and the case
+    worth failing is the day someone changes one site and not the other. This
+    compares them at the point of divergence instead, so a limit read from a
+    different source fails here rather than being absorbed by the collapse
+    (which keeps the first occurrence and only logs the disagreement).
+    """
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    user_api_key_dict = _team_model_limit_auth(
+        "sk-team-agree",
+        "team-agree",
+        model_rpm_limit={"gpt-4": 10},
+        model_tpm_limit={"gpt-4": 100000},
+    )
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
+
+    from_create = [
+        d
+        for d in handler._create_rate_limit_descriptors(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            rpm_limit_type=None,
+            tpm_limit_type=None,
+            model_has_failures=False,
+        )
+        if d["key"] == "model_per_team"
+    ]
+    from_metadata: List[Any] = []
+    handler._add_team_model_rate_limit_descriptor_from_metadata(
+        user_api_key_dict=user_api_key_dict,
+        requested_model="gpt-4",
+        descriptors=from_metadata,
+    )
+
+    assert len(from_create) == 1, f"_create_rate_limit_descriptors: {from_create}"
+    assert len(from_metadata) == 1, f"_add_team_model_..._from_metadata: {from_metadata}"
+    assert from_create[0] == from_metadata[0], (
+        "the two team per-model assembly sites disagree, so collapsing them "
+        f"silently picks one: {from_create[0]} vs {from_metadata[0]}"
+    )
