@@ -304,12 +304,13 @@ async def arealtime_calls(
         api_version=litellm_params.api_version,
     )
     if custom_llm_provider == "chatgpt":
-        from litellm.llms.chatgpt.realtime import ChatGPTRealtime
+        from litellm.llms.chatgpt.realtime import ChatGPTRealtime, configured_realtime_headers
 
         response.extensions["chatgpt_realtime"] = MappingProxyType(
             {
                 "model": model_name,
                 "api_base": ChatGPTRealtime.get_api_base(litellm_params.api_base),
+                "extra_headers": configured_realtime_headers(kwargs.get("extra_headers")),
             }
         )
     return response
@@ -460,7 +461,7 @@ async def _arealtime(
     elif _custom_llm_provider == "chatgpt":
         from litellm.llms.chatgpt.realtime import ChatGPTRealtime
 
-        await ChatGPTRealtime(litellm_params, websocket.headers).async_realtime(
+        await ChatGPTRealtime(litellm_params, websocket.headers, headers).async_realtime(
             model=model,
             websocket=websocket,
             logging_obj=litellm_logging_obj,

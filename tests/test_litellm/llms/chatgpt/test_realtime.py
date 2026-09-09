@@ -1,12 +1,51 @@
+import asyncio
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from websockets.asyncio.server import serve
 
 import litellm
 from litellm.llms.chatgpt.realtime import ChatGPTRealtime
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-realtime-1.5", "gpt-live-1-codex"])
+@pytest.mark.parametrize("call_id", [None, "rtc_existing"])
+async def test_websocket_forwards_configured_headers_without_client_identity(model, call_id, chatgpt_tokens):
+    captured = asyncio.get_running_loop().create_future()
+
+    async def receive_connection(connection):
+        captured.set_result(connection.request.headers)
+        await connection.wait_closed()
+
+    websocket = SimpleNamespace(
+        headers={"authorization": "Bearer client", "cookie": "private-cookie", "openai-alpha": "client-value"},
+        scope={},
+        receive_text=AsyncMock(side_effect=RuntimeError("client disconnected")),
+        send_text=AsyncMock(),
+        close=AsyncMock(),
+    )
+    async with serve(receive_connection, "127.0.0.1", 0) as gateway:
+        port = gateway.sockets[0].getsockname()[1]
+        await asyncio.wait_for(litellm._arealtime(
+            model=f"chatgpt/{model}", websocket=websocket, api_base=f"http://127.0.0.1:{port}",
+            chatgpt_realtime_call_id=call_id,
+            headers={"x-deployment-header": "configured"},
+            extra_headers={"X-Gateway-Route": "voice", "OpenAI-Alpha": "configured-value",
+                           "aUtHoRiZaTiOn": "Bearer wrong", "CHATGPT-ACCOUNT-ID": "wrong"},
+        ), timeout=10)
+        headers = await asyncio.wait_for(captured, timeout=5)
+    assert headers["x-deployment-header"] == "configured"
+    assert headers["x-gateway-route"] == "voice"
+    assert headers["openai-alpha"] == "configured-value"
+    assert headers["authorization"] == "Bearer test-token-default"
+    assert headers["chatgpt-account-id"] == "test-account-default"
+    assert "cookie" not in headers
 
 
 @pytest.mark.asyncio
@@ -36,6 +75,7 @@ async def test_chatgpt_call_keeps_oauth_and_frameless_session(chatgpt_tokens, ap
         client=client,
     )
     assert response.extensions["chatgpt_realtime"]["api_base"] == (api_base or "https://api.openai.com/v1")
+    assert response.extensions["chatgpt_realtime"]["extra_headers"] == {"openai-alpha": "quicksilver=v2", "x-gateway-route": "voice"}
     assert requests[0].url.host == ("voice.example" if api_base else "chatgpt.com")
     assert response.status_code == 201
     assert requests[0].url.path == "/backend-api/codex/realtime/calls"

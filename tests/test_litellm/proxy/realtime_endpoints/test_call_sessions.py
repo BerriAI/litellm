@@ -52,11 +52,13 @@ def test_sideband_token_binds_owner_and_model(monkeypatch):
         call_id="rtc_test",
         model="gpt-live-1-codex",
         alias="gpt-live-1-codex",
+        extra_headers={"x-gateway-secret": "configured-secret"},
         owner=hashlib.sha256(b"Bearer test-owner").hexdigest(),
         expires_at=time.time() + 300,
     )
     token = encode_call(call)
     assert "/" not in token
+    assert "configured-secret" not in token
     assert decode_call(token, "Bearer test-owner") == call
     with pytest.raises(HTTPException) as error:
         decode_call(token, "Bearer different-owner")

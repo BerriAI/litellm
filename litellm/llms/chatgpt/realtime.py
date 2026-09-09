@@ -12,11 +12,19 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import get_model_info
 
 from .authenticator import Authenticator
+from .common_utils import without_oauth_identity_headers
 from .responses.transformation import ChatGPTResponsesAPIConfig
 
 
+def configured_realtime_headers(headers: Mapping[str, object] | None) -> Mapping[str, str]:
+    validated: Final = TypeAdapter(Mapping[str, str]).validate_python(
+        without_oauth_identity_headers(headers or MappingProxyType({}))
+    )
+    return MappingProxyType({key.lower(): value for key, value in validated.items()})
+
+
 def realtime_headers(
-    params: GenericLiteLLMParams, headers: Mapping[str, str]
+    params: GenericLiteLLMParams, headers: Mapping[str, str], extra_headers: Mapping[str, object] | None = None
 ) -> dict[str, str]:  # mutable-ok: HTTP handler header contract
     forwarded: Final = MappingProxyType(
         {
@@ -32,6 +40,7 @@ def realtime_headers(
             litellm_params=params,
         ),
         **forwarded,
+        **configured_realtime_headers(extra_headers),
     }
 
 
@@ -48,9 +57,11 @@ class ChatGPTRealtime(OpenAIRealtime):
     def get_api_base(api_base: str | None = None) -> str:
         return api_base or Authenticator.get_api_base(default_base="https://api.openai.com/v1")
 
-    def __init__(self, params: GenericLiteLLMParams, headers: Mapping[str, str]) -> None:
+    def __init__(
+        self, params: GenericLiteLLMParams, headers: Mapping[str, str], extra_headers: Mapping[str, object] | None = None
+    ) -> None:
         super().__init__()
-        self._profile_headers = realtime_headers(params, headers)
+        self._profile_headers = realtime_headers(params, headers, extra_headers)
         self._call_id = TypeAdapter(str | None).validate_python(getattr(params, "chatgpt_realtime_call_id", None))
 
     def _get_additional_headers(

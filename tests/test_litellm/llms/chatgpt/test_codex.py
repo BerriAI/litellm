@@ -14,10 +14,12 @@ def test_signaling_rejects_invalid_upstream_call_id(location):
 
 def test_signaling_preserves_selected_model_for_sideband():
     response = httpx.Response(201, headers={"Location": "/v1/realtime/calls/rtc_provider"},
-        extensions={"chatgpt_realtime": {"model": "gpt-live-1-codex", "api_base": "https://voice.example/codex"}})
+        extensions={"chatgpt_realtime": {"model": "gpt-live-1-codex", "api_base": "https://voice.example/codex",
+                                      "extra_headers": {"x-gateway-route": "voice"}}})
     call = parse_call_response(response, "voice", "owner", 1000)
     request = build_sideband_request(call)
     assert request["api_base"] == "https://voice.example/codex"
     assert request["model"] == "chatgpt/gpt-live-1-codex"
     assert request["chatgpt_realtime_call_id"] == "rtc_provider"
     assert request["query_params"] == {"model": "gpt-live-1-codex"}
+    assert request["extra_headers"] == {"x-gateway-route": "voice"}
