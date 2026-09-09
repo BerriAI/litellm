@@ -4,7 +4,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::{Map, Value, json};
 
-use crate::error::{Error, json_type_name};
+use crate::error::{AuthError, Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 
@@ -77,7 +77,7 @@ pub fn resolve_api_key(
                 .map(|key| key.trim().to_string())
                 .filter(|key| !key.is_empty())
         })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::Auth(AuthError::Message(MISSING_KEY_MESSAGE.to_string())))
 }
 
 pub fn extract_document_source(document: &Value) -> Result<ReductoDocumentSource, Error> {

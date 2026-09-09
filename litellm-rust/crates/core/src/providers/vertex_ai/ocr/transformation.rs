@@ -1,4 +1,4 @@
-use crate::error::{Error, json_type_name};
+use crate::error::{AuthError, Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
@@ -51,10 +51,10 @@ pub fn resolve_vertex_api_key(
         .or_else(|| env_lookup(VERTEX_AI_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
         .or_else(|| env_lookup(VERTEXAI_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
         .ok_or_else(|| {
-            Error::Auth(
+            Error::Auth(AuthError::Message(
                 "Missing Vertex AI access token - pass api_key or provide Authorization via extra_headers"
                     .to_string(),
-            )
+            ))
         })
 }
 

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use litellm_core::ocr::transformation::OcrProviderConfig;
+use litellm_core::ocr::types::OcrAuthInputs;
 use serde_json::{Map, Value};
 
 use crate::integrations::custom_guardrail::CustomGuardrail;
@@ -34,6 +35,7 @@ pub(crate) struct PreparedOcrRequest {
     pub(crate) api_base: Option<String>,
     pub(crate) extra_headers: Option<Map<String, Value>>,
     pub(crate) optional_params: Map<String, Value>,
+    pub(crate) auth_inputs: OcrAuthInputs,
     pub(crate) timeout: Option<Duration>,
 }
 

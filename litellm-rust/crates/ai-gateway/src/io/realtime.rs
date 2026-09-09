@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use litellm_core::AuthError;
 use litellm_core::error::Error;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
 use litellm_core::realtime::types::RealtimeEvent;
@@ -59,7 +60,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|key| !key.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::Auth(AuthError::Message(MISSING_KEY_MESSAGE.to_string())))
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.
@@ -83,7 +84,7 @@ pub(crate) async fn dial_upstream(
     request.headers_mut().insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|err| Error::Auth(err.to_string()))?,
+            .map_err(|err| Error::Auth(AuthError::Message(err.to_string())))?,
     );
 
     let (upstream, _response) = connect_upstream(request)

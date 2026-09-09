@@ -18,7 +18,7 @@ pyo3::create_exception!(
 
 pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        Error::Auth(message) => PyValueError::new_err(message),
+        Error::Auth(message) => PyValueError::new_err(message.to_string()),
         Error::InvalidProvider(_)
         | Error::InvalidRequest(_)
         | Error::InvalidType { .. }

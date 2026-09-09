@@ -1,4 +1,4 @@
-use crate::error::{Error, json_type_name};
+use crate::error::{AuthError, Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value};
@@ -24,9 +24,6 @@ pub const MISTRAL_DEFAULT_API_BASE: &str = "https://api.mistral.ai/v1";
 
 /// Environment variable holding the Mistral API key.
 pub const MISTRAL_API_KEY_ENV: &str = "MISTRAL_API_KEY";
-
-/// Error message raised when no Mistral API key can be resolved.
-pub const MISSING_KEY_MESSAGE: &str = "Missing Mistral API Key - A call is being made to Mistral but no key is set either in the environment variables or via params";
 
 /// Build the complete OCR endpoint URL, de-duplicating a trailing `/v1`.
 ///
@@ -62,7 +59,9 @@ pub fn resolve_api_key(
         .filter(|key| !key.is_empty())
         .map(str::to_string)
         .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or(Error::Auth(AuthError::MissingApiKey {
+            provider: "Mistral",
+        }))
 }
 
 pub struct MistralOcrConfig;
@@ -428,6 +427,11 @@ mod tests {
     #[test]
     fn resolve_api_key_errors_when_absent() {
         let err = resolve_api_key(None, &|_| None).expect_err("missing key should error");
-        assert_eq!(err, Error::Auth(MISSING_KEY_MESSAGE.to_string()));
+        assert_eq!(
+            err,
+            Error::Auth(AuthError::MissingApiKey {
+                provider: "Mistral",
+            })
+        );
     }
 }

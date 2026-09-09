@@ -1,22 +1,15 @@
 use crate::Error;
+use crate::providers::auth::CredentialPlacement;
+use crate::providers::auth::http::apply_credential;
 use serde_json::{Map, Value};
 
-use super::types::{OcrRequestData, OcrResponseData};
+use std::future::Future;
+use std::pin::Pin;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OcrAuthStrategy {
-    Bearer,
-    Header(&'static str),
-}
+use super::types::{OcrAuthInputs, OcrRequestData, OcrResponseData};
 
-impl OcrAuthStrategy {
-    pub fn header_name(self) -> &'static str {
-        match self {
-            Self::Bearer => "authorization",
-            Self::Header(header_name) => header_name,
-        }
-    }
-}
+pub type OcrAuthFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<(String, String)>, Error>> + Send + 'a>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrResponseHandling {
@@ -81,20 +74,29 @@ pub trait OcrProviderConfig: Sync {
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Vec<(String, String)>, Error> {
-        let strategy = self.auth_strategy();
-        if crate::http_utils::has_header(&headers, strategy.header_name()) {
+        let placement = self.credential_placement();
+        if crate::http_utils::has_header(&headers, placement.header_name()) {
             return Ok(headers);
         }
         let api_key = self.resolve_api_key(api_key, env_lookup)?;
-        let auth_header = match strategy {
-            OcrAuthStrategy::Bearer => ("Authorization".to_string(), format!("Bearer {api_key}")),
-            OcrAuthStrategy::Header(name) => (name.to_string(), api_key),
-        };
-        Ok(std::iter::once(auth_header).chain(headers).collect())
+        apply_credential(headers, &api_key, placement).map_err(Error::from)
     }
 
-    fn auth_strategy(&self) -> OcrAuthStrategy {
-        OcrAuthStrategy::Bearer
+    fn authenticate<'a>(
+        &'a self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&'a str>,
+        auth_inputs: &'a OcrAuthInputs,
+        env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    ) -> OcrAuthFuture<'a> {
+        Box::pin(async move {
+            let _ = auth_inputs;
+            self.validate_environment(headers, api_key, env_lookup)
+        })
+    }
+
+    fn credential_placement(&self) -> CredentialPlacement {
+        CredentialPlacement::Bearer
     }
 
     fn requires_data_uri_document(&self) -> bool {

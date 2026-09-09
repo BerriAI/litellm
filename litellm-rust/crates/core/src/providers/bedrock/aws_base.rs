@@ -1,10 +1,9 @@
 use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::caching::in_memory_cache::InMemoryCache;
-use crate::error::Error;
+use crate::error::{AuthError, Error};
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_sigv4::http_request::{
@@ -22,11 +21,13 @@ use super::constants::{
     BEDROCK_SERVICE, DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX,
     SIGV4_COMPUTED_HEADER_NAMES,
 };
+use super::credential_cache::CredentialCache;
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
+const IAM_CREDENTIALS_CACHE_MAX_CAPACITY: u64 = 200;
 
-static IAM_CREDENTIALS_CACHE: OnceLock<Mutex<InMemoryCache<Credentials>>> = OnceLock::new();
+static IAM_CREDENTIALS_CACHE: OnceLock<CredentialCache<String, Credentials>> = OnceLock::new();
 
 fn credential_cache_ttl(flow: &AwsAuthFlow) -> Option<Duration> {
     match flow {
@@ -107,17 +108,16 @@ fn cache_key(config: &AwsAuthConfig, flow: &AwsAuthFlow) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn get_cached_credentials(key: &str) -> Option<Credentials> {
-    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(InMemoryCache::default()));
-    let mut entries = cache.lock().ok()?;
-    entries.get_cache(key)
+async fn get_cached_credentials(key: &String) -> Option<Credentials> {
+    let cache = IAM_CREDENTIALS_CACHE
+        .get_or_init(|| CredentialCache::new(IAM_CREDENTIALS_CACHE_MAX_CAPACITY));
+    cache.get(key).await
 }
 
-fn set_cached_credentials(key: String, credentials: Credentials, ttl: Duration) {
-    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(InMemoryCache::default()));
-    if let Ok(mut entries) = cache.lock() {
-        entries.set_cache(key, credentials, Some(ttl));
-    }
+async fn set_cached_credentials(key: String, credentials: Credentials, ttl: Duration) {
+    let cache = IAM_CREDENTIALS_CACHE
+        .get_or_init(|| CredentialCache::new(IAM_CREDENTIALS_CACHE_MAX_CAPACITY));
+    cache.insert(key, credentials, ttl).await;
 }
 
 fn role_identity(arn: &str) -> Option<(&str, &str, &str)> {
@@ -223,7 +223,7 @@ pub async fn resolve_credentials(
                 region_name,
             };
             let key = cache_key(&resolved, &flow);
-            if let Some(credentials) = get_cached_credentials(&key) {
+            if let Some(credentials) = get_cached_credentials(&key).await {
                 return Ok(credentials);
             }
             let credentials = Credentials::new(
@@ -237,23 +237,25 @@ pub async fn resolve_credentials(
                 key,
                 credentials.clone(),
                 credential_cache_ttl(&flow).unwrap_or(STATIC_CREDENTIALS_TTL),
-            );
+            )
+            .await;
             Ok(credentials)
         }
         AwsAuthFlow::Profile { name } => {
             let provider = aws_config::profile::ProfileFileCredentialsProvider::builder()
                 .profile_name(name)
                 .build();
-            provider
-                .provide_credentials()
-                .await
-                .map_err(|error| Error::Auth(format!("AWS profile credentials failed: {error}")))
+            provider.provide_credentials().await.map_err(|error| {
+                Error::Auth(AuthError::Message(format!(
+                    "AWS profile credentials failed: {error}"
+                )))
+            })
         }
         AwsAuthFlow::AssumeRole { role, session_name } => {
             if is_already_running_as_role(&role, &resolved).await? {
                 let ambient_flow = AwsAuthFlow::DefaultChain;
                 let key = cache_key(&resolved, &ambient_flow);
-                if let Some(credentials) = get_cached_credentials(&key) {
+                if let Some(credentials) = get_cached_credentials(&key).await {
                     return Ok(credentials);
                 }
                 let provider =
@@ -261,13 +263,16 @@ pub async fn resolve_credentials(
                         .build()
                         .await;
                 let credentials = provider.provide_credentials().await.map_err(|error| {
-                    Error::Auth(format!("AWS default credentials failed: {error}"))
+                    Error::Auth(AuthError::Message(format!(
+                        "AWS default credentials failed: {error}"
+                    )))
                 })?;
                 set_cached_credentials(
                     key,
                     credentials.clone(),
                     credential_cache_ttl(&ambient_flow).unwrap_or(AMBIENT_CREDENTIALS_TTL),
-                );
+                )
+                .await;
                 return Ok(credentials);
             }
             let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
@@ -299,10 +304,11 @@ pub async fn resolve_credentials(
                 None => builder,
             };
             let provider = builder.configure(&sdk_config).build().await;
-            provider
-                .provide_credentials()
-                .await
-                .map_err(|error| Error::Auth(format!("AWS role credentials failed: {error}")))
+            provider.provide_credentials().await.map_err(|error| {
+                Error::Auth(AuthError::Message(format!(
+                    "AWS role credentials failed: {error}"
+                )))
+            })
         }
         AwsAuthFlow::WebIdentity {
             token,
@@ -326,13 +332,19 @@ pub async fn resolve_credentials(
                 .send()
                 .await
                 .map_err(|error| {
-                    Error::Auth(format!("AWS web identity credentials failed: {error}"))
+                    Error::Auth(AuthError::Message(format!(
+                        "AWS web identity credentials failed: {error}"
+                    )))
                 })?;
             let credentials = response.credentials().ok_or_else(|| {
-                Error::Auth("AWS web identity response had no credentials".to_string())
+                Error::Auth(AuthError::Message(
+                    "AWS web identity response had no credentials".to_string(),
+                ))
             })?;
             let expiration = SystemTime::try_from(*credentials.expiration()).map_err(|error| {
-                Error::Auth(format!("AWS web identity expiration was invalid: {error}"))
+                Error::Auth(AuthError::Message(format!(
+                    "AWS web identity expiration was invalid: {error}"
+                )))
             })?;
             Ok(Credentials::new(
                 credentials.access_key_id(),
@@ -344,22 +356,24 @@ pub async fn resolve_credentials(
         }
         AwsAuthFlow::DefaultChain => {
             let key = cache_key(&resolved, &AwsAuthFlow::DefaultChain);
-            if let Some(credentials) = get_cached_credentials(&key) {
+            if let Some(credentials) = get_cached_credentials(&key).await {
                 return Ok(credentials);
             }
             let provider =
                 aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
                     .build()
                     .await;
-            let credentials = provider
-                .provide_credentials()
-                .await
-                .map_err(|error| Error::Auth(format!("AWS default credentials failed: {error}")))?;
+            let credentials = provider.provide_credentials().await.map_err(|error| {
+                Error::Auth(AuthError::Message(format!(
+                    "AWS default credentials failed: {error}"
+                )))
+            })?;
             set_cached_credentials(
                 key,
                 credentials.clone(),
                 credential_cache_ttl(&AwsAuthFlow::DefaultChain).unwrap_or(AMBIENT_CREDENTIALS_TTL),
-            );
+            )
+            .await;
             Ok(credentials)
         }
     }
@@ -449,14 +463,26 @@ pub fn sign_bedrock_post(
         .settings(SigningSettings::default())
         .build()
         .map(SigningParams::from)
-        .map_err(|error| Error::Auth(format!("AWS signing parameters failed: {error}")))?;
+        .map_err(|error| {
+            Error::Auth(AuthError::Message(format!(
+                "AWS signing parameters failed: {error}"
+            )))
+        })?;
     let header_refs = headers
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()));
     let request = SignableRequest::new("POST", url, header_refs, SignableBody::Bytes(body))
-        .map_err(|error| Error::Auth(format!("AWS signable request failed: {error}")))?;
+        .map_err(|error| {
+            Error::Auth(AuthError::Message(format!(
+                "AWS signable request failed: {error}"
+            )))
+        })?;
     let (instructions, _) = sign(request, &params)
-        .map_err(|error| Error::Auth(format!("AWS request signing failed: {error}")))?
+        .map_err(|error| {
+            Error::Auth(AuthError::Message(format!(
+                "AWS request signing failed: {error}"
+            )))
+        })?
         .into_parts();
     Ok(instructions
         .headers()
@@ -737,13 +763,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cache_round_trip_preserves_credentials() {
+    #[tokio::test]
+    async fn cache_round_trip_preserves_credentials() {
         let key = format!("cache-test-{}", std::process::id());
         let credentials = Credentials::new("cache-ak", "cache-sk", None, None, "test");
-        set_cached_credentials(key.clone(), credentials.clone(), STATIC_CREDENTIALS_TTL);
+        set_cached_credentials(key.clone(), credentials.clone(), STATIC_CREDENTIALS_TTL).await;
         assert_eq!(
-            get_cached_credentials(&key).map(|value| value.access_key_id().to_string()),
+            get_cached_credentials(&key)
+                .await
+                .map(|value| value.access_key_id().to_string()),
             Some("cache-ak".to_string())
         );
     }

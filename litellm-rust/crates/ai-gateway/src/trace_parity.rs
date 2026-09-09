@@ -50,7 +50,7 @@ pub async fn messages_request(
     let response = routes::app(state)
         .oneshot(request)
         .await
-        .map_err(|error| match error {})?;
+        .map_err(|error| -> Error { match error {} })?;
     let status: StatusCode = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await

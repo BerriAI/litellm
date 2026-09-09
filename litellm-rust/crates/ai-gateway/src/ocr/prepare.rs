@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use litellm_core::ocr::types::OcrAuthInputs;
+use litellm_core::providers::auth::azure::AzureAuthInputs;
 use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 use serde_json::{Map, Value};
 
@@ -34,6 +36,13 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
             validate_request_format(config, &request.optional_params, &custom_llm_provider)?;
             Ok(config)
         });
+    let auth_inputs = if custom_llm_provider == "azure_ai" {
+        AzureAuthInputs::from_optional_params(&request.optional_params)
+            .map(OcrAuthInputs::AzureAi)
+            .unwrap_or_else(OcrAuthInputs::Invalid)
+    } else {
+        OcrAuthInputs::None
+    };
     let optional_params = match &config {
         Ok(config) => {
             let supported = config.supported_ocr_params();
@@ -71,6 +80,7 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
             api_base: request.api_base.map(str::to_string),
             extra_headers: request.extra_headers,
             optional_params,
+            auth_inputs,
             timeout: request.timeout,
         },
         hooks: OcrLifecycleHooks::new(

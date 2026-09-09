@@ -1,5 +1,8 @@
+use serde_json::{Map, Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 use litellm_ai_gateway::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
@@ -11,11 +14,9 @@ use litellm_ai_gateway::integrations::custom_logger::{
 use litellm_ai_gateway::integrations::types::RequestMetadata;
 use litellm_ai_gateway::ocr::{OcrRequest, ocr};
 use litellm_core::error::Error;
+
 #[cfg(feature = "trace-parity")]
 use litellm_core::observability::FunctionTrace;
-use serde_json::{Map, Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
 #[cfg(feature = "trace-parity")]
 use tracing::instrument::WithSubscriber;
 
@@ -567,6 +568,127 @@ async fn ocr_does_not_duplicate_authorization_header_when_header_is_supplied() {
             || request.contains("Authorization: Bearer sk-from-python"),
         "{request}"
     );
+}
+
+#[tokio::test]
+async fn azure_ai_mistral_ocr_sends_api_key_as_bearer() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body =
+            r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-latest"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+
+    let response = ocr(OcrRequest {
+        model: "mistral-ocr-latest",
+        document: json!({
+            "type": "document_url",
+            "document_url": "data:application/pdf;base64,YWJj"
+        }),
+        api_key: Some("azure-ai-key"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai"),
+        extra_headers: None,
+        optional_params: Map::new(),
+        timeout: Some(Duration::from_secs(5)),
+        callbacks: Vec::new(),
+        guardrails: Vec::new(),
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: None,
+    })
+    .await
+    .expect("Azure AI OCR request succeeds");
+
+    assert_eq!(response["pages"][0]["markdown"], "ok");
+
+    let request = server.await.expect("server task completes");
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer azure-ai-key"),
+        "{request}"
+    );
+    assert!(
+        !request
+            .to_ascii_lowercase()
+            .contains("api-key: azure-ai-key"),
+        "{request}"
+    );
+}
+
+#[tokio::test]
+async fn azure_ai_entra_token_survives_pre_call_guardrail_mapping() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body =
+            r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-latest"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+    let guardrail = Arc::new(RecordingOcrGuardrail::new(vec![
+        GuardrailEventHook::PreCall,
+    ]));
+
+    let response = ocr(OcrRequest {
+        model: "mistral-ocr-latest",
+        document: json!({
+            "type": "document_url",
+            "document_url": "data:application/pdf;base64,YWJj"
+        }),
+        api_key: None,
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai"),
+        extra_headers: None,
+        optional_params: json!({"azure_ad_token": "entra-token"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        timeout: Some(Duration::from_secs(5)),
+        callbacks: Vec::new(),
+        guardrails: vec![guardrail.clone()],
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: None,
+    })
+    .await
+    .expect("Azure AI OCR request succeeds");
+
+    assert_eq!(response["pages"][0]["markdown"], "ok");
+    assert_eq!(guardrail.events(), vec!["async_pre_call_hook"]);
+    let request = server.await.expect("server task completes");
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer entra-token"),
+        "{request}"
+    );
+    assert!(!request.contains("azure_ad_token"), "{request}");
 }
 
 #[tokio::test]

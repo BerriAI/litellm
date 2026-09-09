@@ -1,3 +1,4 @@
+use litellm_core::AuthError;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
 use litellm_core::providers::reducto::ocr::transformation::{
@@ -80,17 +81,20 @@ impl OcrLifecycleHooks {
     ) -> Result<ProviderOcrRequest, Error> {
         let config = request.config?;
         let env_lookup = |key: &str| std::env::var(key).ok();
-        let upstream_headers = config.validate_environment(
-            string_headers(request.extra_headers)?,
-            request.api_key.as_deref(),
-            &env_lookup,
-        )?;
         let url = config.complete_url(
             request.api_base.as_deref(),
             &request.model,
             &request.optional_params,
             &env_lookup,
         )?;
+        let upstream_headers = config
+            .authenticate(
+                string_headers(request.extra_headers)?,
+                request.api_key.as_deref(),
+                &request.auth_inputs,
+                &env_lookup,
+            )
+            .await?;
         let model = request.model.clone();
         let custom_llm_provider = request.custom_llm_provider.clone();
         let is_reducto = custom_llm_provider == "reducto";
@@ -198,9 +202,9 @@ async fn upload_reducto_document(
         .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
         .map(|(_, value)| value.as_str())
     else {
-        return Err(Error::Auth(
+        return Err(Error::Auth(AuthError::Message(
             "Reducto upload requires an Authorization header".to_string(),
-        ));
+        )));
     };
     let Some(upload) = build_upload_request(source, authorization, api_base) else {
         return Ok(document.clone());

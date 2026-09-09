@@ -1,16 +1,15 @@
+use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
 use crate::error::{Error, json_type_name};
-use crate::ocr::transformation::{OcrAuthStrategy, OcrProviderConfig, OcrResponseHandling};
-use crate::ocr::types::{OcrRequestData, OcrResponseData};
-use serde_json::{Map, Value, json};
+use crate::ocr::transformation::{OcrAuthFuture, OcrProviderConfig, OcrResponseHandling};
+use crate::ocr::types::{OcrAuthInputs, OcrRequestData, OcrResponseData};
+use crate::providers::auth::CredentialPlacement;
+use crate::providers::auth::azure::AzureAuthInputs;
+use crate::providers::azure_ai::auth;
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
-const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
-const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
-const AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";
-const AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
 const AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: &str = "2024-11-30";
 const AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI: i64 = 96;
 
@@ -24,44 +23,11 @@ pub const AZURE_AI_OCR_CONFIG: AzureAiOcrConfig = AzureAiOcrConfig;
 pub const AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG: AzureDocumentIntelligenceOcrConfig =
     AzureDocumentIntelligenceOcrConfig;
 
-fn non_empty(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
-
-fn resolve_value(
-    explicit: Option<&str>,
-    env_name: &str,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-    missing_message: &str,
-) -> Result<String, Error> {
-    non_empty(explicit)
-        .map(str::to_string)
-        .or_else(|| env_lookup(env_name).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| Error::Auth(missing_message.to_string()))
-}
-
-pub fn resolve_azure_ai_api_key(
-    api_key: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
-    resolve_value(
-        api_key,
-        AZURE_AI_API_KEY_ENV,
-        env_lookup,
-        "Missing Azure AI API Key - A call is being made to Azure AI but no key is set either in the environment variables or via params",
-    )
-}
-
 pub fn resolve_azure_ai_api_base(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
-    resolve_value(
-        api_base,
-        AZURE_AI_API_BASE_ENV,
-        env_lookup,
-        "Missing Azure AI API Base - Set AZURE_AI_API_BASE environment variable or pass api_base parameter",
-    )
+    auth::resolve_api_base(api_base, env_lookup)
 }
 
 pub fn complete_azure_ai_url(
@@ -75,90 +41,12 @@ pub fn complete_azure_ai_url(
     ))
 }
 
-pub fn resolve_document_intelligence_api_key(
-    api_key: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
-    resolve_value(
-        api_key,
-        AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV,
-        env_lookup,
-        "Missing Azure Document Intelligence API Key - Set AZURE_DOCUMENT_INTELLIGENCE_API_KEY environment variable or pass api_key parameter",
-    )
-}
-
-pub fn resolve_document_intelligence_endpoint(
-    api_base: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
-    resolve_value(
-        api_base,
-        AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV,
-        env_lookup,
-        "Missing Azure Document Intelligence Endpoint - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT environment variable or pass api_base parameter",
-    )
-}
-
-fn prepend_auth_header(
-    headers: Vec<(String, String)>,
-    name: &str,
-    value: String,
-) -> Vec<(String, String)> {
-    std::iter::once((name.to_string(), value))
-        .chain(headers)
-        .collect()
-}
-
-pub fn validate_azure_ai_environment(
-    headers: Vec<(String, String)>,
-    api_key: Option<&str>,
-    azure_ad_token: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Error> {
-    if crate::http_utils::has_header(&headers, "Authorization")
-        || crate::http_utils::has_header(&headers, "Api-Key")
-    {
-        return Ok(headers);
+fn azure_auth_inputs(auth_inputs: &OcrAuthInputs) -> Result<Option<&AzureAuthInputs>, Error> {
+    match auth_inputs {
+        OcrAuthInputs::AzureAi(inputs) => Ok(Some(inputs)),
+        OcrAuthInputs::Invalid(error) => Err(error.clone().into()),
+        OcrAuthInputs::None => Ok(None),
     }
-    if let Ok(api_key) = resolve_azure_ai_api_key(api_key, env_lookup) {
-        return Ok(prepend_auth_header(headers, "Api-Key", api_key));
-    }
-    non_empty(azure_ad_token)
-        .map(|token| prepend_auth_header(headers, "Authorization", format!("Bearer {token}")))
-        .ok_or_else(|| {
-            Error::Auth(
-                "Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token"
-                    .to_string(),
-            )
-        })
-}
-
-pub fn validate_document_intelligence_environment(
-    headers: Vec<(String, String)>,
-    api_key: Option<&str>,
-    azure_ad_token: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Error> {
-    if crate::http_utils::has_header(&headers, "Authorization")
-        || crate::http_utils::has_header(&headers, "Ocp-Apim-Subscription-Key")
-    {
-        return Ok(headers);
-    }
-    if let Ok(api_key) = resolve_document_intelligence_api_key(api_key, env_lookup) {
-        return Ok(prepend_auth_header(
-            headers,
-            "Ocp-Apim-Subscription-Key",
-            api_key,
-        ));
-    }
-    non_empty(azure_ad_token)
-        .map(|token| prepend_auth_header(headers, "Authorization", format!("Bearer {token}")))
-        .ok_or_else(|| {
-            Error::Auth(
-                "Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or provide azure_ad_token"
-                    .to_string(),
-            )
-        })
 }
 
 fn encode_model_id(model: &str) -> Result<String, Error> {
@@ -343,7 +231,7 @@ pub fn complete_document_intelligence_url(
     optional_params: &Map<String, Value>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
-    let endpoint = resolve_document_intelligence_endpoint(api_base, env_lookup)?;
+    let endpoint = auth::resolve_document_intelligence_endpoint(api_base, env_lookup)?;
     let mut url = format!(
         "{}/documentintelligence/documentModels/{}:analyze?api-version={}",
         endpoint.trim_end_matches('/'),
@@ -541,7 +429,25 @@ impl OcrProviderConfig for AzureAiOcrConfig {
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        resolve_azure_ai_api_key(api_key, env_lookup)
+        auth::resolve_api_key(api_key, env_lookup)
+    }
+
+    fn authenticate<'a>(
+        &'a self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&'a str>,
+        auth_inputs: &'a OcrAuthInputs,
+        env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    ) -> OcrAuthFuture<'a> {
+        Box::pin(async move {
+            auth::authenticate(
+                headers,
+                api_key,
+                azure_auth_inputs(auth_inputs)?,
+                env_lookup,
+            )
+            .await
+        })
     }
 
     fn requires_data_uri_document(&self) -> bool {
@@ -632,11 +538,29 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        resolve_document_intelligence_api_key(api_key, env_lookup)
+        auth::resolve_document_intelligence_api_key(api_key, env_lookup)
     }
 
-    fn auth_strategy(&self) -> OcrAuthStrategy {
-        OcrAuthStrategy::Header("Ocp-Apim-Subscription-Key")
+    fn authenticate<'a>(
+        &'a self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&'a str>,
+        auth_inputs: &'a OcrAuthInputs,
+        env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    ) -> OcrAuthFuture<'a> {
+        Box::pin(async move {
+            auth::authenticate_document_intelligence(
+                headers,
+                api_key,
+                azure_auth_inputs(auth_inputs)?,
+                env_lookup,
+            )
+            .await
+        })
+    }
+
+    fn credential_placement(&self) -> CredentialPlacement {
+        CredentialPlacement::Header("Ocp-Apim-Subscription-Key")
     }
 
     fn response_handling(&self) -> OcrResponseHandling {
@@ -654,13 +578,6 @@ mod tests {
     #[fixture]
     fn document_intelligence_config() -> AzureDocumentIntelligenceOcrConfig {
         AzureDocumentIntelligenceOcrConfig
-    }
-
-    fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-        headers
-            .iter()
-            .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
     }
 
     #[fixture]
@@ -1098,35 +1015,6 @@ mod tests {
     }
 
     #[test]
-    fn document_intelligence_validate_environment_uses_subscription_key() {
-        let headers =
-            validate_document_intelligence_environment(Vec::new(), Some("my-key"), None, &|_| None)
-                .expect("api key authenticates");
-
-        assert_eq!(
-            header_value(&headers, "Ocp-Apim-Subscription-Key"),
-            Some("my-key")
-        );
-    }
-
-    #[test]
-    fn document_intelligence_validate_environment_falls_back_to_entra_token() {
-        let headers = validate_document_intelligence_environment(
-            Vec::new(),
-            None,
-            Some("entra-token"),
-            &|_| None,
-        )
-        .expect("Entra token authenticates");
-
-        assert_eq!(
-            header_value(&headers, "Authorization"),
-            Some("Bearer entra-token")
-        );
-        assert_eq!(header_value(&headers, "Ocp-Apim-Subscription-Key"), None);
-    }
-
-    #[test]
     fn document_intelligence_supported_params_include_pages_features_and_req_format() {
         assert_eq!(
             AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG.supported_ocr_params(),
@@ -1330,9 +1218,9 @@ mod tests {
 
     #[test]
     fn document_intelligence_endpoint_ignores_generic_azure_ai_base() {
-        let resolved = resolve_document_intelligence_endpoint(None, &|name| match name {
-            AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV => Some(ENDPOINT.to_string()),
-            AZURE_AI_API_BASE_ENV => Some("https://generic.example.com".to_string()),
+        let resolved = auth::resolve_document_intelligence_endpoint(None, &|name| match name {
+            auth::AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV => Some(ENDPOINT.to_string()),
+            auth::AZURE_AI_API_BASE_ENV => Some("https://generic.example.com".to_string()),
             _ => None,
         })
         .expect("endpoint resolves");
@@ -1342,11 +1230,11 @@ mod tests {
 
     #[test]
     fn document_intelligence_endpoint_honors_explicit_api_base() {
-        let resolved = resolve_document_intelligence_endpoint(
+        let resolved = auth::resolve_document_intelligence_endpoint(
             Some("https://my-di.cognitiveservices.azure.com"),
             &|name| match name {
-                AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV => Some(ENDPOINT.to_string()),
-                AZURE_AI_API_BASE_ENV => Some("https://generic.example.com".to_string()),
+                auth::AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV => Some(ENDPOINT.to_string()),
+                auth::AZURE_AI_API_BASE_ENV => Some("https://generic.example.com".to_string()),
                 _ => None,
             },
         )
@@ -1358,24 +1246,12 @@ mod tests {
     #[test]
     fn azure_ai_mistral_ocr_uses_generic_api_base() {
         let resolved = resolve_azure_ai_api_base(None, &|name| match name {
-            AZURE_AI_API_BASE_ENV => Some("https://generic-azure-ai.example.com".to_string()),
-            AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV => Some(ENDPOINT.to_string()),
+            auth::AZURE_AI_API_BASE_ENV => Some("https://generic-azure-ai.example.com".to_string()),
+            auth::AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV => Some(ENDPOINT.to_string()),
             _ => None,
         })
         .expect("api base resolves");
 
         assert_eq!(resolved, "https://generic-azure-ai.example.com");
-    }
-
-    #[test]
-    fn azure_ai_ocr_authenticates_with_entra_token() {
-        let headers =
-            validate_azure_ai_environment(Vec::new(), None, Some("entra-token"), &|_| None)
-                .expect("Entra token authenticates");
-
-        assert_eq!(
-            header_value(&headers, "Authorization"),
-            Some("Bearer entra-token")
-        );
     }
 }

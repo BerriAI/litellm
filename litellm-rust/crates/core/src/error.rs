@@ -1,5 +1,28 @@
 use thiserror::Error as ThisError;
 
+#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
+pub enum AuthError {
+    #[error("invalid authentication configuration: {0}")]
+    InvalidConfiguration(String),
+    #[error("credential acquisition failed: {0}")]
+    Acquisition(String),
+    #[error("credential caller failed: {0}")]
+    Caller(String),
+    #[error(
+        "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
+    )]
+    MissingApiKey { provider: &'static str },
+    #[error(
+        "Missing {provider} API Base - Set {environment_variable} environment variable or pass api_base parameter"
+    )]
+    MissingApiBase {
+        provider: &'static str,
+        environment_variable: &'static str,
+    },
+    #[error("{0}")]
+    Message(String),
+}
+
 #[derive(Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
@@ -15,8 +38,8 @@ pub enum Error {
     InvalidProvider(String),
     #[error("invalid request: {0}")]
     InvalidRequest(String),
-    #[error("{0}")]
-    Auth(String),
+    #[error(transparent)]
+    Auth(#[from] AuthError),
     #[error("upstream request failed with status {status}: {body}")]
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]

@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use crate::error::Error;
+use crate::error::{AuthError, Error};
 
 use super::prepare::{prepare_provider_request, resolve_request};
 use super::transformation::ChatCompletionsAuth;
@@ -806,7 +806,7 @@ mod round_trip {
             Error::MissingField("usage"),
             Error::Unsupported("non-text response content block"),
             Error::InvalidRequest("whatever".to_string()),
-            Error::Auth("whatever".to_string()),
+            Error::Auth(AuthError::Message("whatever".to_string())),
         ] {
             let label = format!("{original:?}");
             assert!(
