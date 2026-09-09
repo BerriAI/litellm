@@ -255,9 +255,6 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 	}
 }
 
-// The proxy has no dedicated column for model_tpm_limit and merges it into the same metadata
-// blob the caller's own metadata lives in, so a naive read shows it as a permanent metadata
-// diff: config never repeats it inside metadata, since it already has its own attribute.
 func TestWithoutReservedKeyMetadataFieldsDropsProxyOwnedKeys(t *testing.T) {
 	got := withoutReservedKeyMetadataFields(map[string]interface{}{
 		"project":         "pseudonymization",
@@ -288,8 +285,7 @@ func TestWithoutReservedKeyMetadataFieldsNilIsNil(t *testing.T) {
 	}
 }
 
-// Iterates reservedKeyMetadataFields itself, not a hardcoded copy, so adding a name there without
-// a real proxy-merged field (or the reverse) is caught here instead of silently reopening the diff.
+// Iterates the map itself, not a hardcoded copy, so a future entry is covered automatically.
 func TestWithoutReservedKeyMetadataFieldsDropsEveryEntry(t *testing.T) {
 	for name := range reservedKeyMetadataFields {
 		raw := map[string]interface{}{"own_field": "kept", name: "should be dropped"}
@@ -303,11 +299,7 @@ func TestWithoutReservedKeyMetadataFieldsDropsEveryEntry(t *testing.T) {
 	}
 }
 
-// A name only belongs in reservedKeyMetadataFields once this resource also has a real argument
-// for it (see the comment on the map). Something the proxy accepts under metadata but this
-// resource has no argument for yet, like mcp_rpm_limit, has to stay visible through metadata:
-// it is the only place a caller can see or manage it here, so filtering it would erase it with
-// no attribute to hold it instead.
+// mcp_rpm_limit has no attribute of its own yet, so metadata is its only visible home.
 func TestWithoutReservedKeyMetadataFieldsKeepsFieldsWithNoAttributeYet(t *testing.T) {
 	got := withoutReservedKeyMetadataFields(map[string]interface{}{
 		"project":       "pseudonymization",
@@ -318,10 +310,7 @@ func TestWithoutReservedKeyMetadataFieldsKeepsFieldsWithNoAttributeYet(t *testin
 	}
 }
 
-// Ties reservedKeyMetadataFields to the real schema instead of trusting the comment on the map:
-// a name added there without an actual matching attribute (or a schema attribute renamed/removed
-// out from under an existing entry) is exactly the P1 data-loss failure mode this map exists to
-// avoid, and would otherwise only surface as a silent gap in what a future config change reports.
+// Every reserved name must have a real schema attribute, or filtering it erases it with nowhere left to go.
 func TestReservedKeyMetadataFieldsAllHaveSchemaAttribute(t *testing.T) {
 	schema := resourceKey().Schema
 	for name := range reservedKeyMetadataFields {
@@ -331,9 +320,6 @@ func TestReservedKeyMetadataFieldsAllHaveSchemaAttribute(t *testing.T) {
 	}
 }
 
-// resourceKeyRead must not surface the proxy-merged fields as if they were part of the
-// caller's own metadata, or every key that sets model_tpm_limit (or any of the other fields
-// key_management_endpoints.py folds into metadata) shows a permanent plan diff.
 func TestResourceKeyReadStripsProxyOwnedMetadataFields(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
