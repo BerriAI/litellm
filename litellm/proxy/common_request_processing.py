@@ -190,6 +190,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
 )
+from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -1849,7 +1850,6 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
             )
-
         # Calculate request queue time after add_litellm_data_to_request
         # which sets arrival_time in proxy_server_request. Ends at start_time
         # (not a freshly captured time.time() here) so this window is exactly
@@ -1997,6 +1997,12 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             call_type=route_type,
         )
+        if route_type == "aget_responses":
+            attach_post_call_pipelines_to_retrieval(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
 
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
