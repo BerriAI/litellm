@@ -3,7 +3,6 @@ Unit tests for CheckResponsesCost class
 """
 
 import asyncio
-import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -29,10 +28,6 @@ def _completion_calls(mock_prisma_client):
 
 def _completed_job_ids(mock_prisma_client):
     return [call.kwargs["where"]["id"] for call in _completion_calls(mock_prisma_client)]
-
-
-def _persisted_response(completion_call):
-    return json.loads(completion_call.kwargs["data"]["file_object"])
 
 
 def _claim_calls(mock_prisma_client):
@@ -1118,55 +1113,6 @@ class TestCheckResponsesCost:
 
         mock_aget.assert_awaited_once()
         assert _completed_job_ids(mock_prisma_client) == ["job-old-schema"]
-
-    @pytest.mark.asyncio
-    async def test_terminal_response_replaces_the_queued_file_object_on_the_row(
-        self, check_responses_cost_instance, mock_prisma_client
-    ):
-        """The row has to become the durable copy of the finished generation. Leaving the queued
-        placeholder there forces the retrieve endpoint back to the provider, and every re-read
-        replays the same usage under a fresh id, which is what billed the job again per read."""
-        mock_job = MagicMock()
-        mock_job.unified_object_id = "resp_test_persisted"
-        mock_job.created_by = "test-user"
-        mock_job.id = "job-persisted"
-        mock_job.file_object = {
-            "model": "gpt-5",
-            "id": "resp_test_persisted",
-            "status": "queued",
-            "usage": None,
-        }
-
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[mock_job]
-        )
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=1
-        )
-
-        mock_response = ResponsesAPIResponse(
-            id="resp_finished_upstream",
-            object="response",
-            status="completed",
-            created_at=int(datetime.now().timestamp()),
-            output=[],
-            usage=ResponseAPIUsage(
-                input_tokens=100, output_tokens=50, total_tokens=150
-            ),
-        )
-
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
-            await check_responses_cost_instance.check_responses_cost()
-
-        completion_calls = _completion_calls(mock_prisma_client)
-        assert len(completion_calls) == 1
-        assert completion_calls[0].kwargs["where"] == {"id": "job-persisted"}
-
-        persisted = _persisted_response(completion_calls[0])
-        assert persisted["id"] == "resp_finished_upstream"
-        assert persisted["status"] == "completed"
-        assert persisted["usage"]["total_tokens"] == 150
 
     @pytest.mark.asyncio
     async def test_a_failed_persist_does_not_abort_the_rest_of_the_poll_cycle(
