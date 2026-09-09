@@ -3079,7 +3079,7 @@ def register_model(
         # Convert stringified numbers to appropriate numeric types
         loaded_model_cost = model_cost
     elif isinstance(model_cost, str):
-        loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
+        loaded_model_cost = litellm.get_model_cost_map(url=model_cost, max_attempts=1)
 
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost

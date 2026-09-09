@@ -138,11 +138,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
-from litellm.utils import (
-    _invalidate_model_cost_lowercase_map,
-    load_credentials_from_list,
-    reapply_runtime_model_cost_registrations,
-)
+from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -4436,20 +4432,9 @@ def resolve_classifier_plugin(
 
 
 def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
-    """Adopt a freshly fetched cost map into this process's litellm state, return the model count"""
-    litellm.model_cost = new_model_cost_map
-    # Invalidate case-insensitive lookup map since model_cost was replaced
-    _invalidate_model_cost_lowercase_map()
-    # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
-    # wildcard patterns like "anthropic/*" include any newly added models.
-    litellm.add_known_models(model_cost_map=new_model_cost_map)
-    # Counted before the re-apply below, which writes into this same dict, so the
-    # number reported describes the fetched price data alone.
-    fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
-    # The swap discards everything registered at runtime (deployment model_info,
-    # register_model overrides), so put it back on top of the fresh catalog.
-    reapply_runtime_model_cost_registrations()
-    return fetched_model_count
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+
+    return adopt_model_cost_map(new_model_cost_map)
 
 
 def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
