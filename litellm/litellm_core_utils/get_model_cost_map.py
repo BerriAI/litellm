@@ -324,19 +324,14 @@ async def _fetch_remote_model_cost_map_with_retry(
 def _fetch_remote_model_cost_map_with_retry_sync(
     url: str,
     timeout: int,
-    max_attempts: int,
+    attempts: range,
     sleep: Callable[[float], None],
     rng: random.Random,
     client: _SyncGetClient,
-    starting_attempt: int = 1,
-    initial_outcome: _FetchAttemptRetryable | None = None,
 ) -> ModelCostMapReloadResult:
-    for attempt in range(starting_attempt, max_attempts + 1):
-        outcome = (
-            initial_outcome
-            if initial_outcome is not None and attempt == starting_attempt
-            else _attempt_fetch_sync(client=client, url=url, timeout=timeout)
-        )
+    max_attempts: Final = attempts.stop - 1
+    for attempt in attempts:
+        outcome = _attempt_fetch_sync(client=client, url=url, timeout=timeout)
         if not isinstance(outcome, _FetchAttemptRetryable):
             return outcome
         wait_seconds = _next_retry_wait(outcome=outcome, attempt=attempt, max_attempts=max_attempts, rng=rng)
@@ -557,18 +552,18 @@ def _continue_remote_fetch_in_background(
     sleep: Callable[[float], None],
     rng: random.Random,
     client: _SyncGetClient,
-    first_outcome: _FetchAttemptRetryable,
+    first_wait: float,
     apply: Callable[[dict], object],  # mutable-ok: injected callback receives the mutable cost-map dict
 ) -> None:
     try:
+        sleep(first_wait)
         result: Final = _fetch_remote_model_cost_map_with_retry_sync(
             url=url,
             timeout=timeout,
-            max_attempts=max_attempts,
+            attempts=range(2, max_attempts + 1),
             sleep=sleep,
             rng=rng,
             client=client,
-            initial_outcome=first_outcome,
         )
         if isinstance(result, ModelCostMapReloadUnavailable):
             verbose_logger.warning(
@@ -652,19 +647,26 @@ def get_model_cost_map(
         local_map: Final = _finalize_loaded_model_cost_map(
             GetModelCostMap.load_local_model_cost_map_with_revision()
         ).model_cost_map
-        if max_attempts > 1:
-            start_background(
-                lambda: _continue_remote_fetch_in_background(
-                    url=url,
-                    timeout=timeout,
-                    max_attempts=max_attempts,
-                    sleep=sleep,
-                    rng=fetch_rng,
-                    client=fetch_client,
-                    first_outcome=first_outcome,
-                    apply=apply,
-                )
+        first_wait: Final = _next_retry_wait(
+            outcome=first_outcome,
+            attempt=1,
+            max_attempts=max_attempts,
+            rng=fetch_rng,
+        )
+        if isinstance(first_wait, ModelCostMapReloadUnavailable):
+            return local_map
+        start_background(
+            lambda: _continue_remote_fetch_in_background(
+                url=url,
+                timeout=timeout,
+                max_attempts=max_attempts,
+                sleep=sleep,
+                rng=fetch_rng,
+                client=fetch_client,
+                first_wait=first_wait,
+                apply=apply,
             )
+        )
         return local_map
 
     result: Final = first_outcome
