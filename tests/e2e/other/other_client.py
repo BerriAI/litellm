@@ -1,27 +1,23 @@
 """Client for the `other` holding-pen suite: the auth gate (master key vs an
-invalid key on an admin route), JWT auth against the test-only issuer
-(jwt_issuer.py), and the process-lifecycle health probes (liveness, public
-readiness, authenticated readiness diagnostics).
+invalid key on an admin route), JWT auth against the suite's Keycloak realm
+(idp.py), and the process-lifecycle health probes (liveness, public readiness,
+authenticated readiness diagnostics).
 
 Holds the shared ProxyClient so `resources` / `scoped_key` still clean up, and
 adds only the routes these behaviors need. The health probes deliberately send
 no auth header (public routes), so they go through the transport with an empty
-headers model rather than a bearer. Tokens are minted by POSTing claims to the
-issuer, so no test ever holds a signing key.
+headers model rather than a bearer. JWT tests reach the identity provider
+through `idp`, which provisions identities and mints tokens through Keycloak's
+own endpoints, so no test ever holds a signing key.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
 
-import pytest
-
-from e2e_config import JWT_ISSUER_URL
-from e2e_http import NetworkError, NoBody, ProbeResult, Result, Success, post_external
-from jwt_issuer import TOKEN_PATH, MintedToken
+from e2e_http import NoBody, ProbeResult, Result
+from idp import Keycloak, keycloak_from_env
 from models import (
-    JwtClaimsBody,
     ReadinessDetailsResponse,
     ReadinessResponse,
     UserListParams,
@@ -33,7 +29,11 @@ from proxy_client import ProxyClient
 @dataclass(frozen=True, slots=True)
 class OtherClient:
     proxy: ProxyClient
-    jwt_issuer_url: str
+
+    @property
+    def idp(self) -> Keycloak:
+        """Resolved per use, so the suite's non-JWT tests never need the IdP env."""
+        return keycloak_from_env()
 
     def liveness(self) -> ProbeResult:
         """GET /health/liveliness. Unauthenticated; the probe returns status +
@@ -77,21 +77,6 @@ class OtherClient:
             response_type=UserListResponse,
         )
 
-    def mint_jwt(self, claims: JwtClaimsBody) -> str:
-        """Have the test-only issuer sign `claims` into a compact RS256 JWT. A
-        missing issuer is a hard failure naming the start command, not a skip."""
-        result: Final = post_external(f"{self.jwt_issuer_url}{TOKEN_PATH}", json=claims, response_type=MintedToken)
-        match result:
-            case Success(data=minted):
-                return minted.token
-            case NetworkError(message=message):
-                pytest.fail(
-                    f"No live JWT issuer at {self.jwt_issuer_url}: {message}. Start it next to the proxy with "
-                    "`uv run python tests/e2e/jwt_issuer.py` (see CONTRIBUTING.md)"
-                )
-            case _:
-                raise AssertionError(result)
-
 
 def build_client(proxy: ProxyClient) -> OtherClient:
-    return OtherClient(proxy=proxy, jwt_issuer_url=JWT_ISSUER_URL)
+    return OtherClient(proxy=proxy)
