@@ -603,6 +603,62 @@ def test_convert_tool_response_to_message_without_values():
     assert message.content == '{"name": "John", "age": 30}'
 
 
+def test_convert_tool_response_to_message_single_key_envelope():
+    """
+    Test unwrapping single-key envelope dicts in tool responses.
+
+    Vertex AI Anthropic wraps json_tool_call responses in
+    {"parameter": {"facts": [...]}} instead of {"facts": [...]}.
+    The wrapper key varies by provider ("parameter" for Vertex AI,
+    "properties" for Bedrock, "values" for direct Anthropic).
+    Single-key dicts whose value is a dict should be unwrapped.
+    """
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name="json_tool_call",
+                arguments='{"parameter": {"facts": [{"what": "test"}]}}',
+            ),
+            index=0,
+        )
+    ]
+
+    message = AnthropicConfig._convert_tool_response_to_message(
+        tool_calls=tool_calls
+    )
+
+    assert message is not None
+    import json
+
+    parsed = json.loads(message.content)
+    assert "facts" in parsed
+    assert parsed["facts"][0]["what"] == "test"
+
+
+def test_convert_tool_response_to_message_multi_key_no_unwrap():
+    """Multi-key dicts should not be unwrapped even without 'values' key."""
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name="json_tool_call",
+                arguments='{"name": "John", "age": 30}',
+            ),
+            index=0,
+        )
+    ]
+
+    message = AnthropicConfig._convert_tool_response_to_message(
+        tool_calls=tool_calls
+    )
+
+    assert message is not None
+    assert message.content == '{"name": "John", "age": 30}'
+
+
 def test_convert_tool_response_to_message_invalid_json():
     """Test converting a tool response with invalid JSON"""
     tool_calls = [
