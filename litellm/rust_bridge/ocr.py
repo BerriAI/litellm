@@ -87,13 +87,13 @@ class _OcrBindings(NativeLifecycleBindings, Protocol):
         [dict[str, object], object | None, bool, bool], _OcrLifecycle
     ]  # mutable-ok: native bridge retains and updates Python argument objects
     build_request: Callable[
-        [dict[str, object], object, bool], object
+        [object, dict[str, object], object, bool], object
     ]  # mutable-ok: native bridge retains and updates Python argument objects
     pre_call: Callable[[object], None]
     send: Callable[
-        [object], Awaitable[dict[str, object]]
+        [object, object], Awaitable[dict[str, object]]
     ]  # mutable-ok: native bridge retains and updates Python argument objects
-    send_sync: Callable[[object], OCRResponse]
+    send_sync: Callable[[object, object], OCRResponse]
     finish: Callable[
         [dict[str, object]], OCRResponse
     ]  # mutable-ok: native bridge retains and updates Python argument objects
@@ -144,17 +144,17 @@ class _OcrHost:
     def build_request(self) -> None:
         if self.logger is None:
             raise RuntimeError("OCR logging was not initialized")
-        self.state = self.bindings.build_request(self.current, self.logger, self.asynchronous)
+        self.state = self.bindings.build_request(self.machine, self.current, self.logger, self.asynchronous)
 
     def pre_call(self) -> None:
         self.bindings.pre_call(self.state)
 
     def send_sync(self) -> None:
-        self.response = self.bindings.send_sync(self.state)
+        self.response = self.bindings.send_sync(self.machine, self.state)
         self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def send(self) -> None:
-        self.response = self.bindings.finish(await self.bindings.send(self.state))
+        self.response = self.bindings.finish(await self.bindings.send(self.machine, self.state))
         self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def deployment_success(self) -> None:

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use rustls::{ClientConfig, RootCertStore};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -14,10 +14,7 @@ use tokio_tungstenite::{
 };
 
 use crate::Error;
-use crate::integrations::custom_logger::CallbackTiming;
-use crate::lifecycle::{
-    ExecutedCall, TerminalClassification, TerminalDispatcher,
-};
+use crate::lifecycle::{ExecutedCall, TerminalClassification, TerminalDispatcher};
 use crate::providers::dispatch::responses_websocket_provider_config;
 use crate::responses::instrumentation::ResponsesWsInstrumentation;
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
@@ -93,23 +90,37 @@ where
     let instrumentation = Arc::new(ResponsesWsInstrumentation::default());
     let snapshot = instrumentation.clone();
     let mut completion = crate::lifecycle::completion::SessionCompletion::new(
-        services, context, start_time, move |context| {
+        services,
+        context,
+        start_time,
+        move |context| {
             let observation = snapshot.snapshot();
-            if !observation.model.is_empty() { context.model = observation.model; }
+            if !observation.model.is_empty() {
+                context.model = observation.model;
+            }
             context.usage = observation.usage;
+            if observation.usage_available {
+                context.provider_usage =
+                    crate::lifecycle::terminal::UsageObservation::Partial(observation.usage);
+            }
         },
     );
     let config = responses_websocket_provider_config();
     let connection = async {
-        let key = config.resolve_api_key(request.api_key.as_deref(), &|key| std::env::var(key).ok())?;
+        let key =
+            config.resolve_api_key(request.api_key.as_deref(), &|key| std::env::var(key).ok())?;
         dial_upstream(config, &request.model, &key, request.api_base.as_deref()).await
-    }.await;
+    }
+    .await;
     let upstream = match connection {
         Ok(upstream) => upstream,
         Err(error) => {
-            let terminal = completion.settle(TerminalClassification::Failure {
-                kind: "ConnectionError".into(), message: error.to_string(),
-            }).await;
+            let terminal = completion
+                .settle(TerminalClassification::Failure {
+                    kind: "ConnectionError".into(),
+                    message: error.to_string(),
+                })
+                .await;
             return Ok(ExecutedCall::Failure { error, terminal });
         }
     };
@@ -133,7 +144,11 @@ where
             response: (),
             terminal,
         },
-        Ok(TerminalClassification::Failure { message, .. } | TerminalClassification::Cancelled { message } | TerminalClassification::Incomplete { message }) => ExecutedCall::Failure {
+        Ok(
+            TerminalClassification::Failure { message, .. }
+            | TerminalClassification::Cancelled { message }
+            | TerminalClassification::Incomplete { message },
+        ) => ExecutedCall::Failure {
             error: Error::InvalidResponse(message),
             terminal,
         },
@@ -387,9 +402,10 @@ fn error_kind(error: &Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lifecycle::{TerminalRecord, RouteProjection};
     use crate::integrations::custom_logger::{LogError, LogFuture};
+    use crate::lifecycle::TerminalRecord;
     use crate::lifecycle::{CallLifecycleContext, Clock};
+    use serde_json::json;
     use std::sync::Mutex;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
@@ -452,9 +468,15 @@ mod tests {
         assert_eq!(terminals.len(), 1);
         assert_eq!(
             terminals[0].classification,
-            TerminalClassification::Failure {
-                kind: kind.to_string(),
-                message: message.to_string(),
+            if kind == "Cancelled" {
+                TerminalClassification::Cancelled {
+                    message: message.to_string(),
+                }
+            } else {
+                TerminalClassification::Failure {
+                    kind: kind.to_string(),
+                    message: message.to_string(),
+                }
             }
         );
     }
@@ -550,7 +572,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handshake_status_is_preserved_without_a_terminal() {
+    async fn handshake_status_is_preserved_with_a_terminal() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -580,9 +602,11 @@ mod tests {
             output,
         )
         .await
+        .unwrap()
+        .into_result()
         .unwrap_err();
         assert!(matches!(error, Error::Http { status: 429, .. }));
-        assert!(services.terminals.lock().unwrap().is_empty());
+        assert_eq!(services.terminals.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

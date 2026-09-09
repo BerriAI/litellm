@@ -1,17 +1,5 @@
 use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum ActionKind {
-    InputHooks,
-    RequestBuild,
-    PreparedCallLogging,
-    ProviderCall,
-    Deployment,
-    TerminalSuccess,
-    TerminalFailure,
-    Restore,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActionResult<T, E> {
     Continue(T),

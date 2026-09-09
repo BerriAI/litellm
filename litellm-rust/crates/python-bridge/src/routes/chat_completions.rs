@@ -1,15 +1,11 @@
 use litellm_core::Error as CoreError;
+use litellm_core::chat_completions::chat_completions_decline_reason;
 use litellm_core::chat_completions::lifecycle::{
     Admission, ChatCompletionsRoute, Observations, Operation, Options, machine,
 };
-use litellm_core::chat_completions::request::{
-    build_pre_call_request_with_services, parse_messages, settle_pre_call_request_with_services,
-};
+use litellm_core::chat_completions::request::parse_messages;
 use litellm_core::chat_completions::types::{
     ChatCompletionsRequest, ChatPreCallReadback, ChatPreCallRequest, PreCallHeadersPolicy,
-};
-use litellm_core::chat_completions::{
-    chat_completions_decline_reason, execute_settled_with_terminal,
 };
 use litellm_core::lifecycle::{
     CallLifecycleContext, ErrorDisposition, ExecutedCall, Lifecycle, Outcome, TerminalRecord,
@@ -87,6 +83,30 @@ struct ChatCompletionsLifecycle {
     pending_operation: Option<litellm_core::lifecycle::program::OperationTicket>,
 }
 
+impl ChatCompletionsLifecycle {
+    fn preparation_permit(
+        &mut self,
+    ) -> PyResult<litellm_core::lifecycle::program::PreparationPermit<ChatCompletionsRoute>> {
+        let ticket = self.pending_operation.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no build operation is pending")
+        })?;
+        self.machine
+            .preparation_permit(ticket)
+            .map_err(core_error_to_pyerr)
+    }
+
+    fn provider_permit(
+        &mut self,
+    ) -> PyResult<litellm_core::lifecycle::program::ProviderPermit<ChatCompletionsRoute>> {
+        let ticket = self.pending_operation.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no send operation is pending")
+        })?;
+        self.machine
+            .provider_permit(ticket)
+            .map_err(core_error_to_pyerr)
+    }
+}
+
 #[pymethods]
 impl ChatCompletionsLifecycle {
     #[new]
@@ -126,7 +146,9 @@ impl ChatCompletionsLifecycle {
             1 => Outcome::Failure,
             _ => Outcome::Abort,
         };
-        let ticket = self.pending_operation.take().ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no lifecycle operation is pending"))?;
+        let ticket = self.pending_operation.take().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no lifecycle operation is pending")
+        })?;
         self.machine
             .complete_operation(
                 ticket,
@@ -167,9 +189,11 @@ fn invoke(
 #[pyfunction]
 fn build_request(
     py: Python<'_>,
+    machine: Py<ChatCompletionsLifecycle>,
     arguments: Py<PyDict>,
     logging: Py<PyAny>,
 ) -> PyResult<Py<ChatCompletionsState>> {
+    let permit = machine.borrow_mut(py).preparation_permit()?;
     let bag = arguments.bind(py);
     require_messages(bag)?;
     let admission_arguments = bag.extract::<ChatAdmissionArguments<'_>>()?;
@@ -196,20 +220,21 @@ fn build_request(
     let built = run_sync_value(
         py,
         async move {
-            build_pre_call_request_with_services(
-                crate::runtime::authorization_services().as_ref(),
-                ChatCompletionsRequest {
-                    model: &admission.model,
-                    messages: admission.messages,
-                    optional_params: admission.optional_params,
-                    api_key: api_key.as_deref(),
-                    api_base: api_base.as_deref(),
-                    custom_llm_provider: admission.custom_llm_provider.as_deref(),
-                    extra_headers,
-                    timeout,
-                },
-            )
-            .await
+            permit
+                .chat_completions(
+                    crate::runtime::authorization_services().as_ref(),
+                    ChatCompletionsRequest {
+                        model: &admission.model,
+                        messages: admission.messages,
+                        optional_params: admission.optional_params,
+                        api_key: api_key.as_deref(),
+                        api_base: api_base.as_deref(),
+                        custom_llm_provider: admission.custom_llm_provider.as_deref(),
+                        extra_headers,
+                        timeout,
+                    },
+                )
+                .await
         },
         core_error_to_pyerr,
     )?;
@@ -337,18 +362,20 @@ fn take_request(py: Python<'_>, state: &Py<ChatCompletionsState>) -> PyResult<Ow
 }
 
 async fn execute(
+    permit: litellm_core::lifecycle::program::ProviderPermit<ChatCompletionsRoute>,
     request: OwnedRequest,
 ) -> Result<
     ExecutedCall<litellm_core::chat_completions::types::ChatCompletionsResponse, CoreError>,
     CoreError,
 > {
-    let settled = settle_pre_call_request_with_services(
-        crate::runtime::authorization_services().as_ref(),
-        request.request,
-        request.readback,
-    )
-    .await;
-    Ok(execute_settled_with_terminal(settled?, request.context).await)
+    Ok(permit
+        .chat_completions(
+            crate::runtime::authorization_services().as_ref(),
+            request.request,
+            request.readback,
+            request.context,
+        )
+        .await)
 }
 
 fn store_result(
@@ -361,7 +388,7 @@ fn store_result(
 ) -> PyResult<Py<PyAny>> {
     state.borrow_mut(py).terminal = Some(executed.terminal().clone());
     match executed {
-        ExecutedCall::Success { response, .. } => {
+        ExecutedCall::Success { response, .. } | ExecutedCall::Deferred { response, .. } => {
             Ok(Pythonized(response).into_pyobject(py)?.unbind().into_any())
         }
         ExecutedCall::Failure { error, .. } => Err(chat_completions_error_to_pyerr(error)),
@@ -369,18 +396,33 @@ fn store_result(
 }
 
 #[pyfunction]
-fn send(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<Bound<'_, PyAny>> {
+fn send(
+    py: Python<'_>,
+    machine: Py<ChatCompletionsLifecycle>,
+    state: Py<ChatCompletionsState>,
+) -> PyResult<Bound<'_, PyAny>> {
+    let permit = machine.borrow_mut(py).provider_permit()?;
     let request = take_request(py, &state)?;
     litellm_python_interop::run_async_py(py, async move {
-        let executed = run_async_value(execute(request), chat_completions_error_to_pyerr).await?;
+        let executed =
+            run_async_value(execute(permit, request), chat_completions_error_to_pyerr).await?;
         Python::attach(|py| store_result(py, &state, executed))
     })
 }
 
 #[pyfunction]
-fn send_sync(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<Py<PyAny>> {
+fn send_sync(
+    py: Python<'_>,
+    machine: Py<ChatCompletionsLifecycle>,
+    state: Py<ChatCompletionsState>,
+) -> PyResult<Py<PyAny>> {
+    let permit = machine.borrow_mut(py).provider_permit()?;
     let request = take_request(py, &state)?;
-    let executed = run_sync_value(py, execute(request), chat_completions_error_to_pyerr)?;
+    let executed = run_sync_value(
+        py,
+        execute(permit, request),
+        chat_completions_error_to_pyerr,
+    )?;
     store_result(py, &state, executed)
 }
 

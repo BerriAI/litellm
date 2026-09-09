@@ -25,7 +25,9 @@ pub struct ProviderMessagesRequest {
 }
 
 impl ProviderMessagesRequest {
-    pub fn timeout(&self) -> Option<Duration> { self.timeout }
+    pub fn timeout(&self) -> Option<Duration> {
+        self.timeout
+    }
 
     pub fn body(&self) -> &[u8] {
         self.http.body()

@@ -345,11 +345,11 @@ class _MessagesLifecycle(NativeLifecycle, Protocol):
 class _MessagesBindings(NativeLifecycleBindings, Protocol):
     Lifecycle: Callable[[bool, bool], _MessagesLifecycle]
     build_request: Callable[
-        [dict[str, object], object], object
+        [object, dict[str, object], object], object
     ]  # mutable-ok: native bridge retains and updates Python argument objects
     pre_call: Callable[[object], None]
-    send: Callable[[object, object], Awaitable[AnthropicMessagesResponse | AsyncIterator[bytes]]]
-    send_sync: Callable[[object], AnthropicMessagesResponse]
+    send: Callable[[object, object, object], Awaitable[AnthropicMessagesResponse | AsyncIterator[bytes]]]
+    send_sync: Callable[[object, object], AnthropicMessagesResponse]
 
 
 class _MessagesHost:
@@ -399,17 +399,17 @@ class _MessagesHost:
     def build_request(self) -> None:
         if self.logger is None:
             raise RuntimeError("messages logging was not initialized")
-        self.state = self.bindings.build_request(self.current, self.logger)
+        self.state = self.bindings.build_request(self.machine, self.current, self.logger)
 
     def pre_call(self) -> None:
         self.bindings.pre_call(self.state)
 
     def send_sync(self) -> None:
-        self.response = self.bindings.send_sync(self.state)
+        self.response = self.bindings.send_sync(self.machine, self.state)
         self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def send(self) -> None:
-        self.response = await self.bindings.send(self.state, self)
+        self.response = await self.bindings.send(self.machine, self.state, self)
         self.stream_transferred = isinstance(self.response, AsyncIterator)
         if self.stream_transferred and not self.lifecycle_owned:
             self.arguments[_STREAM_COMPLETION_KEY] = self

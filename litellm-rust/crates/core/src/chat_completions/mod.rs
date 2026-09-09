@@ -22,8 +22,6 @@ pub use handler::{as_response_error, signed_headers, signed_headers_with_service
 use request::resolve_provider_config;
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
-use crate::lifecycle::{CallLifecycleContext, ExecutedCall};
-
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
@@ -31,13 +29,6 @@ pub async fn chat_completions(
     crate::runtime::LiteLlm::new()
         .chat_completions(request)
         .await
-}
-
-pub async fn execute_settled_with_terminal(
-    request: types::SettledChatRequest,
-    context: CallLifecycleContext,
-) -> ExecutedCall<ChatCompletionsResponse, Error> {
-    lifecycle::execute_settled(request, context).await
 }
 
 /// Whether the core would accept this request, without resolving credentials or

@@ -1,6 +1,22 @@
 use super::*;
 
 #[pyfunction]
+fn prepared_machine(py: Python<'_>) -> PyResult<Py<MessagesLifecycle>> {
+    let mut owner = MessagesLifecycle::new(false, false)?;
+    loop {
+        let ticket = owner.machine.issue().map_err(core_error_to_pyerr)?;
+        if ticket.operation() == Operation::BuildRequest {
+            owner.pending_operation = Some(ticket);
+            return Py::new(py, owner);
+        }
+        owner
+            .machine
+            .complete_operation(ticket, Outcome::Success, Observations::default())
+            .map_err(core_error_to_pyerr)?;
+    }
+}
+
+#[pyfunction]
 fn snapshot(py: Python<'_>, state: Py<MessagesState>) -> PyResult<Py<PyAny>> {
     let request = take_request(py, &state)?;
     let body: Value = serde_json::from_slice(request.body())
@@ -23,6 +39,9 @@ fn callback_aliases_survive_snapshot_and_roots_are_collectible() {
             .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
             .unwrap();
         let globals = PyDict::new(py);
+        module
+            .add_function(wrap_pyfunction!(prepared_machine, &module).unwrap())
+            .unwrap();
         globals.set_item("native", module).unwrap();
         py.run(
             c"
@@ -51,7 +70,8 @@ logger = Logger()
 arguments = dict(model='model', body=body, api_key='test',
                  custom_llm_provider='anthropic', opaque=opaque,
                  litellm_logging_obj=logger)
-state = native.build_request(arguments, logger)
+machine = native.prepared_machine()
+state = native.build_request(machine, arguments, logger)
 native.pre_call(state)
 wire_body, wire_headers = native.snapshot(state)
 assert wire_body['messages'][0]['content'] == 'original'

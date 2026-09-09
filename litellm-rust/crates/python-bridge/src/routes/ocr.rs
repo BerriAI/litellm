@@ -7,7 +7,6 @@ use litellm_core::lifecycle::ocr::{NativeOutcome, Observations, OcrRoute, Operat
 use litellm_core::lifecycle::{
     CallLifecycleContext, ErrorDisposition, ExecutedCall, Lifecycle, Outcome, TerminalRecord,
 };
-use litellm_core::ocr::DefaultOcrServices;
 use litellm_core::ocr::types::{
     OcrAdmissionRequest, OcrDocumentProjection, OcrEndpoint, OcrPreCallRequest, SettledOcrRequest,
 };
@@ -150,6 +149,30 @@ struct OcrLifecycle {
     pending_operation: Option<litellm_core::lifecycle::program::OperationTicket>,
 }
 
+impl OcrLifecycle {
+    fn preparation_permit(
+        &mut self,
+    ) -> PyResult<litellm_core::lifecycle::program::PreparationPermit<OcrRoute>> {
+        let ticket = self.pending_operation.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no build operation is pending")
+        })?;
+        self.machine
+            .preparation_permit(ticket)
+            .map_err(core_error_to_pyerr)
+    }
+
+    fn provider_permit(
+        &mut self,
+    ) -> PyResult<litellm_core::lifecycle::program::ProviderPermit<OcrRoute>> {
+        let ticket = self.pending_operation.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no send operation is pending")
+        })?;
+        self.machine
+            .provider_permit(ticket)
+            .map_err(core_error_to_pyerr)
+    }
+}
+
 #[pymethods]
 impl OcrLifecycle {
     #[new]
@@ -226,7 +249,9 @@ impl OcrLifecycle {
             1 => Outcome::Failure,
             _ => Outcome::Abort,
         };
-        let ticket = self.pending_operation.take().ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no lifecycle operation is pending"))?;
+        let ticket = self.pending_operation.take().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no lifecycle operation is pending")
+        })?;
         self.machine
             .complete_operation(
                 ticket,
@@ -267,27 +292,27 @@ fn invoke(
 #[pyfunction]
 fn build_request(
     py: Python<'_>,
+    machine: Py<OcrLifecycle>,
     arguments: Py<PyDict>,
     logging: Py<PyAny>,
     asynchronous: bool,
 ) -> PyResult<Py<OcrState>> {
+    let permit = machine.borrow_mut(py).preparation_permit()?;
     let bag = arguments.bind(py);
     let auth = PythonAuth::from_arguments(py, bag)?;
     let request = decode_request(py, bag, auth.inputs().clone())?;
     let model = request.model.clone();
     let custom_llm_provider = request.custom_llm_provider.clone();
-    let pre_call_request = py
-        .detach(|| litellm_core::ocr::request::build_pre_call_request_with_auth(request, &auth))
-        .map_err(|error| {
-            crate::errors::ocr_preparation_error_to_pyerr(
-                py,
-                error,
-                auth.take_error(),
-                &model,
-                custom_llm_provider.as_deref(),
-                bag,
-            )
-        })?;
+    let pre_call_request = py.detach(|| permit.ocr(request, &auth)).map_err(|error| {
+        crate::errors::ocr_preparation_error_to_pyerr(
+            py,
+            error,
+            auth.take_error(),
+            &model,
+            custom_llm_provider.as_deref(),
+            bag,
+        )
+    })?;
     let document = bag
         .get_item("document")?
         .ok_or_else(|| PyValueError::new_err("OCR requires document"))?
@@ -417,8 +442,13 @@ fn request(py: Python<'_>, state: &Py<OcrState>) -> PyResult<OcrWireRequest> {
 }
 
 #[pyfunction]
-fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
-    let (request, model, provider, asynchronous) = request(py, &state)?;
+fn send(
+    py: Python<'_>,
+    machine: Py<OcrLifecycle>,
+    state: Py<OcrState>,
+) -> PyResult<Bound<'_, PyAny>> {
+    let permit = machine.borrow_mut(py).provider_permit()?;
+    let (request, model, provider, _asynchronous) = request(py, &state)?;
     litellm_python_interop::run_async_py(py, async move {
         let error_model = model.clone();
         let error_provider = provider.clone();
@@ -437,18 +467,13 @@ fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
         });
         let executed = run_async_value(
             async move {
-                let services = DefaultOcrServices;
                 Ok::<_, std::convert::Infallible>(
-                    litellm_core::ocr::ocr(
-                        &services,
-                        request,
-                        Options {
-                            asynchronous,
-                            ..Options::default()
-                        },
-                        CallLifecycleContext::new("ocr", &model, &provider, call_id),
-                    )
-                    .await,
+                    permit
+                        .ocr(
+                            request,
+                            CallLifecycleContext::new("ocr", &model, &provider, call_id),
+                        )
+                        .await,
                 )
             },
             |never| match never {},
@@ -457,7 +482,9 @@ fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
         let terminal = executed.terminal().clone();
         Python::attach(|py| state.borrow_mut(py).terminal = Some(terminal));
         match executed {
-            ExecutedCall::Success { response, .. } => Ok(Pythonized(response)),
+            ExecutedCall::Success { response, .. } | ExecutedCall::Deferred { response, .. } => {
+                Ok(Pythonized(response))
+            }
             ExecutedCall::Failure { error, .. } => Err(Python::attach(|py| {
                 ocr_error_to_pyerr(py, error, &error_model, &error_provider)
             })),
@@ -486,8 +513,13 @@ fn finish(py: Python<'_>, response: Py<PyDict>) -> PyResult<Py<PyAny>> {
 }
 
 #[pyfunction]
-fn send_sync(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
-    let (request, model, provider, asynchronous) = request(py, &state)?;
+fn send_sync(
+    py: Python<'_>,
+    machine: Py<OcrLifecycle>,
+    state: Py<OcrState>,
+) -> PyResult<Py<PyAny>> {
+    let permit = machine.borrow_mut(py).provider_permit()?;
+    let (request, model, provider, _asynchronous) = request(py, &state)?;
     let error_model = model.clone();
     let error_provider = provider.clone();
     let call_id = state
@@ -504,25 +536,22 @@ fn send_sync(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
     let executed = run_sync_value(
         py,
         async move {
-            let services = DefaultOcrServices;
             Ok::<_, std::convert::Infallible>(
-                litellm_core::ocr::ocr(
-                    &services,
-                    request,
-                    Options {
-                        asynchronous,
-                        ..Options::default()
-                    },
-                    CallLifecycleContext::new("ocr", &model, &provider, call_id),
-                )
-                .await,
+                permit
+                    .ocr(
+                        request,
+                        CallLifecycleContext::new("ocr", &model, &provider, call_id),
+                    )
+                    .await,
             )
         },
         |never| match never {},
     )?;
     state.borrow_mut(py).terminal = Some(executed.terminal().clone());
     let response = match executed {
-        ExecutedCall::Success { response, .. } => response,
+        ExecutedCall::Success { response, .. } | ExecutedCall::Deferred { response, .. } => {
+            response
+        }
         ExecutedCall::Failure { error, .. } => {
             return Err(ocr_error_to_pyerr(py, error, &error_model, &error_provider));
         }

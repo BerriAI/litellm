@@ -2,9 +2,7 @@ use serde_json::{Map, Value, json};
 
 use litellm_core::error::Error;
 
-use litellm_core::chat_completions::request::{
-    build_provider_request, parse_messages, resolve_request,
-};
+use litellm_core::chat_completions::request::{parse_messages, resolve_request};
 use litellm_core::chat_completions::transformation::ChatCompletionsAuth;
 use litellm_core::chat_completions::types::{
     ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
@@ -17,7 +15,26 @@ fn chat_messages(value: Value) -> Vec<ChatMessage> {
 fn build_chat_completions_request(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
-    build_provider_request(resolve_request(request)?)
+    {
+        use litellm_core::lifecycle::Outcome;
+        use litellm_core::lifecycle::program::{Observations, Operation};
+        let admission = litellm_core::chat_completions::lifecycle::Admission {
+            model: request.model.into(),
+            messages: request.messages.clone(),
+            optional_params: request.optional_params.clone(),
+            custom_llm_provider: request.custom_llm_provider.map(str::to_owned),
+        };
+        let resolved = resolve_request(request)?;
+        let mut call =
+            litellm_core::chat_completions::lifecycle::machine(&admission, Default::default())?
+                .map_err(|decline| Error::Unsupported(decline.reason()))?;
+        while call.operation() != Operation::BuildRequest {
+            let ticket = call.issue()?;
+            call.complete_operation(ticket, Outcome::Success, Observations::default())?;
+        }
+        let ticket = call.issue()?;
+        call.preparation_permit(&ticket)?.chat_request(resolved)
+    }
 }
 
 fn request<'a>(

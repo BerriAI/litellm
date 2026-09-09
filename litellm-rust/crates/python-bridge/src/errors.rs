@@ -346,16 +346,16 @@ pub(crate) fn ocr_preparation_error_to_pyerr(
     if let Some(error) = auth_error {
         return ocr_python_error_to_pyerr(py, error, model, provider, arguments);
     }
-    if provider == "azure_ai" {
-        if let CoreError::InvalidRequest(message) = &error {
-            return ocr_python_error_to_pyerr(
-                py,
-                PyValueError::new_err(message.clone()),
-                model,
-                provider,
-                arguments,
-            );
-        }
+    if provider == "azure_ai"
+        && let CoreError::InvalidRequest(message) = &error
+    {
+        return ocr_python_error_to_pyerr(
+            py,
+            PyValueError::new_err(message.clone()),
+            model,
+            provider,
+            arguments,
+        );
     }
     ocr_error_to_pyerr(py, error, model, provider)
 }

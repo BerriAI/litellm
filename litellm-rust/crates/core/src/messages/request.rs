@@ -6,7 +6,9 @@ use super::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrateg
 use super::types::{MessagesEndpoint, MessagesOptions, MessagesRequest, ProviderMessagesRequest};
 use serde_json::{Map, Value};
 
-pub fn build_provider_request(request: MessagesRequest) -> Result<ProviderMessagesRequest, Error> {
+pub(crate) fn build_provider_request(
+    request: MessagesRequest,
+) -> Result<ProviderMessagesRequest, Error> {
     build_provider_request_with_environment(request, &|key: &str| std::env::var(key).ok())
 }
 
@@ -36,7 +38,7 @@ pub(crate) fn build_provider_request_with_environment(
     Ok(endpoint.settle(authorized, headers))
 }
 
-pub fn build_endpoint(request: MessagesOptions) -> Result<MessagesEndpoint, Error> {
+pub(crate) fn build_endpoint(request: MessagesOptions) -> Result<MessagesEndpoint, Error> {
     build_endpoint_with_environment(request, &|key: &str| std::env::var(key).ok())
 }
 

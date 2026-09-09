@@ -1,8 +1,8 @@
 use crate::Error;
 use crate::ocr::{OcrAdmissionRequest, request};
 
-use super::program::{ProgramOptions, actions_for};
-use super::{ActionBinding, CallLifecycle, LifecycleRoute, Outcome};
+use super::program::ProgramOptions;
+use super::{CallLifecycle, LifecycleRoute};
 
 pub use super::program::{Observations, Operation, Transition};
 
@@ -80,25 +80,25 @@ impl Lifecycle {
     }
 }
 
+impl crate::lifecycle::machine::sealed::Sealed for OcrRoute {}
+
 impl LifecycleRoute for OcrRoute {
     type Admission = OcrAdmissionRequest;
     type Options = Options;
-    type Context = Observations;
-    type Operation = Operation;
-    type Observation = Observations;
-    type Outcome = Outcome;
-    type Transition = Transition;
-    type Error = Error;
     type Decline = Decline;
     type State = OcrState;
 
-    fn program(state: &Self::State) -> &CallLifecycle { &state.program }
-    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle { &mut state.program }
+    fn program(state: &Self::State) -> &CallLifecycle {
+        &state.program
+    }
+    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle {
+        &mut state.program
+    }
 
     fn admit(
         admission: &Self::Admission,
         options: Self::Options,
-    ) -> Result<Result<Self::State, Self::Decline>, Self::Error> {
+    ) -> Result<Result<Self::State, Self::Decline>, Error> {
         match request::admission_capabilities(admission) {
             Err(Error::Unsupported(reason)) => return Ok(Err(Decline(reason))),
             Err(error) => return Err(error),
@@ -122,28 +122,6 @@ impl LifecycleRoute for OcrRoute {
             },
         }))
     }
-
-    fn operation(state: &Self::State) -> Self::Operation {
-        state.program.operation()
-    }
-
-    fn advance(
-        state: &mut Self::State,
-        outcome: Self::Outcome,
-        observations: Self::Observation,
-    ) -> Result<Self::Transition, Self::Error> {
-        state
-            .program
-            .advance(outcome, observations)
-            .ok_or_else(|| Error::InvalidRequest("OCR lifecycle is already complete".into()))
-    }
-
-    fn actions_for(
-        operation: Self::Operation,
-        _context: &Self::Context,
-    ) -> &'static [ActionBinding] {
-        actions_for(operation)
-    }
 }
 
 fn generate_call_id() -> String {
@@ -166,6 +144,7 @@ mod tests {
 
     use super::*;
     use crate::lifecycle::ErrorDisposition;
+    use crate::lifecycle::Outcome;
     use crate::ocr::types::OcrDocument;
 
     fn request() -> OcrAdmissionRequest {

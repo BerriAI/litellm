@@ -64,6 +64,14 @@ impl RouteProjection {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub enum UsageObservation {
+    #[default]
+    Unavailable,
+    Partial(Usage),
+    Final(Usage),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TerminalRecord {
     pub call_id: String,
@@ -74,6 +82,7 @@ pub struct TerminalRecord {
     pub provider: String,
     pub timing: CallbackTiming,
     pub usage: Usage,
+    pub provider_usage: UsageObservation,
     pub cost_inputs: CostInputs,
     pub classification: TerminalClassification,
     pub projection: RouteProjection,
@@ -112,9 +121,11 @@ impl From<&TerminalRecord> for ModelCallDetails {
         let details = Self::from_standard_logging_payload(record.into());
         match &record.classification {
             TerminalClassification::Success => details,
-            TerminalClassification::Cancelled { message } | TerminalClassification::Incomplete { message } => {
+            TerminalClassification::Cancelled { message }
+            | TerminalClassification::Incomplete { message } => {
                 details.with_failure_error(LoggingError {
-                    kind: record.classification.kind().into(), message: message.clone(),
+                    kind: record.classification.kind().into(),
+                    message: message.clone(),
                 })
             }
             TerminalClassification::Failure { kind, message } => {
@@ -152,6 +163,7 @@ mod tests {
                 completion_tokens: 4,
                 total_tokens: 7,
             },
+            provider_usage: Default::default(),
             cost_inputs: CostInputs {
                 response_cost: 0.25,
                 metadata: StandardLoggingMetadata {

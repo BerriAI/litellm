@@ -67,11 +67,14 @@ fn check_admission_capabilities(
     Ok(())
 }
 
-pub fn build_pre_call_request(request: OcrAdmissionRequest) -> Result<OcrPreCallRequest, Error> {
+#[cfg(test)]
+pub(crate) fn build_pre_call_request(
+    request: OcrAdmissionRequest,
+) -> Result<OcrPreCallRequest, Error> {
     build_pre_call_request_with_auth(request, &())
 }
 
-pub fn build_pre_call_request_with_auth(
+pub(crate) fn build_pre_call_request_with_auth(
     request: OcrAdmissionRequest,
     auth: &dyn litellm_auth::AuthServices,
 ) -> Result<OcrPreCallRequest, Error> {

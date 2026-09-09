@@ -10,8 +10,8 @@ mod streaming;
 pub mod terminal;
 pub mod types;
 
-pub use action::{ActionBinding, Owner, ResultPolicy};
-pub use executed::ExecutedCall;
+pub use action::{CallbackRuntime, OperationContract, ResultPolicy};
+pub use executed::{ExecutedCall, PendingCompletion, TerminalRecorder};
 pub use execution::{
     CallLifecycleContext, CallLifecycleRequest, CallbackFuture, Clock, DeploymentFailureHooks,
     DeploymentPreHooks, DeploymentSuccessHooks, ModerationHooks, PreCallHooks, SystemClock,
@@ -23,8 +23,8 @@ pub use request_body::{
     AuthorizedBody, PreCallBody, RequestBodyPolicy, SettledHttpRequest, WireBody,
 };
 pub use streaming::{
-    BytesStream, StreamDrain, StreamDrainPolicy, StreamingCall, StreamingCompletion, StreamingMetadata, StreamingObserver,
-    StreamingSource,
+    BytesStream, CompletionHandle, StreamDrain, StreamDrainPolicy, StreamingCall,
+    StreamingCompletion, StreamingMetadata, StreamingObserver, StreamingSource,
 };
 pub use terminal::{CostInputs, RouteProjection, TerminalClassification, TerminalRecord};
-pub use types::{ActionKind, ActionResult, Delivery, ErrorDisposition, FailurePolicy, Outcome};
+pub use types::{ActionResult, Delivery, ErrorDisposition, FailurePolicy, Outcome};

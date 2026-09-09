@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use rustls::{ClientConfig, RootCertStore};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -17,11 +17,9 @@ use tokio_tungstenite::{
 };
 
 use crate::Error;
-use crate::integrations::custom_logger::CallbackTiming;
 use crate::integrations::types::Usage;
 use crate::lifecycle::{
-    CallLifecycleContext, Clock, ExecutedCall, TerminalClassification,
-    TerminalDispatcher,
+    CallLifecycleContext, Clock, ExecutedCall, TerminalClassification, TerminalDispatcher,
 };
 use crate::providers::dispatch::realtime_provider_config;
 use crate::realtime::transformation::RealtimeProviderConfig;
@@ -147,25 +145,42 @@ where
     let start_time = services.now();
     let model = request.model;
     let observation = Arc::new(Mutex::new(RealtimeObservation::new(
-        context.litellm_call_id.clone(), model.clone(),
+        context.litellm_call_id.clone(),
+        model.clone(),
     )));
     let snapshot = observation.clone();
     let mut completion = crate::lifecycle::completion::SessionCompletion::new(
-        services, context, start_time, move |context| {
+        services,
+        context,
+        start_time,
+        move |context| {
             let observation = snapshot.lock().unwrap();
+            context.litellm_call_id = observation.call_id.clone();
             context.model = observation.model.clone();
             context.usage = observation.usage;
+            if observation.usage_available {
+                context.provider_usage =
+                    crate::lifecycle::terminal::UsageObservation::Partial(observation.usage);
+            }
         },
     );
     let connection = RealtimeConnectionSpec::new(
-        model.clone(), request.api_key.as_deref(), request.api_base.as_deref(),
+        model.clone(),
+        request.api_key.as_deref(),
+        request.api_base.as_deref(),
     );
     let connection = match (connection, request.warm) {
         (Ok(connection), Some(warm)) if warm.connection == connection => Ok(warm),
-        (Ok(_), Some(_)) => Err(Error::InvalidRequest("realtime warm connection does not match the requested provider connection".into())),
-        (Ok(connection), None) => dial_upstream(&connection).await.map(|upstream| WarmConnection {
-            connection, upstream, session_created: empty_event(),
-        }),
+        (Ok(_), Some(_)) => Err(Error::InvalidRequest(
+            "realtime warm connection does not match the requested provider connection".into(),
+        )),
+        (Ok(connection), None) => dial_upstream(&connection)
+            .await
+            .map(|upstream| WarmConnection {
+                connection,
+                upstream,
+                session_created: empty_event(),
+            }),
         (Err(error), _) => Err(error),
     };
     let result = match connection {
@@ -184,6 +199,9 @@ where
     };
     let classification = match &result {
         Ok(()) => TerminalClassification::Success,
+        Err(failure) if failure.kind == "Cancelled" => TerminalClassification::Cancelled {
+            message: failure.error.to_string(),
+        },
         Err(failure) => TerminalClassification::Failure {
             kind: failure.kind.to_string(),
             message: failure.error.to_string(),
@@ -464,6 +482,7 @@ struct RealtimeObservation {
     call_id: String,
     model: String,
     usage: Usage,
+    usage_available: bool,
     completed_response: bool,
     pending_responses: usize,
 }
@@ -474,6 +493,7 @@ impl RealtimeObservation {
             call_id,
             model,
             usage: Usage::default(),
+            usage_available: false,
             completed_response: false,
             pending_responses: 0,
         }
@@ -536,6 +556,7 @@ impl RealtimeObservation {
         else {
             return;
         };
+        self.usage_available = true;
         let input = usage
             .get("input_tokens")
             .and_then(Value::as_u64)
@@ -562,9 +583,10 @@ mod tests {
     use tokio_tungstenite::accept_async;
 
     use super::*;
-    use crate::lifecycle::TerminalRecord;
     use crate::integrations::custom_logger::{LogError, LogFuture};
+    use crate::lifecycle::TerminalRecord;
     use crate::lifecycle::{CallLifecycleContext, Clock};
+    use serde_json::json;
 
     #[derive(Default)]
     struct Services {

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{
-    ActionBinding, ActionKind, Delivery, ErrorDisposition, FailurePolicy, Outcome, Owner,
+    CallbackRuntime, Delivery, ErrorDisposition, FailurePolicy, OperationContract, Outcome,
     ResultPolicy,
 };
 
@@ -33,7 +33,7 @@ pub struct Observations {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Commitment {
-    Replayable,
+    BeforeProvider,
     ProviderStarted,
     ResponseReceived,
 }
@@ -67,12 +67,141 @@ pub struct OperationTicket {
 }
 
 impl OperationTicket {
-    pub fn operation(&self) -> Operation { self.operation }
+    pub fn operation(&self) -> Operation {
+        self.operation
+    }
 }
 
+/// ```compile_fail
+/// use litellm_core::lifecycle::program::PreparationPermit;
+/// use litellm_core::messages::lifecycle::MessagesRoute;
+/// let permit: PreparationPermit<MessagesRoute> = PreparationPermit { _route: Default::default() };
+/// ```
+/// ```compile_fail
+/// use litellm_core::lifecycle::CallLifecycle;
+/// use litellm_core::messages::lifecycle::MessagesRoute;
+/// let mut call = CallLifecycle::asynchronous();
+/// let ticket = call.issue().unwrap();
+/// let permit = call.preparation_permit::<MessagesRoute>(&ticket);
+/// ```
 #[derive(Debug)]
-pub struct ProviderPermit {
-    _private: (),
+pub struct PreparationPermit<Route> {
+    _route: std::marker::PhantomData<Route>,
+}
+
+impl PreparationPermit<crate::messages::lifecycle::MessagesRoute> {
+    pub fn messages(
+        self,
+        request: crate::messages::types::MessagesOptions,
+    ) -> Result<crate::messages::types::MessagesEndpoint, crate::Error> {
+        crate::messages::request::build_endpoint(request)
+    }
+}
+
+impl PreparationPermit<super::ocr::OcrRoute> {
+    pub fn ocr(
+        self,
+        request: crate::ocr::OcrAdmissionRequest,
+        auth: &dyn litellm_auth::AuthServices,
+    ) -> Result<crate::ocr::OcrPreCallRequest, crate::Error> {
+        crate::ocr::request::build_pre_call_request_with_auth(request, auth)
+    }
+}
+
+impl PreparationPermit<crate::chat_completions::lifecycle::ChatCompletionsRoute> {
+    pub async fn chat_completions(
+        self,
+        services: &impl crate::providers::auth::ChatAuthorizationServices,
+        request: crate::chat_completions::types::ChatCompletionsRequest<'_>,
+    ) -> Result<crate::chat_completions::types::ChatPreCallRequest, crate::Error> {
+        crate::chat_completions::request::build_pre_call_request_with_services(services, request)
+            .await
+    }
+
+    pub fn chat_request(
+        self,
+        request: crate::chat_completions::types::ResolvedChatCompletionsRequest<'_>,
+    ) -> Result<crate::chat_completions::types::ProviderChatCompletionsRequest, crate::Error> {
+        crate::chat_completions::request::build_provider_request(request)
+    }
+}
+
+/// ```compile_fail
+/// use litellm_core::lifecycle::program::ProviderPermit;
+/// use litellm_core::messages::lifecycle::MessagesRoute;
+/// let permit: ProviderPermit<MessagesRoute> = ProviderPermit { _route: Default::default() };
+/// ```
+/// ```compile_fail
+/// use litellm_core::messages::execute_provider_messages_request;
+/// ```
+/// ```compile_fail
+/// use litellm_core::http_utils::http_request;
+/// ```
+#[derive(Debug)]
+pub struct ProviderPermit<Route> {
+    _route: std::marker::PhantomData<Route>,
+}
+
+impl ProviderPermit<crate::messages::lifecycle::MessagesRoute> {
+    pub async fn messages(
+        self,
+        request: crate::messages::types::ProviderMessagesRequest,
+    ) -> Result<crate::messages::types::AnthropicMessagesResponse, crate::Error> {
+        crate::messages::execute_provider_messages_request(request).await
+    }
+
+    pub async fn messages_stream<S>(
+        self,
+        request: crate::messages::types::ProviderMessagesRequest,
+        context: super::CallLifecycleContext,
+        start_time: f64,
+        services: std::sync::Arc<S>,
+    ) -> Result<super::StreamingCall, crate::Error>
+    where
+        S: super::Clock + super::TerminalDispatcher + super::StreamDrain + 'static,
+    {
+        crate::messages::messages_stream_prepared(request, context, start_time, services).await
+    }
+}
+
+impl ProviderPermit<crate::chat_completions::lifecycle::ChatCompletionsRoute> {
+    pub async fn chat_completions(
+        self,
+        services: &dyn crate::providers::auth::ChatAuthorizationServices,
+        request: crate::chat_completions::types::ChatPreCallRequest,
+        readback: crate::chat_completions::types::ChatPreCallReadback,
+        context: super::CallLifecycleContext,
+    ) -> super::ExecutedCall<crate::chat_completions::types::ChatCompletionsResponse, crate::Error>
+    {
+        match crate::chat_completions::request::settle_pre_call_request_with_services(
+            services, request, readback,
+        )
+        .await
+        {
+            Ok(request) => {
+                crate::chat_completions::lifecycle::execute_settled(request, context).await
+            }
+            Err(error) => super::execution::provider_result(
+                context,
+                super::Clock::now(&super::SystemClock),
+                Err(error),
+            ),
+        }
+    }
+}
+
+impl ProviderPermit<super::ocr::OcrRoute> {
+    pub async fn ocr(
+        self,
+        request: crate::ocr::SettledOcrRequest,
+        context: super::CallLifecycleContext,
+    ) -> super::ExecutedCall<serde_json::Value, crate::Error> {
+        let start_time = super::Clock::now(&super::SystemClock);
+        let result = crate::ocr::send(request)
+            .await
+            .map(crate::ocr::types::OcrResponseData::into_json);
+        super::execution::provider_result(context, start_time, result)
+    }
 }
 
 #[derive(Debug)]
@@ -81,6 +210,7 @@ pub struct CallLifecycle {
     generation: u64,
     issued: bool,
     provider_issued: bool,
+    preparation_issued: bool,
     operation: Operation,
     outcome: Outcome,
     commitment: Commitment,
@@ -96,9 +226,10 @@ impl CallLifecycle {
             generation: 0,
             issued: false,
             provider_issued: false,
+            preparation_issued: false,
             operation: Operation::Setup,
             outcome: Outcome::Success,
-            commitment: Commitment::Replayable,
+            commitment: Commitment::BeforeProvider,
             failure_stage: None,
             options,
         }
@@ -117,31 +248,73 @@ impl CallLifecycle {
 
     pub fn issue(&mut self) -> Result<OperationTicket, crate::Error> {
         if self.issued || matches!(self.operation, Operation::Complete(_)) {
-            return Err(crate::Error::InvalidRequest("lifecycle operation is already issued or complete".into()));
+            return Err(crate::Error::InvalidRequest(
+                "lifecycle operation is already issued or complete".into(),
+            ));
         }
         self.issued = true;
-        Ok(OperationTicket { owner: self.owner, generation: self.generation, operation: self.operation })
+        Ok(OperationTicket {
+            owner: self.owner,
+            generation: self.generation,
+            operation: self.operation,
+        })
     }
 
     fn owns(&self, ticket: &OperationTicket) -> bool {
-        self.issued && ticket.owner == self.owner && ticket.generation == self.generation && ticket.operation == self.operation
+        self.issued
+            && ticket.owner == self.owner
+            && ticket.generation == self.generation
+            && ticket.operation == self.operation
     }
 
-    pub fn complete_operation(&mut self, ticket: OperationTicket, outcome: Outcome, observations: Observations) -> Result<Transition, crate::Error> {
+    pub fn complete_operation(
+        &mut self,
+        ticket: OperationTicket,
+        outcome: Outcome,
+        observations: Observations,
+    ) -> Result<Transition, crate::Error> {
         if !self.owns(&ticket) {
-            return Err(crate::Error::InvalidRequest("stale or foreign lifecycle operation".into()));
+            return Err(crate::Error::InvalidRequest(
+                "stale or foreign lifecycle operation".into(),
+            ));
         }
         self.issued = false;
-        self.advance(outcome, observations).ok_or_else(|| crate::Error::InvalidRequest("lifecycle is complete".into()))
+        self.advance(outcome, observations)
+            .ok_or_else(|| crate::Error::InvalidRequest("lifecycle is complete".into()))
     }
 
-    pub fn provider_permit(&mut self, ticket: &OperationTicket) -> Result<ProviderPermit, crate::Error> {
+    pub(crate) fn preparation_permit<Route>(
+        &mut self,
+        ticket: &OperationTicket,
+    ) -> Result<PreparationPermit<Route>, crate::Error> {
+        if !self.owns(ticket)
+            || ticket.operation != Operation::BuildRequest
+            || self.preparation_issued
+        {
+            return Err(crate::Error::InvalidRequest(
+                "request preparation requires the current build operation".into(),
+            ));
+        }
+        self.preparation_issued = true;
+        Ok(PreparationPermit {
+            _route: std::marker::PhantomData,
+        })
+    }
+
+    pub(crate) fn provider_permit<Route>(
+        &mut self,
+        ticket: &OperationTicket,
+    ) -> Result<ProviderPermit<Route>, crate::Error> {
         if !self.owns(ticket) || ticket.operation != Operation::Send || self.provider_issued {
-            return Err(crate::Error::InvalidRequest("provider execution requires the current send operation".into()));
+            return Err(crate::Error::InvalidRequest(
+                "provider execution requires the current send operation".into(),
+            ));
         }
         self.provider_issued = true;
         self.begin_provider();
-        Ok(ProviderPermit { _private: () })
+        Ok(ProviderPermit {
+            _route: std::marker::PhantomData,
+        })
     }
 
     pub(crate) fn begin_provider(&mut self) {
@@ -162,7 +335,11 @@ impl CallLifecycle {
         self.failure_stage
     }
 
-    pub(crate) fn advance(&mut self, outcome: Outcome, observations: Observations) -> Option<Transition> {
+    pub(crate) fn advance(
+        &mut self,
+        outcome: Outcome,
+        observations: Observations,
+    ) -> Option<Transition> {
         use Operation::*;
 
         if matches!(self.operation, Complete(_)) {
@@ -177,7 +354,12 @@ impl CallLifecycle {
         } else {
             Restore
         };
-        let error = if outcome != Outcome::Success && current != DeploymentFailure {
+        let error = if outcome != Outcome::Success
+            && current
+                .contract(CallbackRuntime::Native, self.options.asynchronous)
+                .failure
+                != FailurePolicy::PreserveOriginalFailure
+        {
             self.outcome = outcome;
             ErrorDisposition::Replace
         } else {
@@ -255,8 +437,8 @@ impl CallLifecycle {
 
     fn classify_failure_stage(&self, operation: Operation) -> FailureStage {
         match (self.commitment, operation) {
-            (Commitment::Replayable, Operation::Send) => FailureStage::ProviderCall,
-            (Commitment::Replayable, _) => FailureStage::BeforeProvider,
+            (Commitment::BeforeProvider, Operation::Send) => FailureStage::ProviderCall,
+            (Commitment::BeforeProvider, _) => FailureStage::BeforeProvider,
             (Commitment::ProviderStarted, _) => FailureStage::ProviderCall,
             (Commitment::ResponseReceived, _) => FailureStage::AfterProviderResponse,
         }
@@ -280,87 +462,47 @@ impl Operation {
         )
     }
 
-    pub fn is_awaited(self, asynchronous: bool) -> bool {
-        matches!(
-            self,
-            Self::DeploymentPre
-                | Self::DeploymentSuccess
-                | Self::DeploymentFailure
-                | Self::AsyncFailure
-        ) || (asynchronous && self == Self::Send)
-    }
-}
-
-pub fn actions_for(operation: Operation) -> &'static [ActionBinding] {
-    match operation {
-        Operation::InputHooks => &INPUT_HOOK_ACTION,
-        Operation::BuildRequest => &REQUEST_BUILD_ACTION,
-        Operation::Send => &PROVIDER_ACTION,
-        Operation::PreCall => &PRE_CALL_ACTION,
-        Operation::SyncFailure | Operation::AsyncFailure | Operation::DeploymentFailure => {
-            &FAILURE_ACTION
+    pub fn contract(self, runtime: CallbackRuntime, asynchronous: bool) -> OperationContract {
+        use Operation::*;
+        let delivery = match self {
+            DeploymentPre | DeploymentSuccess | DeploymentFailure | AsyncFailure => {
+                Delivery::InlineAwaited
+            }
+            Send if asynchronous => Delivery::InlineAwaited,
+            InputHooks | PreCall if runtime == CallbackRuntime::Native => Delivery::InlineAwaited,
+            SyncSuccess | SyncSuccessIfNeeded => Delivery::BlockingWorker,
+            AsyncSuccess => Delivery::BackgroundTask,
+            StreamComplete => Delivery::Deferred,
+            _ => Delivery::InlineDirect,
+        };
+        let result = match self {
+            DeploymentPre | DeploymentSuccess | InputHooks | BuildRequest | Send => {
+                ResultPolicy::Transform
+            }
+            PreCall if runtime == CallbackRuntime::Native => ResultPolicy::Transform,
+            _ => ResultPolicy::Observe,
+        };
+        let failure = match self {
+            DeploymentFailure => FailurePolicy::PreserveOriginalFailure,
+            SyncSuccess | AsyncSuccess | SyncSuccessIfNeeded
+                if runtime == CallbackRuntime::Native =>
+            {
+                FailurePolicy::RecordAndContinue
+            }
+            _ => FailurePolicy::Propagate,
+        };
+        OperationContract {
+            delivery,
+            result,
+            failure,
         }
-        Operation::Restore => &RESTORE_ACTION,
-        Operation::Complete(_) => &[],
-        _ => &CALLBACK_ACTION,
+    }
+
+    pub fn is_awaited(self, asynchronous: bool) -> bool {
+        self.contract(CallbackRuntime::Python, asynchronous)
+            .is_awaited()
     }
 }
-
-const INPUT_HOOK_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::InputHooks,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Replace,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
-
-const REQUEST_BUILD_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::RequestBuild,
-    delivery: Delivery::InlineDirect,
-    on_result: ResultPolicy::Replace,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
-
-const PROVIDER_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::ProviderCall,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Replace,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
-
-const PRE_CALL_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::PreparedCallLogging,
-    delivery: Delivery::InlineDirect,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Route,
-}];
-
-const CALLBACK_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::TerminalSuccess,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::RecordAndContinue,
-    owner: Owner::Route,
-}];
-
-const FAILURE_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::TerminalFailure,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::PreserveOriginalFailure,
-    owner: Owner::Route,
-}];
-
-const RESTORE_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::Restore,
-    delivery: Delivery::InlineDirect,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
 
 #[cfg(test)]
 mod tests {
@@ -380,7 +522,7 @@ mod tests {
             internal_call: false,
         });
         let failure = before.advance(Outcome::Failure, observations()).unwrap();
-        assert_eq!(failure.commitment, Commitment::Replayable);
+        assert_eq!(failure.commitment, Commitment::BeforeProvider);
         assert_eq!(failure.failure_stage, Some(FailureStage::BeforeProvider));
 
         let mut provider = CallLifecycle::planned(ProgramOptions {
@@ -413,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn request_build_and_pre_call_failures_are_replayable() {
+    fn request_build_and_pre_call_failures_are_before_provider() {
         for success_count in [1, 2, 3] {
             let mut program = CallLifecycle::planned(ProgramOptions {
                 asynchronous: false,
@@ -423,20 +565,68 @@ mod tests {
                 program.advance(Outcome::Success, observations()).unwrap();
             }
             let failure = program.advance(Outcome::Failure, observations()).unwrap();
-            assert_eq!(failure.commitment, Commitment::Replayable);
+            assert_eq!(failure.commitment, Commitment::BeforeProvider);
             assert_eq!(failure.failure_stage, Some(FailureStage::BeforeProvider));
         }
     }
 
     #[test]
-    fn request_build_has_its_own_action_kind() {
-        assert_eq!(
-            actions_for(Operation::BuildRequest)[0].kind,
-            ActionKind::RequestBuild
+    fn tickets_reject_reentry_foreign_owners_and_duplicate_completion() {
+        let mut first = CallLifecycle::asynchronous();
+        let mut second = CallLifecycle::asynchronous();
+        let ticket = first.issue().unwrap();
+        let second_ticket = second.issue().unwrap();
+        assert!(first.issue().is_err());
+        assert!(
+            second
+                .complete_operation(ticket, Outcome::Success, observations())
+                .is_err()
         );
-        assert_eq!(
-            actions_for(Operation::Send)[0].kind,
-            ActionKind::ProviderCall
+        assert_eq!(second.operation(), Operation::Setup);
+        let ticket = second_ticket;
+        let duplicate = OperationTicket {
+            owner: ticket.owner,
+            generation: ticket.generation,
+            operation: ticket.operation,
+        };
+        second
+            .complete_operation(ticket, Outcome::Success, observations())
+            .unwrap();
+        assert!(
+            second
+                .complete_operation(duplicate, Outcome::Success, observations())
+                .is_err()
+        );
+        assert_eq!(second.operation(), Operation::DeploymentPre);
+    }
+
+    #[test]
+    fn provider_permit_is_single_use_and_requires_send() {
+        let mut program = CallLifecycle::asynchronous();
+        let ticket = program.issue().unwrap();
+        assert!(
+            program
+                .provider_permit::<crate::messages::lifecycle::MessagesRoute>(&ticket)
+                .is_err()
+        );
+        program
+            .complete_operation(ticket, Outcome::Success, observations())
+            .unwrap();
+        while program.operation() != Operation::Send {
+            let ticket = program.issue().unwrap();
+            program
+                .complete_operation(ticket, Outcome::Success, observations())
+                .unwrap();
+        }
+        let ticket = program.issue().unwrap();
+        let _permit = program
+            .provider_permit::<crate::messages::lifecycle::MessagesRoute>(&ticket)
+            .unwrap();
+        assert_eq!(program.commitment(), Commitment::ProviderStarted);
+        assert!(
+            program
+                .provider_permit::<crate::messages::lifecycle::MessagesRoute>(&ticket)
+                .is_err()
         );
     }
 }

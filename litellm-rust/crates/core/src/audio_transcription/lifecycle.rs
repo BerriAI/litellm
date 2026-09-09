@@ -153,9 +153,7 @@ impl AudioRoute {
             .run_prepared(
                 context,
                 prepared,
-                &policy,
-                services,
-                services,
+                (&policy, services, services),
                 |request| std::future::ready(policy.prepare_provider_request(request)),
                 |request| execute_audio_transcription_provider_call(services, request),
             )

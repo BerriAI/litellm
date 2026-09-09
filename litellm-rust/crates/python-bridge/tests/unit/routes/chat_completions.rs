@@ -1,6 +1,26 @@
 use super::*;
 
 #[pyfunction]
+fn prepared_machine(
+    py: Python<'_>,
+    arguments: &Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<Py<ChatCompletionsLifecycle>> {
+    let mut owner = ChatCompletionsLifecycle::new(arguments, asynchronous, false)?;
+    loop {
+        let ticket = owner.machine.issue().map_err(core_error_to_pyerr)?;
+        if ticket.operation() == Operation::BuildRequest {
+            owner.pending_operation = Some(ticket);
+            return Py::new(py, owner);
+        }
+        owner
+            .machine
+            .complete_operation(ticket, Outcome::Success, Observations::default())
+            .map_err(core_error_to_pyerr)?;
+    }
+}
+
+#[pyfunction]
 fn snapshot(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<Py<PyAny>> {
     let request = take_request(py, &state)?;
     let (body, headers) = match &request.readback {
@@ -34,6 +54,9 @@ fn bedrock_callback_headers_work_without_botocore() {
             .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
             .unwrap();
         let globals = PyDict::new(py);
+        module
+            .add_function(wrap_pyfunction!(prepared_machine, &module).unwrap())
+            .unwrap();
         globals.set_item("native", module).unwrap();
         py.run(
             c"
@@ -75,7 +98,8 @@ with patch.dict(sys.modules, {'botocore': None, 'botocore.awsrequest': None}):
             extra_headers=original_headers, api_key=api_key,
             custom_llm_provider='bedrock', api_base=None,
         )
-        state = native.build_request(arguments, Logger())
+        machine = native.prepared_machine(arguments, False)
+        state = native.build_request(machine, arguments, Logger())
         native.pre_call(state)
         wire_body, wire_headers = native.snapshot(state)
         assert wire_body['messages'][0]['content'][0]['text'] == 'original'
@@ -110,6 +134,9 @@ fn callback_roots_survive_rebinding_and_cycles_are_collected() {
             .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
             .unwrap();
         let globals = PyDict::new(py);
+        module
+            .add_function(wrap_pyfunction!(prepared_machine, &module).unwrap())
+            .unwrap();
         globals.set_item("native", module).unwrap();
         py.run(
             c"
@@ -145,7 +172,8 @@ arguments = dict(model='claude-opus-5', messages=messages,
                  extra_headers=headers, api_key='test',
                  custom_llm_provider='anthropic', opaque=opaque,
                  litellm_logging_obj=logger)
-state = native.build_request(arguments, logger)
+machine = native.prepared_machine(arguments, False)
+state = native.build_request(machine, arguments, logger)
 native.pre_call(state)
 wire_body, wire_headers = native.snapshot(state)
 assert wire_body['messages'][0]['content'][0]['text'] == 'body edit'

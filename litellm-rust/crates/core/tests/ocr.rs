@@ -6,9 +6,39 @@ use std::time::Duration;
 
 use litellm_core::Error;
 use litellm_core::lifecycle::CallLifecycleContext;
-use litellm_core::ocr::request::build_pre_call_request;
+fn build_pre_call_request(
+    request: litellm_core::ocr::OcrAdmissionRequest,
+) -> Result<OcrPreCallRequest, litellm_core::Error> {
+    use litellm_core::lifecycle::Outcome;
+    use litellm_core::lifecycle::program::{Observations, Operation};
+    let mut call = litellm_core::lifecycle::ocr::Lifecycle::admit(&request, Default::default())?
+        .map_err(|decline| litellm_core::Error::Unsupported(decline.reason()))?;
+    while call.operation() != Operation::BuildRequest {
+        let ticket = call.issue()?;
+        call.complete_operation(ticket, Outcome::Success, Observations::default())?;
+    }
+    let ticket = call.issue()?;
+    let request = call.preparation_permit(&ticket)?.ocr(request, &())?;
+    call.complete_operation(ticket, Outcome::Success, Observations::default())?;
+    Ok(OcrPreCallRequest {
+        request,
+        lifecycle: call,
+    })
+}
 use litellm_core::ocr::types::{OcrDocument, OcrDocumentProjection};
-use litellm_core::ocr::{DefaultOcrServices, OcrAdmissionRequest as OcrRequest, OcrPreCallRequest};
+use litellm_core::ocr::{DefaultOcrServices, OcrAdmissionRequest as OcrRequest};
+
+struct OcrPreCallRequest {
+    request: litellm_core::ocr::OcrPreCallRequest,
+    lifecycle: litellm_core::lifecycle::ocr::Lifecycle,
+}
+
+impl std::ops::Deref for OcrPreCallRequest {
+    type Target = litellm_core::ocr::OcrPreCallRequest;
+    fn deref(&self) -> &Self::Target {
+        &self.request
+    }
+}
 use serde_json::{Value, json};
 
 fn request() -> OcrRequest {
@@ -46,15 +76,24 @@ async fn ocr(
     headers: Vec<(String, String)>,
     body: Value,
 ) -> Result<litellm_core::ocr::OcrResponseData, Error> {
+    use litellm_core::lifecycle::{Outcome, program::Observations};
+    let OcrPreCallRequest {
+        request: built,
+        mut lifecycle,
+    } = built;
+    let ticket = lifecycle.issue()?;
+    lifecycle.complete_operation(ticket, Outcome::Success, Observations::default())?;
+    let ticket = lifecycle.issue()?;
+    let permit = lifecycle.provider_permit(&ticket)?;
     let model = built.endpoint.model().to_string();
     let provider = built.endpoint.custom_llm_provider().to_string();
     let response = litellm_core::ocr::ocr(
         &DefaultOcrServices,
+        permit,
         built.endpoint.settle(
             headers,
             litellm_core::lifecycle::PreCallBody::StructuredAtSend { callback: body },
         )?,
-        Default::default(),
         CallLifecycleContext::new("ocr", model, provider, "test-call"),
     )
     .await

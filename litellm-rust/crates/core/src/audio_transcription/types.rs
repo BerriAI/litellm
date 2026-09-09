@@ -253,6 +253,17 @@ impl AudioTranscriptionResponseData {
     }
 }
 
+pub struct PreparedAudioTranscriptionRequest {
+    pub model: String,
+    pub custom_llm_provider: String,
+    pub audio: AudioInput,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub extra_headers: Option<Map<String, Value>>,
+    pub optional_params: Map<String, Value>,
+    pub timeout: Option<std::time::Duration>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -281,15 +292,4 @@ mod tests {
         let result = serde_json::from_value::<AudioInput>(json!({"format": "wav"}));
         assert!(result.is_err());
     }
-}
-
-pub struct PreparedAudioTranscriptionRequest {
-    pub model: String,
-    pub custom_llm_provider: String,
-    pub audio: AudioInput,
-    pub api_key: Option<String>,
-    pub api_base: Option<String>,
-    pub extra_headers: Option<Map<String, Value>>,
-    pub optional_params: Map<String, Value>,
-    pub timeout: Option<std::time::Duration>,
 }

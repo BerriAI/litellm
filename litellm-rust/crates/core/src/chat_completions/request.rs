@@ -117,7 +117,7 @@ fn validate_environment(
     Ok((headers, auth))
 }
 
-pub fn build_provider_request(
+pub(crate) fn build_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
     build_provider_request_with_services(
@@ -126,7 +126,7 @@ pub fn build_provider_request(
     )
 }
 
-pub fn build_provider_request_with_services(
+pub(crate) fn build_provider_request_with_services(
     services: &impl crate::providers::auth::ChatAuthorizationServices,
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
@@ -155,17 +155,7 @@ pub fn build_provider_request_with_services(
     })
 }
 
-pub async fn build_pre_call_request(
-    request: ChatCompletionsRequest<'_>,
-) -> Result<super::types::ChatPreCallRequest, Error> {
-    build_pre_call_request_with_services(
-        crate::providers::auth::native_authorization_services(),
-        request,
-    )
-    .await
-}
-
-pub async fn build_pre_call_request_with_services(
+pub(crate) async fn build_pre_call_request_with_services(
     services: &impl crate::providers::auth::ChatAuthorizationServices,
     request: ChatCompletionsRequest<'_>,
 ) -> Result<super::types::ChatPreCallRequest, Error> {
@@ -268,7 +258,7 @@ pub fn unchanged_pre_call_readback(
     }
 }
 
-pub async fn settle_pre_call_request_with_services(
+pub(crate) async fn settle_pre_call_request_with_services(
     services: &dyn crate::providers::auth::ChatAuthorizationServices,
     request: super::types::ChatPreCallRequest,
     readback: super::types::ChatPreCallReadback,

@@ -1,26 +1,37 @@
-use serde::Serialize;
+use super::{ActionResult, Delivery, FailurePolicy};
 
-use super::{ActionKind, Delivery, FailurePolicy};
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallbackRuntime {
+    Native,
+    Python,
+}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResultPolicy {
-    Continue,
-    Replace,
-    Reject,
+    Observe,
+    Transform,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum Owner {
-    Core,
-    Route,
-    Host,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct ActionBinding {
-    pub kind: ActionKind,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OperationContract {
     pub delivery: Delivery,
-    pub on_result: ResultPolicy,
-    pub on_error: FailurePolicy,
-    pub owner: Owner,
+    pub result: ResultPolicy,
+    pub failure: FailurePolicy,
+}
+
+impl OperationContract {
+    pub fn is_awaited(self) -> bool {
+        self.delivery == Delivery::InlineAwaited
+    }
+
+    pub(crate) fn apply<T>(self, result: ActionResult<T, crate::Error>) -> Result<T, crate::Error> {
+        match result {
+            ActionResult::Continue(value) => Ok(value),
+            ActionResult::Replace(value) if self.result == ResultPolicy::Transform => Ok(value),
+            ActionResult::Replace(_) => Err(crate::Error::InvalidRequest(
+                "observational operation cannot replace its input".into(),
+            )),
+            ActionResult::Reject(error) => Err(error),
+        }
+    }
 }

@@ -117,17 +117,20 @@ class Host:
                         host.clone_ref(py),
                     );
                     let ticket = machine.issue().unwrap();
-                    machine.complete_operation(ticket,
-                        if result.is_ok() {
-                            Outcome::Success
-                        } else {
-                            Outcome::Failure
-                        },
-                        Observations {
-                            logger_available: true,
-                            has_fallbacks: false,
-                        },
-                    );
+                    machine
+                        .complete_operation(
+                            ticket,
+                            if result.is_ok() {
+                                Outcome::Success
+                            } else {
+                                Outcome::Failure
+                            },
+                            Observations {
+                                logger_available: true,
+                                has_fallbacks: false,
+                            },
+                        )
+                        .unwrap();
                 }
                 let events: Vec<String> = host.getattr(py, "events").unwrap().extract(py).unwrap();
                 let send = if asynchronous { "send" } else { "send_sync" };

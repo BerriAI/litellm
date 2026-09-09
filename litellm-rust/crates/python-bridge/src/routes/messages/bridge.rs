@@ -9,9 +9,7 @@ use serde_json::{Map, Value};
 
 use litellm_core::lifecycle::FailureStage;
 use litellm_core::lifecycle::{ErrorDisposition, Lifecycle, Outcome};
-use litellm_core::messages::execute_provider_messages_request;
 use litellm_core::messages::lifecycle::{MessagesRoute, Observations, Operation, Options, machine};
-use litellm_core::messages::request::build_endpoint;
 use litellm_core::messages::types::{MessagesEndpoint, MessagesOptions, ProviderMessagesRequest};
 use litellm_python_interop::{Pythonized, from_py, run_async_value, run_sync_value};
 
@@ -71,6 +69,30 @@ struct MessagesLifecycle {
     pending_operation: Option<litellm_core::lifecycle::program::OperationTicket>,
 }
 
+impl MessagesLifecycle {
+    fn preparation_permit(
+        &mut self,
+    ) -> PyResult<litellm_core::lifecycle::program::PreparationPermit<MessagesRoute>> {
+        let ticket = self.pending_operation.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no build operation is pending")
+        })?;
+        self.machine
+            .preparation_permit(ticket)
+            .map_err(core_error_to_pyerr)
+    }
+
+    fn provider_permit(
+        &mut self,
+    ) -> PyResult<litellm_core::lifecycle::program::ProviderPermit<MessagesRoute>> {
+        let ticket = self.pending_operation.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no send operation is pending")
+        })?;
+        self.machine
+            .provider_permit(ticket)
+            .map_err(core_error_to_pyerr)
+    }
+}
+
 #[pymethods]
 impl MessagesLifecycle {
     #[new]
@@ -98,7 +120,9 @@ impl MessagesLifecycle {
             1 => Outcome::Failure,
             _ => Outcome::Abort,
         };
-        let ticket = self.pending_operation.take().ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no lifecycle operation is pending"))?;
+        let ticket = self.pending_operation.take().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no lifecycle operation is pending")
+        })?;
         self.machine
             .complete_operation(
                 ticket,
@@ -143,15 +167,17 @@ fn invoke(
 #[pyfunction]
 fn build_request(
     py: Python<'_>,
+    machine: Py<MessagesLifecycle>,
     arguments: Py<PyDict>,
     logging: Py<PyAny>,
 ) -> PyResult<Py<MessagesState>> {
+    let permit = machine.borrow_mut(py).preparation_permit()?;
     let bag = arguments.bind(py);
     validate_arguments(bag)?;
     let call = bag.extract::<MessagesArguments<'_>>()?;
     let options = decode_options(&call)?;
     let endpoint = py
-        .detach(|| build_endpoint(options))
+        .detach(|| permit.messages(options))
         .map_err(core_error_to_pyerr)?;
     let body = call.body.cast_into::<PyDict>()?;
     let callback_body: Value = from_py(body.as_any())?;
@@ -253,29 +279,37 @@ fn validate_arguments(arguments: &Bound<'_, PyDict>) -> PyResult<()> {
 }
 
 #[pyfunction]
-fn send(py: Python<'_>, state: Py<MessagesState>, host: Py<PyAny>) -> PyResult<Bound<'_, PyAny>> {
+fn send(
+    py: Python<'_>,
+    machine: Py<MessagesLifecycle>,
+    state: Py<MessagesState>,
+    host: Py<PyAny>,
+) -> PyResult<Bound<'_, PyAny>> {
+    let permit = machine.borrow_mut(py).provider_permit()?;
     let streaming = state.borrow(py).streaming;
     let request = take_request(py, &state)?;
     if streaming {
-        return streaming::send(py, request, host);
+        return streaming::send(py, permit, request, host);
     }
     litellm_python_interop::run_async_py(py, async move {
         let _state = state;
-        let response = run_async_value(
-            execute_provider_messages_request(request),
-            messages_provider_error_to_pyerr,
-        )
-        .await?;
+        let response =
+            run_async_value(permit.messages(request), messages_provider_error_to_pyerr).await?;
         Ok(Pythonized(response))
     })
 }
 
 #[pyfunction]
-fn send_sync(py: Python<'_>, state: Py<MessagesState>) -> PyResult<Py<PyAny>> {
+fn send_sync(
+    py: Python<'_>,
+    machine: Py<MessagesLifecycle>,
+    state: Py<MessagesState>,
+) -> PyResult<Py<PyAny>> {
+    let permit = machine.borrow_mut(py).provider_permit()?;
     let request = take_request(py, &state)?;
     let response = run_sync_value(
         py,
-        execute_provider_messages_request(request),
+        permit.messages(request),
         messages_provider_error_to_pyerr,
     )?;
     Ok(Pythonized(response).into_pyobject(py)?.unbind().into_any())

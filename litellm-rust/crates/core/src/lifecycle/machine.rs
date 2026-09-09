@@ -1,37 +1,25 @@
 use std::marker::PhantomData;
 
-use super::ActionBinding;
+use super::program::{Observations, Operation, OperationTicket, ProviderPermit, Transition};
+use super::{CallLifecycle, Outcome};
+use crate::Error;
 
-pub trait LifecycleRoute: Sized {
+pub(crate) mod sealed {
+    pub trait Sealed {}
+}
+
+pub trait LifecycleRoute: Sized + sealed::Sealed {
     type Admission;
     type Options;
-    type Context;
-    type Operation: Copy;
-    type Observation;
-    type Outcome;
-    type Transition;
-    type Error;
     type Decline;
     type State;
 
-    fn program(state: &Self::State) -> &super::CallLifecycle;
-    fn program_mut(state: &mut Self::State) -> &mut super::CallLifecycle;
-
+    fn program(state: &Self::State) -> &CallLifecycle;
+    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle;
     fn admit(
         admission: &Self::Admission,
         options: Self::Options,
-    ) -> Result<Result<Self::State, Self::Decline>, Self::Error>;
-
-    fn operation(state: &Self::State) -> Self::Operation;
-
-    fn advance(
-        state: &mut Self::State,
-        outcome: Self::Outcome,
-        observations: Self::Observation,
-    ) -> Result<Self::Transition, Self::Error>;
-
-    fn actions_for(operation: Self::Operation, context: &Self::Context)
-    -> &'static [ActionBinding];
+    ) -> Result<Result<Self::State, Self::Decline>, Error>;
 }
 
 #[derive(Debug)]
@@ -44,7 +32,7 @@ impl<Route: LifecycleRoute> Lifecycle<Route> {
     pub fn admit(
         admission: &Route::Admission,
         options: Route::Options,
-    ) -> Result<Result<Self, Route::Decline>, Route::Error> {
+    ) -> Result<Result<Self, Route::Decline>, Error> {
         Route::admit(admission, options).map(|admission| {
             admission.map(|state| Self {
                 state,
@@ -53,31 +41,44 @@ impl<Route: LifecycleRoute> Lifecycle<Route> {
         })
     }
 
-    pub fn operation(&self) -> Route::Operation {
-        Route::operation(&self.state)
+    pub fn operation(&self) -> Operation {
+        Route::program(&self.state).operation()
     }
 
-    pub(crate) fn advance(
-        &mut self,
-        outcome: Route::Outcome,
-        observations: Route::Observation,
-    ) -> Result<Route::Transition, Route::Error> {
-        Route::advance(&mut self.state, outcome, observations)
-    }
-
-    pub fn issue(&mut self) -> Result<super::program::OperationTicket, crate::Error> {
+    pub fn issue(&mut self) -> Result<OperationTicket, Error> {
         Route::program_mut(&mut self.state).issue()
     }
 
-    pub fn complete_operation(&mut self, ticket: super::program::OperationTicket, outcome: super::Outcome, observations: super::program::Observations) -> Result<super::program::Transition, crate::Error> {
+    pub fn complete_operation(
+        &mut self,
+        ticket: OperationTicket,
+        outcome: Outcome,
+        observations: Observations,
+    ) -> Result<Transition, Error> {
         Route::program_mut(&mut self.state).complete_operation(ticket, outcome, observations)
     }
 
-    pub fn provider_permit(&mut self, ticket: &super::program::OperationTicket) -> Result<super::program::ProviderPermit, crate::Error> {
+    pub fn preparation_permit(
+        &mut self,
+        ticket: &OperationTicket,
+    ) -> Result<super::program::PreparationPermit<Route>, Error> {
+        Route::program_mut(&mut self.state).preparation_permit(ticket)
+    }
+
+    pub fn provider_permit(
+        &mut self,
+        ticket: &OperationTicket,
+    ) -> Result<ProviderPermit<Route>, Error> {
         Route::program_mut(&mut self.state).provider_permit(ticket)
     }
 
-    pub fn actions_for(&self, context: &Route::Context) -> &'static [ActionBinding] {
-        Route::actions_for(self.operation(), context)
+    #[cfg(test)]
+    pub(crate) fn advance(
+        &mut self,
+        outcome: Outcome,
+        observations: Observations,
+    ) -> Result<Transition, Error> {
+        let ticket = self.issue()?;
+        self.complete_operation(ticket, outcome, observations)
     }
 }

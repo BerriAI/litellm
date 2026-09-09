@@ -1,4 +1,42 @@
 use super::*;
+
+#[pyfunction]
+fn prepared_machine(
+    py: Python<'_>,
+    arguments: &Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<Py<OcrLifecycle>> {
+    let mut owner = OcrLifecycle::new(py, arguments, None, asynchronous, false)?;
+    loop {
+        let ticket = owner.machine.issue().map_err(core_error_to_pyerr)?;
+        if ticket.operation() == Operation::BuildRequest {
+            owner.pending_operation = Some(ticket);
+            return Py::new(py, owner);
+        }
+        owner
+            .machine
+            .complete_operation(ticket, Outcome::Success, Observations::default())
+            .map_err(core_error_to_pyerr)?;
+    }
+}
+
+#[pyfunction]
+fn ready_to_send(py: Python<'_>, machine: Py<OcrLifecycle>) -> PyResult<()> {
+    let mut owner = machine.borrow_mut(py);
+    owner.advance(0, true, false)?;
+    loop {
+        let ticket = owner.machine.issue().map_err(core_error_to_pyerr)?;
+        if ticket.operation() == Operation::Send {
+            owner.pending_operation = Some(ticket);
+            return Ok(());
+        }
+        owner
+            .machine
+            .complete_operation(ticket, Outcome::Success, Observations::default())
+            .map_err(core_error_to_pyerr)?;
+    }
+}
+
 use litellm_core::integrations::custom_logger::CallbackTiming;
 use litellm_core::integrations::types::Usage;
 use litellm_core::lifecycle::{RouteProjection, TerminalClassification};
@@ -135,6 +173,7 @@ fn terminal_record_exports_core_timing() {
                     provider: "mistral".into(),
                     timing: CallbackTiming::new(10.25, 12.5),
                     usage: Usage::default(),
+                    provider_usage: Default::default(),
                     cost_inputs: Default::default(),
                     classification: TerminalClassification::Success,
                     projection: RouteProjection::Ocr {
@@ -182,6 +221,12 @@ fn native_send_owns_state_without_the_python_driver() {
             .add_function(wrap_pyfunction!(send, &module).unwrap())
             .unwrap();
         let globals = PyDict::new(py);
+        module
+            .add_function(wrap_pyfunction!(prepared_machine, &module).unwrap())
+            .unwrap();
+        module
+            .add_function(wrap_pyfunction!(ready_to_send, &module).unwrap())
+            .unwrap();
         globals.set_item("native", module).unwrap();
         py.run(
             cr"
@@ -213,12 +258,16 @@ async def exercise():
         port = server.sockets[0].getsockname()[1]
         logger = Logger()
         alive = weakref.ref(logger)
-        state = native.build_request(dict(
+        arguments = dict(
             model='mistral/mistral-ocr-latest', api_key='test-key', timeout=5.0,
             api_base=f'http://127.0.0.1:{port}', litellm_logging_obj=logger,
             document={'type': 'document_url', 'document_url': 'https://example.test/doc.pdf'},
-        ), logger, True)
-        pending = native.send(state)
+        )
+        machine = native.prepared_machine(arguments, True)
+        state = native.build_request(machine, arguments, logger, True)
+        native.ready_to_send(machine)
+        pending = native.send(machine, state)
+        del arguments
         del state, logger
         try:
             await asyncio.wait_for(received.wait(), 5)
@@ -273,6 +322,12 @@ fn retains_identity_independent_wire_roots_and_collects_cycles() {
             .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
             .unwrap();
         let globals = PyDict::new(py);
+        module
+            .add_function(wrap_pyfunction!(prepared_machine, &module).unwrap())
+            .unwrap();
+        module
+            .add_function(wrap_pyfunction!(ready_to_send, &module).unwrap())
+            .unwrap();
         globals.set_item("native", module).unwrap();
         py.run(
             c"
@@ -314,7 +369,8 @@ logger = Logger()
 arguments = dict(model='mistral/mistral-ocr-latest', document=document,
                  api_key='test-key', pages=pages, metadata=metadata,
                  opaque=opaque, litellm_logging_obj=logger, timeout=Timeout())
-state = native.build_request(arguments, logger, False)
+machine = native.prepared_machine(arguments, False)
+state = native.build_request(machine, arguments, logger, False)
 native.pre_call(state)
 assert logger.calls == ['update', 'pre']
 roots = gc.get_referents(state)

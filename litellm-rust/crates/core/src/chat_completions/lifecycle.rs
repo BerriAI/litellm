@@ -1,12 +1,10 @@
 use crate::Error;
-use crate::integrations::custom_logger::{LogError, LogFuture};
 use crate::integrations::types::Usage;
-use crate::lifecycle::program::{ProgramOptions, actions_for};
+use crate::lifecycle::program::ProgramOptions;
 use crate::lifecycle::{
-    ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock,
-    DeploymentFailureHooks, DeploymentPreHooks, DeploymentSuccessHooks, ExecutedCall, Lifecycle,
-    LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, SystemClock, TerminalDispatcher,
-    TerminalRecord,
+    CallLifecycle, CallLifecycleContext, Clock, DeploymentFailureHooks, DeploymentPreHooks,
+    DeploymentSuccessHooks, ExecutedCall, Lifecycle, LifecycleRoute, ModerationHooks, PreCallHooks,
+    TerminalDispatcher,
 };
 
 use super::handler::execute_chat_completions_provider_call_with_transport;
@@ -52,20 +50,20 @@ pub struct ChatCompletionsState {
 #[derive(Debug)]
 pub struct ChatCompletionsRoute;
 
+impl crate::lifecycle::machine::sealed::Sealed for ChatCompletionsRoute {}
+
 impl LifecycleRoute for ChatCompletionsRoute {
     type Admission = Admission;
     type Options = Options;
-    type Context = Observations;
-    type Operation = Operation;
-    type Observation = Observations;
-    type Outcome = Outcome;
-    type Transition = Transition;
-    type Error = Error;
     type Decline = Decline;
     type State = ChatCompletionsState;
 
-    fn program(state: &Self::State) -> &CallLifecycle { &state.program }
-    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle { &mut state.program }
+    fn program(state: &Self::State) -> &CallLifecycle {
+        &state.program
+    }
+    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle {
+        &mut state.program
+    }
 
     fn admit(
         admission: &Admission,
@@ -85,24 +83,6 @@ impl LifecycleRoute for ChatCompletionsRoute {
                 internal_call: options.internal_call,
             }),
         }))
-    }
-
-    fn operation(state: &Self::State) -> Operation {
-        state.program.operation()
-    }
-
-    fn advance(
-        state: &mut Self::State,
-        outcome: Outcome,
-        observations: Observations,
-    ) -> Result<Transition, Error> {
-        state.program.advance(outcome, observations).ok_or_else(|| {
-            Error::InvalidRequest("chat completions lifecycle is already complete".into())
-        })
-    }
-
-    fn actions_for(operation: Operation, _: &Observations) -> &'static [ActionBinding] {
-        actions_for(operation)
     }
 }
 
@@ -160,9 +140,7 @@ where
     CallLifecycle::asynchronous()
         .run_prepared_with_usage(
             (context, request),
-            session,
-            session,
-            session,
+            (session, session, session),
             |request| std::future::ready(super::request::resolve_request(request)),
             |request| async move {
                 execute_chat_completions_provider_call_with_transport(
@@ -185,66 +163,26 @@ fn response_usage(response: &ChatCompletionsResponse) -> Option<Usage> {
     })
 }
 
-struct UndispatchedSession;
-
-impl Clock for UndispatchedSession {
-    fn now(&self) -> f64 {
-        SystemClock.now()
-    }
-}
-
-impl PreCallHooks<SettledChatRequest> for UndispatchedSession {
-    type PreCallFuture<'a> = std::future::Ready<ActionResult<SettledChatRequest, Error>>;
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        _: &'a CallLifecycleContext,
-        request: SettledChatRequest,
-    ) -> Self::PreCallFuture<'a> {
-        std::future::ready(ActionResult::Continue(request))
-    }
-}
-
-impl ModerationHooks<SettledChatRequest> for UndispatchedSession {
-    type ModerationFuture<'a> = std::future::Ready<ActionResult<SettledChatRequest, Error>>;
-
-    fn async_moderation_hook<'a>(
-        &'a self,
-        _: &'a CallLifecycleContext,
-        request: SettledChatRequest,
-    ) -> Self::ModerationFuture<'a> {
-        std::future::ready(ActionResult::Continue(request))
-    }
-}
-
-impl DeploymentPreHooks<SettledChatRequest> for UndispatchedSession {}
-impl DeploymentSuccessHooks<ChatCompletionsResponse> for UndispatchedSession {}
-impl DeploymentFailureHooks for UndispatchedSession {}
-
-impl TerminalDispatcher for UndispatchedSession {
-    fn dispatch<'a>(&'a self, _: &'a TerminalRecord) -> LogFuture<'a> {
-        Box::pin(async { Ok::<(), LogError>(()) })
-    }
-}
-
 pub(crate) async fn execute_settled(
     request: SettledChatRequest,
     context: CallLifecycleContext,
 ) -> ExecutedCall<ChatCompletionsResponse, Error> {
-    CallLifecycle::asynchronous()
-        .run_with_usage(
-            (context, request),
-            &UndispatchedSession,
-            &UndispatchedSession,
-            &UndispatchedSession,
-            |request| async move { super::handler::execute_settled_request(request).await },
-            response_usage,
-        )
-        .await
+    let start_time = crate::lifecycle::SystemClock.now();
+    let result = super::handler::execute_settled_request(request).await;
+    let mut context = context;
+    if let Ok(response) = &result
+        && let Some(usage) = response_usage(response)
+    {
+        context.usage = usage;
+        context.provider_usage = crate::lifecycle::terminal::UsageObservation::Final(usage);
+    }
+    crate::lifecycle::execution::provider_result(context, start_time, result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lifecycle::Outcome;
 
     fn admission() -> Admission {
         Admission {

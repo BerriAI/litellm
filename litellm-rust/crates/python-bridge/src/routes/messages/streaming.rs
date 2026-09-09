@@ -46,8 +46,12 @@ impl TerminalDispatcher for Session {
                     }
                 };
                 let error = match &terminal.classification {
-                    TerminalClassification::Success | TerminalClassification::Incomplete { .. } => None,
-                    TerminalClassification::Cancelled { message } => Some(format!("Cancelled: {message}")),
+                    TerminalClassification::Success | TerminalClassification::Incomplete { .. } => {
+                        None
+                    }
+                    TerminalClassification::Cancelled { message } => {
+                        Some(format!("Cancelled: {message}"))
+                    }
                     TerminalClassification::Failure { kind, message } => {
                         Some(format!("{kind}: {message}"))
                     }
@@ -76,6 +80,9 @@ fn log_error(error: PyErr) -> LogError {
 
 pub(super) fn send(
     py: Python<'_>,
+    permit: litellm_core::lifecycle::program::ProviderPermit<
+        litellm_core::messages::lifecycle::MessagesRoute,
+    >,
     request: ProviderMessagesRequest,
     host: Py<PyAny>,
 ) -> PyResult<Bound<'_, PyAny>> {
@@ -113,11 +120,10 @@ pub(super) fn send(
         locals: pyo3_async_runtimes::tokio::get_current_locals(py)?,
     });
     litellm_python_interop::run_async_py(py, async move {
-        let call = litellm_core::messages::messages_stream_prepared(
-            request, context, start_time, services,
-        )
-        .await
-        .map_err(messages_provider_error_to_pyerr)?;
+        let call = permit
+            .messages_stream(request, context, start_time, services)
+            .await
+            .map_err(messages_provider_error_to_pyerr)?;
         let completion = call.completion.register();
         let stream = call
             .stream

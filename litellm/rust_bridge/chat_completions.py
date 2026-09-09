@@ -615,11 +615,11 @@ class _ChatCompletionsBindings(NativeLifecycleBindings, Protocol):
         [dict[str, object], bool, bool], NativeLifecycle
     ]  # mutable-ok: native bridge retains and updates Python argument objects
     build_request: Callable[
-        [dict[str, object], object], object
+        [object, dict[str, object], object], object
     ]  # mutable-ok: native bridge retains and updates Python argument objects
     pre_call: Callable[[object], None]
-    send: Callable[[object], Awaitable[Mapping[str, object]]]
-    send_sync: Callable[[object], Mapping[str, object]]
+    send: Callable[[object, object], Awaitable[Mapping[str, object]]]
+    send_sync: Callable[[object, object], Mapping[str, object]]
     terminal_record: Callable[[object], Mapping[str, object]]
 
 
@@ -666,7 +666,7 @@ class _ChatCompletionsHost:
     def build_request(self) -> None:
         if self.logger is None:
             raise RuntimeError("chat completions logging was not initialized")
-        self.state = self.bindings.build_request(self.current, self.logger)
+        self.state = self.bindings.build_request(self.machine, self.current, self.logger)
 
     def pre_call(self) -> None:
         self.bindings.pre_call(self.state)
@@ -675,14 +675,14 @@ class _ChatCompletionsHost:
         model_response: Final = self.arguments["model_response"]
         if not isinstance(model_response, ModelResponse):
             raise TypeError("chat completions model_response must be a ModelResponse")
-        self.response = build_model_response(self.bindings.send_sync(self.state), model_response)
+        self.response = build_model_response(self.bindings.send_sync(self.machine, self.state), model_response)
         self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def send(self) -> None:
         model_response: Final = self.arguments["model_response"]
         if not isinstance(model_response, ModelResponse):
             raise TypeError("chat completions model_response must be a ModelResponse")
-        self.response = build_model_response(await self.bindings.send(self.state), model_response)
+        self.response = build_model_response(await self.bindings.send(self.machine, self.state), model_response)
         self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def deployment_success(self) -> None:

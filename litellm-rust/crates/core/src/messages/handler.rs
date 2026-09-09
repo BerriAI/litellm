@@ -43,7 +43,7 @@ pub(crate) async fn execute_provider_messages_request_with_transport(
     config.transform_response(&model, response)
 }
 
-pub async fn execute_provider_messages_request(
+pub(crate) async fn execute_provider_messages_request(
     request: super::types::ProviderMessagesRequest,
 ) -> Result<AnthropicMessagesResponse, Error> {
     let super::types::ProviderMessagesRequest {

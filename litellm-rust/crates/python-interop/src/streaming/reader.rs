@@ -14,7 +14,8 @@ pub type PythonStreamCompletion = Pin<Box<dyn Future<Output = PyResult<()>> + Se
 
 struct State {
     stream: Mutex<Option<PythonByteStream>>,
-    completion: Mutex<Option<PythonStreamCompletion>>,
+    completion: std::sync::Mutex<Option<PythonStreamCompletion>>,
+    completing: Mutex<()>,
     closed: AtomicBool,
     polling: AtomicBool,
     notify: Notify,
@@ -26,9 +27,12 @@ impl State {
     fn close(&self) {
         self.closed.store(true, Ordering::Release);
         self.notify.notify_one();
-        if let Ok(mut stream) = self.stream.try_lock() {
-            stream.take();
-        }
+        let stream = self
+            .stream
+            .try_lock()
+            .ok()
+            .and_then(|mut stream| stream.take());
+        drop(stream);
     }
 
     fn detach(self: &Arc<Self>) {
@@ -36,20 +40,39 @@ impl State {
         if !self.detached.swap(true, Ordering::AcqRel) {
             let state = self.clone();
             self.runtime.spawn(async move {
-                state.stream.lock().await.take();
+                let stream = state.stream.lock().await.take();
+                drop(stream);
                 let _ = state.finish().await;
             });
         }
     }
 
     async fn finish(&self) -> PyResult<()> {
-        let mut completion = self.completion.lock().await;
-        if let Some(future) = completion.as_mut() {
+        let _completing = self.completing.lock().await;
+        let mut completion = CompletionLease {
+            slot: &self.completion,
+            future: self.completion.lock().unwrap().take(),
+        };
+        if let Some(future) = completion.future.as_mut() {
             let result = future.await;
-            completion.take();
+            drop(completion.future.take());
             result?;
         }
         Ok(())
+    }
+}
+
+struct CompletionLease<'a> {
+    slot: &'a std::sync::Mutex<Option<PythonStreamCompletion>>,
+    future: Option<PythonStreamCompletion>,
+}
+
+impl Drop for CompletionLease<'_> {
+    fn drop(&mut self) {
+        if let Some(future) = self.future.take() {
+            let displaced = self.slot.lock().unwrap().replace(future);
+            drop(displaced);
+        }
     }
 }
 
@@ -77,7 +100,8 @@ impl ByteStreamReader {
         Self {
             state: Arc::new(State {
                 stream: Mutex::new(Some(stream)),
-                completion: Mutex::new(Some(completion)),
+                completion: std::sync::Mutex::new(Some(completion)),
+                completing: Mutex::new(()),
                 closed: AtomicBool::new(false),
                 polling: AtomicBool::new(false),
                 notify: Notify::new(),
@@ -102,11 +126,10 @@ impl ByteStreamReader {
             state: state.clone(),
             completed: false,
         };
-        let item = {
-            let mut stream = state.stream.lock().await;
-            if state.closed.load(Ordering::Acquire) {
-                stream.take();
-            }
+        let mut stream = state.stream.lock().await.take();
+        let item = if state.closed.load(Ordering::Acquire) {
+            None
+        } else {
             match stream.as_mut() {
                 Some(inner) => tokio::select! {
                     biased;
@@ -116,6 +139,13 @@ impl ByteStreamReader {
                 None => None,
             }
         };
+        if matches!(item, Some(Ok(_))) {
+            let mut slot = state.stream.lock().await;
+            if !state.closed.load(Ordering::Acquire) {
+                *slot = stream.take();
+            }
+        }
+        drop(stream);
         match item {
             Some(Ok(bytes)) => {
                 guard.completed = true;

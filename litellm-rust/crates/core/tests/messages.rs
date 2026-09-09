@@ -16,7 +16,19 @@ use litellm_core::messages::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
 };
 use litellm_core::messages::messages;
-use litellm_core::messages::request::build_endpoint;
+fn build_endpoint(
+    request: litellm_core::messages::types::MessagesOptions,
+) -> Result<litellm_core::messages::types::MessagesEndpoint, litellm_core::Error> {
+    use litellm_core::lifecycle::Outcome;
+    use litellm_core::lifecycle::program::{Observations, Operation};
+    let mut call = litellm_core::messages::lifecycle::machine(Default::default())?;
+    while call.operation() != Operation::BuildRequest {
+        let ticket = call.issue()?;
+        call.complete_operation(ticket, Outcome::Success, Observations::default())?;
+    }
+    let ticket = call.issue()?;
+    call.preparation_permit(&ticket)?.messages(request)
+}
 use litellm_core::messages::types::{MessagesOptions, MessagesRequest};
 
 async fn read_http_request(socket: &mut TcpStream) -> String {

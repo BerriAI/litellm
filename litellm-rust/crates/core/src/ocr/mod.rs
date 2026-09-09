@@ -17,8 +17,7 @@ pub use types::{
 use types::{OcrDocument, OcrDocumentProjection};
 
 use crate::lifecycle::{
-    CallLifecycle, CallLifecycleContext, Clock, DeploymentFailureHooks, ExecutedCall,
-    TerminalDispatcher,
+    CallLifecycleContext, Clock, DeploymentFailureHooks, ExecutedCall, TerminalDispatcher,
 };
 
 pub trait OcrServices: TerminalDispatcher + Clock + DeploymentFailureHooks {}
@@ -52,69 +51,26 @@ impl TerminalDispatcher for DefaultOcrServices {
 
 pub async fn ocr<S: OcrServices>(
     services: &S,
+    permit: crate::lifecycle::program::ProviderPermit<crate::lifecycle::ocr::OcrRoute>,
     request: SettledOcrRequest,
-    _options: crate::lifecycle::ocr::Options,
     context: CallLifecycleContext,
 ) -> ExecutedCall<Value, Error> {
-    CallLifecycle::asynchronous()
-        .run(
-            context,
-            request,
-            &SettledOcrPolicy(services),
-            services,
-            services,
-            |request| async move { send(request).await.map(OcrResponseData::into_json) },
-        )
-        .await
-}
-
-struct SettledOcrPolicy<'a, S>(&'a S);
-
-impl<S: OcrServices> crate::lifecycle::PreCallHooks<SettledOcrRequest> for SettledOcrPolicy<'_, S> {
-    type PreCallFuture<'a>
-        = std::future::Ready<crate::lifecycle::ActionResult<SettledOcrRequest, Error>>
-    where
-        Self: 'a;
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        _: &'a CallLifecycleContext,
-        request: SettledOcrRequest,
-    ) -> Self::PreCallFuture<'a> {
-        std::future::ready(crate::lifecycle::ActionResult::Continue(request))
+    let start_time = services.now();
+    let mut completion = crate::lifecycle::completion::CompletionOwner::new(
+        context.clone(),
+        start_time,
+        services,
+        services,
+    );
+    let result = permit.ocr(request, context.clone()).await;
+    if let ExecutedCall::Failure { error, .. } = &result {
+        let _ = services
+            .async_post_call_failure_deployment_hook(&context, error)
+            .await;
     }
-}
-
-impl<S: OcrServices> crate::lifecycle::ModerationHooks<SettledOcrRequest>
-    for SettledOcrPolicy<'_, S>
-{
-    type ModerationFuture<'a>
-        = std::future::Ready<crate::lifecycle::ActionResult<SettledOcrRequest, Error>>
-    where
-        Self: 'a;
-
-    fn async_moderation_hook<'a>(
-        &'a self,
-        _: &'a CallLifecycleContext,
-        request: SettledOcrRequest,
-    ) -> Self::ModerationFuture<'a> {
-        std::future::ready(crate::lifecycle::ActionResult::Continue(request))
-    }
-}
-
-impl<S: OcrServices> crate::lifecycle::DeploymentPreHooks<SettledOcrRequest>
-    for SettledOcrPolicy<'_, S>
-{
-}
-impl<S: OcrServices> crate::lifecycle::DeploymentSuccessHooks<Value> for SettledOcrPolicy<'_, S> {}
-impl<S: OcrServices> DeploymentFailureHooks for SettledOcrPolicy<'_, S> {
-    fn async_post_call_failure_deployment_hook<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        error: &'a Error,
-    ) -> crate::lifecycle::CallbackFuture<'a, Result<(), Error>> {
-        self.0
-            .async_post_call_failure_deployment_hook(context, error)
-    }
+    completion.finish(result.terminal());
+    crate::lifecycle::completion::dispatch(services, result.terminal()).await;
+    result
 }
 
 pub(crate) async fn send(request: SettledOcrRequest) -> Result<OcrResponseData, Error> {
@@ -271,10 +227,23 @@ mod tests {
                 vec![],
             ).settle(),
         };
+        let mut owner = crate::lifecycle::CallLifecycle::asynchronous();
+        while owner.operation() != crate::lifecycle::program::Operation::Send {
+            let ticket = owner.issue().unwrap();
+            owner
+                .complete_operation(
+                    ticket,
+                    crate::lifecycle::Outcome::Success,
+                    Default::default(),
+                )
+                .unwrap();
+        }
+        let ticket = owner.issue().unwrap();
+        let permit = owner.provider_permit(&ticket).unwrap();
         let result = ocr(
             &services,
+            permit,
             request,
-            Default::default(),
             CallLifecycleContext::new("ocr", "mistral-ocr-latest", "mistral", "contract-call"),
         )
         .await

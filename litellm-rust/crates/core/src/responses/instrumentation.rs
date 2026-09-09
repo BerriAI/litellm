@@ -8,6 +8,7 @@ use std::sync::Mutex;
 pub struct ResponsesWsObservation {
     pub(crate) model: String,
     pub(crate) usage: Usage,
+    pub(crate) usage_available: bool,
 }
 
 #[derive(Default)]
@@ -43,6 +44,7 @@ impl ResponsesWsInstrumentation {
         let Some(usage) = response.get("usage").and_then(Value::as_object) else {
             return;
         };
+        state.usage_available = true;
         if let Some(input) = usage.get("input_tokens").and_then(Value::as_u64) {
             state.usage.prompt_tokens += input;
         }

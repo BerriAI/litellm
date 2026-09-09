@@ -920,7 +920,10 @@ async fn detached_drain_limits_release_upstream_with_partial_usage(
             matches!(terminal.classification, TerminalClassification::Failure { message, .. } if message.contains("timed out"))
         );
     } else {
-        assert!(matches!(terminal.classification, TerminalClassification::Incomplete { .. }));
+        assert!(matches!(
+            terminal.classification,
+            TerminalClassification::Incomplete { .. }
+        ));
     }
     assert_eq!(drops.load(Ordering::Relaxed), 1);
     assert_eq!(

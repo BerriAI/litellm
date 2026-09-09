@@ -16,9 +16,10 @@ pub mod transformation;
 pub mod types;
 
 use crate::lifecycle::StreamingCall;
-pub use handler::execute_provider_messages_request;
+pub(crate) use handler::execute_provider_messages_request;
 pub(crate) use handler::{
-    execute_provider_messages_request_with_transport, execute_provider_messages_stream_with_transport,
+    execute_provider_messages_request_with_transport,
+    execute_provider_messages_stream_with_transport,
 };
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
@@ -32,14 +33,17 @@ pub async fn messages_stream(request: MessagesRequest) -> Result<StreamingCall, 
         .await
 }
 
-pub async fn messages_stream_prepared<S>(
+pub(crate) async fn messages_stream_prepared<S>(
     request: types::ProviderMessagesRequest,
     context: crate::lifecycle::CallLifecycleContext,
     start_time: f64,
     services: std::sync::Arc<S>,
 ) -> Result<StreamingCall, Error>
 where
-    S: crate::lifecycle::Clock + crate::lifecycle::TerminalDispatcher + crate::lifecycle::StreamDrain + 'static,
+    S: crate::lifecycle::Clock
+        + crate::lifecycle::TerminalDispatcher
+        + crate::lifecycle::StreamDrain
+        + 'static,
 {
     static TRANSPORT: std::sync::OnceLock<crate::runtime::NativeHttpTransport> =
         std::sync::OnceLock::new();

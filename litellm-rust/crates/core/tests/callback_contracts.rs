@@ -387,27 +387,28 @@ async fn audio_deployment_hooks_replace_payloads_and_rejections_preserve_error(
             serde_json::json!({"text":"replaced transcript"})
         );
     }
-    let terminals = services.terminals.lock().unwrap();
-    assert_eq!(terminals.len(), 1);
-    assert_eq!(
-        matches!(
-            terminals[0].classification,
-            litellm_core::lifecycle::TerminalClassification::Success
-        ),
-        reject.is_none()
-    );
-    if reject.is_none() {
+    {
+        let terminals = services.terminals.lock().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert_eq!(
+            matches!(
+                terminals[0].classification,
+                litellm_core::lifecycle::TerminalClassification::Success
+            ),
+            reject.is_none()
+        );
+        if reject.is_none() {
+            assert!(
+                matches!(&terminals[0].projection, litellm_core::lifecycle::RouteProjection::Audio { value } if value == &serde_json::json!({"text":"replaced transcript"}))
+            );
+        }
         assert!(
-            matches!(&terminals[0].projection, litellm_core::lifecycle::RouteProjection::Audio { value } if value == &serde_json::json!({"text":"replaced transcript"}))
+            !services
+                .events
+                .lock()
+                .unwrap()
+                .contains(&Operation::DeploymentFailure)
         );
     }
-    assert!(
-        !services
-            .events
-            .lock()
-            .unwrap()
-            .contains(&Operation::DeploymentFailure)
-    );
-    drop(terminals);
     provider.await.unwrap();
 }

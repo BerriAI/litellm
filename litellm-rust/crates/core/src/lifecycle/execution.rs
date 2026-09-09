@@ -27,6 +27,7 @@ pub struct CallLifecycleContext {
     pub trace_id: Option<String>,
     pub attempt: u32,
     pub usage: Usage,
+    pub provider_usage: super::terminal::UsageObservation,
     pub response_cost: f64,
     pub metadata: StandardLoggingMetadata,
 }
@@ -46,6 +47,7 @@ impl CallLifecycleContext {
             trace_id: None,
             attempt: 1,
             usage: Usage::default(),
+            provider_usage: super::terminal::UsageObservation::Unavailable,
             response_cost: 0.0,
             metadata: StandardLoggingMetadata::default(),
         }
@@ -71,6 +73,7 @@ impl CallLifecycleContext {
             provider: self.custom_llm_provider.clone(),
             timing,
             usage: self.usage,
+            provider_usage: self.provider_usage,
             cost_inputs: CostInputs {
                 response_cost: self.response_cost,
                 metadata: self.metadata.clone(),
@@ -148,6 +151,10 @@ pub trait DeploymentFailureHooks: Send + Sync {
 }
 
 pub trait TerminalDispatcher: Send + Sync {
+    fn deferred_recorder(&self) -> Option<Arc<dyn super::TerminalRecorder>> {
+        None
+    }
+
     fn record(&self, terminal: &TerminalRecord) {
         tracing::debug!(target: "litellm::lifecycle", call_id = %terminal.call_id,
             attempt = terminal.attempt, outcome = terminal.classification.kind(), "call completed");
@@ -244,7 +251,12 @@ impl CallLifecycle {
     {
         let start_time = services.now();
         let completion_services = services.clone();
-        let mut completion = super::completion::CompletionOwner::new(context.clone(), start_time, &*completion_services, &*completion_services);
+        let mut completion = super::completion::CompletionOwner::new(
+            context.clone(),
+            start_time,
+            &*completion_services,
+            &*completion_services,
+        );
         let prepared = self
             .prepare_request(
                 &context,
@@ -283,6 +295,7 @@ impl CallLifecycle {
         }
     }
 
+    #[allow(clippy::manual_async_fn)] // Explicit Send avoids higher-ranked lifetime inference in host futures.
     fn prepare_request<'a, Request, Prepared, Hooks, Prepare, PrepareFuture>(
         &'a mut self,
         context: &'a CallLifecycleContext,
@@ -303,33 +316,50 @@ impl CallLifecycle {
             let mut prepared = None;
             let mut prepare = Some(prepare);
             loop {
+                let contract = self
+                    .operation()
+                    .contract(super::CallbackRuntime::Native, true);
                 let result = match self.operation() {
                     Operation::Setup => Ok(()),
-                    Operation::DeploymentPre => hooks
-                        .async_pre_call_deployment_hook(
-                            context,
-                            request.take().expect("input request"),
+                    Operation::DeploymentPre => contract
+                        .apply(
+                            hooks
+                                .async_pre_call_deployment_hook(
+                                    context,
+                                    request.take().expect("input request"),
+                                )
+                                .await,
                         )
-                        .await
-                        .into_result()
                         .map(|value| request = Some(value)),
-                    Operation::InputHooks => hooks
-                        .async_pre_call_hook(context, request.take().expect("input request"))
-                        .await
-                        .into_result()
+                    Operation::InputHooks => contract
+                        .apply(
+                            hooks
+                                .async_pre_call_hook(
+                                    context,
+                                    request.take().expect("input request"),
+                                )
+                                .await,
+                        )
                         .map(|value| request = Some(value)),
                     Operation::BuildRequest => prepare.take().expect("prepare once")(
                         request.take().expect("input request"),
                     )
                     .await
                     .map(|value| prepared = Some(value)),
-                    Operation::PreCall => hooks
-                        .async_moderation_hook(context, prepared.take().expect("prepared request"))
-                        .await
-                        .into_result()
+                    Operation::PreCall => contract
+                        .apply(
+                            hooks
+                                .async_moderation_hook(
+                                    context,
+                                    prepared.take().expect("prepared request"),
+                                )
+                                .await,
+                        )
                         .map(|value| prepared = Some(value)),
                     Operation::Send => return Ok(prepared.take().expect("prepared request")),
-                    operation => panic!("unexpected preparation operation: {operation:?}"),
+                    operation => Err(Error::InvalidRequest(format!(
+                        "unexpected preparation operation: {operation:?}"
+                    ))),
                 };
                 self.advance(
                     if result.is_ok() {
@@ -411,9 +441,7 @@ impl CallLifecycle {
     {
         self.run_prepared_with_usage(
             input,
-            policy,
-            dispatcher,
-            clock,
+            (policy, dispatcher, clock),
             |request| std::future::ready(Ok(request)),
             provider_call,
             response_usage,
@@ -436,9 +464,7 @@ impl CallLifecycle {
         self,
         context: CallLifecycleContext,
         request: InitialRequest,
-        hooks: &Hooks,
-        dispatcher: &Dispatcher,
-        clock: &ClockImpl,
+        services: (&Hooks, &Dispatcher, &ClockImpl),
         prepare: Prepare,
         provider_call: ProviderCall,
     ) -> ExecutedCall<Response, Error>
@@ -458,15 +484,9 @@ impl CallLifecycle {
         ProviderCall: FnOnce(ProviderRequest) -> ProviderFuture + Send,
         ProviderFuture: Future<Output = Result<Response, Error>> + Send,
     {
-        self.run_prepared_with_usage(
-            (context, request),
-            hooks,
-            dispatcher,
-            clock,
-            prepare,
-            provider_call,
-            |_| None,
-        )
+        self.run_prepared_with_usage((context, request), services, prepare, provider_call, |_| {
+            None
+        })
         .await
     }
 
@@ -485,9 +505,7 @@ impl CallLifecycle {
     >(
         self,
         input: (CallLifecycleContext, InitialRequest),
-        hooks: &Hooks,
-        dispatcher: &Dispatcher,
-        clock: &ClockImpl,
+        services: (&Hooks, &Dispatcher, &ClockImpl),
         prepare: Prepare,
         provider_call: ProviderCall,
         response_usage: ResponseUsage,
@@ -509,10 +527,12 @@ impl CallLifecycle {
         ProviderFuture: Future<Output = Result<Response, Error>> + Send,
         ResponseUsage: FnOnce(&Response) -> Option<Usage> + Send,
     {
+        let (hooks, dispatcher, clock) = services;
         let (mut context, request) = input;
         let mut program = self;
         let start_time = clock.now();
-        let mut completion = super::completion::CompletionOwner::new(context.clone(), start_time, dispatcher, clock);
+        let mut completion =
+            super::completion::CompletionOwner::new(context.clone(), start_time, dispatcher, clock);
         let prepared = program
             .prepare_request(&context, request, hooks, dispatcher.observations(), prepare)
             .await;
@@ -532,23 +552,27 @@ impl CallLifecycle {
             }
             Err(error) => Err(error),
         };
-        if let Ok(response) = &result {
-            if let Some(usage) = response_usage(response) {
-                context.usage = usage;
-            }
+        if let Ok(response) = &result
+            && let Some(usage) = response_usage(response)
+        {
+            context.usage = usage;
+            context.provider_usage = super::terminal::UsageObservation::Final(usage);
         }
         completion.update(&context);
         let mut terminal = None;
         loop {
             let outcome = match program.operation() {
                 Operation::DeploymentSuccess => {
-                    result = hooks
-                        .async_post_call_success_deployment_hook(
-                            &context,
-                            result.expect("provider response"),
-                        )
-                        .await
-                        .into_result();
+                    result = Operation::DeploymentSuccess
+                        .contract(super::CallbackRuntime::Native, true)
+                        .apply(
+                            hooks
+                                .async_post_call_success_deployment_hook(
+                                    &context,
+                                    result.expect("provider response"),
+                                )
+                                .await,
+                        );
                     if result.is_ok() {
                         Outcome::Success
                     } else {
@@ -574,6 +598,18 @@ impl CallLifecycle {
                             ),
                             Err(error) => failure_record(&context, error, start_time, clock.now()),
                         });
+                    }
+                    if result.is_ok()
+                        && let Some(recorder) = dispatcher.deferred_recorder()
+                    {
+                        completion.transfer();
+                        return ExecutedCall::Deferred {
+                            response: result.expect("successful deferred response"),
+                            completion: super::PendingCompletion::new(
+                                terminal.expect("terminal record"),
+                                recorder,
+                            ),
+                        };
                     }
                     completion.finish(terminal.as_ref().expect("terminal record"));
                     if let Operation::Complete(_) = operation {
@@ -621,6 +657,27 @@ impl CallLifecycle {
                 self.dispatch_terminal(services, terminal).await;
             }
             self.advance(Outcome::Success, services.observations());
+        }
+    }
+}
+
+pub(crate) fn provider_result<R: Serialize>(
+    context: CallLifecycleContext,
+    start_time: f64,
+    result: Result<R, Error>,
+) -> ExecutedCall<R, Error> {
+    match result {
+        Ok(response) => {
+            let terminal = context.terminal(
+                CallbackTiming::new(start_time, SystemClock.now()),
+                TerminalClassification::Success,
+                serde_json::to_value(&response).unwrap_or(Value::Null),
+            );
+            ExecutedCall::Success { response, terminal }
+        }
+        Err(error) => {
+            let terminal = failure_record(&context, &error, start_time, SystemClock.now());
+            ExecutedCall::Failure { error, terminal }
         }
     }
 }
@@ -688,9 +745,12 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingPolicy {
+        deferred: Option<Arc<RecordedTerminals>>,
         records: Mutex<Vec<TerminalRecord>>,
         terminals: Mutex<Vec<TerminalRecord>>,
         reject: bool,
+        reject_response: bool,
+        suspend_response: bool,
     }
 
     impl PreCallHooks<String> for RecordingPolicy {
@@ -724,10 +784,44 @@ mod tests {
     }
 
     impl DeploymentPreHooks<String> for RecordingPolicy {}
-    impl DeploymentSuccessHooks<String> for RecordingPolicy {}
+    impl DeploymentSuccessHooks<String> for RecordingPolicy {
+        fn async_post_call_success_deployment_hook<'a>(
+            &'a self,
+            _: &'a CallLifecycleContext,
+            response: String,
+        ) -> CallbackFuture<'a, ActionResult<String, Error>>
+        where
+            String: 'a,
+        {
+            Box::pin(async move {
+                if self.suspend_response {
+                    std::future::pending::<()>().await;
+                }
+                if self.reject_response {
+                    ActionResult::Reject(Error::InvalidRequest("post-response rejection".into()))
+                } else {
+                    ActionResult::Continue(response)
+                }
+            })
+        }
+    }
     impl DeploymentFailureHooks for RecordingPolicy {}
 
+    #[derive(Default)]
+    struct RecordedTerminals(Mutex<Vec<TerminalRecord>>);
+
+    impl super::super::TerminalRecorder for RecordedTerminals {
+        fn record(&self, terminal: &TerminalRecord) {
+            self.0.lock().unwrap().push(terminal.clone());
+        }
+    }
+
     impl TerminalDispatcher for RecordingPolicy {
+        fn deferred_recorder(&self) -> Option<Arc<dyn super::super::TerminalRecorder>> {
+            self.deferred
+                .clone()
+                .map(|recorder| recorder as Arc<dyn super::super::TerminalRecorder>)
+        }
         fn record(&self, terminal: &TerminalRecord) {
             self.records.lock().unwrap().push(terminal.clone());
         }
@@ -798,7 +892,10 @@ mod tests {
         let policy = RecordingPolicy::default();
         let mut call = Box::pin(CallLifecycle::asynchronous().run(
             CallLifecycleContext::new("messages", "model", "provider", "cancelled-call"),
-            "request".to_string(), &policy, &policy, &SystemClock,
+            "request".to_string(),
+            &policy,
+            &policy,
+            &SystemClock,
             |_| std::future::pending::<Result<String, Error>>(),
         ));
         assert!(futures_util::poll!(&mut call).is_pending());
@@ -806,20 +903,154 @@ mod tests {
         assert!(policy.terminals.lock().unwrap().is_empty());
         let records = policy.records.lock().unwrap();
         assert_eq!(records.len(), 1);
-        assert!(matches!(records[0].classification, TerminalClassification::Cancelled { .. }));
+        assert!(matches!(
+            records[0].classification,
+            TerminalClassification::Cancelled { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn deferred_completion_records_only_acceptance_rejection_or_abandonment() {
+        for decision in ["accept", "reject", "drop", "into_result"] {
+            let recorder = Arc::new(RecordedTerminals::default());
+            let policy = RecordingPolicy {
+                deferred: Some(recorder.clone()),
+                ..RecordingPolicy::default()
+            };
+            let call = CallLifecycle::asynchronous()
+                .run(
+                    CallLifecycleContext::new("ocr", "model", "provider", decision),
+                    "request".to_string(),
+                    &policy,
+                    &policy,
+                    &SystemClock,
+                    |request| std::future::ready(Ok(request)),
+                )
+                .await;
+            let ExecutedCall::Deferred {
+                response,
+                completion,
+            } = call
+            else {
+                panic!("expected deferred completion")
+            };
+            assert_eq!(response, "request:pre:during");
+            assert!(recorder.0.lock().unwrap().is_empty());
+            assert!(policy.terminals.lock().unwrap().is_empty());
+            assert!(policy.records.lock().unwrap().is_empty());
+            match decision {
+                "accept" => {
+                    completion.accept();
+                }
+                "reject" => {
+                    completion.reject("GuardrailBlocked".into(), "blocked".into());
+                }
+                "into_result" => {
+                    assert_eq!(
+                        ExecutedCall::<_, Error>::Deferred {
+                            response,
+                            completion
+                        }
+                        .into_result()
+                        .unwrap(),
+                        "request:pre:during"
+                    );
+                }
+                _ => drop(completion),
+            }
+            let records = recorder.0.lock().unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(
+                records[0].classification.kind(),
+                match decision {
+                    "accept" | "into_result" => "Success",
+                    "reject" => "GuardrailBlocked",
+                    _ => "Cancelled",
+                }
+            );
+        }
     }
 
     #[tokio::test]
     async fn response_replacement_cannot_rewrite_provider_usage() {
         let hooks = DeploymentRecordingHooks::default();
-        let call = CallLifecycle::asynchronous().run_with_usage(
-            (CallLifecycleContext::new("messages", "model", "provider", "usage-call"), "request".to_string()),
-            &hooks, &hooks, &SystemClock,
-            |_| std::future::ready(Ok("original".to_string())),
-            |response| Some(Usage { prompt_tokens: 0, completion_tokens: response.len() as u64, total_tokens: response.len() as u64 }),
-        ).await;
+        let call = CallLifecycle::asynchronous()
+            .run_with_usage(
+                (
+                    CallLifecycleContext::new("messages", "model", "provider", "usage-call"),
+                    "request".to_string(),
+                ),
+                &hooks,
+                &hooks,
+                &SystemClock,
+                |_| std::future::ready(Ok("original".to_string())),
+                |response| {
+                    Some(Usage {
+                        prompt_tokens: 0,
+                        completion_tokens: response.len() as u64,
+                        total_tokens: response.len() as u64,
+                    })
+                },
+            )
+            .await;
         assert_eq!(call.terminal().usage.total_tokens, 8);
         assert_eq!(call.into_result().unwrap(), "original:post");
+    }
+
+    #[tokio::test]
+    async fn rejection_and_cancellation_after_response_preserve_trusted_usage() {
+        for cancelled in [false, true] {
+            let policy = RecordingPolicy {
+                reject_response: !cancelled,
+                suspend_response: cancelled,
+                ..Default::default()
+            };
+            let mut pending = Box::pin(CallLifecycle::asynchronous().run_with_usage(
+                (
+                    CallLifecycleContext::new("messages", "model", "provider", "usage"),
+                    "input".to_string(),
+                ),
+                &policy,
+                &policy,
+                &SystemClock,
+                |_| std::future::ready(Ok("provider-response".to_string())),
+                |_| {
+                    Some(Usage {
+                        prompt_tokens: 5,
+                        completion_tokens: 7,
+                        total_tokens: 12,
+                    })
+                },
+            ));
+            if cancelled {
+                assert!(futures_util::poll!(&mut pending).is_pending());
+                assert!(policy.records.lock().unwrap().is_empty());
+                drop(pending);
+            } else {
+                assert!(
+                    matches!(pending.await, ExecutedCall::Failure { error: Error::InvalidRequest(message), .. } if message == "post-response rejection")
+                );
+            }
+            let records = policy.records.lock().unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].usage.total_tokens, 12);
+            assert_eq!(
+                records[0].provider_usage,
+                super::super::terminal::UsageObservation::Final(records[0].usage)
+            );
+            assert_eq!(
+                records[0].classification.kind(),
+                if cancelled {
+                    "Cancelled"
+                } else {
+                    "InvalidRequest"
+                }
+            );
+            assert_eq!(
+                policy.terminals.lock().unwrap().len(),
+                usize::from(!cancelled)
+            );
+        }
     }
 
     #[derive(Default)]
@@ -874,9 +1105,7 @@ mod tests {
             .run_prepared(
                 CallLifecycleContext::new("audio_transcription", "model", "provider", "call-3"),
                 "request".to_string(),
-                &hooks,
-                &hooks,
-                &SystemClock,
+                (&hooks, &hooks, &SystemClock),
                 |request| {
                     hooks.events.lock().unwrap().push("prepare");
                     std::future::ready(Ok(request.len()))
@@ -1034,6 +1263,7 @@ mod tests {
         );
     }
     struct TraceHooks {
+        records: Mutex<Vec<TerminalRecord>>,
         events: Mutex<Vec<Operation>>,
         terminals: Mutex<Vec<TerminalRecord>>,
         reject: Option<Operation>,
@@ -1120,6 +1350,9 @@ mod tests {
     }
 
     impl TerminalDispatcher for TraceHooks {
+        fn record(&self, terminal: &TerminalRecord) {
+            self.records.lock().unwrap().push(terminal.clone());
+        }
         fn observations(&self) -> Observations {
             self.observations
         }
@@ -1155,6 +1388,7 @@ mod tests {
                                 has_fallbacks,
                             };
                             let hooks = TraceHooks {
+                                records: Mutex::new(Vec::new()),
                                 events: Mutex::new(Vec::new()),
                                 terminals: Mutex::new(Vec::new()),
                                 reject,
@@ -1170,9 +1404,7 @@ mod tests {
                                         "messages", "model", "provider", "trace",
                                     ),
                                     "input".to_string(),
-                                    &hooks,
-                                    &hooks,
-                                    &SystemClock,
+                                    (&hooks, &hooks, &SystemClock),
                                     |request| {
                                         assert!(request.ends_with(":InputHooks"));
                                         std::future::ready(
@@ -1231,32 +1463,7 @@ mod tests {
                                 usize::from(should_dispatch)
                             );
                             assert_eq!(executed.terminal().call_id, "trace");
-                            let mut oracle = CallLifecycle::planned(options);
-                            let mut contract = Vec::new();
-                            while !matches!(oracle.operation(), Complete(_)) {
-                                let op = oracle.operation();
-                                if matches!(
-                                    op,
-                                    DeploymentPre
-                                        | InputHooks
-                                        | BuildRequest
-                                        | PreCall
-                                        | Send
-                                        | DeploymentSuccess
-                                        | DeploymentFailure
-                                ) {
-                                    contract.push(op);
-                                }
-                                oracle.advance(
-                                    if reject == Some(op) || op == DeploymentFailure {
-                                        Outcome::Failure
-                                    } else {
-                                        Outcome::Success
-                                    },
-                                    observations,
-                                );
-                            }
-                            assert_eq!(contract, expected);
+                            assert_eq!(hooks.records.lock().unwrap().len(), 1);
                         }
                     }
                 }
@@ -1293,6 +1500,7 @@ mod tests {
             for internal_call in [false, true] {
                 for stream_error in [false, true] {
                     let services = Arc::new(TraceHooks {
+                        records: Mutex::new(Vec::new()),
                         events: Mutex::new(Vec::new()),
                         terminals: Mutex::new(Vec::new()),
                         reject: None,
@@ -1338,6 +1546,7 @@ mod tests {
                     .await
                     .unwrap();
                     assert!(services.terminals.lock().unwrap().is_empty());
+                    assert!(services.records.lock().unwrap().is_empty());
                     let completion = call.completion.register();
                     while call.stream.next().await.is_some() {}
                     let terminal = completion.await.unwrap();

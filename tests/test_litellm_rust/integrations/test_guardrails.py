@@ -324,7 +324,8 @@ async def test_stream_masking_failure_uses_guardrail_error_and_logs_once(backend
 
 
 @pytest.mark.asyncio
-async def test_guarded_native_stream_cancel_releases_roots_and_logs_once() -> None:
+@pytest.mark.parametrize("backend", ("python", "rust"))
+async def test_guarded_stream_cancel_drains_and_releases_roots(backend: Backend) -> None:
     class NamesOnlyLogger(RecordingLogger):
         def _record(self, name: str, kwargs: object = None, response: object = None) -> None:
             super()._record(name)
@@ -332,7 +333,7 @@ async def test_guarded_native_stream_cancel_releases_roots_and_logs_once() -> No
     class Root:
         pass
 
-    async with isolated_backend("rust"):
+    async with isolated_backend(backend):
         with recording_service() as provider:
             release: Final = threading.Event()
             wire: Final = tuple(
@@ -359,24 +360,32 @@ async def test_guarded_native_stream_cancel_releases_roots_and_logs_once() -> No
                 guardrails=[guardrail.guardrail_name],
                 metadata={"retained": root},
             )
-            guarded = arm_guarded_stream(source, request_data, logger)
+            first_chunk: Final = asyncio.Event()
+
+            async def observed_source() -> AsyncIterator[bytes]:
+                async for chunk in source:
+                    first_chunk.set()
+                    yield chunk
+
+            guarded = arm_guarded_stream(observed_source(), request_data, logger)
             del root
             task: Final = asyncio.create_task(anext(guarded))
             await provider.wait_for_requests(1)
-            await asyncio.sleep(0.05)
+            await asyncio.wait_for(first_chunk.wait(), 5)
             task.cancel()
 
             try:
                 with pytest.raises(asyncio.CancelledError):
                     await task
                 await guarded.aclose()
-                events: Final = await recorder.wait_for_async("async_log_failure_event")
+                release.set()
+                events: Final = await recorder.wait_for_async("async_log_success_event")
                 del guarded
                 del source
                 gc.collect()
 
                 assert len(events) == 1
-                assert "async_log_success_event" not in recorder.names
+                assert "async_log_failure_event" not in recorder.names
                 del events
                 del task
                 del request_data

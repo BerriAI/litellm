@@ -5,12 +5,11 @@ use std::sync::Arc;
 use crate::Error;
 use crate::integrations::custom_logger::{LogError, LogFuture};
 use crate::integrations::types::Usage;
-use crate::lifecycle::program::{ProgramOptions, actions_for};
+use crate::lifecycle::program::ProgramOptions;
 use crate::lifecycle::{
-    ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock,
-    DeploymentFailureHooks, DeploymentPreHooks, DeploymentSuccessHooks, ExecutedCall, Lifecycle,
-    LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, StreamingCall, TerminalDispatcher,
-    TerminalRecord,
+    ActionResult, CallLifecycle, CallLifecycleContext, Clock, DeploymentFailureHooks,
+    DeploymentPreHooks, DeploymentSuccessHooks, ExecutedCall, Lifecycle, LifecycleRoute,
+    ModerationHooks, PreCallHooks, StreamingCall, TerminalDispatcher, TerminalRecord,
 };
 
 use super::handler::execute_provider_messages_request;
@@ -35,20 +34,20 @@ pub struct MessagesState {
 #[derive(Debug)]
 pub struct MessagesRoute;
 
+impl crate::lifecycle::machine::sealed::Sealed for MessagesRoute {}
+
 impl LifecycleRoute for MessagesRoute {
     type Admission = ();
     type Options = Options;
-    type Context = Observations;
-    type Operation = Operation;
-    type Observation = Observations;
-    type Outcome = Outcome;
-    type Transition = Transition;
-    type Error = Error;
     type Decline = std::convert::Infallible;
     type State = MessagesState;
 
-    fn program(state: &Self::State) -> &CallLifecycle { &state.program }
-    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle { &mut state.program }
+    fn program(state: &Self::State) -> &CallLifecycle {
+        &state.program
+    }
+    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle {
+        &mut state.program
+    }
 
     fn admit(_: &(), options: Options) -> Result<Result<Self::State, Self::Decline>, Error> {
         Ok(Ok(MessagesState {
@@ -57,25 +56,6 @@ impl LifecycleRoute for MessagesRoute {
                 internal_call: options.internal_call,
             }),
         }))
-    }
-
-    fn operation(state: &Self::State) -> Operation {
-        state.program.operation()
-    }
-
-    fn advance(
-        state: &mut Self::State,
-        outcome: Outcome,
-        observations: Observations,
-    ) -> Result<Transition, Error> {
-        state
-            .program
-            .advance(outcome, observations)
-            .ok_or_else(|| Error::InvalidRequest("messages lifecycle is already complete".into()))
-    }
-
-    fn actions_for(operation: Operation, _: &Observations) -> &'static [ActionBinding] {
-        actions_for(operation)
     }
 }
 
@@ -92,6 +72,7 @@ impl Lifecycle<MessagesRoute> {
 #[cfg(test)]
 mod program_tests {
     use super::*;
+    use crate::lifecycle::Outcome;
 
     #[test]
     fn sync_and_async_sequences_build_then_run_pre_call() {
@@ -278,9 +259,7 @@ where
     program
         .run_prepared_with_usage(
             (context, request),
-            services,
-            services,
-            services,
+            (services, services, services),
             prepare,
             provider_call,
             anthropic_response_usage,

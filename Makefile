@@ -324,7 +324,7 @@ test-rust-ocr:
 	LITELLM_LOCAL_MODEL_COST_MAP=True "$$temporary/venv/bin/python" -I -c 'from litellm.rust_bridge import _native; assert callable(_native.ocr) and callable(_native.aocr)' && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib \
-	tests/test_litellm_rust/test_ocr.py tests/test_litellm_rust/test_ocr_callbacks.py -v
+	tests/test_litellm_rust/ocr -v
 
 test-rust-python: install-rust-python-test-deps
 	@python=$$($(UV_RUN) python -c 'import sys; print(sys.executable)') && \
