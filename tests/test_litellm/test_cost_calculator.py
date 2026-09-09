@@ -17,6 +17,8 @@ from litellm.cost_calculator import (
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import (
     CacheCreationTokenDetails,
@@ -4651,9 +4653,7 @@ UNMAPPED_OCR_MODEL: Final = "azure_ai/some-unmapped-ocr-model-for-testing"
 MAPPED_OCR_MODEL: Final = "mistral/mistral-ocr-4-0"
 
 
-def _ocr_response(model: str, pages_processed: int, credits: float | None = None):
-    from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
-
+def _ocr_response(model: str, pages_processed: int, credits: float | None = None) -> OCRResponse:
     return OCRResponse(
         pages=[OCRPage(index=index, markdown=f"page {index}") for index in range(pages_processed)],
         model=model,
@@ -4661,9 +4661,7 @@ def _ocr_response(model: str, pages_processed: int, credits: float | None = None
     )
 
 
-def _ocr_logging_obj(litellm_params: dict):
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
+def _ocr_logging_obj(litellm_params: dict[str, dict[str, ModelInfo]]) -> Logging:
     logging_obj = Logging(
         model=UNMAPPED_OCR_MODEL,
         messages=[],
