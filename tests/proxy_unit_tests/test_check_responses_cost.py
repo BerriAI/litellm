@@ -3,13 +3,48 @@ Unit tests for CheckResponsesCost class
 """
 
 import asyncio
-from datetime import datetime
+import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+
+def _update_many_calls_writing(mock_prisma_client, matches_data):
+    return [
+        call
+        for call in mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        if matches_data(call.kwargs["data"])
+    ]
+
+
+def _completion_calls(mock_prisma_client):
+    return _update_many_calls_writing(
+        mock_prisma_client, lambda data: data.get("status") == "completed"
+    )
+
+
+def _completed_job_ids(mock_prisma_client):
+    return [call.kwargs["where"]["id"] for call in _completion_calls(mock_prisma_client)]
+
+
+def _persisted_response(completion_call):
+    return json.loads(completion_call.kwargs["data"]["file_object"])
+
+
+def _claim_calls(mock_prisma_client):
+    return _update_many_calls_writing(
+        mock_prisma_client, lambda data: data == {"batch_processed": True}
+    )
+
+
+def _release_calls(mock_prisma_client):
+    return _update_many_calls_writing(
+        mock_prisma_client, lambda data: data == {"batch_processed": False}
+    )
 
 
 class TestCheckResponsesCost:
@@ -135,7 +170,7 @@ class TestCheckResponsesCost:
         )
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         # Run the check with mocked litellm.aget_responses
@@ -144,14 +179,8 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # update_many should only contain the job completion call
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 1
-        completion_call = calls[0]
-        assert completion_call[1]["data"]["status"] == "completed"
-        assert completion_call[1]["where"]["id"]["in"] == ["job-123"]
+        assert _completed_job_ids(mock_prisma_client) == ["job-123"]
+        assert _release_calls(mock_prisma_client) == []
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_failed_response(
@@ -180,7 +209,7 @@ class TestCheckResponsesCost:
         )
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         # Run the check
@@ -189,12 +218,8 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # update_many should only contain the job completion call
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 1
-        assert calls[0][1]["data"]["status"] == "completed"
+        assert _completed_job_ids(mock_prisma_client) == ["job-456"]
+        assert _release_calls(mock_prisma_client) == []
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_cancelled_response(
@@ -223,7 +248,7 @@ class TestCheckResponsesCost:
         )
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         # Run the check
@@ -232,12 +257,8 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # update_many should only contain the job completion call
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 1
-        assert calls[0][1]["data"]["status"] == "completed"
+        assert _completed_job_ids(mock_prisma_client) == ["job-789"]
+        assert _release_calls(mock_prisma_client) == []
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_in_progress_response(
@@ -266,7 +287,7 @@ class TestCheckResponsesCost:
         )
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         # Run the check
@@ -276,10 +297,7 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # No job completion update_many — response is still in progress
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 0
+        assert _completion_calls(mock_prisma_client) == []
         # Stale cleanup still ran via _expire_stale_rows
         check_responses_cost_instance._expire_stale_rows.assert_called_once()
 
@@ -310,7 +328,7 @@ class TestCheckResponsesCost:
         )
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         # Run the check
@@ -320,10 +338,7 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # No job completion update_many — response is still queued
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 0
+        assert _completion_calls(mock_prisma_client) == []
         # Stale cleanup still ran via _expire_stale_rows
         check_responses_cost_instance._expire_stale_rows.assert_called_once()
 
@@ -344,7 +359,7 @@ class TestCheckResponsesCost:
         )
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         # Run the check with mocked exception
@@ -357,10 +372,7 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         # No job completion update_many — exception skipped the job
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 0
+        assert _completion_calls(mock_prisma_client) == []
         # Stale cleanup still ran via _expire_stale_rows
         check_responses_cost_instance._expire_stale_rows.assert_called_once()
 
@@ -429,7 +441,7 @@ class TestCheckResponsesCost:
         )
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         # Run the check
@@ -438,16 +450,7 @@ class TestCheckResponsesCost:
 
             await check_responses_cost_instance.check_responses_cost()
 
-        # update_many should only contain the job completion call
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 1
-        completion_call = calls[0]
-        assert len(completion_call[1]["where"]["id"]["in"]) == 2
-        assert "job-1" in completion_call[1]["where"]["id"]["in"]
-        assert "job-3" in completion_call[1]["where"]["id"]["in"]
-        assert "job-2" not in completion_call[1]["where"]["id"]["in"]
+        assert _completed_job_ids(mock_prisma_client) == ["job-1", "job-3"]
 
     @pytest.mark.asyncio
     async def test_encoded_response_id_is_fetched_through_router(
@@ -480,7 +483,7 @@ class TestCheckResponsesCost:
             return_value=[mock_job]
         )
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         mock_llm_router.aget_responses = AsyncMock(
@@ -511,12 +514,7 @@ class TestCheckResponsesCost:
             == encoded_response_id
         )
 
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 1
-        assert calls[0][1]["data"]["status"] == "completed"
-        assert calls[0][1]["where"]["id"]["in"] == ["job-router"]
+        assert _completed_job_ids(mock_prisma_client) == ["job-router"]
 
     @pytest.mark.asyncio
     async def test_encrypted_response_id_is_fetched_through_router(
@@ -556,7 +554,7 @@ class TestCheckResponsesCost:
             return_value=[mock_job]
         )
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         mock_llm_router.aget_responses = AsyncMock(
@@ -584,11 +582,7 @@ class TestCheckResponsesCost:
             mock_llm_router.aget_responses.call_args[1]["response_id"]
             == encoded_response_id
         )
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 1
-        assert calls[0][1]["where"]["id"]["in"] == ["job-encrypted"]
+        assert _completed_job_ids(mock_prisma_client) == ["job-encrypted"]
 
     @pytest.mark.asyncio
     async def test_response_id_without_model_id_uses_sdk(
@@ -605,7 +599,7 @@ class TestCheckResponsesCost:
             return_value=[mock_job]
         )
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
         mock_llm_router.aget_responses = AsyncMock(
             side_effect=AssertionError("router cannot route an id without a model_id")
@@ -654,7 +648,7 @@ class TestCheckResponsesCost:
             return_value=[mock_job]
         )
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
         mock_llm_router.get_deployment = MagicMock(return_value=None)
         mock_llm_router.aget_responses = AsyncMock(
@@ -679,12 +673,7 @@ class TestCheckResponsesCost:
         mock_sdk_aget.assert_called_once()
         assert mock_sdk_aget.call_args[1]["response_id"] == encoded_response_id
 
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 1
-        assert calls[0][1]["data"]["status"] == "completed"
-        assert calls[0][1]["where"]["id"]["in"] == ["job-missing-deployment"]
+        assert _completed_job_ids(mock_prisma_client) == ["job-missing-deployment"]
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_incomplete_response(
@@ -701,7 +690,7 @@ class TestCheckResponsesCost:
             return_value=[mock_job]
         )
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         mock_response = ResponsesAPIResponse(
@@ -717,12 +706,7 @@ class TestCheckResponsesCost:
             mock_aget.return_value = mock_response
             await check_responses_cost_instance.check_responses_cost()
 
-        calls = (
-            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
-        )
-        assert len(calls) == 1
-        assert calls[0][1]["data"]["status"] == "completed"
-        assert calls[0][1]["where"]["id"]["in"] == ["job-incomplete"]
+        assert _completed_job_ids(mock_prisma_client) == ["job-incomplete"]
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_no_model_in_file_object(
@@ -741,7 +725,7 @@ class TestCheckResponsesCost:
             return_value=[mock_job]
         )
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         mock_response = MagicMock()
@@ -783,7 +767,7 @@ class TestCheckResponsesCost:
             return_value=[mock_job]
         )
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
-            return_value=0
+            return_value=1
         )
 
         mock_response = MagicMock()
@@ -800,3 +784,430 @@ class TestCheckResponsesCost:
         assert metadata["user_api_key_hash"] == "sk-billed"
         assert is_unbilled_non_inference_call("aget_responses", metadata) is False
         assert is_unbilled_non_inference_call("aget_responses", None) is True
+
+    @pytest.mark.asyncio
+    async def test_job_claimed_by_another_pod_is_never_read_or_completed(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """Every pod and uvicorn worker polls the same table, and the read is what writes the
+        spend log, so losing the claim has to skip the read entirely or the job is billed twice."""
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_claimed_elsewhere"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-claimed-elsewhere"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_claimed_elsewhere"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_not_awaited()
+        mock_llm_router.aget_responses.assert_not_awaited()
+        assert _completion_calls(mock_prisma_client) == []
+        assert _release_calls(mock_prisma_client) == []
+
+        claim_calls = _claim_calls(mock_prisma_client)
+        assert len(claim_calls) == 1
+        claim_where = claim_calls[0].kwargs["where"]
+        assert claim_where["id"] == "job-claimed-elsewhere"
+        assert {"batch_processed": False} in claim_where["OR"]
+
+    @pytest.mark.asyncio
+    async def test_claim_is_taken_back_from_a_pod_that_died_holding_it(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """A pod that dies between claiming and billing releases nothing, and the row's status
+        never reaches terminal, so without a lease every later cycle re-selects it and loses.
+        The window has to be longer than a live cycle can hold a claim and short enough that the
+        row is retried well before stale expiry gives up on it unbilled."""
+        from litellm.constants import PROXY_BATCH_POLLING_INTERVAL
+        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
+            CLAIM_ABANDONED_AFTER_POLL_CYCLES,
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_abandoned"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-abandoned"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_abandoned"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=1
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_abandoned",
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        claim_where = _claim_calls(mock_prisma_client)[0].kwargs["where"]
+        abandoned_arm = next(arm for arm in claim_where["OR"] if "updated_at" in arm)
+        lease = timedelta(
+            seconds=CLAIM_ABANDONED_AFTER_POLL_CYCLES * PROXY_BATCH_POLLING_INTERVAL
+        )
+        untouched_for = datetime.now(timezone.utc) - abandoned_arm["updated_at"]["lt"]
+        assert lease <= untouched_for < lease + timedelta(seconds=30)
+        assert lease > timedelta(seconds=PROXY_BATCH_POLLING_INTERVAL)
+
+    @pytest.mark.asyncio
+    async def test_claim_is_taken_before_the_billing_read_and_kept_on_a_terminal_status(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """The read prices the job, so the claim has to be taken before it, and keeping the claim
+        afterwards is what stops a second pod reading and billing the same row again."""
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_ordering"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-ordering"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_ordering"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        writes_and_reads = []
+
+        async def record_update_many(**kwargs):
+            writes_and_reads.append(kwargs["data"])
+            return 1
+
+        async def record_read(**kwargs):
+            writes_and_reads.append("provider_read")
+            return ResponsesAPIResponse(
+                id="resp_ordering",
+                object="response",
+                status="completed",
+                created_at=int(datetime.now().timestamp()),
+                output=[],
+                usage=ResponseAPIUsage(
+                    input_tokens=100, output_tokens=50, total_tokens=150
+                ),
+            )
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            side_effect=record_update_many
+        )
+
+        with patch(
+            "litellm.aget_responses", new_callable=AsyncMock, side_effect=record_read
+        ):
+            await check_responses_cost_instance.check_responses_cost()
+
+        assert len(writes_and_reads) == 3
+        assert writes_and_reads[0] == {"batch_processed": True}
+        assert writes_and_reads[1] == "provider_read"
+        assert writes_and_reads[2]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("provider_status", ["queued", "in_progress"])
+    async def test_non_terminal_status_releases_the_claim(
+        self, check_responses_cost_instance, mock_prisma_client, provider_status
+    ):
+        """A response the provider has not finished yet has no spend to record, so its row must go
+        back to batch_processed=False; holding the claim retires it before it is ever billed."""
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_still_running"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-still-running"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_still_running"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=1
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_still_running",
+            object="response",
+            status=provider_status,
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=None,
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        assert _completion_calls(mock_prisma_client) == []
+        release_calls = _release_calls(mock_prisma_client)
+        assert len(release_calls) == 1
+        assert release_calls[0].kwargs["where"] == {
+            "id": "job-still-running",
+            "batch_processed": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_failed_provider_read_releases_the_claim(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """A read that raised billed nothing, so the claim has to be handed back or the row is
+        retired unbilled and no later poll cycle ever retries it."""
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_read_error"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-read-error"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_read_error"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=1
+        )
+
+        with patch(
+            "litellm.aget_responses",
+            new_callable=AsyncMock,
+            side_effect=Exception("Provider error"),
+        ):
+            await check_responses_cost_instance.check_responses_cost()
+
+        assert _completion_calls(mock_prisma_client) == []
+        release_calls = _release_calls(mock_prisma_client)
+        assert len(release_calls) == 1
+        assert release_calls[0].kwargs["where"] == {
+            "id": "job-read-error",
+            "batch_processed": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_job_claimed_elsewhere_does_not_block_the_next_job(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """Losing one row to another pod must skip only that row: the rest of the poll page still
+        has to be read and billed in the same cycle."""
+        mock_job1 = MagicMock()
+        mock_job1.unified_object_id = "resp_test_first"
+        mock_job1.created_by = "user1"
+        mock_job1.id = "job-first"
+        mock_job1.file_object = {"model": "gpt-5", "id": "resp_test_first"}
+
+        mock_job2 = MagicMock()
+        mock_job2.unified_object_id = "resp_test_second"
+        mock_job2.created_by = "user2"
+        mock_job2.id = "job-second"
+        mock_job2.file_object = {"model": "gpt-5", "id": "resp_test_second"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job1, mock_job2]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            side_effect=[0, 1, 1]
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_second",
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_aget.assert_awaited_once()
+        assert mock_aget.await_args.kwargs["response_id"] == "resp_test_second"
+
+        assert _completed_job_ids(mock_prisma_client) == ["job-second"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "db_error_message",
+        [
+            "column LiteLLM_ManagedObjectTable.batch_processed does not exist",
+            "Unknown column in where clause",
+            "The column P2022 does not exist in the current database",
+        ],
+    )
+    async def test_claim_fails_open_on_a_schema_without_the_claim_column(
+        self, check_responses_cost_instance, mock_prisma_client, db_error_message
+    ):
+        """A deployment that never ran the batch_processed migration cannot claim anything, so it
+        keeps the pre-claim behavior of billing rather than silently billing nothing."""
+        mock_job = MagicMock()
+        mock_job.id = "job-old-schema"
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            side_effect=Exception(db_error_message)
+        )
+
+        assert (
+            await check_responses_cost_instance._claim_job_for_costing(mock_job) is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_claim_is_lost_when_the_database_fails_for_any_other_reason(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """A dropped connection is no proof the row is free, so the read that would bill it is
+        not allowed to run."""
+        mock_job = MagicMock()
+        mock_job.id = "job-db-down"
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            side_effect=Exception("connection to server was lost")
+        )
+
+        assert (
+            await check_responses_cost_instance._claim_job_for_costing(mock_job) is False
+        )
+
+    @pytest.mark.asyncio
+    async def test_old_schema_without_the_claim_column_still_bills_and_completes(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """End to end on a pre-migration schema: the claim write fails, the response is still read
+        (which is what bills it) and the row is still marked completed."""
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_old_schema"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-old-schema"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_old_schema"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        async def reject_batch_processed_writes(**kwargs):
+            if "batch_processed" in kwargs["data"]:
+                raise Exception(
+                    'column "batch_processed" of relation '
+                    '"LiteLLM_ManagedObjectTable" does not exist'
+                )
+            return 1
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            side_effect=reject_batch_processed_writes
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_old_schema",
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_aget.assert_awaited_once()
+        assert _completed_job_ids(mock_prisma_client) == ["job-old-schema"]
+
+    @pytest.mark.asyncio
+    async def test_terminal_response_replaces_the_queued_file_object_on_the_row(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """The row has to become the durable copy of the finished generation. Leaving the queued
+        placeholder there forces the retrieve endpoint back to the provider, and every re-read
+        replays the same usage under a fresh id, which is what billed the job again per read."""
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_persisted"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-persisted"
+        mock_job.file_object = {
+            "model": "gpt-5",
+            "id": "resp_test_persisted",
+            "status": "queued",
+            "usage": None,
+        }
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=1
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_finished_upstream",
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=ResponseAPIUsage(
+                input_tokens=100, output_tokens=50, total_tokens=150
+            ),
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        completion_calls = _completion_calls(mock_prisma_client)
+        assert len(completion_calls) == 1
+        assert completion_calls[0].kwargs["where"] == {"id": "job-persisted"}
+
+        persisted = _persisted_response(completion_calls[0])
+        assert persisted["id"] == "resp_finished_upstream"
+        assert persisted["status"] == "completed"
+        assert persisted["usage"]["total_tokens"] == 150
+
+    @pytest.mark.asyncio
+    async def test_a_failed_persist_does_not_abort_the_rest_of_the_poll_cycle(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """One row's write failing must not take the whole cycle down with it: the jobs behind it
+        are already read and billed, so losing their write loses their usage for good."""
+        mock_job1 = MagicMock()
+        mock_job1.unified_object_id = "resp_test_persist_fails"
+        mock_job1.created_by = "user1"
+        mock_job1.id = "job-persist-fails"
+        mock_job1.file_object = {"model": "gpt-5", "id": "resp_test_persist_fails"}
+
+        mock_job2 = MagicMock()
+        mock_job2.unified_object_id = "resp_test_persist_works"
+        mock_job2.created_by = "user2"
+        mock_job2.id = "job-persist-works"
+        mock_job2.file_object = {"model": "gpt-5", "id": "resp_test_persist_works"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job1, mock_job2]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            side_effect=[1, 1, Exception("deadlock detected"), 1]
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_persisted",
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        assert mock_aget.await_count == 2
+        assert _completed_job_ids(mock_prisma_client) == [
+            "job-persist-fails",
+            "job-persist-works",
+        ]
