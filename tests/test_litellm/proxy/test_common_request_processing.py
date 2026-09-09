@@ -2202,6 +2202,19 @@ class TestGuardrailBlockErrorPayloadNeverStringifiesNone:
         assert frame["error"]["param"] is None
         assert frame["error"]["code"] == "400"
 
+    def test_a_streaming_frame_keeps_the_status_a_proxy_exception_was_raised_with(self):
+        """ProxyException stores its status as the string ``code``, so a 429 raised before the
+        first chunk used to reach the SSE frame as a 500."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        error_status, error_obj = sse_error_payload(
+            ProxyException(message="Rate limit reached", type="rate_limit_error", param=None, code=429)
+        )
+
+        assert error_status == 429
+        assert (error_obj["type"], error_obj["code"]) == ("rate_limit_error", "429")
+
     @pytest.mark.parametrize(
         "status_code, expected_type",
         [
@@ -8259,3 +8272,38 @@ class TestPassthroughHeadersAcceptImmutableMappings:
         assert merged["content-type"] == "text/event-stream"
         # the excluded hop-by-hop header is still dropped
         assert "transfer-encoding" not in merged
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_forwards_provider_headers_on_http_status_error():
+    """The httpx.HTTPStatusError branch dropped the headers its sibling branches forward.
+
+    A Bedrock passthrough failure reaches this branch, so the request id was gone
+    before the client saw the response.
+    """
+    import httpx
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request = httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse")
+    response = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-passthrough-500"},
+        content=b'{"message": "Amazon Bedrock is unable to process your request."}',
+        request=request,
+    )
+
+    processor = ProxyBaseLLMRequestProcessing(data={})
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await processor._handle_llm_api_exception(
+            e=httpx.HTTPStatusError("boom", request=request, response=response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert exc_info.value.headers is not None
+    assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-passthrough-500"
