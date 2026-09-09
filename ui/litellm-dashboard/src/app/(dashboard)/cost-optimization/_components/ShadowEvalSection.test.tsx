@@ -75,18 +75,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
       { model_name: "gpt-auto", litellm_params: { model: "auto_router/gpt-auto" } },
     ],
   })),
-  usePlainModelGroups: vi.fn(() => new Set(["prod-claude"])),
-}));
-
-vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
-  useModelCostMap: vi.fn(() => ({
-    data: {
-      "claude-sonnet-5": { litellm_provider: "anthropic", mode: "chat" },
-      "gpt-4o": { litellm_provider: "openai", mode: "chat" },
-      "gemini/gemini-2.5-pro": { litellm_provider: "gemini", mode: "chat" },
-      "text-embedding-3-large": { litellm_provider: "openai", mode: "embedding" },
-    },
-  })),
+  usePlainModelGroups: vi.fn(() => new Set(["prod-claude", "anthropic/claude-sonnet-5"])),
 }));
 
 import ShadowEvalSection, { shadowedTargetLabel } from "./ShadowEvalSection";
@@ -444,6 +433,7 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
 
     await user.click(screen.getByPlaceholderText("Select a judge model"));
+    expect(screen.queryByRole("option", { name: /openai\/gpt-4o/ })).not.toBeInTheDocument();
     await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
     await user.click(screen.getByText("Start shadow eval"));
 
@@ -537,7 +527,7 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
 
     await user.click(screen.getByPlaceholderText("Select a baseline model"));
-    expect(await screen.findByRole("option", { name: /openai\/gpt-4o/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /openai\/gpt-4o/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("option", { name: /prod-claude/ }));
     await user.click(screen.getByText("Start shadow eval"));
 

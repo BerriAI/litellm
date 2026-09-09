@@ -5,7 +5,6 @@ import React, { useMemo, useState } from "react";
 import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useAutoRouters, usePlainModelGroups } from "@/app/(dashboard)/hooks/models/useModels";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { PaginatedMultiSelect } from "@/components/shared/PaginatedMultiSelect";
@@ -25,50 +24,15 @@ type ShadowEvalDirection = ShadowEvalJob["direction"];
 const MAX_ROUTERS = 4;
 const MAX_MODELS = 100;
 
-const RECOMMENDED_JUDGE_MODELS = ["anthropic/claude-sonnet-5", "openai/gpt-4o", "gemini/gemini-2.5-pro"] as const;
-
-interface CostMapEntry {
-  litellm_provider?: string;
-  mode?: string;
-}
-
-const useChatModelNames = (): string[] => {
-  const { data: costMap } = useModelCostMap();
-  return useMemo(() => {
-    if (!costMap) return [];
-    const chatModels = Object.entries(costMap as Record<string, CostMapEntry>)
-      .filter(([, value]) => value?.mode === "chat" && value?.litellm_provider)
-      .map(([key, value]) => (key.startsWith(`${value.litellm_provider}/`) ? key : `${value.litellm_provider}/${key}`));
-    return [...new Set(chatModels)].toSorted((a, b) => a.localeCompare(b));
-  }, [costMap]);
-};
-
-const useJudgeModelOptions = (): SearchSelectOption[] => {
-  const chatModels = useChatModelNames();
-  return useMemo(() => {
-    const pinned: SearchSelectOption[] = RECOMMENDED_JUDGE_MODELS.map((model) => ({
-      label: model,
-      value: model,
-      sublabel: "Recommended",
-    }));
-    const pinnedNames = new Set<string>(RECOMMENDED_JUDGE_MODELS);
-    const rest = chatModels.filter((model) => !pinnedNames.has(model)).map((model) => ({ label: model, value: model }));
-    return [...pinned, ...rest];
-  }, [chatModels]);
-};
-
-const useBaselineModelOptions = (): SearchSelectOption[] => {
+const useConfiguredModelOptions = (): SearchSelectOption[] => {
   const configuredGroups = usePlainModelGroups();
-  const chatModels = useChatModelNames();
-  return useMemo(() => {
-    const configured = [...configuredGroups]
-      .toSorted((a, b) => a.localeCompare(b))
-      .map((model) => ({ label: model, value: model, sublabel: "Configured on this gateway" }));
-    const rest = chatModels
-      .filter((model) => !configuredGroups.has(model))
-      .map((model) => ({ label: model, value: model }));
-    return [...configured, ...rest];
-  }, [configuredGroups, chatModels]);
+  return useMemo(
+    () =>
+      [...configuredGroups]
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((model) => ({ label: model, value: model, sublabel: "Configured on this gateway" })),
+    [configuredGroups],
+  );
 };
 
 const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; label: string }[] = [
@@ -276,13 +240,7 @@ export const StartForm: React.FC = () => {
   const [judgeModel, setJudgeModel] = useState("");
   const [maxBudget, setMaxBudget] = useState("10");
   const { data: autoRouters } = useAutoRouters();
-  const judgeModelOptions = useJudgeModelOptions();
-  const baselineModelOptions = useBaselineModelOptions();
-  const configuredGroups = usePlainModelGroups();
-  const modelOptions = useMemo<SearchSelectOption[]>(
-    () => [...configuredGroups].toSorted((a, b) => a.localeCompare(b)).map((name) => ({ label: name, value: name })),
-    [configuredGroups],
-  );
+  const configuredModelOptions = useConfiguredModelOptions();
   const start = useStartShadowEval();
 
   const routerOptions = useMemo<SearchSelectOption[]>(() => {
@@ -360,7 +318,7 @@ export const StartForm: React.FC = () => {
           {direction === "forward" && (
             <Field label="Only on models">
               <MultiSelect
-                options={modelOptions}
+                options={configuredModelOptions}
                 value={models}
                 onValueChange={setModels}
                 placeholder="Every model the targets use"
@@ -434,7 +392,7 @@ export const StartForm: React.FC = () => {
           {direction === "reverse" && (
             <Field label="Baseline model">
               <SearchSelect
-                options={baselineModelOptions}
+                options={configuredModelOptions}
                 value={baselineModel}
                 onValueChange={setBaselineModel}
                 placeholder="Select a baseline model"
@@ -444,7 +402,7 @@ export const StartForm: React.FC = () => {
           )}
           <Field label="Judge model" className="sm:col-span-2">
             <SearchSelect
-              options={judgeModelOptions}
+              options={configuredModelOptions}
               value={judgeModel}
               onValueChange={setJudgeModel}
               placeholder="Select a judge model"
