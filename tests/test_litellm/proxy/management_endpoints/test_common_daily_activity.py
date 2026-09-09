@@ -518,6 +518,26 @@ async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_s
     assert all("take" not in call.kwargs and "skip" not in call.kwargs for call in token_lookups)
 
 
+def _spend_log_transaction(mock_prisma: MagicMock, rows: list[dict[str, str | None]]) -> AsyncMock:
+    transaction = MagicMock()
+    transaction.execute_raw = AsyncMock(return_value=0)
+    transaction.query_raw = AsyncMock(return_value=rows)
+    mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
+    return transaction.query_raw
+
+
+def _spend_log_row(digest: str, key_alias: str, user_id: str) -> dict[str, str | None]:
+    return {
+        "digest": digest,
+        "first_alias": key_alias,
+        "last_alias": key_alias,
+        "first_team": None,
+        "last_team": None,
+        "first_owner": user_id,
+        "last_owner": user_id,
+    }
+
+
 @pytest.mark.asyncio
 async def test_get_api_key_metadata_permanent_miss_with_a_window_reads_spend_logs_once_within_it():
     from litellm.proxy.utils import hash_token
@@ -529,14 +549,13 @@ async def test_get_api_key_metadata_permanent_miss_with_a_window_reads_spend_log
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    spend_log_query_raw = _spend_log_transaction(mock_prisma, [])
 
     result = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={double_hashed}, spend_logs_window=window)
 
     assert double_hashed not in result
-    assert mock_prisma.db.query_raw.await_count == 3
-    ((_, digests, start, end),) = [
-        call.args for call in mock_prisma.db.query_raw.call_args_list if "LiteLLM_SpendLogs" in call.args[0]
-    ]
+    assert mock_prisma.db.query_raw.await_count == 2
+    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
     assert digests == [double_hashed]
     assert (start, end) == window
 
@@ -559,12 +578,10 @@ async def test_get_daily_activity_recovers_a_session_key_alias_from_spend_logs_a
         return_value=[SimpleNamespace(user_id="session-user", user_email="session@example.com")]
     )
 
-    async def query_raw(sql, *params):
-        if "LiteLLM_SpendLogs" in sql:
-            return [{"digest": session_digest, "key_alias": "cli-session-alias", "team_id": None, "user_id": "session-user"}]
-        return []
-
-    mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    spend_log_query_raw = _spend_log_transaction(
+        mock_prisma, [_spend_log_row(session_digest, "cli-session-alias", "session-user")]
+    )
 
     result = await get_daily_activity(
         prisma_client=mock_prisma,
@@ -583,9 +600,7 @@ async def test_get_daily_activity_recovers_a_session_key_alias_from_spend_logs_a
     key_metadata = result.results[0].breakdown.api_keys[session_digest].metadata
     assert key_metadata.key_alias == "cli-session-alias"
     assert key_metadata.user_email == "session@example.com"
-    ((_, digests, start, end),) = [
-        call.args for call in mock_prisma.db.query_raw.call_args_list if "LiteLLM_SpendLogs" in call.args[0]
-    ]
+    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
     assert digests == [session_digest]
     assert (start, end) == (datetime(2023, 12, 31), datetime(2024, 1, 3))
 
@@ -2191,12 +2206,10 @@ async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
         return_value=[SimpleNamespace(user_id="user-42", user_email="user42@example.com")]
     )
 
-    async def query_raw(sql, *params):
-        if "LiteLLM_SpendLogs" in sql:
-            return [{"digest": session_digest, "key_alias": "cli-session-user-42", "team_id": None, "user_id": "user-42"}]
-        return []
-
-    mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    spend_log_query_raw = _spend_log_transaction(
+        mock_prisma, [_spend_log_row(session_digest, "cli-session-user-42", "user-42")]
+    )
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -2207,8 +2220,7 @@ async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
     assert result[session_digest]["key_alias"] == "cli-session-user-42"
     assert result[session_digest]["user_id"] == "user-42"
     assert result[session_digest]["user_email"] == "user42@example.com"
-    spend_log_calls = [call.args for call in mock_prisma.db.query_raw.call_args_list if "LiteLLM_SpendLogs" in call.args[0]]
-    ((_, digests, start, end),) = spend_log_calls
+    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
     assert digests == [session_digest]
     assert (start, end) == (datetime(2026, 9, 7), datetime(2026, 9, 10))
 
