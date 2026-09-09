@@ -2,6 +2,7 @@ import inspect
 import json
 import os
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import click
@@ -90,9 +91,7 @@ class TestAgentProfile:
 
 class TestBuildAgentEnv:
     def test_anthropic_profile_uses_bare_root_and_bearer(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"anthropic"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"anthropic"}))
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
         assert env["ENABLE_TOOL_SEARCH"] == "true"
@@ -128,9 +127,7 @@ class TestBuildAgentEnv:
         assert "ANTHROPIC_API_KEY" not in env
 
     def test_openai_profile_appends_v1(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"openai"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}))
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["OPENAI_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in env
@@ -138,9 +135,7 @@ class TestBuildAgentEnv:
         assert "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" not in env
 
     def test_both_profiles_set_everything(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000", "sk-key", frozenset({"anthropic", "openai"})
-        )
+        env = build_agent_env({}, "http://localhost:4000", "sk-key", frozenset({"anthropic", "openai"}))
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
@@ -148,9 +143,7 @@ class TestBuildAgentEnv:
         assert env["ENABLE_TOOL_SEARCH"] == "true"
 
     def test_litellm_profile_exports_only_the_proxy_key(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"litellm"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"litellm"}))
         assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in env
         assert "OPENAI_BASE_URL" not in env
@@ -158,9 +151,7 @@ class TestBuildAgentEnv:
 
     def test_preserves_unrelated_env_and_does_not_mutate_input(self):
         base = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
-        env = build_agent_env(
-            base, "http://localhost:4000", "sk-key", frozenset({"anthropic"})
-        )
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"anthropic"}))
         assert env["PATH"] == "/usr/bin"
         assert base == {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
 
@@ -320,9 +311,7 @@ class TestOpencodeModelSync:
         assert "refused" in result.reason
 
     def test_non_200_is_reported(self):
-        result = opencode_model_sync_env(
-            {}, "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500)
-        )
+        result = opencode_model_sync_env({}, "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500))
         assert isinstance(result, ModelSyncSkipped)
         assert "HTTP 500" in result.reason
 
@@ -454,12 +443,36 @@ class TestCodexModelSync:
         slugs = [m["slug"] for m in json.loads((tmp_path / "litellm-models.json").read_text())["models"]]
         assert slugs == ["new"]
 
-    def test_defaults_to_dot_codex_in_home(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: tmp_path))
+    def test_catalog_is_replaced_whole_and_leaves_no_temp_files(self, tmp_path):
+        self._sync(self._listing(*(self._row(f"m{i}") for i in range(50))), tmp_path)
+        self._sync(self._listing(self._row("new")), tmp_path)
+        assert [p.name for p in tmp_path.iterdir()] == ["litellm-models.json"]
+        assert json.loads((tmp_path / "litellm-models.json").read_text())["models"][0]["slug"] == "new"
+
+    def test_defaults_to_dot_codex_in_home(self, tmp_path):
         result = codex_model_sync_args(
-            {}, "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m")))
+            {},
+            "http://localhost:4000",
+            "sk-key",
+            get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            home=lambda: tmp_path,
         )
         assert self._catalog_path(result) == str(tmp_path / ".codex" / "litellm-models.json")
+
+    def test_default_home_is_the_users(self):
+        assert _default_of(codex_model_sync_args, "home") == Path.home
+
+    def test_missing_base_instructions_is_reported_not_raised(self, tmp_path):
+        result = codex_model_sync_args(
+            {"CODEX_HOME": str(tmp_path)},
+            "http://localhost:4000",
+            "sk-key",
+            get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            instructions_path=tmp_path / "missing.md",
+        )
+        assert isinstance(result, ModelSyncSkipped)
+        assert "could not read" in result.reason
+        assert not (tmp_path / "litellm-models.json").exists()
 
     def test_unwritable_catalog_path_is_reported_not_raised(self, tmp_path):
         blocker = tmp_path / "file"
@@ -528,7 +541,9 @@ class TestRunAgent:
         args = calls["args"]
         assert args[-2:] == ("exec", "hi")
         assert args[args.index('model_catalog_json="/tmp/c.json"') - 1] == "-c"
-        assert args.index('model_provider="litellm"') < args.index('model_catalog_json="/tmp/c.json"') < args.index("exec")
+        assert (
+            args.index('model_provider="litellm"') < args.index('model_catalog_json="/tmp/c.json"') < args.index("exec")
+        )
         assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
         assert "model_catalog_json" not in json.dumps(calls["env"])
 
@@ -1214,10 +1229,7 @@ class TestAgentCommands:
         assert captured["api_key"] == "sk-key"
         assert captured["command"] == ["claude", "--resume", "-p", "hi"]
         assert captured["skip_verify"] is False
-        assert (
-            "routing Claude Code through proxy at http://localhost:4000"
-            in result.output
-        )
+        assert "routing Claude Code through proxy at http://localhost:4000" in result.output
 
     def test_codex_shows_friendly_name(self):
         captured = {}
@@ -1290,14 +1302,10 @@ class TestAgentCommands:
         with (
             patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
             patch(f"{AGENTS_MODULE}.login", fake_login),
-            patch(
-                f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login"
-            ) as mock_get,
+            patch(f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login") as mock_get,
             patch(
                 f"{AGENTS_MODULE}.run_agent",
-                side_effect=lambda base_url, api_key, command, **k: captured.update(
-                    api_key=api_key
-                ),
+                side_effect=lambda base_url, api_key, command, **k: captured.update(api_key=api_key),
             ),
         ):
             result = self.runner.invoke(

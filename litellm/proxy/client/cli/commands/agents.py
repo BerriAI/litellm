@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -416,7 +417,7 @@ class _CodexCatalog(BaseModel):
     models: tuple[_CodexModel, ...]
 
 
-def codex_model_catalog(models: Sequence[ListedModel]) -> str | None:
+def codex_model_catalog(models: Sequence[ListedModel], instructions: str) -> str | None:
     """The `model_catalog_json` body listing the proxy's chat models, or None if there are none.
 
     Codex refuses an empty catalog, hence None instead of `{"models": []}`.
@@ -427,7 +428,6 @@ def codex_model_catalog(models: Sequence[ListedModel]) -> str | None:
     chat_models: Final = _chat_models(models)
     if not chat_models:
         return None
-    instructions: Final = _CODEX_BASE_INSTRUCTIONS_PATH.read_text(encoding="utf-8")
     catalog: Final = _CodexCatalog(
         models=tuple(
             _CodexModel(
@@ -443,10 +443,17 @@ def codex_model_catalog(models: Sequence[ListedModel]) -> str | None:
     return catalog.model_dump_json()
 
 
-def codex_model_catalog_path(env: Mapping[str, str]) -> Path:
+def codex_model_catalog_path(env: Mapping[str, str], *, home: Callable[[], Path] = Path.home) -> Path:
     override: Final = env.get(CODEX_HOME_ENV)
-    root: Final = Path(override) if override else Path.home() / ".codex"
+    root: Final = Path(override) if override else home() / ".codex"
     return root / CODEX_MODEL_CATALOG_FILENAME
+
+
+def _replace_file(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+        _ = tmp.write(text)
+    os.replace(tmp.name, path)
 
 
 def codex_model_sync_args(
@@ -455,25 +462,30 @@ def codex_model_sync_args(
     api_key: str,
     *,
     get: Callable[..., requests.Response] = requests.get,
+    home: Callable[[], Path] = Path.home,
+    instructions_path: Path = _CODEX_BASE_INSTRUCTIONS_PATH,
 ) -> ModelSyncArgs | ModelSyncSkipped:
     """`-c model_catalog_json=...` pointing Codex at the proxy's model list, or why it was skipped.
 
     Codex has no env or inline equivalent of OPENCODE_CONFIG_CONTENT: the catalog
     must be a file, so it is written under $CODEX_HOME (default ~/.codex) and
-    rewritten on every launch. The key never lands in the file. A failed fetch
-    or write is reported rather than raised: Codex still launches with its
-    built-in catalog and takes a proxy model by name via -m.
+    atomically replaced on every launch. The key never lands in the file. A
+    failed fetch, read or write is reported rather than raised: Codex still
+    launches with its built-in catalog and takes a proxy model by name via -m.
     """
     listing: Final = _fetch_model_listing(base_url, api_key, get=get)
     if isinstance(listing, ModelSyncSkipped):
         return listing
-    catalog: Final = codex_model_catalog(listing)
+    try:
+        instructions: Final = instructions_path.read_text(encoding="utf-8")
+    except OSError as e:
+        return ModelSyncSkipped(f"could not read {instructions_path}: {e}")
+    catalog: Final = codex_model_catalog(listing, instructions)
     if catalog is None:
         return ModelSyncSkipped(f"{base_url.rstrip('/')}/v1/models lists no chat models")
-    path: Final = codex_model_catalog_path(base_env)
+    path: Final = codex_model_catalog_path(base_env, home=home)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(catalog, encoding="utf-8")
+        _replace_file(path, catalog)
     except OSError as e:
         return ModelSyncSkipped(f"could not write {path}: {e}")
     return ModelSyncArgs(("-c", f"model_catalog_json={json.dumps(str(path))}"))
