@@ -19946,6 +19946,22 @@
                 ],
                 "title": "Resource"
               }
+            },
+            {
+              "in": "query",
+              "name": "team",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Team"
+              }
             }
           ],
           "responses": {
@@ -20635,6 +20651,22 @@
                   }
                 ],
                 "title": "Resource"
+              }
+            },
+            {
+              "in": "query",
+              "name": "team",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Team"
               }
             }
           ],

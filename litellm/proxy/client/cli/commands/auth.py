@@ -621,8 +621,7 @@ def match_requested_team(teams: Sequence[CliTeam], requested_team: str | None) -
         (
             team_id
             for team in teams
-            if (team_id := team.get("team_id")) is not None
-            and requested_team in (team_id, team.get("team_alias"))
+            if (team_id := team.get("team_id")) is not None and requested_team in (team_id, team.get("team_alias"))
         ),
         None,
     )
