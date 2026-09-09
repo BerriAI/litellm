@@ -64,13 +64,24 @@ spec:
             {{- if .Values.billingMetrics.enabled }}
             {{- include "litellm.billingMetricsEnv" . | nindent 12 }}
             {{- end }}
+            {{- if .Values.gateway.metricsServer.enabled }}
+            {{- if eq (int .Values.gateway.metricsServer.port) 4000 }}
+            {{- fail "gateway.metricsServer.port must differ from the gateway port 4000" }}
+            {{- end }}
+            - name: PROMETHEUS_MULTIPROC_DIR
+              value: {{ include "litellm.gateway.prometheusMultiprocDir" . }}
+            {{- end }}
           {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
-          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.billingMetrics.enabled }}
+          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled }}
           volumeMounts:
             {{- if .Values.gateway.config.create }}
             - name: gateway-config
               mountPath: /app/config/config.yaml
               subPath: config.yaml
+            {{- end }}
+            {{- if .Values.gateway.metricsServer.enabled }}
+            - name: prometheus-multiproc
+              mountPath: {{ include "litellm.gateway.prometheusMultiprocDir" . }}
             {{- end }}
             {{- if .Values.billingMetrics.enabled }}
             {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
@@ -97,15 +108,53 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
+        {{- if .Values.gateway.metricsServer.enabled }}
+        - name: metrics
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          {{- with .Values.gateway.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command:
+            - python
+            - -m
+            - litellm.proxy.prometheus_metrics_server
+            - --port
+            - {{ .Values.gateway.metricsServer.port | quote }}
+          env:
+            - name: PROMETHEUS_MULTIPROC_DIR
+              value: {{ include "litellm.gateway.prometheusMultiprocDir" . }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.gateway.metricsServer.port }}
+              protocol: TCP
+          volumeMounts:
+            - name: prometheus-multiproc
+              mountPath: {{ include "litellm.gateway.prometheusMultiprocDir" . }}
+          readinessProbe:
+            tcpSocket: { port: metrics }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: metrics }
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.gateway.metricsServer.resources | nindent 12 }}
+        {{- end }}
       {{- with .Values.gateway.extraContainers }}
         {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }}
-      {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.billingMetrics.enabled }}
+      {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled }}
       volumes:
         {{- if .Values.gateway.config.create }}
         - name: gateway-config
           configMap:
             name: {{ include "litellm.gateway.fullname" . }}-config
+        {{- end }}
+        {{- if .Values.gateway.metricsServer.enabled }}
+        - name: prometheus-multiproc
+          emptyDir: {}
         {{- end }}
         {{- if .Values.billingMetrics.enabled }}
         {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}

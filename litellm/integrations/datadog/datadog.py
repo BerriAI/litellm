@@ -29,6 +29,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.integrations.batch_utils import BatchSendCancelled, requeue_after_http_error, send_batch_with_413_split
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_base_url_from_env,
@@ -43,7 +44,6 @@ from litellm.integrations.datadog.datadog_mock_client import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
-    MaskedHTTPStatusError,
     _get_httpx_client,
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -396,6 +396,9 @@ class DataDogLogger(
             if self.is_mock_mode:
                 verbose_logger.debug("[DATADOG MOCK] Batch of %s events successfully mocked", len(batch_to_send))
 
+        except BatchSendCancelled as cancelled:
+            self.log_queue = list(cancelled.undelivered) + self.log_queue  # mutable-ok: logger queue remains appendable
+            raise asyncio.CancelledError() from cancelled
         except Exception as e:
             self.log_queue = batch_to_send + self.log_queue
             verbose_logger.exception("Datadog Error sending batch API - %s\n%s", e, traceback.format_exc())
@@ -413,53 +416,16 @@ class DataDogLogger(
         that could not be delivered because of a non-413 (transient) error, so the caller
         re-queues only those and never the events already accepted by Datadog.
         """
-        pending: Final[list[list]] = [batch]
-        while pending:
-            chunk = pending.pop()
-            if not chunk:
-                continue
-            if len(chunk) > 1 and self._exceeds_intake_limits(chunk):
-                mid = len(chunk) // 2
-                pending.append(chunk[mid:])
-                pending.append(chunk[:mid])
-                continue
-            try:
-                response = await self.async_send_compressed_data(chunk)
-            except Exception as e:
-                if isinstance(e, MaskedHTTPStatusError) and e.status_code == 413:
-                    response = e.response
-                else:
-                    verbose_logger.exception("Datadog Error sending batch API - %s", e)
-                    return self._undelivered(chunk, pending)
-
-            if response.status_code == 413:
-                if len(chunk) == 1:
-                    verbose_logger.error(DD_ERRORS.DATADOG_413_ERROR.value)
-                    continue
-                mid = len(chunk) // 2
-                pending.append(chunk[mid:])
-                pending.append(chunk[:mid])
-                continue
-
-            if response.status_code != 202:
-                verbose_logger.error(
-                    "Datadog: unexpected response status_code=%s, text=%s",
-                    response.status_code,
-                    response.text,
-                )
-                return self._undelivered(chunk, pending)
-
-            verbose_logger.debug(
-                "Datadog: delivered %s events, status_code=%s, text=%s",
-                len(chunk),
-                response.status_code,
-                response.text,
-            )
-        return []
-
-    @staticmethod
-    def _undelivered(chunk: list, pending: list[list]) -> list:
-        return chunk + [event for remaining in reversed(pending) for event in remaining]
+        undelivered: Final = await send_batch_with_413_split(
+            batch=batch,
+            send_batch=self.async_send_compressed_data,
+            exceeds_limits=self._exceeds_intake_limits,
+            success_status_codes=frozenset({202}),
+            integration_name="Datadog",
+            drop_error_message=DD_ERRORS.DATADOG_413_ERROR.value,
+            non_success_handler=requeue_after_http_error,
+        )
+        return list(undelivered)  # mutable-ok: caller prepends records to the logger queue
 
     @staticmethod
     def _exceeds_intake_limits(chunk: Sequence[DatadogPayload]) -> bool:
@@ -606,7 +572,7 @@ class DataDogLogger(
         )
         return dd_payload
 
-    async def async_send_compressed_data(self, data: list) -> Response:
+    async def async_send_compressed_data(self, data: Sequence[DatadogPayload]) -> Response:
         """
         Async helper to send compressed data to datadog self.intake_url
 
