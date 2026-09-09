@@ -2670,6 +2670,7 @@ async def test_cached_response_without_choices_streams_a_single_stop_chunk(
 
     chunks: Final = tuple([chunk async for chunk in wrapper])
 
+    assert len(chunks) == 1
     assert tuple(choice.finish_reason for chunk in chunks for choice in chunk.choices) == ("stop",)
     assert all(choice.delta.content in (None, "") for chunk in chunks for choice in chunk.choices)
 
