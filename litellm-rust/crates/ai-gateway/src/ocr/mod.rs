@@ -10,7 +10,7 @@ mod hooks;
 mod types;
 pub use types::OcrRequest;
 
-pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
+pub async fn ocr(http_client: &reqwest::Client, request: OcrRequest<'_>) -> Result<Value, Error> {
     let mut core_request = decode_request(OcrWireRequest {
         model: request.model.into(),
         document: request.document,
@@ -27,7 +27,7 @@ pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
         request.guardrails,
         request.request_metadata,
     ));
-    perform_ocr(core_request)
+    perform_ocr(http_client, core_request)
         .await
         .map(|response| response.into_json())
 }
@@ -38,8 +38,16 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    use super::{OcrRequest, ocr};
+    use super::{OcrRequest, ocr as run_ocr};
     use crate::integrations::types::RequestMetadata;
+
+    async fn ocr(request: OcrRequest<'_>) -> Result<serde_json::Value, litellm_core::Error> {
+        let http_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("test HTTP client builds");
+        run_ocr(&http_client, request).await
+    }
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
         let mut request = Vec::new();

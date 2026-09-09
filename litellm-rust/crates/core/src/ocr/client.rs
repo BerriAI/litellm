@@ -2,32 +2,13 @@ use crate::ocr::error::OcrError;
 use crate::ocr::error::OcrRequestError;
 use crate::ocr::error::OcrResponseError;
 use std::net::IpAddr;
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use super::types::{OcrConnection, OcrDocument};
-use crate::constants::{
-    OCR_CONNECT_TIMEOUT_SECS, OCR_ERROR_BODY_MAX_CHARS, OCR_HTTP_TIMEOUT_SECS,
-    OCR_MAX_FETCH_REDIRECTS,
-};
+use crate::constants::{OCR_ERROR_BODY_MAX_CHARS, OCR_MAX_FETCH_REDIRECTS};
 use crate::error::TransportError;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::Url;
-
-pub(crate) fn http_client() -> Result<&'static reqwest::Client, TransportError> {
-    static CLIENT: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(OCR_CONNECT_TIMEOUT_SECS))
-                .timeout(Duration::from_secs(OCR_HTTP_TIMEOUT_SECS))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|error| error.to_string())
-        })
-        .as_ref()
-        .map_err(|error| TransportError::Network(error.clone()))
-}
 
 pub(crate) fn network_error(error: reqwest::Error) -> TransportError {
     TransportError::from(error)
@@ -97,6 +78,7 @@ async fn validate_safe_fetch_url(url: &Url) -> Result<(), OcrError> {
 }
 
 async fn safe_get_document_url(
+    http_client: &reqwest::Client,
     source: &str,
     timeout: Duration,
 ) -> Result<reqwest::Response, OcrError> {
@@ -105,7 +87,7 @@ async fn safe_get_document_url(
     })?;
     for _ in 0..OCR_MAX_FETCH_REDIRECTS {
         validate_safe_fetch_url(&url).await?;
-        let response = http_client()?
+        let response = http_client
             .get(url.clone())
             .timeout(timeout)
             .send()
@@ -136,9 +118,13 @@ fn enforce_download_size(length: u64, max_bytes: u64) -> Result<(), OcrError> {
     Ok(())
 }
 
-async fn download_data_uri(source: &str, connection: &OcrConnection) -> Result<String, OcrError> {
+async fn download_data_uri(
+    http_client: &reqwest::Client,
+    source: &str,
+    connection: &OcrConnection,
+) -> Result<String, OcrError> {
     enforce_download_size(0, connection.max_download_bytes)?;
-    let mut response = safe_get_document_url(source, connection.timeout).await?;
+    let mut response = safe_get_document_url(http_client, source, connection.timeout).await?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
         return Err(TransportError::Http {
@@ -172,6 +158,7 @@ async fn download_data_uri(source: &str, connection: &OcrConnection) -> Result<S
 }
 
 pub(crate) async fn convert_document_url_to_data_uri(
+    http_client: &reqwest::Client,
     document: OcrDocument,
     connection: &OcrConnection,
 ) -> Result<OcrDocument, OcrError> {
@@ -179,8 +166,11 @@ pub(crate) async fn convert_document_url_to_data_uri(
     if !source.starts_with("http://") && !source.starts_with("https://") {
         return Ok(document);
     }
-    let data_uri = tokio::time::timeout(connection.timeout, download_data_uri(source, connection))
-        .await
-        .map_err(|_| TransportError::Network("OCR document download timed out".into()))??;
+    let data_uri = tokio::time::timeout(
+        connection.timeout,
+        download_data_uri(http_client, source, connection),
+    )
+    .await
+    .map_err(|_| TransportError::Network("OCR document download timed out".into()))??;
     Ok(document.with_source(data_uri))
 }

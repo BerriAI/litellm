@@ -1,8 +1,10 @@
 use crate::auth::AuthError;
+use crate::ocr::document::InlineDocument;
 use crate::ocr::error::OcrError;
 use crate::ocr::error::OcrRequestError;
 use crate::ocr::error::OcrResponseError;
 use crate::ocr::error::PagesError;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use std::collections::BTreeSet;
 
 use super::types::*;
@@ -97,19 +99,6 @@ fn normalize_features_param(
         return Err(OcrRequestError::Features);
     }
     Ok(Some(NormalizedFeatures(normalized.join(","))))
-}
-
-fn extract_base64_from_data_uri(source: &str) -> &str {
-    let Some((header, data)) = source.split_once(',') else {
-        return source;
-    };
-    let media_type = header.strip_prefix("data:").unwrap_or_default();
-    let media_type = media_type.strip_suffix(";base64").unwrap_or(media_type);
-    if media_type.is_empty() || media_type.contains(';') || data.is_empty() {
-        source
-    } else {
-        data
-    }
 }
 
 fn pixel_dimension(value: f64, scale: f64, field: &'static str) -> Result<i64, OcrResponseError> {
@@ -218,6 +207,7 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
 
     async fn prepare_document(
         &self,
+        _http_client: &reqwest::Client,
         document: OcrDocument,
         _connection: &OcrConnection,
         _headers: &[(String, String)],
@@ -236,9 +226,9 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         if source.is_empty() {
             return Err(OcrRequestError::MissingField("document URL"));
         }
-        Ok(if source.starts_with("data:") {
+        Ok(if let Some(document) = InlineDocument::parse(source)? {
             DocumentIntelligenceRequest::Base64Source(
-                extract_base64_from_data_uri(source).to_string(),
+                STANDARD.encode(document.decode(crate::constants::OCR_INLINE_MAX_BYTES)?),
             )
         } else {
             DocumentIntelligenceRequest::UrlSource(source.to_string())
@@ -284,6 +274,7 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
 
     async fn read_response(
         &self,
+        http_client: &reqwest::Client,
         response: reqwest::Response,
         url: &str,
         headers: &[(String, String)],
@@ -291,6 +282,7 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         params: &Self::MappedParams,
     ) -> Result<DecodedOcrResponse<Self::ResponseBody>, OcrError> {
         super::polling::read_operation_response(
+            http_client,
             response,
             url,
             headers,

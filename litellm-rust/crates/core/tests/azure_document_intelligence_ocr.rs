@@ -1,6 +1,6 @@
 use super::transformation::AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG as CONFIG;
-use crate::ocr::perform_ocr;
 use crate::ocr::prepare::OcrProviderKind;
+use crate::ocr::tests::perform_ocr;
 use crate::ocr::tests::{MockResponse, body, mock_server, params, transform, wire_request};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::OcrConnection;
@@ -106,10 +106,10 @@ async fn document_intelligence_mistral_pages_flow_to_query_only() {
 }
 #[rstest]
 #[case("data:application/pdf;base64,YWJj", "YWJj")]
-#[case("data:application/pdf,YWJj", "YWJj")]
-#[case("data:application/pdf;base64,", "data:application/pdf;base64,")]
-#[case("data:application/pdf;other,YWJj", "data:application/pdf;other,YWJj")]
-#[case("data:application/pdf;base64", "data:application/pdf;base64")]
+#[case("data:application/pdf,abc", "YWJj")]
+#[case("data:application/pdf;base64,", "")]
+#[case("data:application/pdf;version=1.7;base64,YWJj", "YWJj")]
+#[case("DATA:;BASE64,YQ%3D%3D#page", "YQ==")]
 #[tokio::test]
 async fn document_intelligence_request_uses_base64_source_for_data_uri(
     #[case] source: &str,
@@ -349,4 +349,23 @@ async fn polling_deadline_bounds_retry_after() {
         .unwrap_err();
     server.await.unwrap();
     assert!(error.to_string().contains("timed out"));
+}
+
+#[rstest]
+#[case("data:application/pdf;base64")]
+#[case("data:application/pdf;base64,INVALID!")]
+#[tokio::test]
+async fn document_intelligence_rejects_invalid_data_uri(#[case] source: &str) {
+    let error = body(
+        &CONFIG,
+        "model",
+        json!({"type":"document_url","document_url":source}),
+        json!({}),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::ocr::error::OcrError::Request(crate::ocr::error::OcrRequestError::InvalidDataUri)
+    ));
 }

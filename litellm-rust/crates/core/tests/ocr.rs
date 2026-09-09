@@ -6,8 +6,21 @@ use tokio::net::TcpListener;
 use super::transformation::OcrProviderConfig;
 use super::types::OcrConnection;
 use super::wire::{OcrWireRequest, decode_request, decode_response};
-use super::{OcrRequest, perform_ocr};
+use super::{OcrRequest, perform_ocr as run_ocr};
 use crate::ocr::error::OcrError;
+
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("test HTTP client builds")
+}
+
+pub(crate) async fn perform_ocr(
+    request: OcrRequest,
+) -> Result<super::OcrResponseData, crate::Error> {
+    run_ocr(&http_client(), request).await
+}
 
 pub(crate) fn params<C: OcrProviderConfig>(config: &C, value: Value) -> C::MappedParams {
     config
@@ -36,8 +49,10 @@ pub(crate) async fn body<C: OcrProviderConfig>(
     options: Value,
 ) -> Result<Value, OcrError> {
     let params = config.map_ocr_params(serde_json::from_value(options).unwrap())?;
+    let http_client = http_client();
     let document = config
         .prepare_document(
+            &http_client,
             serde_json::from_value(document).unwrap(),
             &OcrConnection::default(),
             &[],
@@ -149,6 +164,34 @@ async fn performs_mistral_ocr_from_typed_request() {
     let body: Value = serde_json::from_str(request[0].split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(body["extract_header"], true);
     assert!(body.get("unknown").is_none());
+}
+
+#[tokio::test]
+async fn uses_the_host_injected_http_client() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(
+        json!({"pages":[],"usage_info":{"pages_processed":0}}),
+    )])
+    .await;
+    let mut default_headers = reqwest::header::HeaderMap::new();
+    default_headers.insert(
+        "x-transport-owner",
+        reqwest::header::HeaderValue::from_static("python-sdk"),
+    );
+    let http_client = reqwest::Client::builder()
+        .default_headers(default_headers)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("test HTTP client builds");
+
+    run_ocr(
+        &http_client,
+        wire_request("mistral/model", &base, json!({})),
+    )
+    .await
+    .expect("OCR request succeeds");
+
+    server.await.expect("mock server completes");
+    assert!(seen.lock().unwrap()[0].contains("x-transport-owner: python-sdk"));
 }
 
 #[tokio::test]

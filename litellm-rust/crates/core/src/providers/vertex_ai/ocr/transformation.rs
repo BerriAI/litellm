@@ -102,11 +102,13 @@ impl OcrProviderConfig for VertexAiOcrConfig {
 
     async fn prepare_document(
         &self,
+        http_client: &reqwest::Client,
         document: OcrDocument,
         connection: &OcrConnection,
         _headers: &[(String, String)],
     ) -> Result<OcrDocument, OcrError> {
-        crate::ocr::client::convert_document_url_to_data_uri(document, connection).await
+        crate::ocr::client::convert_document_url_to_data_uri(http_client, document, connection)
+            .await
     }
 
     async fn authenticate(

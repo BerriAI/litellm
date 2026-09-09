@@ -45,9 +45,9 @@ pub const EMPTY_TEXT_PLACEHOLDER: &str =
 pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
 
 pub(crate) const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
-pub(crate) const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
 pub(crate) const OCR_POLL_TIMEOUT_SECS: u64 = 120;
 pub(crate) const OCR_POLL_RETRY_SECS: u64 = 2;
+pub(crate) const OCR_INLINE_MAX_BYTES: usize = 50 * 1024 * 1024;
 pub(crate) const OCR_DOWNLOAD_MAX_BYTES: u64 = 50 * 1024 * 1024;
 pub(crate) const OCR_MAX_FETCH_REDIRECTS: usize = 10;
 pub(crate) const OCR_ERROR_BODY_MAX_CHARS: usize = 256;

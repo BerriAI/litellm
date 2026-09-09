@@ -82,6 +82,7 @@ impl OcrProviderConfig for MistralOcrConfig {
 
     async fn prepare_document(
         &self,
+        _http_client: &reqwest::Client,
         document: OcrDocument,
         _connection: &OcrConnection,
         _headers: &[(String, String)],

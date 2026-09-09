@@ -44,6 +44,7 @@ pub trait OcrProviderConfig: Send + Sync + Sized + 'static {
     ) -> impl Future<Output = Result<Vec<(String, String)>, AuthError>> + Send;
     fn prepare_document(
         &self,
+        http_client: &reqwest::Client,
         document: OcrDocument,
         connection: &OcrConnection,
         headers: &[(String, String)],
@@ -57,6 +58,7 @@ pub trait OcrProviderConfig: Send + Sync + Sized + 'static {
 
     fn read_response(
         &self,
+        _http_client: &reqwest::Client,
         response: reqwest::Response,
         _url: &str,
         _headers: &[(String, String)],

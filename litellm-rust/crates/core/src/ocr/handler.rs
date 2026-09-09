@@ -15,7 +15,16 @@ use crate::providers::reducto::ocr::transformation::{
 use crate::providers::vertex_ai::ocr::deepseek::transformation::VertexAiDeepSeekOcrConfig;
 use crate::providers::vertex_ai::ocr::transformation::VertexAiOcrConfig;
 
-pub(crate) async fn perform_ocr_request(request: OcrRequest) -> Result<OcrResponseData, Error> {
+struct OcrExecution<'a> {
+    http_client: &'a reqwest::Client,
+    lifecycle_context: CallLifecycleContext,
+    hooks: Arc<dyn OcrHooks>,
+}
+
+pub(crate) async fn perform_ocr_request(
+    http_client: &reqwest::Client,
+    request: OcrRequest,
+) -> Result<OcrResponseData, Error> {
     let context = CallLifecycleContext::new(
         "ocr",
         request.model.clone(),
@@ -32,8 +41,11 @@ pub(crate) async fn perform_ocr_request(request: OcrRequest) -> Result<OcrRespon
                 request.document,
                 $params,
                 request.connection,
-                context,
-                request.hooks,
+                OcrExecution {
+                    http_client,
+                    lifecycle_context: context,
+                    hooks: request.hooks,
+                },
             )
             .await
         };
@@ -69,24 +81,34 @@ async fn perform_provider_ocr<C: OcrProviderConfig>(
     document: OcrDocument,
     params: C::InputParams,
     connection: OcrConnection,
-    context: CallLifecycleContext,
-    hooks: Arc<dyn OcrHooks>,
+    execution: OcrExecution<'_>,
 ) -> Result<OcrResponseData, Error> {
+    let OcrExecution {
+        http_client,
+        lifecycle_context,
+        hooks,
+    } = execution;
     let request = prepare_ocr_call(config, model, document, params, connection);
     let lifecycle_hooks = OcrLifecycleHooks {
         hooks: hooks.clone(),
-        provider_name: context.custom_llm_provider.clone(),
+        provider_name: lifecycle_context.custom_llm_provider.clone(),
         marker: std::marker::PhantomData,
     };
     CallLifecycle::default()
-        .run(context, request, &lifecycle_hooks, |request| {
-            execute_ocr_provider_call(request, hooks.as_ref(), &lifecycle_hooks.provider_name)
+        .run(lifecycle_context, request, &lifecycle_hooks, |request| {
+            execute_ocr_provider_call(
+                http_client,
+                request,
+                hooks.as_ref(),
+                &lifecycle_hooks.provider_name,
+            )
         })
         .await
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 async fn execute_ocr_provider_call<C: OcrProviderConfig>(
+    http_client: &reqwest::Client,
     request: PreparedOcrRequest<C>,
     hooks: &dyn OcrHooks,
     provider_name: &str,
@@ -109,7 +131,7 @@ async fn execute_ocr_provider_call<C: OcrProviderConfig>(
         request.document
     };
     let document = config
-        .prepare_document(document, &request.connection, &headers)
+        .prepare_document(http_client, document, &request.connection, &headers)
         .await?;
     let body = serde_json::to_value(config.transform_ocr_request(
         &request.model,
@@ -130,7 +152,7 @@ async fn execute_ocr_provider_call<C: OcrProviderConfig>(
     } else {
         body
     };
-    let mut builder = super::client::http_client()?
+    let mut builder = http_client
         .post(&url)
         .json(&body)
         .timeout(request.connection.timeout);
@@ -142,6 +164,7 @@ async fn execute_ocr_provider_call<C: OcrProviderConfig>(
         .map_err(super::client::network_error)?;
     let decoded = config
         .read_response(
+            http_client,
             response,
             &url,
             &headers,

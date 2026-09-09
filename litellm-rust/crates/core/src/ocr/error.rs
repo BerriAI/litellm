@@ -36,11 +36,13 @@ pub enum OcrRequestError {
     #[error("model_id cannot be a dot path segment")]
     DotModel,
     #[error(
-        "Reducto requires a reducto:// id or a base64 data URI after OCR preprocessing; plain http(s) URLs are not supported"
+        "Reducto requires a reducto:// id or a data URI after OCR preprocessing; plain http(s) URLs are not supported"
     )]
     ReductoSource,
-    #[error("Invalid Reducto base64 data URI")]
-    ReductoDataUri,
+    #[error("Invalid OCR document data URI")]
+    InvalidDataUri,
+    #[error("OCR inline document exceeds maximum allowed size")]
+    InlineDocumentTooLarge,
     #[error("OCR document URL rejected by SSRF protection")]
     BlockedDocumentUrl,
     #[error("Too many redirects while fetching OCR document URL")]

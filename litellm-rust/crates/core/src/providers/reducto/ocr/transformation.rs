@@ -6,11 +6,10 @@ use std::collections::BTreeMap;
 
 use super::types::*;
 use crate::constants::{REDUCTO_ID_PREFIX, REDUCTO_OCR_API_BASE};
+use crate::ocr::document::InlineDocument;
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrConnection, OcrDocument, OcrPage, OcrResponseData, OcrUsageInfo};
 use crate::providers::reducto::auth;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
 pub struct ReductoParseV3Config;
 pub struct ReductoParseLegacyConfig;
@@ -26,6 +25,7 @@ pub fn normalize_api_base(api_base: Option<&str>) -> &str {
 }
 
 async fn prepare_reducto_document(
+    http_client: &reqwest::Client,
     document: OcrDocument,
     connection: &OcrConnection,
     headers: &[(String, String)],
@@ -34,28 +34,14 @@ async fn prepare_reducto_document(
     if source.starts_with(REDUCTO_ID_PREFIX) {
         return Ok(ReductoFileId(source.to_string()));
     }
-    if !source.starts_with("data:") {
-        return Err(OcrRequestError::ReductoSource.into());
-    }
-    let (header, encoded) = source
-        .split_once(',')
-        .ok_or(OcrRequestError::ReductoDataUri)?;
-    if !header.split(';').any(|part| part == "base64") {
-        return Err(OcrRequestError::ReductoDataUri.into());
-    }
-    let mime = header
-        .strip_prefix("data:")
-        .and_then(|header| header.split(';').next())
-        .filter(|mime| !mime.is_empty())
-        .unwrap_or("application/octet-stream");
-    let bytes = BASE64_STANDARD
-        .decode(encoded)
-        .map_err(|_| OcrRequestError::ReductoDataUri)?;
+    let document = InlineDocument::parse(source)?.ok_or(OcrRequestError::ReductoSource)?;
+    let mime = document.mime_type().to_string();
+    let bytes = document.decode(crate::constants::OCR_INLINE_MAX_BYTES)?;
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name("document")
-        .mime_str(mime)
-        .map_err(|_| OcrRequestError::ReductoDataUri)?;
-    let mut builder = crate::ocr::client::http_client()?
+        .mime_str(&mime)
+        .map_err(|_| OcrRequestError::InvalidDataUri)?;
+    let mut builder = http_client
         .post(format!(
             "{}/upload",
             normalize_api_base(connection.api_base.as_deref())
@@ -203,11 +189,12 @@ impl OcrProviderConfig for ReductoParseV3Config {
 
     async fn prepare_document(
         &self,
+        http_client: &reqwest::Client,
         document: OcrDocument,
         connection: &OcrConnection,
         headers: &[(String, String)],
     ) -> Result<ReductoFileId, OcrError> {
-        prepare_reducto_document(document, connection, headers).await
+        prepare_reducto_document(http_client, document, connection, headers).await
     }
 
     fn guard_document_before_preparation(&self) -> bool {
@@ -282,11 +269,12 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
 
     async fn prepare_document(
         &self,
+        http_client: &reqwest::Client,
         document: OcrDocument,
         connection: &OcrConnection,
         headers: &[(String, String)],
     ) -> Result<ReductoFileId, OcrError> {
-        prepare_reducto_document(document, connection, headers).await
+        prepare_reducto_document(http_client, document, connection, headers).await
     }
 
     fn guard_document_before_preparation(&self) -> bool {

@@ -1,6 +1,5 @@
 use super::transformation::{REDUCTO_PARSE_LEGACY_CONFIG as LEGACY, REDUCTO_PARSE_V3_CONFIG as V3};
-use crate::ocr::perform_ocr;
-use crate::ocr::tests::{MockResponse, body, mock_server, transform, wire_request};
+use crate::ocr::tests::{MockResponse, body, mock_server, perform_ocr, transform, wire_request};
 use rstest::rstest;
 use serde_json::json;
 
@@ -36,7 +35,7 @@ async fn test_parse_legacy_wraps_enhance_under_options() {
 #[rstest]
 #[case("http://example.com/a.pdf")]
 #[case("https://example.com/a.pdf")]
-#[case("data:application/pdf,YWJj")]
+#[case("data:application/pdf;base64")]
 #[case("data:application/pdf;base64,INVALID!")]
 #[tokio::test]
 async fn test_parse_v3_rejects_plain_http_urls(#[case] source: &str) {
@@ -86,7 +85,15 @@ fn reducto_missing_result_and_null_result_are_distinct() {
 #[case("parse-v3")]
 #[case("parse-legacy")]
 #[tokio::test]
-async fn test_parse_v3_file_upload_and_response_mapping(#[case] model: &str) {
+async fn test_parse_v3_file_upload_and_response_mapping(
+    #[case] model: &str,
+    #[values(
+        "data:application/pdf;base64,YWJj",
+        "data:application/pdf,abc",
+        "DATA:application/pdf;BASE64,YWJj#page"
+    )]
+    source: &str,
+) {
     let (base, seen, server) = mock_server(vec![
         MockResponse::json(json!({"file_id":"reducto://uploaded.pdf"})),
         MockResponse::json(
@@ -94,9 +101,9 @@ async fn test_parse_v3_file_upload_and_response_mapping(#[case] model: &str) {
         ),
     ])
     .await;
-    let response = perform_ocr(wire_request(&format!("reducto/{model}"), &base, json!({})))
-        .await
-        .unwrap();
+    let mut request = wire_request(&format!("reducto/{model}"), &base, json!({}));
+    request.document = request.document.with_source(source.to_string());
+    let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
     assert_eq!(response.pages[0].markdown, "hello");
     let seen = seen.lock().unwrap();

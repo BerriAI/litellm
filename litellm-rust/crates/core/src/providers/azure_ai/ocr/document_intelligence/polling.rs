@@ -5,13 +5,14 @@ use std::time::Duration;
 
 use super::types::{AzureDocumentIntelligenceOperation, OperationStatus};
 use crate::constants::{AZURE_DI_SUBSCRIPTION_HEADER, OCR_POLL_RETRY_SECS};
-use crate::ocr::client::{http_client, network_error};
+use crate::ocr::client::network_error;
 use crate::ocr::types::OcrConnection;
 use crate::ocr::wire::{DecodedOcrResponse, read_json_response};
 use reqwest::Url;
 use tokio::time::Instant;
 
 pub(crate) async fn read_operation_response(
+    http_client: &reqwest::Client,
     response: reqwest::Response,
     original_url: &str,
     headers: &[(String, String)],
@@ -34,11 +35,12 @@ pub(crate) async fn read_operation_response(
     {
         return Err(OcrPollingError::PollOrigin.into());
     }
-    poll_document_intelligence(operation, headers, connection, native).await
+    poll_document_intelligence(http_client, operation, headers, connection, native).await
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 async fn poll_document_intelligence(
+    http_client: &reqwest::Client,
     url: Url,
     headers: &[(String, String)],
     connection: &OcrConnection,
@@ -52,7 +54,7 @@ async fn poll_document_intelligence(
             .checked_duration_since(Instant::now())
             .filter(|remaining| !remaining.is_zero())
             .ok_or(OcrPollingError::PollTimeout)?;
-        let mut builder = http_client()?
+        let mut builder = http_client
             .get(url.clone())
             .timeout(remaining.min(connection.timeout));
         for (name, value) in headers {
