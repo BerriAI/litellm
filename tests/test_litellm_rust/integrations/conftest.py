@@ -10,7 +10,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.prometheus import PrometheusLogger
-from tests.test_litellm_rust.conftest import isolate_rust_state
 from tests.test_litellm_rust.integrations import GenericAPIExportHarness, OtelHarness, Route, provider_response
 from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
 

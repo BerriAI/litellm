@@ -3,6 +3,7 @@ import os
 from collections.abc import AsyncIterator, Generator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, asynccontextmanager, contextmanager
+from threading import Lock
 from types import ModuleType
 from typing import Final, Literal, cast
 
@@ -16,9 +17,9 @@ import litellm
 from litellm import utils
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.rust_bridge.configuration import (  # pyright: ignore[reportPrivateUsage]  # share the canonical env parsing with the module under test
+from litellm.rust_bridge.configuration import (  # pyright: ignore[reportPrivateUsage]  # preserve raw configuration state in test isolation
+    _CONFIGURATION,
     _parse_env_bool,
-    reset_rust_configuration,
 )
 from tests._prometheus_helpers import isolated_prometheus_registry
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
@@ -34,6 +35,29 @@ CALLBACK_ATTRIBUTES: Final = (
     "_async_failure_callback",
 )
 Backend = Literal["python", "rust"]
+
+
+class _BackendScopes:
+    def __init__(self) -> None:
+        self._owner: asyncio.Task[object] | None = None
+        self._lock: Final = Lock()
+
+    @contextmanager
+    def enter(self) -> Generator[None]:
+        task: Final = asyncio.current_task()
+        with self._lock:
+            previous: Final = self._owner
+            if previous is not None and previous is not task:
+                raise RuntimeError("isolated_backend scopes cannot overlap across tasks; run them sequentially")
+            self._owner = task
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._owner = previous
+
+
+_BACKEND_SCOPES: Final = _BackendScopes()
 
 
 def _list_attribute(container: ModuleType, attribute: str) -> list[object]:
@@ -57,7 +81,7 @@ def _isolated_list(container: ModuleType, attribute: str) -> Generator[None]:
 
 
 @contextmanager
-def _rebound(container: ModuleType, attribute: str, value: object) -> Generator[None]:
+def _rebound(container: object, attribute: str, value: object) -> Generator[None]:
     original: Final[object] = getattr(container, attribute)
     setattr(container, attribute, value)
     try:
@@ -68,16 +92,19 @@ def _rebound(container: ModuleType, attribute: str, value: object) -> Generator[
 
 @contextmanager
 def _rust_mode(enabled: bool) -> Generator[None]:
-    reset_rust_configuration()
-    litellm.rust(enabled)
-    try:
+    with _rebound(_CONFIGURATION, "override", enabled):
         yield
-    finally:
-        reset_rust_configuration()
 
 
 @asynccontextmanager
 async def isolated_backend(backend: Backend) -> AsyncIterator[ExitStack]:
+    with _BACKEND_SCOPES.enter():
+        async with _isolated_backend(backend) as stack:
+            yield stack
+
+
+@asynccontextmanager
+async def _isolated_backend(backend: Backend) -> AsyncIterator[ExitStack]:
     with ExitStack() as stack:
         for attribute in CALLBACK_ATTRIBUTES:
             stack.enter_context(_isolated_list(litellm, attribute))
@@ -104,7 +131,8 @@ async def isolated_backend(backend: Backend) -> AsyncIterator[ExitStack]:
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="function")
 async def isolate_rust_state() -> AsyncIterator[ExitStack]:
-    async with isolated_backend("rust") as stack:
+    # pytest-asyncio runs fixture setup and the test body in different tasks.
+    async with _isolated_backend("rust") as stack:
         yield stack
 
 
