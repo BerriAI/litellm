@@ -3,6 +3,8 @@ general_settings:
   store_model_in_db: true
 
 litellm_settings:
+  callbacks: ["prometheus"]
+  require_auth_for_metrics_endpoint: false
   cache: true
   cache_params:
     type: redis

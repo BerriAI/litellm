@@ -86,6 +86,8 @@ jobs:
         env:
           E2E_REDIS_TIMEOUT: "1"
           LITELLM_PROXY_URL: http://localhost:4000
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: "6379"
         run: |
           uv run --no-sync pytest tests/e2e/router/test_redis_timeout_e2e.py -v --tb=short -rA
 

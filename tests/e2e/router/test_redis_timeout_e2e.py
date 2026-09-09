@@ -1,8 +1,10 @@
 """Live e2e: the proxy keeps answering while every Redis command times out.
 
 Runs only against a proxy booted from tests/e2e/gateway/redis_timeout_ci_config.yml, which
-points cache_params at a real Redis with socket_timeout 0.001 so commands time out and the
-circuit breaker opens. Each request fails its primary deployment, whose api_base is a closed
+points cache_params at a real Redis with socket_timeout 0.001. The test holds that Redis in
+CLIENT PAUSE WRITE for its duration, so every write the proxy sends, the spend counter increment
+included, hangs past the timeout, and it proves the degradation was real from the breaker metrics on /metrics: fresh timeouts, a breaker transition,
+or an already-open breaker rejecting every call, which is the state a customer's worker sits in. Each request fails its primary deployment, whose api_base is a closed
 port, retries, falls back to the backup and succeeds, so it carries retry breadcrumbs; its cost
 tracking then fails on the spend counter increment and stringifies the request metadata into a
 failed-tracking alert. On v1.100.0 that string doubled per request until the worker hung
@@ -11,12 +13,15 @@ failed-tracking alert. On v1.100.0 that string doubled per request until the wor
 
 from __future__ import annotations
 
+import os
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Final
 
 import pytest
+import redis
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
 from e2e_http import NoBody, Result, Success
@@ -33,6 +38,11 @@ REQUESTS: Final = 20
 MAX_SECONDS_PER_REQUEST: Final = 10.0
 MAX_LATENCY_GROWTH_RATIO: Final = 3.0
 MAX_LIVELINESS_SECONDS: Final = 2.0
+REDIS_PAUSE_MS: Final = 600_000
+BREAKER_FAILURE_THRESHOLD: Final = 5
+TIMEOUT_FAILURES_RE: Final = re.compile(
+    r'^litellm_redis_circuit_breaker_failures_total\{failure_class="timeout"\} ([0-9.e+]+)$', re.M
+)
 
 
 class ResponsesBody(BaseModel):
@@ -86,6 +96,32 @@ ENDPOINTS: Final = (
         served=lambda data: isinstance(data, ResponsesObject) and bool(data.output),
     ),
 )
+BREAKER_OPEN_RE: Final = re.compile(r'^litellm_redis_circuit_breaker_state\{state="open"\} ([0-9.e+]+)$', re.M)
+BREAKER_TRANSITIONS_RE: Final = re.compile(
+    r'^litellm_redis_circuit_breaker_transitions_total\{state="[a-z_]+"\} ([0-9.e+]+)$', re.M
+)
+
+
+@pytest.fixture
+def paused_redis() -> Iterator[None]:
+    """Hold the proxy's Redis in CLIENT PAUSE WRITE so every write it sends outlives the 1 ms socket
+    timeout. A loopback Redis otherwise answers many commands inside that budget. Reads stay live so
+    this control connection can lift the pause in teardown."""
+    host = os.environ.get("REDIS_HOST")
+    port = os.environ.get("REDIS_PORT")
+    assert host and port, "REDIS_HOST and REDIS_PORT must name the Redis the proxy under test uses"
+    control = redis.Redis(host=host, port=int(port), socket_timeout=5)
+    control.client_pause(REDIS_PAUSE_MS, all=False)  # pyright: ignore[reportUnknownMemberType]  # redis-py stubs return Any
+    try:
+        yield
+    finally:
+        control.client_unpause()  # pyright: ignore[reportUnknownMemberType]  # redis-py stubs return Any
+        control.close()
+
+
+def _metric(proxy: ProxyClient, pattern: re.Pattern[str]) -> float:
+    body = proxy.probe("/metrics", params=NoBody()).body
+    return sum(float(match.group(1)) for match in pattern.finditer(body))
 
 
 class TestRedisTimeout:
@@ -95,9 +131,11 @@ class TestRedisTimeout:
         exercised_on=["chat_completions", "responses"],
     )
     def test_retries_under_redis_timeouts_keep_answering(
-        self, client: ComplexityRouterClient, resources: ResourceManager, endpoint: Endpoint
+        self, client: ComplexityRouterClient, resources: ResourceManager, endpoint: Endpoint, paused_redis: None
     ) -> None:
         proxy = client.proxy
+        timeouts_before = _metric(proxy, TIMEOUT_FAILURES_RE)
+        transitions_before = _metric(proxy, BREAKER_TRANSITIONS_RE)
         key = proxy.generate_key(
             KeyGenerateBody(
                 models=[PRIMARY_MODEL, BACKUP_MODEL], key_alias=f"e2e-redis-timeout-{endpoint.name}-{unique_marker()}"
@@ -137,6 +175,20 @@ class TestRedisTimeout:
         assert probe.healthy, f"/health/liveliness returned {probe.status_code} after the Redis timeout loop"
         assert liveliness_seconds < MAX_LIVELINESS_SECONDS, (
             f"/health/liveliness took {liveliness_seconds:.1f}s after the loop; the worker is stalled"
+        )
+
+        timeouts_total = _metric(proxy, TIMEOUT_FAILURES_RE)
+        timeouts = timeouts_total - timeouts_before
+        transitions = _metric(proxy, BREAKER_TRANSITIONS_RE) - transitions_before
+        breaker_open = _metric(proxy, BREAKER_OPEN_RE) >= 1
+        assert timeouts_total >= BREAKER_FAILURE_THRESHOLD, (
+            f"the proxy counted only {timeouts_total:.0f} Redis timeouts in its lifetime; the write-paused Redis "
+            "never made its spend counter writes time out, so this run proved nothing"
+        )
+        assert timeouts >= REQUESTS or transitions >= 1 or breaker_open, (
+            f"during {REQUESTS} {endpoint.name} requests the breaker counted {timeouts:.0f} new timeouts, "
+            f"{transitions:.0f} state transitions, and ended {'open' if breaker_open else 'closed'}; "
+            "Redis was healthy for this case, so it proved nothing"
         )
 
         rows = proxy.poll_logs_for_key(key, min_rows=REQUESTS)
