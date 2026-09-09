@@ -5,8 +5,8 @@ from typing import Final, cast
 import pytest
 
 import litellm
-from tests.test_litellm_rust.contracts import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -135,7 +135,7 @@ async def test_messages_delivers_before_upstream_finishes(messages_server: Recor
     import asyncio
     import threading
 
-    from tests.test_litellm_rust.callback_recorder import RecordingLogger
+    from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 
     release: Final = threading.Event()
     recorder: Final = RecordingLogger()
@@ -181,7 +181,7 @@ async def test_messages_delivers_before_upstream_finishes(messages_server: Recor
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ending", ["truncated", "provider_error", "http_error"])
 async def test_messages_stream_failures_do_not_replay(messages_server: RecordingServer, ending: str) -> None:
-    from tests.test_litellm_rust.callback_recorder import RecordingLogger
+    from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 
     recorder: Final = RecordingLogger()
     events: Final = (
@@ -221,7 +221,7 @@ async def test_messages_stream_abandonment_releases_roots(messages_server: Recor
     import threading
     import weakref
 
-    from tests.test_litellm_rust.callback_recorder import RecordingLogger
+    from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 
     class NamesOnlyLogger(RecordingLogger):
         def _record(self, name: str, kwargs: object = None, response: object = None) -> None:
@@ -261,9 +261,13 @@ async def test_messages_stream_abandonment_releases_roots(messages_server: Recor
             await stream.aclose()
         del stream
         gc.collect()
-        await recorder.wait_for_async("async_log_failure_event")
-        assert recorder.names.count("async_log_failure_event") == 1
+        assert reference() is not None
         assert "async_log_success_event" not in recorder.names
+        assert "async_log_failure_event" not in recorder.names
+        release.set()
+        await recorder.wait_for_async("async_log_success_event")
+        assert recorder.names.count("async_log_success_event") == 1
+        assert "async_log_failure_event" not in recorder.names
         assert len(messages_server.requests) == 1
         gc.collect()
         assert reference() is None

@@ -7,9 +7,7 @@ from urllib.parse import urlsplit
 import pytest
 
 import litellm
-from litellm.rust_bridge.provenance import has_rust_response_marker
-from tests.test_litellm_rust.contracts import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
-from tests.test_litellm_rust.recording_server import RecordedRequest, RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.recording_server import RecordedRequest, RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -45,74 +43,6 @@ def _verify_sigv4(request: RecordedRequest, secret_key: str) -> None:
     assert hmac.compare_digest(attributes["Signature"], expected)
 
 
-@pytest.fixture
-def ocr_server(recording_server: RecordingServer) -> RecordingServer:
-    recording_server.default_response = ResponseSpec(body=OCR_RESPONSE)
-    return recording_server
-
-
-def test_public_ocr_entrypoint_uses_native_transport_when_enabled(ocr_server: RecordingServer) -> None:
-    response: Final = litellm.ocr(
-        model=OCR_MODEL,
-        document=OCR_DOCUMENT,
-        api_key="test-key",
-        api_base=ocr_server.base_url,
-    )
-
-    assert response.pages[0].markdown == "native OCR response"
-    assert has_rust_response_marker(response)
-
-
-@pytest.mark.asyncio
-async def test_public_aocr_entrypoint_uses_native_transport_when_enabled(ocr_server: RecordingServer) -> None:
-    response: Final = await litellm.aocr(
-        model=OCR_MODEL,
-        document=OCR_DOCUMENT,
-        api_key="test-key",
-        api_base=ocr_server.base_url,
-    )
-
-    assert response.pages[0].markdown == "native OCR response"
-    assert has_rust_response_marker(response)
-
-
-def test_public_ocr_falls_back_when_native_transport_declines(ocr_server: RecordingServer) -> None:
-    response: Final = litellm.ocr(
-        model=OCR_MODEL,
-        document={"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
-        api_key="test-key",
-        api_base=ocr_server.base_url,
-    )
-
-    assert response.pages[0].markdown == "native OCR response"
-    assert not has_rust_response_marker(response)
-
-
-def test_public_ocr_uses_python_transport_when_disabled(ocr_server: RecordingServer) -> None:
-    litellm.rust(False)
-
-    response: Final = litellm.ocr(
-        model=OCR_MODEL,
-        document=OCR_DOCUMENT,
-        api_key="test-key",
-        api_base=ocr_server.base_url,
-    )
-
-    assert response.pages[0].markdown == "native OCR response"
-    assert not has_rust_response_marker(response)
-
-
-def test_native_ocr_requests_an_uncompressed_response(ocr_server: RecordingServer) -> None:
-    litellm.ocr(
-        model=OCR_MODEL,
-        document=OCR_DOCUMENT,
-        api_key="test-key",
-        api_base=ocr_server.base_url,
-    )
-
-    assert ocr_server.requests[0].headers["accept-encoding"] == "identity"
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("provider", ["anthropic", "bedrock"])
@@ -131,8 +61,8 @@ async def test_chat_retains_callback_edits_through_public_dispatch(
 
     litellm.rust(native)
 
-    from tests.test_litellm_rust.callback_recorder import RecordingLogger
-    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
+    from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+    from tests.test_litellm_rust.support.requests import MESSAGES_RESPONSE
 
     recording_server.default_response = ResponseSpec(
         status=status,
@@ -229,7 +159,7 @@ async def test_bedrock_callbacks_share_state_without_replacing_signed_transport(
     status: int,
     native: bool,
 ) -> None:
-    from tests.test_litellm_rust.callback_recorder import RecordingLogger
+    from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 
     litellm.rust(native)
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
@@ -302,7 +232,7 @@ async def test_native_chat_pre_call_preserves_the_caller_task_and_context(
     from contextvars import ContextVar
 
     from litellm.integrations.custom_logger import CustomLogger
-    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
+    from tests.test_litellm_rust.support.requests import MESSAGES_RESPONSE
 
     recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
     marker: Final[ContextVar[str]] = ContextVar("native_chat_marker", default="missing")
@@ -337,7 +267,7 @@ async def test_native_chat_concurrent_calls_keep_callback_roots_isolated(
     import asyncio
 
     from litellm.integrations.custom_logger import CustomLogger
-    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
+    from tests.test_litellm_rust.support.requests import MESSAGES_RESPONSE
 
     call_ids: Final = tuple(f"chat-{index}" for index in range(4))
     recording_server.expected_requests = len(call_ids)
@@ -375,7 +305,7 @@ async def test_native_chat_callback_can_make_a_nested_native_call(
     import threading
 
     from litellm.integrations.custom_logger import CustomLogger
-    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
+    from tests.test_litellm_rust.support.requests import MESSAGES_RESPONSE
 
     recording_server.expected_requests = 2
     recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
@@ -421,8 +351,8 @@ async def test_native_chat_cancellation_during_io_does_not_publish_a_terminal(
     import asyncio
 
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-    from tests.test_litellm_rust.callback_recorder import RecordingLogger
-    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
+    from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+    from tests.test_litellm_rust.support.requests import MESSAGES_RESPONSE
 
     recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE, delay=0.5)
     recorder: Final = RecordingLogger()

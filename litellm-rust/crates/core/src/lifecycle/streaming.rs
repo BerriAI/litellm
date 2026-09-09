@@ -1,11 +1,12 @@
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use futures_util::Stream;
+use futures_util::{Stream, StreamExt};
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Semaphore};
 use tokio::task::JoinHandle;
 
 use crate::Error;
@@ -13,8 +14,41 @@ use crate::integrations::custom_logger::CallbackTiming;
 use crate::integrations::types::Usage;
 
 use super::{
-    CallLifecycleContext, Clock, TerminalClassification, TerminalDispatcher, TerminalRecord,
+    CallLifecycle, CallLifecycleContext, Outcome, Clock, TerminalClassification, TerminalDispatcher, TerminalRecord,
 };
+
+#[derive(Clone)]
+pub struct StreamDrainPolicy {
+    permits: Arc<Semaphore>,
+    idle_timeout: Duration,
+}
+
+impl StreamDrainPolicy {
+    pub fn with_max_detached(max_detached: usize) -> Self {
+        Self::new(max_detached, Duration::from_secs(crate::constants::HTTP_TIMEOUT_SECS))
+    }
+
+    pub fn new(max_detached: usize, idle_timeout: Duration) -> Self {
+        Self { permits: Arc::new(Semaphore::new(max_detached)), idle_timeout }
+    }
+
+    pub fn with_idle_timeout(&self, idle_timeout: Duration) -> Self {
+        Self { permits: self.permits.clone(), idle_timeout }
+    }
+}
+
+impl Default for StreamDrainPolicy {
+    fn default() -> Self {
+        static POLICY: OnceLock<StreamDrainPolicy> = OnceLock::new();
+        POLICY.get_or_init(|| Self::with_max_detached(100)).clone()
+    }
+}
+
+pub trait StreamDrain: Send + Sync {
+    fn stream_drain_policy(&self) -> StreamDrainPolicy {
+        StreamDrainPolicy::default()
+    }
+}
 
 pub type BytesStream = Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>>;
 
@@ -49,6 +83,22 @@ pub struct StreamingCall {
 }
 
 impl StreamingCall {
+    pub(crate) fn with_lifecycle<S>(
+        source: StreamingSource,
+        observer: Box<dyn StreamingObserver>,
+        context: CallLifecycleContext,
+        start_time: f64,
+        services: Arc<S>,
+        program: CallLifecycle,
+    ) -> Self
+    where
+        S: Clock + TerminalDispatcher + StreamDrain + 'static,
+    {
+        let mut call = Self::new(source, observer, context, start_time, services.clone());
+        call.completion.lifecycle = Some(program);
+        call
+    }
+
     pub(crate) fn new<S>(
         source: StreamingSource,
         observer: Box<dyn StreamingObserver>,
@@ -57,19 +107,20 @@ impl StreamingCall {
         services: Arc<S>,
     ) -> Self
     where
-        S: Clock + TerminalDispatcher + 'static,
+        S: Clock + TerminalDispatcher + StreamDrain + 'static,
     {
         let (sender, receiver) = oneshot::channel();
         Self {
             metadata: source.metadata,
             stream: Box::pin(ObservedStream {
-                inner: Some(source.stream),
-                observer,
-                sender: Some(sender),
+                state: Some(ObservedState { inner: Some(source.stream), observer, sender: Some(sender) }),
+                runtime: Some(tokio::runtime::Handle::current()),
+                drain: services.stream_drain_policy(),
             }),
             completion: StreamingCompletion {
                 runtime: tokio::runtime::Handle::current(),
                 receiver: Some(receiver),
+                lifecycle: None,
                 context: Some(context),
                 start_time,
                 services,
@@ -79,6 +130,7 @@ impl StreamingCall {
 }
 
 pub struct StreamingCompletion {
+    lifecycle: Option<CallLifecycle>,
     runtime: tokio::runtime::Handle,
     receiver: Option<oneshot::Receiver<StreamTerminal>>,
     context: Option<CallLifecycleContext>,
@@ -100,6 +152,7 @@ impl StreamingCompletion {
             .context
             .take()
             .expect("stream completion registered once");
+        let lifecycle = self.lifecycle.take();
         let services = self.services.clone();
         let start_time = self.start_time;
         self.runtime.spawn(async move {
@@ -118,7 +171,17 @@ impl StreamingCompletion {
                 terminal_result.classification,
                 terminal_result.projection,
             );
-            let _ = services.dispatch(&terminal).await;
+            services.record(&terminal);
+            if let Some(mut program) = lifecycle {
+                let outcome = match terminal.classification {
+                    TerminalClassification::Success => Outcome::Success,
+                    _ => Outcome::Failure,
+                };
+                program.advance(outcome, services.observations());
+                program.finish_stream(&*services, &context, &terminal, None).await;
+            } else {
+                super::completion::dispatch(&*services, &terminal).await;
+            }
             terminal
         })
     }
@@ -142,13 +205,13 @@ struct StreamTerminal {
     classification: TerminalClassification,
 }
 
-struct ObservedStream {
+struct ObservedState {
     inner: Option<BytesStream>,
     observer: Box<dyn StreamingObserver>,
     sender: Option<oneshot::Sender<StreamTerminal>>,
 }
 
-impl ObservedStream {
+impl ObservedState {
     fn complete(&mut self, classification: TerminalClassification) {
         self.inner.take();
         if let Some(sender) = self.sender.take() {
@@ -161,7 +224,7 @@ impl ObservedStream {
     }
 }
 
-impl Stream for ObservedStream {
+impl Stream for ObservedState {
     type Item = Result<Bytes, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -211,11 +274,51 @@ impl Stream for ObservedStream {
     }
 }
 
+struct ObservedStream {
+    state: Option<ObservedState>,
+    runtime: Option<tokio::runtime::Handle>,
+    drain: StreamDrainPolicy,
+}
+
+impl Stream for ObservedStream {
+    type Item = Result<Bytes, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.state.as_mut() {
+            Some(state) => Pin::new(state).poll_next(cx),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
 impl Drop for ObservedStream {
     fn drop(&mut self) {
-        self.complete(TerminalClassification::Failure {
-            kind: "Cancelled".to_string(),
-            message: "stream consumer dropped before completion".to_string(),
+        let Some(mut state) = self.state.take().filter(|state| state.sender.is_some()) else { return; };
+        let Some(runtime) = &self.runtime else {
+            state.complete(TerminalClassification::Failure {
+                kind: "Cancelled".into(), message: "stream consumer dropped before completion".into(),
+            });
+            return;
+        };
+        let Ok(permit) = self.drain.permits.clone().try_acquire_owned() else {
+            state.complete(TerminalClassification::Incomplete { message: "detached stream drain capacity exhausted".into() });
+            return;
+        };
+        let timeout = self.drain.idle_timeout;
+        runtime.spawn(async move {
+            let _permit = permit;
+            loop {
+                match tokio::time::timeout(timeout, state.next()).await {
+                    Ok(Some(Ok(_))) => {},
+                    Ok(_) => break,
+                    Err(_) => {
+                        state.complete(TerminalClassification::Failure {
+                            kind: "NetworkError".into(), message: "detached stream read timed out".into(),
+                        });
+                        break;
+                    }
+                }
+            }
         });
     }
 }
@@ -311,15 +414,13 @@ mod tests {
         let (sender, receiver) = oneshot::channel();
         (
             ObservedStream {
-                inner: Some(Box::pin(Source {
-                    stream: inner,
-                    probe: probe.clone(),
-                })),
-                observer: Box::new(Observer {
-                    probe: probe.clone(),
-                    last: Bytes::new(),
+                state: Some(ObservedState {
+                    inner: Some(Box::pin(Source { stream: inner, probe: probe.clone() })),
+                    observer: Box::new(Observer { probe: probe.clone(), last: Bytes::new() }),
+                    sender: Some(sender),
                 }),
-                sender: Some(sender),
+                runtime: None,
+                drain: StreamDrainPolicy::default(),
             },
             receiver,
         )
@@ -401,7 +502,7 @@ mod tests {
                 .unwrap();
             match terminal.classification {
                 TerminalClassification::Success => assert_eq!(expected, "Success"),
-                TerminalClassification::Failure { kind, .. } => assert_eq!(kind, expected),
+                other => assert_eq!(other.kind(), expected),
             }
             assert_eq!(terminal.usage.total_tokens, 5);
             assert_eq!(probe.drops.load(Ordering::Relaxed), 1, "{expected}");
@@ -427,6 +528,8 @@ mod tests {
             TerminalClassification::Failure { kind, .. } if kind == "Cancelled"));
     }
     struct Dispatcher(tokio::sync::mpsc::UnboundedSender<TerminalRecord>);
+
+    impl StreamDrain for Dispatcher {}
 
     impl Clock for Dispatcher {
         fn now(&self) -> f64 {
@@ -488,7 +591,7 @@ mod tests {
             });
             assert_eq!(
                 matches!(terminal.classification, TerminalClassification::Success),
-                consume
+                true
             );
             assert_eq!(terminal.usage.total_tokens, 5);
             assert!(runtime.block_on(terminals.recv()).is_none());

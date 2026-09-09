@@ -1,3 +1,4 @@
+use crate::messages::types::ProviderMessagesRequest;
 use std::future::{Future, Ready, ready};
 use std::sync::Arc;
 
@@ -12,7 +13,8 @@ use crate::lifecycle::{
     TerminalRecord,
 };
 
-use super::handler::execute_messages_provider_call;
+use super::handler::execute_provider_messages_request;
+use super::request::build_provider_request;
 use super::types::{AnthropicMessagesResponse, MessagesRequest};
 
 pub use crate::lifecycle::program::{Observations, Operation, Transition};
@@ -44,6 +46,9 @@ impl LifecycleRoute for MessagesRoute {
     type Error = Error;
     type Decline = std::convert::Infallible;
     type State = MessagesState;
+
+    fn program(state: &Self::State) -> &CallLifecycle { &state.program }
+    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle { &mut state.program }
 
     fn admit(_: &(), options: Options) -> Result<Result<Self::State, Self::Decline>, Error> {
         Ok(Ok(MessagesState {
@@ -95,6 +100,7 @@ mod program_tests {
                 false,
                 vec![
                     Operation::Setup,
+                    Operation::InputHooks,
                     Operation::BuildRequest,
                     Operation::PreCall,
                     Operation::Send,
@@ -107,6 +113,7 @@ mod program_tests {
                 vec![
                     Operation::Setup,
                     Operation::DeploymentPre,
+                    Operation::InputHooks,
                     Operation::BuildRequest,
                     Operation::PreCall,
                     Operation::Send,
@@ -141,7 +148,7 @@ mod program_tests {
 
 pub trait MessagesServices:
     PreCallHooks<MessagesRequest>
-    + ModerationHooks<MessagesRequest>
+    + ModerationHooks<ProviderMessagesRequest>
     + DeploymentPreHooks<MessagesRequest>
     + DeploymentSuccessHooks<AnthropicMessagesResponse>
     + DeploymentFailureHooks
@@ -152,7 +159,7 @@ pub trait MessagesServices:
 
 impl<T> MessagesServices for T where
     T: PreCallHooks<MessagesRequest>
-        + ModerationHooks<MessagesRequest>
+        + ModerationHooks<ProviderMessagesRequest>
         + DeploymentPreHooks<MessagesRequest>
         + DeploymentSuccessHooks<AnthropicMessagesResponse>
         + DeploymentFailureHooks
@@ -184,13 +191,13 @@ impl PreCallHooks<MessagesRequest> for NoopServices {
     }
 }
 
-impl ModerationHooks<MessagesRequest> for NoopServices {
-    type ModerationFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
+impl ModerationHooks<ProviderMessagesRequest> for NoopServices {
+    type ModerationFuture<'a> = Ready<ActionResult<ProviderMessagesRequest, Error>>;
 
     fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
-        request: MessagesRequest,
+        request: ProviderMessagesRequest,
     ) -> Self::ModerationFuture<'a> {
         ready(ActionResult::Continue(request))
     }
@@ -206,41 +213,75 @@ impl TerminalDispatcher for NoopServices {
     }
 }
 
+impl Options {
+    pub(crate) fn context(&self, mut context: CallLifecycleContext) -> CallLifecycleContext {
+        if let Some(call_id) = &self.call_id {
+            context.litellm_call_id = call_id.clone();
+        }
+        if let Some(trace_id) = &self.trace_id {
+            context.trace_id = Some(trace_id.clone());
+        }
+        context
+    }
+
+    fn apply(self, context: CallLifecycleContext) -> (CallLifecycle, CallLifecycleContext) {
+        let context = self.context(context);
+        (
+            CallLifecycle::planned(ProgramOptions {
+                asynchronous: self.asynchronous,
+                internal_call: self.internal_call,
+            }),
+            context,
+        )
+    }
+}
+
 pub async fn messages<S: MessagesServices>(
     services: &S,
     request: MessagesRequest,
-    _options: Options,
+    options: Options,
     context: CallLifecycleContext,
 ) -> ExecutedCall<AnthropicMessagesResponse, Error> {
-    CallLifecycle::default()
-        .run_with_usage(
-            (context, request),
-            services,
-            services,
-            services,
-            |request| async move { execute_messages_provider_call(request).await },
-            anthropic_response_usage,
-        )
-        .await
+    messages_with_provider(
+        services,
+        request,
+        options,
+        context,
+        |request| std::future::ready(build_provider_request(request)),
+        execute_provider_messages_request,
+    )
+    .await
 }
 
-pub(crate) async fn messages_with_provider<S, ProviderCall, ProviderFuture>(
+pub(crate) async fn messages_with_provider<
+    S,
+    Prepare,
+    PrepareFuture,
+    ProviderCall,
+    ProviderFuture,
+>(
     services: &S,
     request: MessagesRequest,
+    options: Options,
     context: CallLifecycleContext,
+    prepare: Prepare,
     provider_call: ProviderCall,
 ) -> ExecutedCall<AnthropicMessagesResponse, Error>
 where
     S: MessagesServices,
-    ProviderCall: FnOnce(MessagesRequest) -> ProviderFuture,
-    ProviderFuture: Future<Output = Result<AnthropicMessagesResponse, Error>>,
+    Prepare: FnOnce(MessagesRequest) -> PrepareFuture + Send,
+    PrepareFuture: Future<Output = Result<ProviderMessagesRequest, Error>> + Send,
+    ProviderCall: FnOnce(ProviderMessagesRequest) -> ProviderFuture + Send,
+    ProviderFuture: Future<Output = Result<AnthropicMessagesResponse, Error>> + Send,
 {
-    CallLifecycle::default()
-        .run_with_usage(
+    let (program, context) = options.apply(context);
+    program
+        .run_prepared_with_usage(
             (context, request),
             services,
             services,
             services,
+            prepare,
             provider_call,
             anthropic_response_usage,
         )
@@ -258,26 +299,31 @@ fn anthropic_response_usage(response: &AnthropicMessagesResponse) -> Option<Usag
     })
 }
 
-pub(crate) async fn messages_stream_with<S, ProviderCall, ProviderFuture>(
+pub(crate) async fn messages_stream_with<S, Prepare, PrepareFuture, ProviderCall, ProviderFuture>(
     services: Arc<S>,
     request: MessagesRequest,
-    _options: Options,
+    options: Options,
     context: CallLifecycleContext,
+    prepare: Prepare,
     provider_call: ProviderCall,
 ) -> Result<StreamingCall, Error>
 where
-    S: MessagesServices + 'static,
-    ProviderCall: FnOnce(MessagesRequest) -> ProviderFuture,
-    ProviderFuture: Future<Output = Result<crate::lifecycle::StreamingSource, Error>>,
+    S: MessagesServices + crate::lifecycle::StreamDrain + 'static,
+    Prepare: FnOnce(MessagesRequest) -> PrepareFuture + Send,
+    PrepareFuture: Future<Output = Result<ProviderMessagesRequest, Error>> + Send,
+    ProviderCall: FnOnce(ProviderMessagesRequest) -> ProviderFuture + Send,
+    ProviderFuture: Future<Output = Result<crate::lifecycle::StreamingSource, Error>> + Send,
 {
-    CallLifecycle::default()
-        .run_streaming(
+    let (program, context) = options.apply(context);
+    program
+        .run_streaming_prepared(
             context,
             request,
             services,
             Box::new(crate::sse::SseObserver::new(
                 super::streaming::AnthropicMessagesObserver::default(),
             )),
+            prepare,
             provider_call,
         )
         .await

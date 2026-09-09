@@ -11,6 +11,7 @@ use litellm_core::lifecycle::{
     DeploymentSuccessHooks, ModerationHooks, PreCallHooks, TerminalDispatcher, TerminalRecord,
 };
 use litellm_core::messages::types::MessagesRequest;
+use litellm_core::messages::types::ProviderMessagesRequest;
 use litellm_core::router::Router;
 use litellm_core::runtime::{
     CallServices, ChatCompletionsServices, LiteLlm, MessagesRuntimeServices, NativeHttpTransport,
@@ -49,6 +50,8 @@ impl CallServices for GatewayMessagesCallServices {
     }
 }
 
+impl litellm_core::lifecycle::StreamDrain for GatewayMessagesSession {}
+
 impl Clock for GatewayMessagesSession {
     fn now(&self) -> f64 {
         std::time::SystemTime::now()
@@ -69,13 +72,13 @@ impl PreCallHooks<MessagesRequest> for GatewayMessagesSession {
     }
 }
 
-impl ModerationHooks<MessagesRequest> for GatewayMessagesSession {
-    type ModerationFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
+impl ModerationHooks<ProviderMessagesRequest> for GatewayMessagesSession {
+    type ModerationFuture<'a> = std::future::Ready<ActionResult<ProviderMessagesRequest, Error>>;
 
     fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
-        request: MessagesRequest,
+        request: ProviderMessagesRequest,
     ) -> Self::ModerationFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }

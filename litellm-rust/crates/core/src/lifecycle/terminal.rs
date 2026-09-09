@@ -15,7 +15,20 @@ pub struct CostInputs {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum TerminalClassification {
     Success,
+    Cancelled { message: String },
+    Incomplete { message: String },
     Failure { kind: String, message: String },
+}
+
+impl TerminalClassification {
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::Success => "Success",
+            Self::Cancelled { .. } => "Cancelled",
+            Self::Incomplete { .. } => "Incomplete",
+            Self::Failure { kind, .. } => kind,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -99,6 +112,11 @@ impl From<&TerminalRecord> for ModelCallDetails {
         let details = Self::from_standard_logging_payload(record.into());
         match &record.classification {
             TerminalClassification::Success => details,
+            TerminalClassification::Cancelled { message } | TerminalClassification::Incomplete { message } => {
+                details.with_failure_error(LoggingError {
+                    kind: record.classification.kind().into(), message: message.clone(),
+                })
+            }
             TerminalClassification::Failure { kind, message } => {
                 details.with_failure_error(LoggingError {
                     kind: kind.clone(),

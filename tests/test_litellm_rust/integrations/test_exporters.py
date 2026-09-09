@@ -9,8 +9,8 @@ import litellm
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils import litellm_logging
 from tests._prometheus_helpers import isolated_prometheus_registry
-from tests.test_litellm_rust.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.contracts import MESSAGES_EVENTS
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.support.requests import MESSAGES_EVENTS
 from tests.test_litellm_rust.integrations import (
     ALL_ROUTES,
     ASYNC_ROUTES,
@@ -26,7 +26,7 @@ from tests.test_litellm_rust.integrations import (
     route_id,
     wait_for_callback,
 )
-from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 

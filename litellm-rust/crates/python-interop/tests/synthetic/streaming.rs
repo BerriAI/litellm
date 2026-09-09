@@ -70,6 +70,13 @@ async fn eof_and_repeated_close_release_source_and_complete_once() {
         reader.aclose().await.unwrap();
         assert!(reader.next_chunk().await.unwrap().is_none());
         assert_eq!(drops.load(Ordering::SeqCst), 1);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while completions.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert_eq!(completions.load(Ordering::SeqCst), 1);
     }
 }
@@ -114,6 +121,13 @@ async fn concurrent_poll_is_rejected_and_close_wakes_the_pending_reader() {
     );
     reader.aclose().await.unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while completions.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(completions.load(Ordering::SeqCst), 1);
 }
 
@@ -132,6 +146,13 @@ async fn dropping_a_pending_read_cancels_and_releases_its_source() {
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     reader.aclose().await.unwrap();
     assert!(reader.next_chunk().await.unwrap().is_none());
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while completions.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(completions.load(Ordering::SeqCst), 1);
 }
 
@@ -153,10 +174,10 @@ async fn stream_and_completion_errors_preserve_precedence() {
             );
             let result = reader.next_chunk().await;
             Python::attach(|py| {
-                if completion_fails {
-                    assert!(result.unwrap_err().is_instance_of::<PyValueError>(py));
-                } else if stream_fails {
+                if stream_fails {
                     assert!(result.unwrap_err().is_instance_of::<PyRuntimeError>(py));
+                } else if completion_fails {
+                    assert!(result.unwrap_err().is_instance_of::<PyValueError>(py));
                 } else {
                     assert!(result.unwrap().is_none());
                 }
@@ -184,10 +205,12 @@ async fn cancelled_eof_wait_resumes_the_same_completion_on_close() {
     let mut eof = Box::pin(reader.next_chunk());
     assert!(eof.as_mut().now_or_never().is_none());
     drop(eof);
-    let mut close = Box::pin(reader.aclose());
-    assert!(close.as_mut().now_or_never().is_none());
+    tokio::time::timeout(std::time::Duration::from_millis(50), reader.aclose())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
     release.notify_one();
-    close.await.unwrap();
     reader.aclose().await.unwrap();
     assert_eq!(starts.load(Ordering::SeqCst), 1);
 }

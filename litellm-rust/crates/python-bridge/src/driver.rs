@@ -15,6 +15,9 @@ fn operation_binding(
     route: Route,
 ) -> PyResult<OperationBinding> {
     let binding = match operation {
+        Operation::InputHooks => OperationBinding {
+            method: "input_hooks",
+        },
         Operation::Setup => OperationBinding { method: "setup" },
         Operation::DeploymentPre => OperationBinding {
             method: "deployment_pre",
@@ -49,7 +52,7 @@ fn operation_binding(
             method: "async_failure",
         },
         Operation::Restore => OperationBinding { method: "restore" },
-        Operation::Complete(_) => {
+        Operation::StreamComplete | Operation::Complete(_) => {
             return Err(Error::LifecycleComplete(route).into());
         }
     };
@@ -63,6 +66,9 @@ pub(crate) fn invoke(
     route: Route,
     host: Py<PyAny>,
 ) -> PyResult<(bool, Py<PyAny>)> {
+    if operation == Operation::InputHooks {
+        return Ok((false, py.None()));
+    }
     let binding = operation_binding(operation, asynchronous, route)?;
     Ok((
         operation.is_awaited(asynchronous),

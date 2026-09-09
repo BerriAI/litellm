@@ -16,8 +16,7 @@ use tokio_tungstenite::{
 use crate::Error;
 use crate::integrations::custom_logger::CallbackTiming;
 use crate::lifecycle::{
-    CostInputs, ExecutedCall, RouteProjection, TerminalClassification, TerminalDispatcher,
-    TerminalRecord,
+    ExecutedCall, TerminalClassification, TerminalDispatcher,
 };
 use crate::providers::dispatch::responses_websocket_provider_config;
 use crate::responses::instrumentation::ResponsesWsInstrumentation;
@@ -90,13 +89,30 @@ where
     Out: Sink<ResponsesWsEvent> + Unpin + Send,
     Out::Error: std::fmt::Display,
 {
-    let config = responses_websocket_provider_config();
-    let key = config.resolve_api_key(request.api_key.as_deref(), &|key| std::env::var(key).ok())?;
-    let upstream = dial_upstream(config, &request.model, &key, request.api_base.as_deref()).await?;
     let start_time = services.now();
     let instrumentation = Arc::new(ResponsesWsInstrumentation::default());
-    let mut completion =
-        ResponsesWsCompletion::new(services, context, start_time, Arc::clone(&instrumentation));
+    let snapshot = instrumentation.clone();
+    let mut completion = crate::lifecycle::completion::SessionCompletion::new(
+        services, context, start_time, move |context| {
+            let observation = snapshot.snapshot();
+            if !observation.model.is_empty() { context.model = observation.model; }
+            context.usage = observation.usage;
+        },
+    );
+    let config = responses_websocket_provider_config();
+    let connection = async {
+        let key = config.resolve_api_key(request.api_key.as_deref(), &|key| std::env::var(key).ok())?;
+        dial_upstream(config, &request.model, &key, request.api_base.as_deref()).await
+    }.await;
+    let upstream = match connection {
+        Ok(upstream) => upstream,
+        Err(error) => {
+            let terminal = completion.settle(TerminalClassification::Failure {
+                kind: "ConnectionError".into(), message: error.to_string(),
+            }).await;
+            return Ok(ExecutedCall::Failure { error, terminal });
+        }
+    };
     let result = splice(
         upstream,
         &request.model,
@@ -117,7 +133,7 @@ where
             response: (),
             terminal,
         },
-        Ok(TerminalClassification::Failure { message, .. }) => ExecutedCall::Failure {
+        Ok(TerminalClassification::Failure { message, .. } | TerminalClassification::Cancelled { message } | TerminalClassification::Incomplete { message }) => ExecutedCall::Failure {
             error: Error::InvalidResponse(message),
             terminal,
         },
@@ -126,95 +142,6 @@ where
             terminal,
         },
     })
-}
-
-trait ResponsesCompletionServices: TerminalDispatcher + crate::lifecycle::Clock {}
-
-impl<T> ResponsesCompletionServices for T where T: TerminalDispatcher + crate::lifecycle::Clock {}
-
-struct ResponsesWsCompletion {
-    services: Arc<dyn ResponsesCompletionServices>,
-    context: Option<crate::lifecycle::CallLifecycleContext>,
-    start_time: f64,
-    instrumentation: Arc<ResponsesWsInstrumentation>,
-}
-
-impl ResponsesWsCompletion {
-    fn new<S>(
-        services: Arc<S>,
-        context: crate::lifecycle::CallLifecycleContext,
-        start_time: f64,
-        instrumentation: Arc<ResponsesWsInstrumentation>,
-    ) -> Self
-    where
-        S: ResponsesCompletionServices + 'static,
-    {
-        Self {
-            services,
-            context: Some(context),
-            start_time,
-            instrumentation,
-        }
-    }
-
-    async fn settle(&mut self, classification: TerminalClassification) -> TerminalRecord {
-        let terminal = self.terminal(classification);
-        let dispatched = terminal.clone();
-        let services = Arc::clone(&self.services);
-        let dispatch = tokio::spawn(async move {
-            let _ = services.dispatch(&dispatched).await;
-        });
-        let _ = dispatch.await;
-        terminal
-    }
-
-    fn terminal(&mut self, classification: TerminalClassification) -> TerminalRecord {
-        let context = self.context.take().expect("Responses session settled once");
-        let observation = self.instrumentation.snapshot();
-        let model = if observation.model.is_empty() {
-            context.model
-        } else {
-            observation.model
-        };
-        let projection = match &classification {
-            TerminalClassification::Success => Value::Null,
-            TerminalClassification::Failure { kind, message } => {
-                json!({"kind": kind, "message": message})
-            }
-        };
-        TerminalRecord {
-            call_id: context.litellm_call_id,
-            trace_id: context.trace_id,
-            attempt: context.attempt,
-            call_type: context.call_type,
-            model,
-            provider: context.custom_llm_provider,
-            timing: CallbackTiming::new(self.start_time, self.services.now()),
-            usage: observation.usage,
-            cost_inputs: CostInputs {
-                response_cost: context.response_cost,
-                metadata: context.metadata,
-            },
-            classification,
-            projection: RouteProjection::ResponsesWs { value: projection },
-        }
-    }
-}
-
-impl Drop for ResponsesWsCompletion {
-    fn drop(&mut self) {
-        if self.context.is_none() {
-            return;
-        }
-        let terminal = self.terminal(TerminalClassification::Failure {
-            kind: "Cancelled".to_string(),
-            message: "Responses WebSocket session was cancelled before completion".to_string(),
-        });
-        let services = Arc::clone(&self.services);
-        tokio::spawn(async move {
-            let _ = services.dispatch(&terminal).await;
-        });
-    }
 }
 
 struct ResponsesWsFailure {
@@ -460,6 +387,7 @@ fn error_kind(error: &Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lifecycle::{TerminalRecord, RouteProjection};
     use crate::integrations::custom_logger::{LogError, LogFuture};
     use crate::lifecycle::{CallLifecycleContext, Clock};
     use std::sync::Mutex;

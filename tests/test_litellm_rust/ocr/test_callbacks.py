@@ -9,8 +9,8 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.rust_bridge.provenance import has_rust_response_marker
-from tests.test_litellm_rust.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.contracts import (
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
     call_native_aocr,
@@ -18,7 +18,7 @@ from tests.test_litellm_rust.contracts import (
     request_body,
     request_headers,
 )
-from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -334,7 +334,7 @@ async def test_azure_token_callback_precedes_logger_and_preserves_context(
     asynchronous: bool,
 ) -> None:
     from contextvars import ContextVar
-    from tests.test_litellm_rust.contracts import call_aocr as public_aocr, call_ocr as public_ocr
+    from tests.test_litellm_rust.support.requests import call_aocr as public_aocr, call_ocr as public_ocr
 
     context: Final = ContextVar("azure-token-context", default="missing")
     context.set("caller")
@@ -378,7 +378,7 @@ async def test_azure_token_callback_can_reenter_native_sdk(
     isolated_azure_auth: None,
     asynchronous: bool,
 ) -> None:
-    from tests.test_litellm_rust.contracts import call_aocr as public_aocr, call_ocr as public_ocr
+    from tests.test_litellm_rust.support.requests import call_aocr as public_aocr, call_ocr as public_ocr
 
     ocr_server.expected_requests = 2
     calls: Final = []
@@ -410,7 +410,7 @@ async def test_concurrent_azure_token_callbacks_keep_results_and_errors_separate
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
 ) -> None:
-    from tests.test_litellm_rust.contracts import call_aocr as public_aocr
+    from tests.test_litellm_rust.support.requests import call_aocr as public_aocr
 
     ocr_server.expected_requests = 2
 
@@ -452,8 +452,8 @@ async def test_azure_token_provider_is_released_after_request(
 ) -> None:
     import gc
     import weakref
-    from tests.test_litellm_rust.callback_recorder import drain_logging
-    from tests.test_litellm_rust.contracts import call_aocr as public_aocr
+    from tests.test_litellm_rust.support.callback_recorder import drain_logging
+    from tests.test_litellm_rust.support.requests import call_aocr as public_aocr
 
     class Provider:
         def __call__(self) -> str:

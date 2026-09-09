@@ -1,4 +1,5 @@
 pub mod action;
+pub(crate) mod completion;
 pub mod executed;
 pub mod execution;
 pub mod machine;
@@ -22,7 +23,7 @@ pub use request_body::{
     AuthorizedBody, PreCallBody, RequestBodyPolicy, SettledHttpRequest, WireBody,
 };
 pub use streaming::{
-    BytesStream, StreamingCall, StreamingCompletion, StreamingMetadata, StreamingObserver,
+    BytesStream, StreamDrain, StreamDrainPolicy, StreamingCall, StreamingCompletion, StreamingMetadata, StreamingObserver,
     StreamingSource,
 };
 pub use terminal::{CostInputs, RouteProjection, TerminalClassification, TerminalRecord};

@@ -147,6 +147,7 @@ fn request_error_to_pyerr(
 struct OcrLifecycle {
     machine: Lifecycle<OcrRoute>,
     asynchronous: bool,
+    pending_operation: Option<litellm_core::lifecycle::program::OperationTicket>,
 }
 
 #[pymethods]
@@ -201,6 +202,7 @@ impl OcrLifecycle {
             NativeOutcome::Completed(machine) => Ok(Self {
                 machine,
                 asynchronous,
+                pending_operation: None,
             }),
             NativeOutcome::Declined(decline) => {
                 Err(PyNotImplementedError::new_err(decline.reason()))
@@ -224,8 +226,10 @@ impl OcrLifecycle {
             1 => Outcome::Failure,
             _ => Outcome::Abort,
         };
+        let ticket = self.pending_operation.take().ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no lifecycle operation is pending"))?;
         self.machine
-            .advance(
+            .complete_operation(
+                ticket,
                 outcome,
                 Observations {
                     logger_available,
@@ -251,8 +255,11 @@ fn invoke(
     host: Py<PyAny>,
 ) -> PyResult<(bool, Py<PyAny>)> {
     let (operation, asynchronous) = {
-        let machine = machine.borrow(py);
-        (machine.machine.operation(), machine.asynchronous)
+        let mut machine = machine.borrow_mut(py);
+        let ticket = machine.machine.issue().map_err(core_error_to_pyerr)?;
+        let operation = ticket.operation();
+        machine.pending_operation = Some(ticket);
+        (operation, machine.asynchronous)
     };
     crate::driver::invoke(py, operation, asynchronous, Route::Ocr, host)
 }

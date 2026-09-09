@@ -22,7 +22,7 @@ from tests.test_litellm_rust.integrations.harness import (
     purview_harness,
     wait_for_audits,
 )
-from tests.test_litellm_rust.integrations.routes import (
+from tests.test_litellm_rust.support.routes import (
     ALL_ROUTES,
     ASYNC_ROUTES,
     MESSAGES_ROUTE,

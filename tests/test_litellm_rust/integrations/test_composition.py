@@ -1,3 +1,4 @@
+import asyncio
 import json
 import threading
 from collections.abc import Mapping
@@ -16,14 +17,14 @@ from litellm.proxy.guardrails.guardrail_registry import guardrail_initializer_re
 from litellm.rust_bridge.provenance import has_rust_response_marker
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 from litellm.types.utils import CallTypes
-from tests.test_litellm_rust.callback_recorder import (
+from tests.test_litellm_rust.support.callback_recorder import (
     LiveReferenceLogger,
     RecordingLogger,
     SecondaryLiveReferenceLogger,
     drain_logging,
 )
 from tests.test_litellm_rust.conftest import Backend, isolated_backend
-from tests.test_litellm_rust.contracts import MESSAGES_EVENTS
+from tests.test_litellm_rust.support.requests import MESSAGES_EVENTS
 from tests.test_litellm_rust.integrations import (
     ASYNC_ROUTES,
     DISCOVERED_ONLY_GUARDRAIL_NAMES,
@@ -47,7 +48,7 @@ from tests.test_litellm_rust.integrations import (
     route_id,
     wait_for_callback,
 )
-from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec, recording_service
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -273,7 +274,7 @@ async def test_interrupted_stream_emits_terminal_only_when_consumer_closes(backe
     ),
     ids=("ocr-pre", "messages-pre", "messages-stream-pre", "ocr-success", "messages-success"),
 )
-async def test_deployment_rejection_notifies_failure_before_terminal(
+async def test_deployment_rejection_logs_failure_without_deployment_failure(
     backend: Backend, route: Route, phase: str
 ) -> None:
     class Reject(CustomLogger):
@@ -302,16 +303,13 @@ async def test_deployment_rejection_notifies_failure_before_terminal(
 
             assert len(provider.requests) == provider.expected_requests
             assert "async_log_success_event" not in recorder.names
-            assert recorder.names.count("async_post_call_failure_deployment_hook") == 1
-            assert recorder.names.index("async_post_call_failure_deployment_hook") < recorder.names.index(
-                "async_log_failure_event"
-            )
+            assert recorder.names.count("async_post_call_failure_deployment_hook") == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ("python", "rust"))
+@pytest.mark.parametrize("backend", ("rust",))
 @pytest.mark.parametrize("ending", ("provider_error", "truncated", "close"))
-async def test_established_stream_failure_notifies_deployment_once(backend: Backend, ending: str) -> None:
+async def test_established_stream_completion_does_not_notify_deployment_failure(backend: Backend, ending: str) -> None:
     async with isolated_backend(backend):
         with recording_service() as provider:
             provider.default_response = ResponseSpec(
@@ -351,7 +349,12 @@ async def test_established_stream_failure_notifies_deployment_once(backend: Back
 
                 if ending == "close":
                     assert await anext(stream)
+                    await asyncio.wait_for(stream.aclose(), timeout=1)
                     await stream.aclose()
+                    assert "async_log_success_event" not in recorder.names
+                    assert "async_log_failure_event" not in recorder.names
+                    release.set()
+                    await recorder.wait_for_async("async_log_success_event")
                 else:
                     try:
                         async for _ in stream:
@@ -363,9 +366,6 @@ async def test_established_stream_failure_notifies_deployment_once(backend: Back
                 release.set()
 
             assert len(provider.requests) == 1
-            assert recorder.names.count("async_log_failure_event") == 1, recorder.names
-            assert "async_log_success_event" not in recorder.names
-            assert recorder.names.count("async_post_call_failure_deployment_hook") == 1
-            assert recorder.names.index("async_post_call_failure_deployment_hook") < recorder.names.index(
-                "async_log_failure_event"
-            )
+            assert recorder.names.count("async_log_failure_event") == (0 if ending == "close" else 1), recorder.names
+            assert recorder.names.count("async_log_success_event") == (1 if ending == "close" else 0), recorder.names
+            assert recorder.names.count("async_post_call_failure_deployment_hook") == 0

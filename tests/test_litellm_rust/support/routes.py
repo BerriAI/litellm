@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 import litellm
-from tests.test_litellm_rust.callback_recorder import HookEvent, RecordingLogger
-from tests.test_litellm_rust.contracts import (
+from tests.test_litellm_rust.support.callback_recorder import HookEvent, RecordingLogger
+from tests.test_litellm_rust.support.requests import (
     MESSAGES,
     MESSAGES_EVENTS,
     MESSAGES_MODEL,
@@ -14,7 +14,7 @@ from tests.test_litellm_rust.contracts import (
     call_aocr,
     call_ocr,
 )
-from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 RouteName = Literal["ocr-sync", "ocr-async", "messages", "messages-stream"]
 

@@ -4,7 +4,7 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from tests.test_litellm_rust.contracts import (
+from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_MODEL,
     OCR_RESPONSE,
@@ -13,8 +13,8 @@ from tests.test_litellm_rust.contracts import (
     call_ocr as call_public_ocr,
 )
 from litellm.rust_bridge.provenance import has_rust_response_marker
-from tests.test_litellm_rust.callback_recorder import RecordingLogger
-from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 

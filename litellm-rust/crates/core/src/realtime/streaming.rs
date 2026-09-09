@@ -20,8 +20,8 @@ use crate::Error;
 use crate::integrations::custom_logger::CallbackTiming;
 use crate::integrations::types::Usage;
 use crate::lifecycle::{
-    CallLifecycleContext, Clock, CostInputs, ExecutedCall, RouteProjection, TerminalClassification,
-    TerminalDispatcher, TerminalRecord,
+    CallLifecycleContext, Clock, ExecutedCall, TerminalClassification,
+    TerminalDispatcher,
 };
 use crate::providers::dispatch::realtime_provider_config;
 use crate::realtime::transformation::RealtimeProviderConfig;
@@ -146,35 +146,28 @@ where
 {
     let start_time = services.now();
     let model = request.model;
+    let observation = Arc::new(Mutex::new(RealtimeObservation::new(
+        context.litellm_call_id.clone(), model.clone(),
+    )));
+    let snapshot = observation.clone();
+    let mut completion = crate::lifecycle::completion::SessionCompletion::new(
+        services, context, start_time, move |context| {
+            let observation = snapshot.lock().unwrap();
+            context.model = observation.model.clone();
+            context.usage = observation.usage;
+        },
+    );
     let connection = RealtimeConnectionSpec::new(
-        model.clone(),
-        request.api_key.as_deref(),
-        request.api_base.as_deref(),
+        model.clone(), request.api_key.as_deref(), request.api_base.as_deref(),
     );
     let connection = match (connection, request.warm) {
         (Ok(connection), Some(warm)) if warm.connection == connection => Ok(warm),
-        (Ok(_), Some(_)) => Err(Error::InvalidRequest(
-            "realtime warm connection does not match the requested provider connection".to_string(),
-        )),
-        (Ok(connection), None) => dial_upstream(&connection)
-            .await
-            .map(|upstream| WarmConnection {
-                connection,
-                upstream,
-                session_created: empty_event(),
-            }),
+        (Ok(_), Some(_)) => Err(Error::InvalidRequest("realtime warm connection does not match the requested provider connection".into())),
+        (Ok(connection), None) => dial_upstream(&connection).await.map(|upstream| WarmConnection {
+            connection, upstream, session_created: empty_event(),
+        }),
         (Err(error), _) => Err(error),
     };
-    let observation = Arc::new(Mutex::new(RealtimeObservation::new(
-        context.litellm_call_id.clone(),
-        model.clone(),
-    )));
-    let mut completion = RealtimeCompletion::new(
-        Arc::clone(&services),
-        context,
-        start_time,
-        Arc::clone(&observation),
-    );
     let result = match connection {
         Ok(connection) => {
             splice(
@@ -206,90 +199,6 @@ where
             error: failure.error,
             terminal,
         },
-    }
-}
-
-trait RealtimeCompletionServices: TerminalDispatcher + Clock {}
-
-impl<T> RealtimeCompletionServices for T where T: TerminalDispatcher + Clock {}
-
-struct RealtimeCompletion {
-    services: Arc<dyn RealtimeCompletionServices>,
-    context: Option<CallLifecycleContext>,
-    start_time: f64,
-    observation: Arc<Mutex<RealtimeObservation>>,
-}
-
-impl RealtimeCompletion {
-    fn new<S>(
-        services: Arc<S>,
-        context: CallLifecycleContext,
-        start_time: f64,
-        observation: Arc<Mutex<RealtimeObservation>>,
-    ) -> Self
-    where
-        S: RealtimeCompletionServices + 'static,
-    {
-        Self {
-            services,
-            context: Some(context),
-            start_time,
-            observation,
-        }
-    }
-
-    async fn settle(&mut self, classification: TerminalClassification) -> TerminalRecord {
-        let terminal = self.terminal(classification);
-        let dispatched = terminal.clone();
-        let services = Arc::clone(&self.services);
-        let dispatch = tokio::spawn(async move {
-            let _ = services.dispatch(&dispatched).await;
-        });
-        let _ = dispatch.await;
-        terminal
-    }
-
-    fn terminal(&mut self, classification: TerminalClassification) -> TerminalRecord {
-        let context = self.context.take().expect("realtime session settled once");
-        let observation = self.observation.lock().unwrap();
-        let projection = match &classification {
-            TerminalClassification::Success => Value::Null,
-            TerminalClassification::Failure { kind, message } => {
-                json!({"kind": kind, "message": message})
-            }
-        };
-        TerminalRecord {
-            call_id: observation.call_id.clone(),
-            trace_id: context.trace_id,
-            attempt: context.attempt,
-            call_type: context.call_type,
-            model: observation.model.clone(),
-            provider: context.custom_llm_provider,
-            timing: CallbackTiming::new(self.start_time, self.services.now()),
-            usage: observation.usage,
-            cost_inputs: CostInputs {
-                response_cost: context.response_cost,
-                metadata: context.metadata,
-            },
-            classification,
-            projection: RouteProjection::Realtime { value: projection },
-        }
-    }
-}
-
-impl Drop for RealtimeCompletion {
-    fn drop(&mut self) {
-        if self.context.is_none() {
-            return;
-        }
-        let terminal = self.terminal(TerminalClassification::Failure {
-            kind: "Cancelled".to_string(),
-            message: "realtime session was cancelled before completion".to_string(),
-        });
-        let services = Arc::clone(&self.services);
-        tokio::spawn(async move {
-            let _ = services.dispatch(&terminal).await;
-        });
     }
 }
 
@@ -653,6 +562,7 @@ mod tests {
     use tokio_tungstenite::accept_async;
 
     use super::*;
+    use crate::lifecycle::TerminalRecord;
     use crate::integrations::custom_logger::{LogError, LogFuture};
     use crate::lifecycle::{CallLifecycleContext, Clock};
 
@@ -824,7 +734,7 @@ mod tests {
         assert_eq!(terminals.len(), 1);
         assert!(matches!(
             &terminals[0].classification,
-            TerminalClassification::Failure { kind, .. } if kind == "Cancelled"
+            TerminalClassification::Cancelled { .. }
         ));
     }
 
@@ -864,7 +774,7 @@ mod tests {
         assert_eq!(terminals.len(), 1);
         assert!(matches!(
             &terminals[0].classification,
-            TerminalClassification::Failure { kind, .. } if kind == "Cancelled"
+            TerminalClassification::Cancelled { .. }
         ));
     }
 

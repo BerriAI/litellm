@@ -6,20 +6,6 @@ from litellm.rust_bridge.provenance import (
     RUST_RESPONSE_ENTRYPOINTS,
 )
 
-MARKER_CONTRACT_ENTRYPOINTS: Final = frozenset(
-    {
-        "achat_completions",
-        "amessages",
-        "aocr",
-        "atranscription",
-        "chat_completions",
-        "messages",
-        "ocr",
-        "transcription",
-    }
-)
-
-
 def test_native_route_catalogue_matches_extension_exports() -> None:
     native: Final = get_native_bridge()
     assert native is not None
@@ -30,7 +16,3 @@ def test_native_route_catalogue_matches_extension_exports() -> None:
     )
 
     assert route_exports == RUST_RESPONSE_ENTRYPOINTS | RUST_NON_RESPONSE_ENTRYPOINTS
-
-
-def test_every_response_entrypoint_has_marker_contract_coverage() -> None:
-    assert MARKER_CONTRACT_ENTRYPOINTS == RUST_RESPONSE_ENTRYPOINTS

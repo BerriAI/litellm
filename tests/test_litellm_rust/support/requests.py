@@ -3,7 +3,7 @@ from typing import Final
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import ocr as native_ocr
-from tests.test_litellm_rust.recording_server import RecordingServer
+from tests.test_litellm_rust.support.recording_server import RecordingServer
 
 OCR_DOCUMENT: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
 OCR_MODEL: Final = "mistral/mistral-ocr-latest"

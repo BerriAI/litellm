@@ -12,7 +12,8 @@ pub use lifecycle::{
 };
 pub use types::{
     AudioDuringCallGuardrailRequest, AudioFormat, AudioInput, AudioPreCallGuardrailRequest,
-    AudioRouteRequest, AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
+    AudioRouteRequest, AudioTranscriptionRequest, PreparedAudioTranscriptionRequest,
+    ProviderAudioTranscriptionRequest,
 };
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]

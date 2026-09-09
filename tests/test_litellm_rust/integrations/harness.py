@@ -20,8 +20,8 @@ from litellm.integrations.literal_ai import LiteralAILogger
 from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME, OpenTelemetry
 from litellm.proxy.guardrails.guardrail_hooks.microsoft_purview.purview_dlp import MicrosoftPurviewDLPGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
-from tests.test_litellm_rust.callback_recorder import drain_logging
-from tests.test_litellm_rust.recording_server import RecordedRequest, RecordingServer
+from tests.test_litellm_rust.support.callback_recorder import drain_logging
+from tests.test_litellm_rust.support.recording_server import RecordedRequest, RecordingServer
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,6 +14,9 @@ pub trait LifecycleRoute: Sized {
     type Decline;
     type State;
 
+    fn program(state: &Self::State) -> &super::CallLifecycle;
+    fn program_mut(state: &mut Self::State) -> &mut super::CallLifecycle;
+
     fn admit(
         admission: &Self::Admission,
         options: Self::Options,
@@ -54,12 +57,24 @@ impl<Route: LifecycleRoute> Lifecycle<Route> {
         Route::operation(&self.state)
     }
 
-    pub fn advance(
+    pub(crate) fn advance(
         &mut self,
         outcome: Route::Outcome,
         observations: Route::Observation,
     ) -> Result<Route::Transition, Route::Error> {
         Route::advance(&mut self.state, outcome, observations)
+    }
+
+    pub fn issue(&mut self) -> Result<super::program::OperationTicket, crate::Error> {
+        Route::program_mut(&mut self.state).issue()
+    }
+
+    pub fn complete_operation(&mut self, ticket: super::program::OperationTicket, outcome: super::Outcome, observations: super::program::Observations) -> Result<super::program::Transition, crate::Error> {
+        Route::program_mut(&mut self.state).complete_operation(ticket, outcome, observations)
+    }
+
+    pub fn provider_permit(&mut self, ticket: &super::program::OperationTicket) -> Result<super::program::ProviderPermit, crate::Error> {
+        Route::program_mut(&mut self.state).provider_permit(ticket)
     }
 
     pub fn actions_for(&self, context: &Route::Context) -> &'static [ActionBinding] {

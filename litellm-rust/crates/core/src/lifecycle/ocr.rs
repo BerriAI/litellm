@@ -92,6 +92,9 @@ impl LifecycleRoute for OcrRoute {
     type Decline = Decline;
     type State = OcrState;
 
+    fn program(state: &Self::State) -> &CallLifecycle { &state.program }
+    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle { &mut state.program }
+
     fn admit(
         admission: &Self::Admission,
         options: Self::Options,
@@ -221,13 +224,22 @@ mod tests {
         for (asynchronous, expected) in [
             (
                 false,
-                vec![Setup, BuildRequest, PreCall, Send, SyncSuccess, Restore],
+                vec![
+                    Setup,
+                    InputHooks,
+                    BuildRequest,
+                    PreCall,
+                    Send,
+                    SyncSuccess,
+                    Restore,
+                ],
             ),
             (
                 true,
                 vec![
                     Setup,
                     DeploymentPre,
+                    InputHooks,
                     BuildRequest,
                     PreCall,
                     Send,
@@ -259,6 +271,7 @@ mod tests {
                 vec![
                     Setup,
                     DeploymentPre,
+                    InputHooks,
                     BuildRequest,
                     PreCall,
                     Send,
@@ -267,7 +280,7 @@ mod tests {
                     SyncSuccessIfNeeded,
                 ]
             } else {
-                vec![Setup, BuildRequest, PreCall, Send, SyncSuccess]
+                vec![Setup, InputHooks, BuildRequest, PreCall, Send, SyncSuccess]
             };
             for stage in stages {
                 for outcome in [Outcome::Failure, Outcome::Abort] {
@@ -277,7 +290,9 @@ mod tests {
                     assert_eq!(transition.error, ErrorDisposition::Replace);
                     let expected = if outcome == Outcome::Abort {
                         Restore
-                    } else if asynchronous && matches!(stage, BuildRequest | PreCall | Send) {
+                    } else if asynchronous
+                        && matches!(stage, InputHooks | BuildRequest | PreCall | Send)
+                    {
                         DeploymentFailure
                     } else {
                         SyncFailure

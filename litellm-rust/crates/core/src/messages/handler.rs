@@ -4,24 +4,12 @@ use crate::lifecycle::{StreamingMetadata, StreamingSource};
 use futures_util::TryStreamExt;
 
 use super::common_utils::truncate_error_body;
-use super::request::{build_provider_request, build_provider_request_with_environment};
-use super::types::{AnthropicMessagesResponse, MessagesRequest};
+use super::types::AnthropicMessagesResponse;
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(super) async fn execute_messages_provider_call(
-    request: MessagesRequest,
-) -> Result<AnthropicMessagesResponse, Error> {
-    let request = build_provider_request(request)?;
-    execute_provider_messages_request(request).await
-}
-
-pub(crate) async fn execute_messages_provider_call_with_transport(
-    environment: &dyn crate::providers::auth::Environment,
+pub(crate) async fn execute_provider_messages_request_with_transport(
     transport: &dyn crate::runtime::HttpTransport,
-    request: MessagesRequest,
+    request: super::types::ProviderMessagesRequest,
 ) -> Result<AnthropicMessagesResponse, Error> {
-    let request =
-        build_provider_request_with_environment(request, &|key| environment.environment(key))?;
     let super::types::ProviderMessagesRequest {
         model,
         config,
@@ -99,16 +87,6 @@ pub async fn execute_provider_messages_request(
     let response = serde_json::from_str(&text)
         .map_err(|err| Error::InvalidResponse(format!("invalid messages response JSON: {err}")))?;
     config.transform_response(&model, response)
-}
-
-pub(crate) async fn execute_messages_provider_stream_with_transport(
-    environment: &dyn crate::providers::auth::Environment,
-    transport: &dyn crate::runtime::HttpTransport,
-    request: MessagesRequest,
-) -> Result<StreamingSource, Error> {
-    let request =
-        build_provider_request_with_environment(request, &|key| environment.environment(key))?;
-    execute_provider_messages_stream_with_transport(transport, request).await
 }
 
 pub(crate) async fn execute_provider_messages_stream_with_transport(

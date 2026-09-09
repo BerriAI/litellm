@@ -25,9 +25,9 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.rust_bridge.provenance import has_rust_response_marker
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 from litellm.types.utils import CallTypes
-from tests.test_litellm_rust.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.conftest import Backend, isolated_backend
-from tests.test_litellm_rust.contracts import CHAT_MESSAGES, CHAT_MODEL, CHAT_RESPONSE, MESSAGES
+from tests.test_litellm_rust.support.requests import CHAT_MESSAGES, CHAT_MODEL, CHAT_RESPONSE, MESSAGES
 from tests.test_litellm_rust.integrations import (
     MESSAGES_ROUTE,
     MESSAGES_STREAM,
@@ -42,7 +42,7 @@ from tests.test_litellm_rust.integrations import (
     wait_for_audits,
     wait_for_callback,
 )
-from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec, recording_service
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
 
 pytestmark = pytest.mark.requires_rust_extension
 

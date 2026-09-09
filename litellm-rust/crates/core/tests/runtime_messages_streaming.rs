@@ -1,3 +1,4 @@
+use litellm_core::messages::types::ProviderMessagesRequest;
 use std::future::{Ready, ready};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,6 +37,7 @@ struct Tracking {
     terminals: Mutex<Vec<TerminalRecord>>,
     deployment_events: Mutex<Vec<&'static str>>,
     reject_deployment: bool,
+    drain: Option<litellm_core::lifecycle::StreamDrainPolicy>,
 }
 
 impl Tracking {
@@ -51,6 +53,17 @@ struct Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.tracking.session_drops.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl litellm_core::lifecycle::StreamDrain for Session {
+    fn stream_drain_policy(&self) -> litellm_core::lifecycle::StreamDrainPolicy {
+        self.tracking.drain.clone().unwrap_or_else(|| {
+            litellm_core::lifecycle::StreamDrainPolicy::new(
+                100,
+                std::time::Duration::from_millis(50),
+            )
+        })
     }
 }
 
@@ -71,13 +84,13 @@ impl PreCallHooks<MessagesRequest> for Session {
     }
 }
 
-impl ModerationHooks<MessagesRequest> for Session {
-    type ModerationFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
+impl ModerationHooks<ProviderMessagesRequest> for Session {
+    type ModerationFuture<'a> = Ready<ActionResult<ProviderMessagesRequest, Error>>;
 
     fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
-        request: MessagesRequest,
+        request: ProviderMessagesRequest,
     ) -> Self::ModerationFuture<'a> {
         ready(ActionResult::Continue(request))
     }
@@ -260,7 +273,7 @@ fn response(stream: litellm_core::lifecycle::BytesStream) -> HttpStreamResponse 
 #[case::truncated("truncated")]
 #[case::cancelled("cancelled")]
 #[tokio::test]
-async fn established_stream_failure_notifies_deployment_before_terminal(#[case] ending: &str) {
+async fn established_stream_failure_only_dispatches_terminal(#[case] ending: &str) {
     let tracking = Tracking::new();
     let source: litellm_core::lifecycle::BytesStream = match ending {
         "network" => Box::pin(stream::iter([Err(Error::Network("stream failed".into()))])),
@@ -270,7 +283,15 @@ async fn established_stream_failure_notifies_deployment_before_terminal(#[case] 
     };
     let client = client(Ok(response(source)), tracking.clone());
     let call = client
-        .messages_stream_with(request(), Options::default(), context(), 1)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            1,
+        )
         .await
         .unwrap();
     let completion = call.completion.register();
@@ -289,7 +310,7 @@ async fn established_stream_failure_notifies_deployment_before_terminal(#[case] 
     let expected = match ending {
         "network" => "NetworkError",
         "truncated" => "InvalidResponse",
-        "cancelled" => "Cancelled",
+        "cancelled" => "NetworkError",
         _ => unreachable!(),
     };
     assert!(
@@ -298,7 +319,7 @@ async fn established_stream_failure_notifies_deployment_before_terminal(#[case] 
     assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
     assert_eq!(
         *tracking.deployment_events.lock().unwrap(),
-        ["pre", "failure", "terminal"]
+        ["pre", "terminal"]
     );
 }
 
@@ -307,7 +328,15 @@ async fn deployment_pre_replacement_reaches_stream_transport() {
     let tracking = Tracking::new();
     let client = client(Ok(response(Box::pin(stream::pending()))), tracking.clone());
     let call = client
-        .messages_stream_with(request(), Options::default(), context(), 1)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            1,
+        )
         .await
         .unwrap();
     let completion = call.completion.register();
@@ -338,7 +367,15 @@ async fn deployment_pre_rejection_prevents_stream_transport() {
     });
     let client = client(Ok(response(Box::pin(stream::pending()))), tracking.clone());
     let result = client
-        .messages_stream_with(request(), Options::default(), context(), 1)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            1,
+        )
         .await;
     if let Ok(call) = result {
         let completion = call.completion.register();
@@ -369,7 +406,15 @@ async fn provider_open_failure_notifies_deployment_before_terminal_and_preserves
         tracking.clone(),
     );
     let result = client
-        .messages_stream_with(request(), Options::default(), context(), 1)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            1,
+        )
         .await;
 
     assert!(matches!(result, Err(Error::Network(message)) if message == "provider unavailable"));
@@ -399,7 +444,15 @@ async fn completion_retains_application_and_session_until_terminal_delivery() {
         tracking.clone(),
     );
     let call = client
-        .messages_stream_with(request(), Options::default(), context(), 1)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            1,
+        )
         .await
         .unwrap();
 
@@ -439,7 +492,15 @@ async fn unregistered_completion_still_delivers_terminal_before_cleanup() {
         tracking.clone(),
     );
     let call = client
-        .messages_stream_with(request(), Options::default(), context(), 5)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            5,
+        )
         .await
         .unwrap();
     drop(client);
@@ -461,17 +522,25 @@ async fn unregistered_completion_still_delivers_terminal_before_cleanup() {
 }
 
 #[tokio::test]
-async fn partial_consumption_and_early_drop_cancel_once_and_release_owners() {
+async fn partial_consumption_and_early_drop_drain_once_and_release_owners() {
     let tracking = Tracking::new();
     let client = client(
         Ok(response(Box::pin(stream::iter([
             Ok(Bytes::from_static(b"data: {\"type\":\"ping\"}\n\n")),
-            Ok(Bytes::from_static(b"data: second\n\n")),
+            Ok(Bytes::from_static(b"data: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\ndata: {\"type\":\"message_stop\"}\n\n")),
         ])))),
         tracking.clone(),
     );
     let call = client
-        .messages_stream_with(request(), Options::default(), context(), 2)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            2,
+        )
         .await
         .unwrap();
     drop(client);
@@ -485,10 +554,7 @@ async fn partial_consumption_and_early_drop_cancel_once_and_release_owners() {
     drop(stream);
     let terminal = completion.await.unwrap();
 
-    assert!(matches!(
-        terminal.classification,
-        TerminalClassification::Failure { ref kind, .. } if kind == "Cancelled"
-    ));
+    assert_eq!(terminal.classification, TerminalClassification::Success);
     assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
     assert_eq!(tracking.session_drops.load(Ordering::Relaxed), 1);
     assert_eq!(tracking.service_drops.load(Ordering::Relaxed), 1);
@@ -507,7 +573,15 @@ async fn provider_failure_dispatches_before_releasing_the_session() {
         tracking.clone(),
     );
     let result = client
-        .messages_stream_with(request(), Options::default(), context(), 3)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            3,
+        )
         .await;
     let error = match result {
         Ok(_) => panic!("provider rejects the stream"),
@@ -526,7 +600,15 @@ async fn cancelled_consumer_releases_stream_owners() {
     let tracking = Tracking::new();
     let client = client(Ok(response(Box::pin(stream::pending()))), tracking.clone());
     let call = client
-        .messages_stream_with(request(), Options::default(), context(), 4)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            4,
+        )
         .await
         .unwrap();
     drop(client);
@@ -542,7 +624,7 @@ async fn cancelled_consumer_releases_stream_owners() {
 
     assert!(matches!(
         terminal.classification,
-        TerminalClassification::Failure { ref kind, .. } if kind == "Cancelled"
+        TerminalClassification::Failure { ref kind, .. } if kind == "NetworkError"
     ));
     assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
     assert_eq!(tracking.session_drops.load(Ordering::Relaxed), 1);
@@ -559,7 +641,15 @@ async fn stream_failure_dispatches_once_and_releases_owners() {
         tracking.clone(),
     );
     let call = client
-        .messages_stream_with(request(), Options::default(), context(), 6)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            6,
+        )
         .await
         .unwrap();
     drop(client);
@@ -625,7 +715,15 @@ async fn sse_preserves_raw_chunks_without_read_ahead_and_releases_upstream_at_st
     };
     let client = client(Ok(response(Box::pin(source))), tracking.clone());
     let call = client
-        .messages_stream_with(request(), Options::default(), context(), 7)
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            7,
+        )
         .await
         .unwrap();
     let completion = call.completion.register();
@@ -675,7 +773,15 @@ async fn sse_observation_failures_dispatch_once_and_release_upstream() {
         };
         let client = client(Ok(response(Box::pin(source))), tracking.clone());
         let call = client
-            .messages_stream_with(request(), Options::default(), context(), 8)
+            .messages_stream_with(
+                request(),
+                Options {
+                    asynchronous: true,
+                    ..Options::default()
+                },
+                context(),
+                8,
+            )
             .await
             .unwrap();
         let completion = call.completion.register();
@@ -698,4 +804,129 @@ async fn sse_observation_failures_dispatch_once_and_release_upstream() {
         assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
+}
+
+#[rstest::rstest]
+#[case::success(false)]
+#[case::failure(true)]
+#[tokio::test]
+async fn detached_stream_retains_owners_until_gated_upstream_finishes(#[case] fail: bool) {
+    let tracking = Tracking::new();
+    let (release, gate) = tokio::sync::oneshot::channel::<()>();
+    let source = stream::iter([Ok(Bytes::from_static(
+        b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n",
+    ))]).chain(stream::once(async move {
+        gate.await.unwrap();
+        if fail {
+            Err(Error::Network("original upstream error".into()))
+        } else {
+            Ok(Bytes::from_static(b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\ndata: {\"type\":\"message_stop\"}\n\n"))
+        }
+    }));
+    let client = client(Ok(response(Box::pin(source))), tracking.clone());
+    let call = client
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            9,
+        )
+        .await
+        .unwrap();
+    let completion = call.completion.register();
+    let mut stream = call.stream;
+    stream.next().await.unwrap().unwrap();
+    drop(client);
+    drop(stream);
+    tokio::task::yield_now().await;
+    assert!(tracking.terminals.lock().unwrap().is_empty());
+    assert_eq!(tracking.session_drops.load(Ordering::Relaxed), 0);
+    assert_eq!(tracking.service_drops.load(Ordering::Relaxed), 0);
+    release.send(()).unwrap();
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(1), completion)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(terminal.usage.prompt_tokens, 5);
+    if fail {
+        assert!(
+            matches!(terminal.classification, TerminalClassification::Failure { message, .. } if message.contains("original upstream error"))
+        );
+    } else {
+        assert_eq!(terminal.classification, TerminalClassification::Success);
+        assert_eq!(terminal.usage.completion_tokens, 7);
+        assert_eq!(terminal.usage.total_tokens, 12);
+    }
+    assert_eq!(
+        *tracking.deployment_events.lock().unwrap(),
+        ["pre", "terminal"]
+    );
+    assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
+    assert_eq!(tracking.session_drops.load(Ordering::Relaxed), 1);
+    assert_eq!(tracking.service_drops.load(Ordering::Relaxed), 1);
+}
+
+#[rstest::rstest]
+#[case::capacity_exhausted(0, false)]
+#[case::timeout(1, true)]
+#[tokio::test]
+async fn detached_drain_limits_release_upstream_with_partial_usage(
+    #[case] capacity: usize,
+    #[case] timeout: bool,
+) {
+    let tracking = Arc::new(Tracking {
+        drain: Some(litellm_core::lifecycle::StreamDrainPolicy::new(
+            capacity,
+            std::time::Duration::from_millis(10),
+        )),
+        ..Tracking::default()
+    });
+    let drops = Arc::new(AtomicUsize::new(0));
+    let source = TrackedStream {
+        inner: Box::pin(stream::iter([Ok(Bytes::from_static(
+            b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n",
+        ))]).chain(stream::pending())),
+        polls: Arc::new(AtomicUsize::new(0)),
+        drops: drops.clone(),
+    };
+    let client = client(Ok(response(Box::pin(source))), tracking.clone());
+    let call = client
+        .messages_stream_with(
+            request(),
+            Options {
+                asynchronous: true,
+                ..Options::default()
+            },
+            context(),
+            10,
+        )
+        .await
+        .unwrap();
+    let completion = call.completion.register();
+    let mut stream = call.stream;
+    stream.next().await.unwrap().unwrap();
+    drop(stream);
+    drop(client);
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(1), completion)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(terminal.usage.prompt_tokens, 5);
+    if timeout {
+        assert!(
+            matches!(terminal.classification, TerminalClassification::Failure { message, .. } if message.contains("timed out"))
+        );
+    } else {
+        assert!(matches!(terminal.classification, TerminalClassification::Incomplete { .. }));
+    }
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        *tracking.deployment_events.lock().unwrap(),
+        ["pre", "terminal"]
+    );
+    assert_eq!(tracking.session_drops.load(Ordering::Relaxed), 1);
+    assert_eq!(tracking.service_drops.load(Ordering::Relaxed), 1);
 }

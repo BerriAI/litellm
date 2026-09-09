@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import threading
 from collections.abc import Mapping
 from typing import Final
@@ -11,8 +12,8 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.rust_bridge.provenance import has_rust_response_marker
 from litellm.types.utils import CallTypes
-from tests.test_litellm_rust.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.contracts import (
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.support.requests import (
     MESSAGES,
     MESSAGES_EVENTS,
     MESSAGES_MODEL,
@@ -20,7 +21,7 @@ from tests.test_litellm_rust.contracts import (
     request_body,
     request_headers,
 )
-from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -202,16 +203,16 @@ async def test_messages_callbacks_run_once(messages_server: RecordingServer) -> 
 
 
 @pytest.mark.asyncio
-async def test_messages_unconsumed_stream_close_logs_failure_once(messages_server: RecordingServer) -> None:
+async def test_messages_unconsumed_stream_close_drains_and_logs_success_once(messages_server: RecordingServer) -> None:
     messages_server.enqueue(ResponseSpec(body=None, events=MESSAGES_EVENTS))
     recorder: Final = RecordingLogger()
     stream: Final = await call_messages(messages_server, [recorder], stream=True)
     assert "async_log_success_event" not in recorder.names
     await stream.aclose()
     await stream.aclose()
-    await recorder.wait_for_async("async_log_failure_event")
-    assert recorder.names.count("async_log_failure_event") == 1
-    assert "async_log_success_event" not in recorder.names
+    await recorder.wait_for_async("async_log_success_event")
+    assert recorder.names.count("async_log_success_event") == 1
+    assert "async_log_failure_event" not in recorder.names
 
 
 @pytest.mark.asyncio
@@ -635,11 +636,21 @@ async def test_whole_call_with_supplied_logger_still_owns_terminal_callbacks(
 
 
 @pytest.mark.asyncio
-async def test_direct_bridge_stream_owns_callbacks(messages_server: RecordingServer) -> None:
+@pytest.mark.parametrize("detach", (False, True))
+async def test_direct_bridge_stream_owns_callbacks(messages_server: RecordingServer, detach: bool) -> None:
     from litellm.rust_bridge import messages as bridge
 
     recorder: Final = RecordingLogger()
-    messages_server.enqueue(ResponseSpec(body=None, events=MESSAGES_EVENTS))
+    release: Final = threading.Event()
+    if not detach:
+        release.set()
+    messages_server.enqueue(
+        ResponseSpec(
+            body=None,
+            chunks=tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in MESSAGES_EVENTS),
+            release=release,
+        )
+    )
     stream: Final = await bridge.amessages(
         model=MESSAGES_MODEL.split("/", 1)[-1],
         body={"model": MESSAGES_MODEL.split("/", 1)[-1], "messages": MESSAGES, "max_tokens": 64, "stream": True},
@@ -651,10 +662,21 @@ async def test_direct_bridge_stream_owns_callbacks(messages_server: RecordingSer
         request_arguments={"callbacks": [recorder]},
     )
     assert "async_log_success_event" not in recorder.names
-    assert b"message_stop" in b"".join([chunk async for chunk in stream])
+    try:
+        if detach:
+            assert await anext(stream)
+            await asyncio.wait_for(stream.aclose(), timeout=1)
+            await stream.aclose()
+            assert "async_log_success_event" not in recorder.names
+            assert "async_log_failure_event" not in recorder.names
+        else:
+            assert b"message_stop" in b"".join([chunk async for chunk in stream])
+    finally:
+        release.set()
     events: Final = await recorder.wait_for_async("async_log_success_event")
     assert len(events) == 1
     assert events[0].stream is True
+    assert events[0].response.usage.total_tokens == 9
     assert events[0].response.choices[0].message.content == "Hello from native Messages"
     assert recorder.names.count("log_pre_api_call") == 1
     await stream.aclose()

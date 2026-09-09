@@ -17,14 +17,17 @@ pub use types::{
 use types::{OcrDocument, OcrDocumentProjection};
 
 use crate::lifecycle::{
-    CallLifecycle, CallLifecycleContext, Clock, ExecutedCall, TerminalDispatcher,
+    CallLifecycle, CallLifecycleContext, Clock, DeploymentFailureHooks, ExecutedCall,
+    TerminalDispatcher,
 };
 
-pub trait OcrServices: TerminalDispatcher + Clock {}
+pub trait OcrServices: TerminalDispatcher + Clock + DeploymentFailureHooks {}
 
-impl<T> OcrServices for T where T: TerminalDispatcher + Clock {}
+impl<T> OcrServices for T where T: TerminalDispatcher + Clock + DeploymentFailureHooks {}
 
 pub struct DefaultOcrServices;
+
+impl DeploymentFailureHooks for DefaultOcrServices {}
 
 impl Default for DefaultOcrServices {
     fn default() -> Self {
@@ -53,11 +56,11 @@ pub async fn ocr<S: OcrServices>(
     _options: crate::lifecycle::ocr::Options,
     context: CallLifecycleContext,
 ) -> ExecutedCall<Value, Error> {
-    CallLifecycle::default()
+    CallLifecycle::asynchronous()
         .run(
             context,
             request,
-            &SettledOcrPolicy,
+            &SettledOcrPolicy(services),
             services,
             services,
             |request| async move { send(request).await.map(OcrResponseData::into_json) },
@@ -65,9 +68,9 @@ pub async fn ocr<S: OcrServices>(
         .await
 }
 
-struct SettledOcrPolicy;
+struct SettledOcrPolicy<'a, S>(&'a S);
 
-impl crate::lifecycle::PreCallHooks<SettledOcrRequest> for SettledOcrPolicy {
+impl<S: OcrServices> crate::lifecycle::PreCallHooks<SettledOcrRequest> for SettledOcrPolicy<'_, S> {
     type PreCallFuture<'a>
         = std::future::Ready<crate::lifecycle::ActionResult<SettledOcrRequest, Error>>
     where
@@ -81,7 +84,9 @@ impl crate::lifecycle::PreCallHooks<SettledOcrRequest> for SettledOcrPolicy {
     }
 }
 
-impl crate::lifecycle::ModerationHooks<SettledOcrRequest> for SettledOcrPolicy {
+impl<S: OcrServices> crate::lifecycle::ModerationHooks<SettledOcrRequest>
+    for SettledOcrPolicy<'_, S>
+{
     type ModerationFuture<'a>
         = std::future::Ready<crate::lifecycle::ActionResult<SettledOcrRequest, Error>>
     where
@@ -96,9 +101,21 @@ impl crate::lifecycle::ModerationHooks<SettledOcrRequest> for SettledOcrPolicy {
     }
 }
 
-impl crate::lifecycle::DeploymentPreHooks<SettledOcrRequest> for SettledOcrPolicy {}
-impl crate::lifecycle::DeploymentSuccessHooks<Value> for SettledOcrPolicy {}
-impl crate::lifecycle::DeploymentFailureHooks for SettledOcrPolicy {}
+impl<S: OcrServices> crate::lifecycle::DeploymentPreHooks<SettledOcrRequest>
+    for SettledOcrPolicy<'_, S>
+{
+}
+impl<S: OcrServices> crate::lifecycle::DeploymentSuccessHooks<Value> for SettledOcrPolicy<'_, S> {}
+impl<S: OcrServices> DeploymentFailureHooks for SettledOcrPolicy<'_, S> {
+    fn async_post_call_failure_deployment_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        error: &'a Error,
+    ) -> crate::lifecycle::CallbackFuture<'a, Result<(), Error>> {
+        self.0
+            .async_post_call_failure_deployment_hook(context, error)
+    }
+}
 
 pub(crate) async fn send(request: SettledOcrRequest) -> Result<OcrResponseData, Error> {
     let SettledOcrRequest { endpoint, http } = request;

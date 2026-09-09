@@ -64,6 +64,9 @@ impl LifecycleRoute for ChatCompletionsRoute {
     type Decline = Decline;
     type State = ChatCompletionsState;
 
+    fn program(state: &Self::State) -> &CallLifecycle { &state.program }
+    fn program_mut(state: &mut Self::State) -> &mut CallLifecycle { &mut state.program }
+
     fn admit(
         admission: &Admission,
         options: Options,
@@ -154,7 +157,7 @@ where
     T: crate::runtime::HttpTransport,
     A: crate::providers::auth::ChatAuthorizationServices,
 {
-    CallLifecycle::default()
+    CallLifecycle::asynchronous()
         .run_prepared_with_usage(
             (context, request),
             session,
@@ -227,7 +230,7 @@ pub(crate) async fn execute_settled(
     request: SettledChatRequest,
     context: CallLifecycleContext,
 ) -> ExecutedCall<ChatCompletionsResponse, Error> {
-    CallLifecycle::default()
+    CallLifecycle::asynchronous()
         .run_with_usage(
             (context, request),
             &UndispatchedSession,
@@ -276,6 +279,7 @@ mod tests {
                 false,
                 vec![
                     Operation::Setup,
+                    Operation::InputHooks,
                     Operation::BuildRequest,
                     Operation::PreCall,
                     Operation::Send,
@@ -288,6 +292,7 @@ mod tests {
                 vec![
                     Operation::Setup,
                     Operation::DeploymentPre,
+                    Operation::InputHooks,
                     Operation::BuildRequest,
                     Operation::PreCall,
                     Operation::Send,

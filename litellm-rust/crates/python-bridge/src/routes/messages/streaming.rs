@@ -15,6 +15,13 @@ use crate::errors::messages_provider_error_to_pyerr;
 struct Session {
     host: Py<PyAny>,
     locals: pyo3_async_runtimes::TaskLocals,
+    drain: litellm_core::lifecycle::StreamDrainPolicy,
+}
+
+impl litellm_core::lifecycle::StreamDrain for Session {
+    fn stream_drain_policy(&self) -> litellm_core::lifecycle::StreamDrainPolicy {
+        self.drain.clone()
+    }
 }
 
 impl Clock for Session {
@@ -39,7 +46,8 @@ impl TerminalDispatcher for Session {
                     }
                 };
                 let error = match &terminal.classification {
-                    TerminalClassification::Success => None,
+                    TerminalClassification::Success | TerminalClassification::Incomplete { .. } => None,
+                    TerminalClassification::Cancelled { message } => Some(format!("Cancelled: {message}")),
                     TerminalClassification::Failure { kind, message } => {
                         Some(format!("{kind}: {message}"))
                     }
@@ -87,7 +95,20 @@ pub(super) fn send(
         .getattr("start")?
         .call_method0("timestamp")?
         .extract::<f64>()?;
+    static DRAIN: std::sync::OnceLock<litellm_core::lifecycle::StreamDrainPolicy> =
+        std::sync::OnceLock::new();
+    let max_detached = py
+        .import("litellm.constants")?
+        .getattr("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS")?
+        .extract::<usize>()?;
+    let drain = DRAIN.get_or_init(|| {
+        litellm_core::lifecycle::StreamDrainPolicy::with_max_detached(max_detached)
+    });
+    let drain = request
+        .timeout()
+        .map_or_else(|| drain.clone(), |timeout| drain.with_idle_timeout(timeout));
     let services = Arc::new(Session {
+        drain,
         host,
         locals: pyo3_async_runtimes::tokio::get_current_locals(py)?,
     });

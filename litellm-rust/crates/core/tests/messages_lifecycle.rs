@@ -1,3 +1,4 @@
+use litellm_core::messages::types::ProviderMessagesRequest;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
@@ -26,6 +27,8 @@ type PolicyFuture<'a, T> = Pin<Box<dyn Future<Output = ActionResult<T, Error>> +
 #[derive(Default)]
 struct Services {
     reject: bool,
+    events: Mutex<Vec<&'static str>>,
+    contexts: Mutex<Vec<CallLifecycleContext>>,
     terminals: Mutex<Vec<TerminalRecord>>,
 }
 
@@ -39,9 +42,11 @@ impl PreCallHooks<MessagesRequest> for Services {
     type PreCallFuture<'a> = PolicyFuture<'a, MessagesRequest>;
     fn async_pre_call_hook<'a>(
         &'a self,
-        _: &'a CallLifecycleContext,
+        context: &'a CallLifecycleContext,
         request: MessagesRequest,
     ) -> Self::PreCallFuture<'a> {
+        self.events.lock().unwrap().push("input");
+        self.contexts.lock().unwrap().push(context.clone());
         Box::pin(async move {
             if self.reject {
                 ActionResult::Reject(Error::InvalidRequest("blocked".into()))
@@ -52,21 +57,43 @@ impl PreCallHooks<MessagesRequest> for Services {
     }
 }
 
-impl ModerationHooks<MessagesRequest> for Services {
-    type ModerationFuture<'a> = PolicyFuture<'a, MessagesRequest>;
+impl ModerationHooks<ProviderMessagesRequest> for Services {
+    type ModerationFuture<'a> = PolicyFuture<'a, ProviderMessagesRequest>;
 
     fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
-        request: MessagesRequest,
+        request: ProviderMessagesRequest,
     ) -> Self::ModerationFuture<'a> {
+        self.events.lock().unwrap().push("prepared");
         Box::pin(async move { ActionResult::Continue(request) })
     }
 }
 
-impl DeploymentPreHooks<MessagesRequest> for Services {}
+impl DeploymentPreHooks<MessagesRequest> for Services {
+    fn async_pre_call_deployment_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: MessagesRequest,
+    ) -> litellm_core::lifecycle::CallbackFuture<'a, ActionResult<MessagesRequest, Error>>
+    where
+        MessagesRequest: 'a,
+    {
+        self.events.lock().unwrap().push("deployment");
+        Box::pin(async move { ActionResult::Continue(request) })
+    }
+}
 impl DeploymentSuccessHooks<litellm_core::messages::types::AnthropicMessagesResponse> for Services {}
-impl DeploymentFailureHooks for Services {}
+impl DeploymentFailureHooks for Services {
+    fn async_post_call_failure_deployment_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        _: &'a Error,
+    ) -> litellm_core::lifecycle::CallbackFuture<'a, Result<(), Error>> {
+        self.events.lock().unwrap().push("failure");
+        Box::pin(async { Err(Error::Network("observer error".into())) })
+    }
+}
 
 impl TerminalDispatcher for Services {
     fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
@@ -173,4 +200,87 @@ async fn pre_call_rejection_never_touches_socket() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn options_control_callbacks_and_preserve_or_override_identity() {
+    for asynchronous in [false, true] {
+        for override_identity in [false, true] {
+            let (api_base, server) = upstream(200).await;
+            let services = Services::default();
+            let mut context = context();
+            context.trace_id = Some("context-trace".into());
+            let options = Options {
+                asynchronous,
+                call_id: override_identity.then(|| "option-call".into()),
+                trace_id: override_identity.then(|| "option-trace".into()),
+                ..Options::default()
+            };
+            let result = messages(&services, request(api_base), options, context).await;
+            server.await.unwrap();
+            assert_eq!(services.terminals.lock().unwrap().len(), 1);
+            let terminal = result.terminal();
+            let callback_contexts = services.contexts.lock().unwrap();
+            assert_eq!(
+                terminal.call_id,
+                if override_identity {
+                    "option-call"
+                } else {
+                    "call-1"
+                }
+            );
+            assert_eq!(
+                terminal.trace_id.as_deref(),
+                Some(if override_identity {
+                    "option-trace"
+                } else {
+                    "context-trace"
+                })
+            );
+            assert_eq!(callback_contexts[0].litellm_call_id, terminal.call_id);
+            assert_eq!(callback_contexts[0].trace_id, terminal.trace_id);
+            assert_eq!(
+                *services.events.lock().unwrap(),
+                if asynchronous {
+                    vec!["deployment", "input", "prepared"]
+                } else {
+                    vec!["input", "prepared"]
+                }
+            );
+            result.into_result().unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn preparation_failure_stops_before_prepared_callbacks_and_retains_internal_terminal() {
+    for internal_call in [false, true] {
+        let services = Services::default();
+        let mut request = request("http://127.0.0.1:1".into());
+        request.custom_llm_provider = Some("invalid-provider".into());
+        let result = messages(
+            &services,
+            request,
+            Options {
+                asynchronous: true,
+                internal_call,
+                ..Options::default()
+            },
+            context(),
+        )
+        .await;
+        assert_eq!(
+            *services.events.lock().unwrap(),
+            ["deployment", "input", "failure"]
+        );
+        assert_eq!(
+            services.terminals.lock().unwrap().len(),
+            usize::from(!internal_call)
+        );
+        assert_eq!(result.terminal().call_id, "call-1");
+        assert!(matches!(
+            result.into_result(),
+            Err(Error::InvalidProvider(_))
+        ));
+    }
 }

@@ -1,3 +1,4 @@
+use crate::messages::types::ProviderMessagesRequest;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -165,6 +166,8 @@ pub struct NativeBindings;
 #[derive(Debug)]
 pub struct NativeSession;
 
+impl crate::lifecycle::StreamDrain for NativeSession {}
+
 impl Clock for NativeSession {
     fn now(&self) -> f64 {
         std::time::SystemTime::now()
@@ -185,13 +188,13 @@ impl PreCallHooks<MessagesRequest> for NativeSession {
     }
 }
 
-impl ModerationHooks<MessagesRequest> for NativeSession {
-    type ModerationFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
+impl ModerationHooks<ProviderMessagesRequest> for NativeSession {
+    type ModerationFuture<'a> = std::future::Ready<ActionResult<ProviderMessagesRequest, Error>>;
 
     fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
-        request: MessagesRequest,
+        request: ProviderMessagesRequest,
     ) -> Self::ModerationFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
@@ -407,8 +410,16 @@ impl LiteLlm<NativeServices> {
             provider,
             format!("{:032x}", rand::random::<u128>()),
         );
-        self.messages_stream_with(request, MessagesOptions::default(), context, NativeBindings)
-            .await
+        self.messages_stream_with(
+            request,
+            MessagesOptions {
+                asynchronous: true,
+                ..MessagesOptions::default()
+            },
+            context,
+            NativeBindings,
+        )
+        .await
     }
 
     pub async fn messages(
@@ -485,10 +496,21 @@ where
         crate::messages::lifecycle::messages_with_provider(
             &invocation,
             request,
+            MessagesOptions {
+                asynchronous: true,
+                ..MessagesOptions::default()
+            },
             context,
+            |request| {
+                std::future::ready(
+                    crate::messages::request::build_provider_request_with_environment(
+                        request,
+                        &|key| self.services.environment(key),
+                    ),
+                )
+            },
             |request| async move {
-                crate::messages::execute_messages_provider_call_with_transport(
-                    &*self.services,
+                crate::messages::execute_provider_messages_request_with_transport(
                     self.services.transport(),
                     request,
                 )
@@ -533,10 +555,10 @@ where
     }
 }
 
-impl<S, Session> ModerationHooks<MessagesRequest> for StreamingRuntimeSession<S, Session>
+impl<S, Session> ModerationHooks<ProviderMessagesRequest> for StreamingRuntimeSession<S, Session>
 where
     S: Send + Sync,
-    Session: ModerationHooks<MessagesRequest>,
+    Session: ModerationHooks<ProviderMessagesRequest>,
 {
     type ModerationFuture<'a>
         = Session::ModerationFuture<'a>
@@ -546,7 +568,7 @@ where
     fn async_moderation_hook<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
-        request: MessagesRequest,
+        request: ProviderMessagesRequest,
     ) -> Self::ModerationFuture<'a> {
         self.invocation.async_moderation_hook(context, request)
     }
@@ -612,8 +634,20 @@ where
     S: Send + Sync,
     Session: TerminalDispatcher,
 {
+    fn observations(&self) -> crate::lifecycle::program::Observations {
+        self.invocation.observations()
+    }
+
     fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
         self.invocation.dispatch(terminal)
+    }
+}
+
+impl<S: Send + Sync, Session: crate::lifecycle::StreamDrain> crate::lifecycle::StreamDrain
+    for StreamingRuntimeSession<S, Session>
+{
+    fn stream_drain_policy(&self) -> crate::lifecycle::StreamDrainPolicy {
+        self.invocation.stream_drain_policy()
     }
 }
 
@@ -621,7 +655,7 @@ impl<S> LiteLlm<S>
 where
     S: MessagesRuntimeServices + 'static,
     <<S as MessagesRuntimeServices>::Calls as CallServices>::Session:
-        MessagesServices + Send + Sync + 'static,
+        MessagesServices + crate::lifecycle::StreamDrain + Send + Sync + 'static,
     for<'a> <<S as MessagesRuntimeServices>::Calls as CallServices>::OpenFuture<'a>: Send,
 {
     pub async fn messages_stream_with(
@@ -631,12 +665,14 @@ where
         context: CallLifecycleContext,
         bindings: <<S as MessagesRuntimeServices>::Calls as CallServices>::Bindings,
     ) -> Result<StreamingCall, Error> {
+        let context = options.context(context);
         let invocation = self
             .services
             .calls()
             .open(context.clone(), bindings)
             .await?;
         let application = self.services.clone();
+        let environment = application.clone();
         let session = Arc::new(StreamingRuntimeSession {
             _application: application.clone(),
             invocation,
@@ -646,9 +682,16 @@ where
             request,
             options,
             context,
+            move |request| {
+                std::future::ready(
+                    crate::messages::request::build_provider_request_with_environment(
+                        request,
+                        &|key| environment.environment(key),
+                    ),
+                )
+            },
             move |request| async move {
-                crate::messages::execute_messages_provider_stream_with_transport(
-                    &*application,
+                crate::messages::execute_provider_messages_stream_with_transport(
                     application.transport(),
                     request,
                 )

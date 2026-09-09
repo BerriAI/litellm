@@ -102,7 +102,7 @@ impl crate::lifecycle::TerminalDispatcher for CustomLoggerRunner {
             let details = ModelCallDetails::from(terminal);
             let response = CallbackValue::new(
                 match (&terminal.classification, &terminal.projection) {
-                    (crate::lifecycle::TerminalClassification::Failure { .. }, _) => "error",
+                    (crate::lifecycle::TerminalClassification::Failure { .. } | crate::lifecycle::TerminalClassification::Cancelled { .. } | crate::lifecycle::TerminalClassification::Incomplete { .. }, _) => "error",
                     (_, crate::lifecycle::RouteProjection::Ocr { .. }) => "ocr",
                     (_, crate::lifecycle::RouteProjection::Messages { .. }) => "messages",
                     (_, crate::lifecycle::RouteProjection::ChatCompletions { .. }) => {
@@ -121,7 +121,7 @@ impl crate::lifecycle::TerminalDispatcher for CustomLoggerRunner {
                     self.async_log_success_event(&details, &response, terminal.timing)
                         .await;
                 }
-                crate::lifecycle::TerminalClassification::Failure { .. } => {
+                crate::lifecycle::TerminalClassification::Failure { .. } | crate::lifecycle::TerminalClassification::Cancelled { .. } | crate::lifecycle::TerminalClassification::Incomplete { .. } => {
                     self.async_log_failure_event(&details, Some(&response), terminal.timing)
                         .await;
                 }

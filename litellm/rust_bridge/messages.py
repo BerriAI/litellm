@@ -172,8 +172,9 @@ class MessagesStream(AsyncIterator[bytes]):
             )
 
             try:
+                if self.completion is not None:
+                    await self.completion.detach_stream()
                 await aclose_if_supported(self.source)
-                await self._complete()
             finally:
                 self._release()
             raise
@@ -194,8 +195,9 @@ class MessagesStream(AsyncIterator[bytes]):
         from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import aclose_if_supported
 
         try:
+            if self.completion is not None:
+                await self.completion.detach_stream()
             await aclose_if_supported(self.source)
-            await self._complete()
         finally:
             self._release()
 
@@ -373,6 +375,7 @@ class _MessagesHost:
         self.error: BaseException | None = None
         self.start: datetime = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
         self.end: datetime | None = None
+        self.stream_detached: bool = False
         self.stream_transferred: bool = False
         self.deferred_stream: tuple[object, str | None, float] | None = None
 
@@ -421,10 +424,14 @@ class _MessagesHost:
             self.response = await deployment_success(self.current, self.response, CallTypes.aanthropic_messages)
 
     async def complete_stream(self, response: object, error: str | None, end_time: float) -> None:
-        if not self.lifecycle_owned:
+        if not self.lifecycle_owned and not self.stream_detached:
             self.deferred_stream = (response, error, end_time)
             return
         await self._dispatch_stream_completion(response, error, end_time)
+
+    async def detach_stream(self) -> None:
+        self.stream_detached = True
+        await self.finish_deferred_stream()
 
     async def finish_deferred_stream(self) -> None:
         deferred: Final = self.deferred_stream
@@ -441,7 +448,11 @@ class _MessagesHost:
         logger: Final = self.logger
         end: Final = datetime.fromtimestamp(end_time, tz=self.start.tzinfo)
         roots: Final = (self.arguments, self.current, self.state)
-        if error is None and callable(getattr(logger, "_on_deferred_stream_complete", None)):
+        if (
+            error is None
+            and not self.stream_detached
+            and callable(getattr(logger, "_on_deferred_stream_complete", None))
+        ):
             deferred_complete: Final = logger._handle_anthropic_messages_response_logging(response)  # pyright: ignore[reportPrivateUsage]  # existing Messages logging transform
 
             async def dispatch(replacement: object | None = None) -> None:
@@ -463,6 +474,26 @@ class _MessagesHost:
             return
         try:
             if error is not None:
+                from litellm.litellm_core_utils.litellm_logging import Logging
+                from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+                    AnthropicPassthroughLoggingHandler,
+                )
+                from litellm.types.utils import ModelResponse, Usage
+
+                partial: Final = logger._handle_anthropic_messages_response_logging(response)  # pyright: ignore[reportPrivateUsage]  # existing Messages logging transform
+                if (
+                    isinstance(logger, Logging)
+                    and isinstance(partial, ModelResponse)
+                    and isinstance(partial.usage, Usage)
+                ):
+                    logger.record_partial_usage_for_failure(
+                        usage=partial.usage,
+                        response_cost=AnthropicPassthroughLoggingHandler._cost_partial_stream_or_zero(  # pyright: ignore[reportPrivateUsage]  # shared partial-stream costing policy
+                            partial_response=partial,
+                            model=str(self.current.get("model") or ""),
+                            logging_obj=logger,
+                        ),
+                    )
                 failure: Final = APIError(
                     status_code=500,
                     message=error,
@@ -473,6 +504,9 @@ class _MessagesHost:
                 pending: Final = invoke_terminal("async_failure", roots, logger, None, failure, self.start, end)
                 if isinstance(pending, Awaitable):
                     await pending
+                detached_failure: Final = getattr(logger, "_on_detached_stream_failure", None)
+                if self.stream_detached and callable(detached_failure):
+                    await detached_failure(failure)
                 return
             complete: Final = logger._handle_anthropic_messages_response_logging(response)  # pyright: ignore[reportPrivateUsage]  # existing Messages logging transform
             logger.model_call_details["complete_streaming_response"] = complete

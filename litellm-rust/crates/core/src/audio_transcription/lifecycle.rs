@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::Error;
 use crate::integrations::custom_guardrail::{
@@ -22,12 +22,18 @@ use crate::providers::dispatch::resolve_audio_route_provider;
 use super::handler::execute_audio_transcription_provider_call;
 use super::prepare::prepare_audio_transcription_provider_call;
 use super::types::{
-    AudioDuringCallGuardrailRequest, AudioInput, AudioPreCallGuardrailRequest, AudioRouteRequest,
-    AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
+    AudioDuringCallGuardrailRequest, AudioPreCallGuardrailRequest, AudioRouteRequest,
+    AudioTranscriptionRequest, PreparedAudioTranscriptionRequest,
+    ProviderAudioTranscriptionRequest,
 };
 
 pub trait AudioServices:
-    TerminalDispatcher + Clock + crate::providers::auth::AuthorizationServices
+    TerminalDispatcher
+    + Clock
+    + crate::providers::auth::AuthorizationServices
+    + DeploymentPreHooks<PreparedAudioTranscriptionRequest>
+    + DeploymentSuccessHooks<Value>
+    + DeploymentFailureHooks
 {
     fn guardrails(&self) -> AudioGuardrailRunner;
 }
@@ -100,6 +106,10 @@ impl crate::providers::auth::AuthorizationServices for DefaultAudioServices {
     }
 }
 
+impl DeploymentPreHooks<PreparedAudioTranscriptionRequest> for DefaultAudioServices {}
+impl DeploymentSuccessHooks<Value> for DefaultAudioServices {}
+impl DeploymentFailureHooks for DefaultAudioServices {}
+
 impl AudioServices for DefaultAudioServices {
     fn guardrails(&self) -> AudioGuardrailRunner {
         self.guardrails.clone()
@@ -125,6 +135,7 @@ impl AudioRoute {
         )
         .with_metadata(logging_metadata(&request.request_metadata));
         let policy = AudioRequestPolicy {
+            services,
             guardrail_runner: services.guardrails(),
             request_metadata: request.request_metadata,
         };
@@ -138,7 +149,7 @@ impl AudioRoute {
             optional_params: request.optional_params,
             timeout: request.timeout,
         };
-        CallLifecycle::default()
+        CallLifecycle::asynchronous()
             .run_prepared(
                 context,
                 prepared,
@@ -152,25 +163,15 @@ impl AudioRoute {
     }
 }
 
-struct PreparedAudioTranscriptionRequest {
-    model: String,
-    custom_llm_provider: String,
-    audio: AudioInput,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    extra_headers: Option<Map<String, Value>>,
-    optional_params: Map<String, Value>,
-    timeout: Option<std::time::Duration>,
-}
-
-struct AudioRequestPolicy {
+struct AudioRequestPolicy<'a, S> {
+    services: &'a S,
     guardrail_runner: AudioGuardrailRunner,
     request_metadata: RequestMetadata,
 }
 
 type AudioFuture<'a, T> = Pin<Box<dyn Future<Output = ActionResult<T, Error>> + Send + 'a>>;
 
-impl AudioRequestPolicy {
+impl<S: AudioServices> AudioRequestPolicy<'_, S> {
     async fn run_pre_call_guardrails(
         &self,
         request: PreparedAudioTranscriptionRequest,
@@ -244,7 +245,9 @@ impl AudioRequestPolicy {
     }
 }
 
-impl PreCallHooks<PreparedAudioTranscriptionRequest> for AudioRequestPolicy {
+impl<S: AudioServices> PreCallHooks<PreparedAudioTranscriptionRequest>
+    for AudioRequestPolicy<'_, S>
+{
     type PreCallFuture<'a>
         = AudioFuture<'a, PreparedAudioTranscriptionRequest>
     where
@@ -263,7 +266,9 @@ impl PreCallHooks<PreparedAudioTranscriptionRequest> for AudioRequestPolicy {
     }
 }
 
-impl ModerationHooks<ProviderAudioTranscriptionRequest> for AudioRequestPolicy {
+impl<S: AudioServices> ModerationHooks<ProviderAudioTranscriptionRequest>
+    for AudioRequestPolicy<'_, S>
+{
     type ModerationFuture<'a>
         = AudioFuture<'a, ProviderAudioTranscriptionRequest>
     where
@@ -283,9 +288,44 @@ impl ModerationHooks<ProviderAudioTranscriptionRequest> for AudioRequestPolicy {
     }
 }
 
-impl DeploymentPreHooks<PreparedAudioTranscriptionRequest> for AudioRequestPolicy {}
-impl DeploymentSuccessHooks<Value> for AudioRequestPolicy {}
-impl DeploymentFailureHooks for AudioRequestPolicy {}
+impl<S: AudioServices> DeploymentPreHooks<PreparedAudioTranscriptionRequest>
+    for AudioRequestPolicy<'_, S>
+{
+    fn async_pre_call_deployment_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        request: PreparedAudioTranscriptionRequest,
+    ) -> crate::lifecycle::CallbackFuture<'a, ActionResult<PreparedAudioTranscriptionRequest, Error>>
+    where
+        PreparedAudioTranscriptionRequest: 'a,
+    {
+        self.services
+            .async_pre_call_deployment_hook(context, request)
+    }
+}
+impl<S: AudioServices> DeploymentSuccessHooks<Value> for AudioRequestPolicy<'_, S> {
+    fn async_post_call_success_deployment_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        response: Value,
+    ) -> crate::lifecycle::CallbackFuture<'a, ActionResult<Value, Error>>
+    where
+        Value: 'a,
+    {
+        self.services
+            .async_post_call_success_deployment_hook(context, response)
+    }
+}
+impl<S: AudioServices> DeploymentFailureHooks for AudioRequestPolicy<'_, S> {
+    fn async_post_call_failure_deployment_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        error: &'a Error,
+    ) -> crate::lifecycle::CallbackFuture<'a, Result<(), Error>> {
+        self.services
+            .async_post_call_failure_deployment_hook(context, error)
+    }
+}
 
 fn logging_metadata(metadata: &RequestMetadata) -> StandardLoggingMetadata {
     StandardLoggingMetadata {

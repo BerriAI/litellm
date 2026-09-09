@@ -18,6 +18,8 @@ struct State {
     closed: AtomicBool,
     polling: AtomicBool,
     notify: Notify,
+    runtime: tokio::runtime::Handle,
+    detached: AtomicBool,
 }
 
 impl State {
@@ -26,6 +28,17 @@ impl State {
         self.notify.notify_one();
         if let Ok(mut stream) = self.stream.try_lock() {
             stream.take();
+        }
+    }
+
+    fn detach(self: &Arc<Self>) {
+        self.close();
+        if !self.detached.swap(true, Ordering::AcqRel) {
+            let state = self.clone();
+            self.runtime.spawn(async move {
+                state.stream.lock().await.take();
+                let _ = state.finish().await;
+            });
         }
     }
 
@@ -48,7 +61,7 @@ struct PollGuard {
 impl Drop for PollGuard {
     fn drop(&mut self) {
         if !self.completed {
-            self.state.close();
+            self.state.detach();
         }
         self.state.polling.store(false, Ordering::Release);
     }
@@ -68,12 +81,18 @@ impl ByteStreamReader {
                 closed: AtomicBool::new(false),
                 polling: AtomicBool::new(false),
                 notify: Notify::new(),
+                runtime: tokio::runtime::Handle::try_current()
+                    .unwrap_or_else(|_| pyo3_async_runtimes::tokio::get_runtime().handle().clone()),
+                detached: AtomicBool::new(false),
             }),
         }
     }
 
     pub async fn next_chunk(&self) -> PyResult<Option<Bytes>> {
         let state = &self.state;
+        if state.closed.load(Ordering::Acquire) {
+            return Ok(None);
+        }
         if state.polling.swap(true, Ordering::AcqRel) {
             return Err(PyRuntimeError::new_err(
                 "concurrent stream iteration is not supported",
@@ -103,8 +122,14 @@ impl ByteStreamReader {
                 Ok(Some(bytes))
             }
             item => {
+                let detached = state.closed.load(Ordering::Acquire);
                 state.close();
-                state.finish().await?;
+                if !detached {
+                    let completion = state.finish().await;
+                    if item.is_none() {
+                        completion?;
+                    }
+                }
                 guard.completed = true;
                 item.transpose()
             }
@@ -112,12 +137,11 @@ impl ByteStreamReader {
     }
 
     pub fn close(&self) {
-        self.state.close();
+        self.state.detach();
     }
 
     pub async fn aclose(&self) -> PyResult<()> {
         self.close();
-        self.state.stream.lock().await.take();
-        self.state.finish().await
+        Ok(())
     }
 }
