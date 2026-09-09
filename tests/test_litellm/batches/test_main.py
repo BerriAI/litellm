@@ -778,3 +778,45 @@ def test_retrieve__omits_trusted_model_credentials_when_not_supplied(seams):
 
     litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
     assert "_litellm_internal_model_credentials" not in litellm_params
+
+
+# =========================================================================== #
+# mistral - a provider-config provider, like bedrock, so it requires `model`
+# =========================================================================== #
+
+
+def test_create__mistral_ocr_routes_to_base_http_handler_with_mistral_config(seams):
+    with patch.object(bm.ProviderConfigManager, "get_provider_batches_config", wraps=bm.ProviderConfigManager.get_provider_batches_config) as get_cfg:
+        result = bm.create_batch(
+            completion_window="24h",
+            endpoint="/v1/ocr",
+            input_file_id="file-abc",
+            custom_llm_provider="mistral",
+            model="mistral/mistral-ocr-latest",
+        )
+
+    assert result is seams.base_http.create_batch.return_value
+    _assert_only(seams.base_http.create_batch, seams, "create_batch")
+    get_cfg.assert_called_once()
+    forwarded = seams.base_http.create_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "MistralBatchesConfig"
+    assert forwarded["model"] == "mistral-ocr-latest"
+    assert forwarded["create_batch_data"]["endpoint"] == "/v1/ocr"
+
+
+def test_create__mistral_without_model_raises_badrequest(seams):
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        bm.create_batch(**CREATE_KW, custom_llm_provider="mistral")
+
+    for m in _all_seam_methods(seams, "create_batch"):
+        m.assert_not_called()
+
+
+def test_retrieve__mistral_routes_to_base_http_handler_with_mistral_config(seams):
+    result = bm.retrieve_batch(batch_id="job-1", custom_llm_provider="mistral", model="mistral/mistral-ocr-latest")
+
+    assert result is seams.base_http.retrieve_batch.return_value
+    _assert_only(seams.base_http.retrieve_batch, seams, "retrieve_batch")
+    forwarded = seams.base_http.retrieve_batch.call_args.kwargs
+    assert type(forwarded["provider_config"]).__name__ == "MistralBatchesConfig"
+    assert forwarded["batch_id"] == "job-1"
