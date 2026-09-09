@@ -41,6 +41,7 @@ longer signal it.
 - **key**: Updates no longer send an empty `budget_duration`, which the proxy rejects with a 400; any update to a key without a configured `budget_duration` previously failed outright
 - **key**: A config-supplied `key` value (write-only) is now forwarded to `/key/generate`; previously it was silently dropped and the proxy generated a random key instead
 - **security**: The `litellm_key` data source and `litellm_key_block` resource normalize raw `sk-` keys to their SHA-256 token hash before building request URLs and resource IDs, so plaintext keys no longer land in reverse-proxy access logs, Terraform plan output, or state IDs
+- **key**: `metadata` no longer includes the fields the proxy merges into the same JSON blob on its own (`model_rpm_limit`, `model_tpm_limit`, `guardrails`, `tags`, and the rest of `LiteLLM_ManagementEndpoint_MetadataFields`); each already has its own argument here, so a key that set any of them showed a permanent plan diff reverting metadata to what config actually declared
 
 ### Changed
 

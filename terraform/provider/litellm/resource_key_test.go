@@ -254,3 +254,68 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 		t.Errorf("RPMLimit not parsed: %+v", key.RPMLimit)
 	}
 }
+
+// The proxy has no dedicated column for model_tpm_limit and merges it into the same metadata
+// blob the caller's own metadata lives in, so a naive read shows it as a permanent metadata
+// diff: config never repeats it inside metadata, since it already has its own attribute.
+func TestWithoutReservedKeyMetadataFieldsDropsProxyOwnedKeys(t *testing.T) {
+	got := withoutReservedKeyMetadataFields(map[string]interface{}{
+		"project":         "pseudonymization",
+		"managed_by":      "terraform",
+		"model_tpm_limit": map[string]interface{}{"gpt-4.1-mini-20250414": float64(60000000)},
+		"guardrails":      []interface{}{"pii-detector"},
+		"rpm_limit_type":  "guaranteed_throughput",
+		"tags":            []interface{}{"managed_by:terraform"},
+	})
+
+	want := map[string]interface{}{
+		"project":    "pseudonymization",
+		"managed_by": "terraform",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("got[%q] = %v, want %v", k, got[k], v)
+		}
+	}
+}
+
+func TestWithoutReservedKeyMetadataFieldsNilIsNil(t *testing.T) {
+	if got := withoutReservedKeyMetadataFields(nil); got != nil {
+		t.Errorf("got %v, want nil", got)
+	}
+}
+
+// resourceKeyRead must not surface the proxy-merged fields as if they were part of the
+// caller's own metadata, or every key that sets model_tpm_limit (or any of the other fields
+// key_management_endpoints.py folds into metadata) shows a permanent plan diff.
+func TestResourceKeyReadStripsProxyOwnedMetadataFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"token": "hash-1",
+			"key_alias": "pseudonymization",
+			"metadata": {
+				"project": "pseudonymization",
+				"model_tpm_limit": {"gpt-4.1-mini-20250414": 60000000},
+				"tags": ["managed_by:terraform"]
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newKeyResourceData(t, map[string]interface{}{})
+	d.SetId("hash-1")
+
+	if diags := resourceKeyRead(context.Background(), d, client); diags.HasError() {
+		t.Fatalf("read returned error: %v", diags)
+	}
+
+	metadata := d.Get("metadata").(map[string]interface{})
+	if len(metadata) != 1 || metadata["project"] != "pseudonymization" {
+		t.Errorf("metadata = %v, want only {project: pseudonymization}", metadata)
+	}
+}

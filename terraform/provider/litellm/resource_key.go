@@ -326,7 +326,7 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 		d.Set("max_parallel_requests", *key.MaxParallelRequests)
 	}
 	if key.Metadata != nil {
-		d.Set("metadata", key.Metadata)
+		d.Set("metadata", withoutReservedKeyMetadataFields(key.Metadata))
 	}
 	if key.TPMLimit != nil {
 		d.Set("tpm_limit", *key.TPMLimit)

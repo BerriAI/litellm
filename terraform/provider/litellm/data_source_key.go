@@ -191,7 +191,7 @@ func dataSourceLiteLLMKeyRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("budget_duration", info.BudgetDuration)
 
 	metadata := map[string]string{}
-	for k, v := range info.Metadata {
+	for k, v := range withoutReservedKeyMetadataFields(info.Metadata) {
 		if s, ok := v.(string); ok {
 			metadata[k] = s
 		}
