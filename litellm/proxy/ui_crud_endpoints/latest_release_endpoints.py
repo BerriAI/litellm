@@ -3,7 +3,7 @@ from collections import Counter
 from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, Protocol
+from typing import Annotated, Final, Literal, Protocol
 
 import httpx
 from fastapi import APIRouter, Depends
@@ -124,8 +124,8 @@ async def get_latest_release_info(
     response_model=LatestReleaseInfo | None,
 )
 async def latest_release_info(
-    client: _AsyncGetClient = Depends(_default_client),
-    cache: InMemoryCache = Depends(_default_cache),
+    client: Annotated[_AsyncGetClient, Depends(_default_client)],
+    cache: Annotated[InMemoryCache, Depends(_default_cache)],
 ) -> LatestReleaseInfo | None:
     """
     Latest stable LiteLLM GitHub release with its PR count split into new features, bug fixes and other updates.

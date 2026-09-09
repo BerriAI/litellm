@@ -28,9 +28,8 @@ describe("describeRelease", () => {
   });
 
   it("singularises counts of one", () => {
-    expect(describeRelease({ ...RELEASE, new_features: 1, bug_fixes: 1, other_updates: 1 })).toBe(
-      "1 new feature, 1 fix, and 1 other update",
-    );
+    const singularCounts = { ...RELEASE, new_features: 1, bug_fixes: 1, other_updates: 1 };
+    expect(describeRelease(singularCounts)).toBe("1 new feature, 1 fix, and 1 other update");
   });
 });
 

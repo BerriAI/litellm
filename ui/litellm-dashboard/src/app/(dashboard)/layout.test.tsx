@@ -37,6 +37,10 @@ vi.mock("@/components/UserBanner", () => ({
   UserBanner: () => null,
 }));
 
+vi.mock("@/components/UpgradeBanner", () => ({
+  UpgradeBanner: () => null,
+}));
+
 vi.mock("@/contexts/ThemeContext", () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
