@@ -37,8 +37,6 @@ def _average_latency(samples: Sequence[float]) -> float:
 
 
 def _percentile_latency(samples: Sequence[float], percentile: float) -> float:
-    if not samples:
-        return 0.0
     values: Final = sorted(samples)
     index: Final = ceil(len(values) * percentile) - 1
     return values[index]
