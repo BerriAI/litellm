@@ -2,6 +2,7 @@ from typing import Final
 
 import pytest
 
+import litellm.proxy.proxy_server as proxy_server
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -13,6 +14,13 @@ TOKEN_COUNTING_ROUTES: Final = (
     "/v1/responses/input_tokens",
     "/openai/v1/responses/input_tokens",
     "/utils/token_counter",
+    "/v1/messages/count_tokens",
+    "/v1beta/models/gemini-3.8-flash:countTokens",
+    "/models/gemini-3.8-flash:countTokens",
+    "/bedrock/v1/messages/count-tokens",
+    "/bedrock/model/us.anthropic.claude-sonnet-4-6/count-tokens",
+    "/vertex_ai/v1/projects/p/locations/us-east5/publishers/anthropic/models/count-tokens:rawPredict",
+    "/vertex-ai/v1/projects/p/locations/us-east5/publishers/anthropic/models/count-tokens:rawPredict",
 )
 
 
@@ -46,6 +54,62 @@ async def test_non_exempt_llm_route_still_reserves_budget():
 
     assert reservation is not None
     assert reservation["reserved_cost"] > 0
+
+
+ANTHROPIC_MESSAGES: Final = [{"role": "user", "content": "hello!!!"}]
+COUNT_TOKENS_REQUESTS: Final[tuple[tuple[str, dict[str, object]], ...]] = (
+    ("/v1/messages/count_tokens", {"model": "claude-sonnet-5", "messages": ANTHROPIC_MESSAGES}),
+    ("/v1beta/models/gemini-3.8-flash:countTokens", {"contents": [{"role": "user", "parts": [{"text": "hello!!!"}]}]}),
+    (
+        "/vertex_ai/v1/projects/p/locations/us-east5/publishers/anthropic/models/count-tokens:rawPredict",
+        {"model": "claude-sonnet-5", "messages": ANTHROPIC_MESSAGES},
+    ),
+    ("/bedrock/v1/messages/count-tokens", {"model": "claude-sonnet-5", "messages": ANTHROPIC_MESSAGES}),
+)
+TINY_BUDGET_KEY_TOKEN: Final = "hashed-count-tokens-key"
+
+
+@pytest.fixture
+def spend_counter_cache(monkeypatch: pytest.MonkeyPatch) -> DualCache:
+    cache: Final = DualCache()
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    return cache
+
+
+async def _reserve_for_tiny_budget_key(route: str, request_body: dict[str, object]) -> dict[str, object] | None:
+    return await reserve_budget_for_request(
+        request_body=request_body,
+        route=route,
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token=TINY_BUDGET_KEY_TOKEN, max_budget=0.01, spend=0.0),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("route", "request_body"), COUNT_TOKENS_REQUESTS)
+async def test_repeated_token_counting_never_touches_a_tiny_budget(
+    spend_counter_cache: DualCache, route: str, request_body: dict[str, object]
+):
+    counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
+
+    assert await _reserve_for_tiny_budget_key(route, request_body) is None
+    assert await _reserve_for_tiny_budget_key(route, request_body) is None
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is None
+
+    completion: Final = await _reserve_for_tiny_budget_key(
+        "/v1/messages", {"model": "claude-sonnet-5", "max_tokens": 16, "messages": ANTHROPIC_MESSAGES}
+    )
+    assert completion is not None
+    reserved_cost: Final = completion["reserved_cost"]
+    assert isinstance(reserved_cost, float)
+    assert reserved_cost > 0
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reserved_cost)
 
 
 BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-6"

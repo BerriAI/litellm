@@ -80,6 +80,7 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
 )
@@ -3239,7 +3240,7 @@ def get_optional_params_transcription(
 
     passed_params.pop("OPENAI_TRANSCRIPTION_PARAMS")
     custom_llm_provider = passed_params.pop("custom_llm_provider")
-    drop_params = passed_params.pop("drop_params")
+    drop_params = normalize_drop_params(passed_params.pop("drop_params"))
     special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
     for k, v in special_params.items():
         passed_params[k] = v
@@ -3347,7 +3348,7 @@ def get_optional_params_image_gen(
     model = passed_params.pop("model", None)
     custom_llm_provider = passed_params.pop("custom_llm_provider")
     provider_config = passed_params.pop("provider_config", None)
-    drop_params = passed_params.pop("drop_params", None)
+    drop_params = normalize_drop_params(passed_params.pop("drop_params", None))
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     special_params: Final[Mapping[str, object]] = passed_params.pop("kwargs")
     for k, v in special_params.items():
@@ -3475,7 +3476,7 @@ def get_optional_params_embeddings(
     custom_llm_provider = passed_params.pop("custom_llm_provider", None)
     special_params: Final = passed_params.pop("kwargs")
 
-    drop_params = passed_params.pop("drop_params", None)
+    drop_params = normalize_drop_params(passed_params.pop("drop_params", None))
     additional_drop_params = passed_params.pop("additional_drop_params", None)
     allowed_openai_params = passed_params.pop("allowed_openai_params", None) or []
     # Remove function objects from passed_params to avoid JSON serialization errors
@@ -3631,7 +3632,7 @@ def get_optional_params_embeddings(
         elif "cohere.embed" in model:
             object = litellm.BedrockCohereEmbeddingConfig()
         elif "twelvelabs" in model or "marengo" in model:
-            object = litellm.TwelveLabsMarengoEmbeddingConfig()
+            object = litellm.TwelveLabsMarengoEmbeddingConfig(model=model)
         elif "nova" in model.lower():
             object = litellm.AmazonNovaEmbeddingConfig()
         else:  # unmapped model
@@ -4202,6 +4203,7 @@ def get_optional_params(
     base_model: str | None = None,
     **kwargs,
 ):
+    drop_params = normalize_drop_params(drop_params)  # rebind-ok: config and DB deployments pass "true" as a string
     passed_params: Final = locals().copy()
     special_params: Final = passed_params.pop("kwargs")
     # Remove base_model from passed_params so it doesn't interfere with
@@ -4279,20 +4281,20 @@ def get_optional_params(
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "anthropic_text":
         optional_params = litellm.AnthropicTextConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
         optional_params = litellm.AnthropicTextConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
 
     elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
@@ -4301,14 +4303,14 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "triton":
         optional_params = litellm.TritonConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=bool(drop_params),
         )
 
     elif custom_llm_provider == "maritalk":
@@ -4316,35 +4318,35 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "replicate":
         optional_params = litellm.ReplicateConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "predibase":
         optional_params = litellm.PredibaseConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "huggingface":
         optional_params = litellm.HuggingFaceChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "together_ai":
         optional_params = litellm.TogetherAIChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "vertex_ai" and (
         model in litellm.vertex_chat_models
@@ -4358,7 +4360,7 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
 
     elif custom_llm_provider == "gemini":
@@ -4366,21 +4368,21 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "vertex_ai_beta" or (custom_llm_provider == "vertex_ai" and "gemini" in model):
         optional_params = litellm.VertexGeminiConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif litellm.VertexAIAnthropicConfig.is_supported_model(model=model, custom_llm_provider=custom_llm_provider):
         optional_params = litellm.VertexAIAnthropicConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "vertex_ai":
         if model in litellm.vertex_mistral_models:
@@ -4389,35 +4391,35 @@ def get_optional_params(
                     model=model,
                     non_default_params=non_default_params,
                     optional_params=optional_params,
-                    drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                    drop_params=bool(drop_params),
                 )
             else:
                 optional_params = litellm.MistralConfig().map_openai_params(
                     model=model,
                     non_default_params=non_default_params,
                     optional_params=optional_params,
-                    drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                    drop_params=bool(drop_params),
                 )
         elif model in litellm.vertex_ai_ai21_models:
             optional_params = litellm.VertexAIAi21Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                drop_params=bool(drop_params),
             )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                drop_params=bool(drop_params),
             )
         else:  # use generic openai-like param mapping
             optional_params = litellm.VertexAILlama3Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                drop_params=bool(drop_params),
             )
 
     elif custom_llm_provider == "sagemaker":
@@ -4426,7 +4428,7 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "bedrock":
         BedrockModelInfo: Final = getattr(sys.modules[__name__], "BedrockModelInfo")
@@ -4437,14 +4439,14 @@ def get_optional_params(
                 model=model,
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                drop_params=bool(drop_params),
             )
         elif bedrock_route == "openai":
             optional_params = litellm.AmazonBedrockOpenAIConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                drop_params=bool(drop_params),
             )
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
             if bedrock_base_model in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names():
@@ -4452,21 +4454,21 @@ def get_optional_params(
                     non_default_params=non_default_params,
                     optional_params=optional_params,
                     model=model,
-                    drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                    drop_params=bool(drop_params),
                 )
             else:
                 optional_params = litellm.AmazonAnthropicClaudeConfig().map_openai_params(
                     non_default_params=non_default_params,
                     optional_params=optional_params,
                     model=model,
-                    drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                    drop_params=bool(drop_params),
                 )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                drop_params=bool(drop_params),
             )
             if bedrock_route == "claude_platform":
                 optional_params = BedrockModelInfo.map_claude_platform_auth_params(
@@ -4477,28 +4479,28 @@ def get_optional_params(
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "ollama":
         optional_params = litellm.OllamaConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "ollama_chat":
         optional_params = litellm.OllamaChatConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "nlp_cloud":
         optional_params = litellm.NLPCloudConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
 
     elif custom_llm_provider == "petals":
@@ -4506,35 +4508,35 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "deepinfra":
         optional_params = litellm.DeepInfraConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "perplexity" and provider_config is not None:
         optional_params = provider_config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "mistral" or custom_llm_provider == "codestral":
         optional_params = litellm.MistralConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "text-completion-codestral":
         optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
 
     elif custom_llm_provider == "text-completion-inception":
@@ -4542,7 +4544,7 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
 
     elif custom_llm_provider == "databricks":
@@ -4550,21 +4552,21 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "nvidia_nim":
         optional_params = litellm.NvidiaNimConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
             optional_params=optional_params,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "cerebras":
         optional_params = litellm.CerebrasConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "xai":
         optional_params = litellm.XAIChatConfig().map_openai_params(
@@ -4577,77 +4579,77 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "fireworks_ai":
         optional_params = litellm.FireworksAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "volcengine":
         optional_params = litellm.VolcEngineConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "hosted_vllm":
         optional_params = litellm.HostedVLLMChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "vllm":
         optional_params = litellm.VLLMConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "groq":
         optional_params = litellm.GroqChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "bedrock_mantle":
         optional_params = litellm.BedrockMantleChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "deepseek":
         optional_params = litellm.DeepSeekChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "tencent":
         optional_params = litellm.TencentChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "openrouter":
         optional_params = litellm.OpenrouterConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "watsonx":
         optional_params = litellm.IBMWatsonXChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
         # WatsonX-text param check
         for param in passed_params:
@@ -4660,21 +4662,21 @@ def get_optional_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "openai":
         optional_params = litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "nebius":
         optional_params = litellm.NebiusConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "azure":
         _azure_detection_model: Final = base_model or model
@@ -4683,14 +4685,14 @@ def get_optional_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=_azure_detection_model,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                drop_params=bool(drop_params),
             )
         elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=_azure_detection_model):
             optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=_azure_detection_model,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                drop_params=bool(drop_params),
             )
         else:
             verbose_logger.debug(
@@ -4709,21 +4711,21 @@ def get_optional_params(
                 optional_params=optional_params,
                 model=_azure_detection_model,
                 api_version=api_version,
-                drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                drop_params=bool(drop_params),
             )
     elif provider_config is not None:
         optional_params = provider_config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+            drop_params=bool(drop_params),
         )
     # if user passed in non-default kwargs for specific providers/models, pass them along
     optional_params = add_provider_specific_params_to_optional_params(
@@ -6041,7 +6043,7 @@ def get_model_info(
             input_cost_per_character_above_128k_tokens: Optional[
                 float
             ]  # only for vertex ai models
-            input_cost_per_query: Optional[float] # only for rerank models
+            input_cost_per_query: Optional[float] # per-request pricing: rerank, search, and Bedrock Marengo embeddings
             input_cost_per_image: Optional[float]  # only for vertex ai models
             input_cost_per_audio_token: Optional[float]
             input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
