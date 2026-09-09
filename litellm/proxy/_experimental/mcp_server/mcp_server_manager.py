@@ -6272,8 +6272,7 @@ class MCPServerManager:
                 ]
             }
         )
-        db_mcp_servers: Final = [LiteLLM_MCPServerTable.model_validate(r.model_dump()) for r in raw_rows]
-        verbose_logger.info("Found %s MCP servers in database", len(db_mcp_servers))
+        verbose_logger.info("Found %s MCP servers in database", len(raw_rows))
 
         previous_registry: Final = self.registry
         new_registry: Final[dict[str, MCPServer]] = {}
@@ -6281,8 +6280,9 @@ class MCPServerManager:
         # Stage one: build every server.  Stage two assigns short prefixes
         # against the *full* set so dedup is deterministic regardless of
         # iteration order.
-        for server in db_mcp_servers:
+        for row in raw_rows:
             try:
+                server = LiteLLM_MCPServerTable.model_validate(row.model_dump())
                 existing_server = previous_registry.get(server.server_id)
 
                 if (
@@ -6320,8 +6320,8 @@ class MCPServerManager:
             except Exception as e:
                 verbose_logger.exception(
                     "Skipping MCP server %s (%s) during DB reload: %s",
-                    server.server_id,
-                    getattr(server, "alias", None),
+                    getattr(row, "server_id", None),
+                    getattr(row, "alias", None),
                     e,
                 )
 

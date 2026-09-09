@@ -117,6 +117,9 @@ jobs:
 
       - run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
 
+      - name: Run pytest tests/test_litellm_rust with the compiled extension
+        run: make test-rust-extension
+
       - run: >-
           uv build --wheel --out-dir panic-dist
           --config-setting "maturin.build-args=--features panic-test,extension-module"

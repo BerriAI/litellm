@@ -475,6 +475,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
 
 
 _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
+_TEAM_GRANT_RELATIONS: Final[Mapping[str, object]] = MappingProxyType({"litellm_model_table": True})
 
 
 def _has_ptu_flat_cost(model: str, llm_router: "Router") -> bool:
@@ -2858,7 +2859,9 @@ class TeamNotFoundError(HTTPException):
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None
 ) -> "_PrismaTeamRow | None":
-    response = await _team_table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
+    response = await _team_table(TeamRepository(prisma_client)).find_unique(
+        where={"team_id": team_id}, include=_TEAM_GRANT_RELATIONS
+    )
 
     if response is None and team_id_upsert:
         from litellm.proxy.management_endpoints.team_endpoints import new_team
@@ -3158,7 +3161,9 @@ async def get_team_object_by_alias(
 
     # Query database by team_alias
     try:
-        teams: Final = await _team_table(TeamRepository(prisma_client)).find_many(where={"team_alias": team_alias})
+        teams: Final = await _team_table(TeamRepository(prisma_client)).find_many(
+            where={"team_alias": team_alias}, include=_TEAM_GRANT_RELATIONS
+        )
 
         if not teams:
             raise HTTPException(

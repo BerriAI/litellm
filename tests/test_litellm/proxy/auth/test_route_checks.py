@@ -3638,3 +3638,191 @@ def test_agent_registry_route_gate_open_to_non_admin_roles(user_role, method, ro
         valid_token=valid_token,
         request_data={},
     )
+TEAM_CALLBACK_ROUTES = (
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/callback",
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/callback/langfuse",
+    # the routes register team_id with the :path converter, so a team id may
+    # contain a slash
+    "/team/tenant/06bda574/callback",
+    "/team/tenant/06bda574/callback/langfuse",
+    # team_id is a free-form string, so it may also contain a colon
+    "/team/tenant:06bda574/callback",
+    "/team/tenant:06bda574/callback/langfuse",
+    # or both, which is the shape neither a "[^:]+" nor a "[^/]+" expansion
+    # of the placeholder reaches on its own
+    "/team/tenant:acme/prod/callback",
+    "/team/tenant:acme/prod/callback/langfuse",
+)
+
+
+def _gate(route, role) -> str:
+    """Drive the real route gate for a non-proxy-admin caller.
+
+    Reports "allowed" when the gate lets the request through to its handler, and
+    the denial message otherwise, so a caller asserts the verdict as a value
+    instead of on whether an exception escaped.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="team_admin_user",
+        user_email="team-admin@example.com",
+        user_role=role,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=role,
+            route=route,
+            request=request,
+            valid_token=UserAPIKeyAuth(user_id="team_admin_user", user_role=role),
+            request_data={},
+        )
+    except Exception as exc:
+        return f"denied: {exc}"
+    return "allowed"
+
+
+def test_team_callback_routes_are_self_managed():
+    """The grant has to come from self_managed_routes specifically.
+
+    That list is the one whose entries carry no role predicate, so the handler
+    decides. Granting the same paths through internal_user_routes instead would
+    look identical for an internal_user while silently denying the org admins and
+    view-only roles that list does not cover.
+    """
+    for template in (
+        "/team/{team_id:path}/callback",
+        "/team/{team_id:path}/callback/{callback_name}",
+    ):
+        assert template in LiteLLMRoutes.self_managed_routes.value
+
+
+@pytest.mark.parametrize("route", TEAM_CALLBACK_ROUTES)
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+        LitellmUserRoles.ORG_ADMIN.value,
+    ],
+)
+def test_team_callback_routes_reach_their_handler_for_non_admins(route, role):
+    """A team admin manages their own team's logging callbacks, so the route gate
+    must let a non-proxy-admin through to the handler.
+
+    The handler is what authorizes: every team callback endpoint calls
+    _verify_team_access, which admits only a proxy admin, an org admin for the
+    team, or an admin of that team, and 403s everyone else. Before this, the gate
+    rejected the team admin with a 401 naming proxy admin, so the handler's own
+    check was unreachable for them.
+    """
+    assert _gate(route, role) == "allowed"
+
+
+@pytest.mark.parametrize(
+    "pattern, route, matches",
+    [
+        # a :path placeholder takes what the router's path converter takes
+        ("/team/{team_id:path}/callback", "/team/plain/callback", True),
+        ("/team/{team_id:path}/callback", "/team/tenant/acme/callback", True),
+        ("/team/{team_id:path}/callback", "/team/tenant:acme/callback", True),
+        ("/team/{team_id:path}/callback", "/team/tenant:acme/prod/callback", True),
+        # and still has to reach the template's own suffix
+        ("/team/{team_id:path}/callback", "/team/tenant:acme/disable_logging", False),
+        # a template with a ":" literal after the placeholder keeps the suffix
+        (
+            "/v1beta/models/{model_name:path}:generateContent",
+            "/v1beta/models/gemini-2.5-flash:generateContent",
+            True,
+        ),
+        (
+            "/v1beta/models/{model_name:path}:generateContent",
+            "/v1beta/models/publishers/google/gemini-2.5-flash:generateContent",
+            True,
+        ),
+        # the value must not swallow that suffix and match a different verb
+        (
+            "/v1beta/models/{model_name:path}:generateContent",
+            "/v1beta/models/gemini-2.5-flash:countTokens",
+            False,
+        ),
+        # a %0A in the value reaches the handler through the path converter, so
+        # the gate has to see it too or DISABLE_ADMIN_ENDPOINTS is bypassable
+        ("/v1/mcp/server/{path:path}", "/v1/mcp/server/abc\ndef", True),
+        ("/team/{team_id:path}/callback", "/team/ten\nant/callback", True),
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/gem\nini:generateContent", True),
+        # an ordinary placeholder stays one segment
+        ("/team/{team_id}/members/me", "/team/abc/members/me", True),
+        ("/team/{team_id}/members/me", "/team/tenant/abc/members/me", False),
+        ("/team/{team_id}/members/me", "/team/ab\nc/members/me", True),
+    ],
+)
+def test_path_placeholder_matches_what_the_router_accepts(pattern, route, matches):
+    """The gate's placeholder expansion has to agree with the router's.
+
+    A team id may carry a slash, a colon, or both, and the router mounted these
+    paths with the same :path converter, so an id the router routes must not be
+    an id the gate fails to recognize. The one narrowing that stays is a template
+    whose own suffix begins with a colon: there the value stops before it, or
+    ":generateContent" would also match a ":countTokens" request.
+    """
+    assert RouteChecks._route_matches_pattern(route=route, pattern=pattern) is matches
+
+
+# Every other route the proxy mounts under /team/{team_id}, spelled the way it
+# is registered. None of them takes a path converter, so none can be reached by
+# a URL that ends in the callback suffix.
+PROTECTED_TEAM_ROUTES = (
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112",
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/disable_logging",
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/members/me",
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/member/u-1/reset_spend",
+    # the same routes with the callback suffix spliced in, which is the shape a
+    # caller would craft to make a protected route look self-managed
+    "/team/06bda574/callback/disable_logging/x",
+    "/team/06bda574/callback/member/u-1/reset_spend",
+    "/team/06bda574/callback/members/me",
+)
+
+
+@pytest.mark.parametrize("route", PROTECTED_TEAM_ROUTES)
+def test_the_callback_grant_does_not_reach_another_team_route(route):
+    """Widening the callback templates must not hand out any neighbouring route.
+
+    The grant is two templates ending in the callback suffix. Every other team
+    route registers an ordinary single-segment placeholder, so no URL the router
+    sends to one of them can end in "/callback" or "/callback/<name>" -- and the
+    gate must agree, or a crafted team id would carry a caller into a handler
+    the grant never covered.
+    """
+    for template in (
+        "/team/{team_id:path}/callback",
+        "/team/{team_id:path}/callback/{callback_name}",
+    ):
+        assert RouteChecks._route_matches_pattern(route=route, pattern=template) is False
+
+
+def test_team_disable_logging_stays_proxy_admin_only():
+    """disable_logging was left out of the grant, so it must still be rejected at
+    the gate. It is the one team callback route a team admin cannot reach."""
+    verdict = _gate(
+        "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/disable_logging",
+        LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    assert "Only proxy admin" in verdict
+    assert "disable_logging" in verdict
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112",
+        "/team/update",
+        "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/model/add",
+    ],
+)
+def test_neighbouring_team_routes_stay_closed(route):
+    """The grant is the callback paths and nothing else on the team namespace."""
+    assert "Only proxy admin" in _gate(route, LitellmUserRoles.INTERNAL_USER.value)
