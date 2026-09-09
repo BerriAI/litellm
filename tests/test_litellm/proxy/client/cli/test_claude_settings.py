@@ -2,6 +2,7 @@ import json
 import shlex
 import stat
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -12,6 +13,7 @@ from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.claude_settings import (
     AUTOROUTE_BACKUP_PATH,
     BACKUP_PATH,
+    CLAUDE_SETTINGS_PATH,
     SETTINGS_FILE_OWNERS,
     ClaudeSettingsError,
     SettingsFileOwner,
@@ -98,6 +100,16 @@ def lite_on_path():
 
 
 class TestWriteClaudeSettings:
+    def test_refuses_to_write_the_live_settings_file_from_pytest(self, lite_on_path):
+        live: Path = CLAUDE_SETTINGS_PATH
+        before = live.read_bytes() if live.exists() else None
+
+        with pytest.raises(ClaudeSettingsError, match="live ~/.claude/settings.json"):
+            write_claude_settings("https://test.example.com", live, ())
+
+        after = live.read_bytes() if live.exists() else None
+        assert after == before
+
     def test_creates_the_file_and_its_parent_when_missing(self, paths, lite_on_path):
         settings_path, backup_path = paths
         assert not settings_path.parent.exists()

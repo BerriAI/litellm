@@ -6,6 +6,7 @@ apiKeyHelper command, and `up` already imports from `auth`, so the shared parts
 live here rather than in either command module.
 """
 
+import os
 import shlex
 import shutil
 import sys
@@ -53,6 +54,24 @@ _SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
 
 class ClaudeSettingsError(Exception):
     """Raised for any user-actionable failure while reading or writing Claude Code settings."""
+
+
+def reject_live_settings_write_from_tests(settings_path: Path) -> None:
+    """Refuse to write the user's real ~/.claude/settings.json from a pytest process."""
+    if os.environ.get("PYTEST_CURRENT_TEST") is None:
+        return
+    live: Final = Path.home() / ".claude" / "settings.json"
+    try:
+        resolved: Final = settings_path.resolve()
+        live_resolved: Final = live.resolve()
+    except OSError:
+        return
+    if resolved != live_resolved:
+        return
+    raise ClaudeSettingsError(
+        "Refusing to write the live ~/.claude/settings.json from a pytest process. "
+        "Patch CLAUDE_SETTINGS_PATH to a tmp file."
+    )
 
 
 def load_json_or_empty(path: Path) -> dict[str, JsonValue]:
@@ -127,6 +146,7 @@ def write_claude_settings(base_url: str, settings_path: Path, owners: Sequence[S
     Refuses while any owner holds a backup: each restores its backup when it
     stops, which would silently undo this write.
     """
+    reject_live_settings_write_from_tests(settings_path)
     for owner in owners:
         if owner.backup_path.exists():
             raise ClaudeSettingsError(
@@ -171,6 +191,7 @@ __all__ = (
     "SettingsFileOwner",
     "load_json_or_empty",
     "merge_claude_settings",
+    "reject_live_settings_write_from_tests",
     "resolve_api_key_helper",
     "write_claude_settings",
 )

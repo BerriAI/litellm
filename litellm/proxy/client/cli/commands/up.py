@@ -26,6 +26,7 @@ from .claude_settings import (
     ClaudeSettingsError,
     load_json_or_empty,
     merge_claude_settings,
+    reject_live_settings_write_from_tests,
     resolve_api_key_helper,
 )
 
@@ -91,6 +92,7 @@ def restore_claude_settings(settings_path: Path | None = None, backup_path: Path
     Returns the restored record, or None if there was nothing to restore.
     """
     resolved_settings_path: Final = settings_path if settings_path is not None else CLAUDE_SETTINGS_PATH
+    reject_live_settings_write_from_tests(resolved_settings_path)
     resolved_backup_path: Final = backup_path if backup_path is not None else BACKUP_PATH
     record: Final = read_backup(resolved_backup_path)
     if record is None:
@@ -189,6 +191,7 @@ def up(ctx: click.Context) -> None:
             )
         )
 
+        reject_live_settings_write_from_tests(CLAUDE_SETTINGS_PATH)
         CLAUDE_SETTINGS_PATH.parent.mkdir(exist_ok=True)
         merged: Final = merge_claude_settings(original_settings, base_url, api_key_helper)
         with open(CLAUDE_SETTINGS_PATH, "w") as f:
