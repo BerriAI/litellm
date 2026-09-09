@@ -9,9 +9,9 @@ use futures_util::{Stream, StreamExt, stream};
 use litellm_core::Error;
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, DeploymentFailureHooks, DeploymentPreHooks,
-    DeploymentSuccessHooks, ModerationHooks, PreCallHooks, TerminalClassification,
-    TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycleContext, CallbackFuture, Clock, DeploymentFailureHooks,
+    DeploymentPreHooks, DeploymentSuccessHooks, ModerationHooks, PreCallHooks,
+    TerminalClassification, TerminalDispatcher, TerminalRecord,
 };
 use litellm_core::messages::lifecycle::Options;
 use litellm_core::messages::types::MessagesRequest;
@@ -28,21 +28,19 @@ macro_rules! messages_body {
     };
 }
 
+#[derive(Default)]
 struct Tracking {
     opened: AtomicUsize,
     session_drops: AtomicUsize,
     service_drops: AtomicUsize,
     terminals: Mutex<Vec<TerminalRecord>>,
+    deployment_events: Mutex<Vec<&'static str>>,
+    reject_deployment: bool,
 }
 
 impl Tracking {
     fn new() -> Arc<Self> {
-        Arc::new(Self {
-            opened: AtomicUsize::new(0),
-            session_drops: AtomicUsize::new(0),
-            service_drops: AtomicUsize::new(0),
-            terminals: Mutex::new(Vec::new()),
-        })
+        Arc::new(Self::default())
     }
 }
 
@@ -85,13 +83,56 @@ impl ModerationHooks<MessagesRequest> for Session {
     }
 }
 
-impl DeploymentPreHooks<MessagesRequest> for Session {}
+impl DeploymentPreHooks<MessagesRequest> for Session {
+    fn async_pre_call_deployment_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: MessagesRequest,
+    ) -> CallbackFuture<'a, ActionResult<MessagesRequest, Error>>
+    where
+        MessagesRequest: 'a,
+    {
+        Box::pin(async move {
+            self.tracking.deployment_events.lock().unwrap().push("pre");
+            if self.tracking.reject_deployment {
+                return ActionResult::Reject(Error::InvalidRequest("deployment rejected".into()));
+            }
+            ActionResult::Replace(MessagesRequest {
+                body: litellm_core::messages::types::AnthropicMessagesRequest {
+                    max_tokens: Some(17),
+                    ..request.body
+                },
+                ..request
+            })
+        })
+    }
+}
 impl DeploymentSuccessHooks<litellm_core::messages::types::AnthropicMessagesResponse> for Session {}
-impl DeploymentFailureHooks for Session {}
+impl DeploymentFailureHooks for Session {
+    fn async_post_call_failure_deployment_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        _: &'a Error,
+    ) -> CallbackFuture<'a, Result<(), Error>> {
+        Box::pin(async move {
+            self.tracking
+                .deployment_events
+                .lock()
+                .unwrap()
+                .push("failure");
+            Err(Error::InvalidRequest("deployment observer failed".into()))
+        })
+    }
+}
 
 impl TerminalDispatcher for Session {
     fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
         Box::pin(async move {
+            self.tracking
+                .deployment_events
+                .lock()
+                .unwrap()
+                .push("terminal");
             self.tracking
                 .terminals
                 .lock()
@@ -212,6 +253,92 @@ fn response(stream: litellm_core::lifecycle::BytesStream) -> HttpStreamResponse 
         cache_control: Some("no-cache".to_string()),
         stream,
     }
+}
+
+#[tokio::test]
+async fn deployment_pre_replacement_reaches_stream_transport() {
+    let tracking = Tracking::new();
+    let client = client(Ok(response(Box::pin(stream::pending()))), tracking.clone());
+    let call = client
+        .messages_stream_with(request(), Options::default(), context(), 1)
+        .await
+        .unwrap();
+    let completion = call.completion.register();
+    drop(call.stream);
+    completion.await.unwrap();
+
+    let requests = client.services().transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["max_tokens"], 17);
+    assert_eq!(
+        tracking
+            .deployment_events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| **event == "pre")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn deployment_pre_rejection_prevents_stream_transport() {
+    let tracking = Arc::new(Tracking {
+        reject_deployment: true,
+        ..Tracking::default()
+    });
+    let client = client(Ok(response(Box::pin(stream::pending()))), tracking.clone());
+    let result = client
+        .messages_stream_with(request(), Options::default(), context(), 1)
+        .await;
+    if let Ok(call) = result {
+        let completion = call.completion.register();
+        drop(call.stream);
+        completion.await.unwrap();
+        panic!("deployment rejection must prevent opening a provider stream");
+    }
+    assert!(
+        matches!(result, Err(Error::InvalidRequest(message)) if message == "deployment rejected")
+    );
+    assert!(
+        client
+            .services()
+            .transport
+            .requests
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn provider_open_failure_notifies_deployment_before_terminal_and_preserves_error() {
+    let tracking = Tracking::new();
+    let client = client(
+        Err(Error::Network("provider unavailable".into())),
+        tracking.clone(),
+    );
+    let result = client
+        .messages_stream_with(request(), Options::default(), context(), 1)
+        .await;
+
+    assert!(matches!(result, Err(Error::Network(message)) if message == "provider unavailable"));
+    assert_eq!(
+        client.services().transport.requests.lock().unwrap().len(),
+        1
+    );
+    let events = tracking.deployment_events.lock().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .copied()
+            .filter(|event| *event != "pre")
+            .collect::<Vec<_>>(),
+        ["failure", "terminal"]
+    );
 }
 
 #[tokio::test]

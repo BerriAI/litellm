@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import threading
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.rust_bridge.provenance import has_rust_response_marker
 from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.contracts import (
@@ -307,22 +309,105 @@ async def test_messages_stream_logs_success_after_exhaustion(messages_server: Re
 
 
 @pytest.mark.asyncio
-async def test_messages_compression_hook_replaces_messages_sent_to_provider(messages_server: RecordingServer) -> None:
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_messages_compression_hook_replaces_messages_sent_to_provider(
+    messages_server: RecordingServer, native: bool, stream: bool
+) -> None:
+    litellm.rust(native)
     compressed_messages: Final = [{"role": "user", "content": "Compressed context"}]
     call_types: Final = []
+    recorder: Final = RecordingLogger()
 
     class CompressMessages(CustomLogger):
         async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            assert not messages_server.requests
             call_types.append(call_type)
-            kwargs["messages"] = compressed_messages
-            return kwargs
+            return {**kwargs, "messages": compressed_messages}
 
     litellm.callbacks.append(CompressMessages())
 
-    await call_messages(messages_server, [])
+    if stream:
+        messages_server.enqueue(ResponseSpec(body=None, events=MESSAGES_EVENTS))
+    response: Final = await call_messages(messages_server, [recorder], stream=stream)
+    assert has_rust_response_marker(response) is native
+    if stream:
+        assert [chunk async for chunk in response]
+    await recorder.wait_for_async("async_log_success_event")
 
     assert call_types == [CallTypes.anthropic_messages]
     assert messages_server.requests[0].body["messages"] == compressed_messages
+    pre_calls: Final = tuple(event for event in recorder.events if event.name == "log_pre_api_call")
+    assert len(pre_calls) == 1
+    assert request_body(pre_calls[0].kwargs)["messages"] == compressed_messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_messages_deployment_rejection_prevents_provider_call(
+    messages_server: RecordingServer, native: bool, stream: bool
+) -> None:
+    litellm.rust(native)
+    messages_server.expected_requests = 0
+    calls: Final[list[CallTypes | None]] = []
+    recorder: Final = RecordingLogger()
+
+    class Reject(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object]:
+            calls.append(call_type)
+            raise litellm.BadRequestError(
+                message="deployment policy rejected request", model=MESSAGES_MODEL, llm_provider="anthropic"
+            )
+
+    litellm.callbacks.append(Reject())
+
+    with pytest.raises(litellm.BadRequestError, match="deployment policy rejected request"):
+        await call_messages(messages_server, [recorder], stream=stream)
+
+    assert calls == [CallTypes.anthropic_messages]
+    assert not messages_server.requests
+    assert "log_pre_api_call" not in recorder.names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_messages_provider_open_failure_notifies_deployment_once_and_preserves_error(
+    messages_server: RecordingServer, native: bool, stream: bool
+) -> None:
+    litellm.rust(native)
+    messages_server.enqueue(ResponseSpec(body={"error": {"message": "provider unavailable"}}, status=500))
+    calls: Final[list[tuple[CallTypes | None, Exception, int]]] = []
+
+    class FailingObserver(CustomLogger):
+        async def async_post_call_failure_deployment_hook(
+            self,
+            request_data: Mapping[str, object],
+            exception: Exception,
+            call_type: CallTypes | None,
+            fallback_depth: int | None = None,
+        ) -> None:
+            calls.append((call_type, exception, len(messages_server.requests)))
+            raise RuntimeError("deployment observer unavailable")
+
+    litellm.callbacks.append(FailingObserver())
+    recorder: Final = RecordingLogger()
+
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await call_messages(messages_server, [recorder], stream=stream)
+    await recorder.wait_for_async("async_log_failure_event")
+
+    assert len(calls) == 1
+    call_type, exception, request_count = calls[0]
+    assert call_type == CallTypes.anthropic_messages
+    assert isinstance(exception, litellm.InternalServerError)
+    assert exception.status_code == raised.value.status_code == 500
+    assert request_count == len(messages_server.requests) == 1
+    assert recorder.names.count("async_log_failure_event") == 1
+    assert "async_log_success_event" not in recorder.names
 
 
 @pytest.mark.asyncio
