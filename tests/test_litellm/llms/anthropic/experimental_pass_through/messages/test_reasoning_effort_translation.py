@@ -109,27 +109,25 @@ def test_invalid_reasoning_effort_raises_400(bad_effort):
 
 
 @pytest.mark.parametrize(
-    "model,bad_effort",
+    "model,requested_effort,expected_effort",
     [
-        ("claude-opus-4-6", "xhigh"),
-        ("claude-sonnet-4-6", "xhigh"),
+        ("claude-opus-4-6", "xhigh", "high"),
+        ("claude-sonnet-4-6", "xhigh", "high"),
     ],
 )
-def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort):
+def test_reasoning_effort_unsupported_tier_degrades_on_messages(model, requested_effort, expected_effort):
     config = AnthropicMessagesConfig()
-    optional_params = {"max_tokens": 1024, "reasoning_effort": bad_effort}
+    optional_params = {"max_tokens": 1024, "reasoning_effort": requested_effort}
 
-    with pytest.raises(AnthropicError) as exc_info:
-        config.transform_anthropic_messages_request(
-            model=model,
-            messages=[{"role": "user", "content": "Hello"}],
-            anthropic_messages_optional_request_params=optional_params,
-            litellm_params={},
-            headers={},
-        )
+    result = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
 
-    assert exc_info.value.status_code == 400
-    assert "not supported by this model" in str(exc_info.value)
+    assert result["output_config"]["effort"] == expected_effort
 
 
 @pytest.mark.parametrize(
@@ -164,22 +162,19 @@ def test_bedrock_invoke_messages_clamps_effort_to_ceiling(
     assert result["thinking"]["type"] == "adaptive"
 
 
-def test_bedrock_invoke_messages_rejects_xhigh_without_ceiling(local_model_cost_map):
-    """Sonnet 4.6 on Bedrock has no effort ceiling, so xhigh is still rejected."""
+def test_bedrock_invoke_messages_degrades_xhigh_without_ceiling(local_model_cost_map):
     config = AmazonAnthropicClaudeMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": "xhigh"}
 
-    with pytest.raises(AnthropicError) as exc_info:
-        config.transform_anthropic_messages_request(
-            model="invoke/us.anthropic.claude-sonnet-4-6",
-            messages=[{"role": "user", "content": "Hello"}],
-            anthropic_messages_optional_request_params=optional_params,
-            litellm_params={},
-            headers={},
-        )
+    result = config.transform_anthropic_messages_request(
+        model="invoke/us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
 
-    assert exc_info.value.status_code == 400
-    assert "not supported by this model" in str(exc_info.value)
+    assert result["output_config"]["effort"] == "high"
 
 
 @pytest.mark.parametrize(
