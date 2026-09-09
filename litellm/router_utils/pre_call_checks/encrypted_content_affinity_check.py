@@ -229,7 +229,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         self,
         model: str,
         healthy_deployments: list,
-        messages: Sequence[AllMessageValues] | None,
+        messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
