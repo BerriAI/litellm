@@ -4915,9 +4915,13 @@ async def test_clean_eof_without_finish_reason_raises_midstream_error_issue_4026
     )
 
     chunks = []
-    with pytest.raises(MidStreamFallbackError) as excinfo:
+
+    async def _consume():
         async for c in wrapper:
             chunks.append(c)
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _consume()
 
     assert chunks, "partial content should have been yielded before the error"
     assert all(getattr(c.choices[0], "finish_reason", None) is None for c in chunks)
