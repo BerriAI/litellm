@@ -91,7 +91,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
-from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     independent_snapshot,
@@ -100,6 +99,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -2570,7 +2570,7 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        request_data.update(await asyncify(_failure_fields_to_lift)(request_data))
+        request_data.update(await offload_token_count(_failure_fields_to_lift)(request_data))
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)

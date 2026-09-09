@@ -67,6 +67,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import (
     UI_TEAM_ID,
     CallbackDelete,
@@ -274,7 +275,6 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
-from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -12713,7 +12713,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    _tokenizer_used: Final = await asyncify(litellm.utils._select_tokenizer)(
+    _tokenizer_used: Final = await offload_token_count(litellm.utils._select_tokenizer)(
         model=model_to_use, custom_tokenizer=custom_tokenizer
     )
 
@@ -12728,7 +12728,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    total_tokens: Final = await asyncify(litellm.token_counter)(
+    total_tokens: Final = await offload_token_count(litellm.token_counter)(
         model=model_to_use,
         text=prompt,
         messages=counted_messages,

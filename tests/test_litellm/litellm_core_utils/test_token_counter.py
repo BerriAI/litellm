@@ -5,10 +5,10 @@ import importlib
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 from unittest.mock import MagicMock
 
+import anyio.to_thread
 import pytest
 import tiktoken
 
@@ -18,12 +18,13 @@ import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES
+from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
+    offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
@@ -181,16 +182,25 @@ class _SlowEncoder:
         return [[0] * len(text) for text in texts]
 
 
-def test_huggingface_counts_run_at_most_the_configured_number_at_once():
+@pytest.mark.asyncio
+async def test_offloaded_counts_do_not_borrow_from_the_shared_thread_pool():
     encoder: Final = _SlowEncoder()
     count: Final = _get_exact_count_function(None, {"type": "huggingface_tokenizer", "tokenizer": encoder})
-    burst: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES
+    shared_pool: Final = anyio.to_thread.current_default_thread_limiter()
+    burst: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 
-    with ThreadPoolExecutor(max_workers=burst) as pool:
-        counts: Final = tuple(pool.map(count, ["abc"] * burst))
+    async def shared_pool_borrowed_until_done(counting: asyncio.Future[list[int]]) -> tuple[int, ...]:
+        if counting.done():
+            return ()
+        await asyncio.sleep(0.01)
+        return (shared_pool.borrowed_tokens, *await shared_pool_borrowed_until_done(counting))
 
-    assert counts == (3,) * burst
-    assert 1 < encoder.peak_in_flight <= TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES
+    counting: Final = asyncio.ensure_future(asyncio.gather(*(offload_token_count(count)("abc") for _ in range(burst))))
+    borrowed: Final = await shared_pool_borrowed_until_done(counting)
+
+    assert await counting == [3] * burst
+    assert len(borrowed) > 1 and max(borrowed) == 0
+    assert 1 < encoder.peak_in_flight <= TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 
 
 def test_token_counter_applies_the_default_cap():
