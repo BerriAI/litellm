@@ -273,4 +273,13 @@ CACHE_SETTINGS_FIELDS: Final[list[CacheSettingsField]] = [
         ui_field_name="AWS IAM Region",
         redis_type=None,
     ),
+    CacheSettingsField(
+        field_name="aws_iam_serverless",
+        field_type="Boolean",
+        field_value=None,
+        field_description="The ElastiCache cache is serverless rather than a self-designed cluster",
+        field_default=False,
+        ui_field_name="AWS IAM Serverless Cache",
+        redis_type=None,
+    ),
 ]

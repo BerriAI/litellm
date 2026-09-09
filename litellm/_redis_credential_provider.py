@@ -5,7 +5,7 @@ import threading
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final, Protocol
-from urllib.parse import quote
+from urllib.parse import urlencode
 
 from redis.credentials import CredentialProvider
 
@@ -126,6 +126,7 @@ class GCPIAMCredentialProvider(CredentialProvider):
 
 _ELASTICACHE_SERVICE_NAME: Final = "elasticache"
 _ELASTICACHE_TOKEN_TTL_SECONDS: Final = 900
+_ELASTICACHE_SERVERLESS_RESOURCE_TYPE: Final = "ServerlessCache"
 
 
 class ElastiCacheIAMCredentialProvider(CredentialProvider):
@@ -134,12 +135,14 @@ class ElastiCacheIAMCredentialProvider(CredentialProvider):
         user_name: str,
         cache_name: str,
         region: str,
+        is_serverless: bool = False,
         credentials_resolver: Callable[[], Credentials | None] | None = None,
         token_lifetime_seconds: int = _ELASTICACHE_TOKEN_TTL_SECONDS,
     ) -> None:
         self._user_name = user_name
-        self._cache_name = cache_name
+        self._cache_name = cache_name.lower()
         self._region = region
+        self._is_serverless = is_serverless
         self._credentials_resolver = credentials_resolver or self._resolve_credentials
         self._credentials: Credentials | None = None
         self._token_lifetime_seconds = token_lifetime_seconds
@@ -171,10 +174,14 @@ class ElastiCacheIAMCredentialProvider(CredentialProvider):
                 "botocore is required for ElastiCache IAM Redis authentication. Install it with: pip install boto3"
             ) from e
 
-        request: Final = AWSRequest(
-            method="GET",
-            url=(f"https://{self._cache_name}/?Action=connect&User={quote(self._user_name, safe='')}"),
+        query: Final = urlencode(
+            (
+                ("Action", "connect"),
+                ("User", self._user_name),
+                *((("ResourceType", _ELASTICACHE_SERVERLESS_RESOURCE_TYPE),) if self._is_serverless else ()),
+            )
         )
+        request: Final = AWSRequest(method="GET", url=f"https://{self._cache_name}/?{query}")
         SigV4QueryAuth(
             frozen_credentials,
             _ELASTICACHE_SERVICE_NAME,

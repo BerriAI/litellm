@@ -26373,6 +26373,11 @@ export interface components {
              */
             aws_iam_region?: string | null;
             /**
+             * Aws Iam Serverless
+             * @description the ElastiCache cache is serverless rather than a self-designed cluster
+             */
+            aws_iam_serverless?: boolean | string | null;
+            /**
              * Aws Iam User Name
              * @description AWS ElastiCache IAM user name
              */

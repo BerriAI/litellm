@@ -39,6 +39,14 @@ from ._logging import verbose_logger
 
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
 
+_AWS_IAM_KWARG_NAMES: Final = (
+    "aws_iam_auth",
+    "aws_iam_user_name",
+    "aws_iam_cache_name",
+    "aws_iam_region",
+    "aws_iam_serverless",
+)
+
 
 def _unwrapped_init_args(cls: type) -> frozenset[str]:
     """Every parameter on a single class's own ``__init__``, decorator-unwrapped.
@@ -76,10 +84,7 @@ def _get_redis_kwargs():
         "azure_client_id",
         "azure_tenant_id",
         "azure_client_secret",
-        "aws_iam_auth",
-        "aws_iam_user_name",
-        "aws_iam_cache_name",
-        "aws_iam_region",
+        *_AWS_IAM_KWARG_NAMES,
     }
 
     available_args: Final = {x for x in _unwrapped_init_args(redis.Redis) if x not in exclude_args} | include_args
@@ -275,22 +280,25 @@ def _redis_kwargs_from_environment():
     return return_dict
 
 
-def _is_true(value: object | None) -> bool:
-    return value is True or (isinstance(value, str) and value.lower() == "true")
+def _coerces_to_true(value: object | None) -> bool:
+    return _str_to_bool(value) if isinstance(value, str) else bool(value)
 
 
 def _uses_tls(redis_kwargs: Mapping[str, object]) -> bool:
     if redis_kwargs.get("startup_nodes") is not None:
-        return _is_true(redis_kwargs.get("ssl"))
+        return _coerces_to_true(redis_kwargs.get("ssl"))
     url: Final = redis_kwargs.get("url")
-    return urlsplit(url).scheme.lower() == "rediss" if isinstance(url, str) else _is_true(redis_kwargs.get("ssl"))
+    if isinstance(url, str):
+        return urlsplit(url).scheme.lower() == "rediss"
+    return _coerces_to_true(redis_kwargs.get("ssl"))
 
 
-def _build_elasticache_iam_provider(
-    user_name: object | None,
-    cache_name: object | None,
-    region: object | None,
-) -> ElastiCacheIAMCredentialProvider:
+def _build_elasticache_iam_provider(redis_kwargs: Mapping[str, object]) -> ElastiCacheIAMCredentialProvider:
+    user_name: Final = redis_kwargs.get("aws_iam_user_name")
+    cache_name: Final = redis_kwargs.get("aws_iam_cache_name")
+    region: Final = (
+        redis_kwargs.get("aws_iam_region") or get_secret_str("AWS_REGION") or get_secret_str("AWS_DEFAULT_REGION")
+    )
     required_settings: Final = (
         ("aws_iam_user_name", user_name),
         ("aws_iam_cache_name", cache_name),
@@ -304,6 +312,7 @@ def _build_elasticache_iam_provider(
         user_name=str(user_name),
         cache_name=str(cache_name),
         region=str(region),
+        is_serverless=_coerces_to_true(redis_kwargs.get("aws_iam_serverless")),
     )
 
 
@@ -577,7 +586,7 @@ def _get_redis_client_logic(**env_overrides):
         _azure_redis_ad_token: Final = redis_kwargs.get("azure_redis_ad_token") or get_secret("REDIS_AZURE_AD_TOKEN")
 
         _azure_ad_enabled: Final = _azure_redis_ad_token is not None and str(_azure_redis_ad_token).lower() == "true"
-        _aws_iam_enabled: Final = _is_true(redis_kwargs.get("aws_iam_auth"))
+        _aws_iam_enabled: Final = _coerces_to_true(redis_kwargs.get("aws_iam_auth"))
 
         if _azure_ad_enabled and _gcp_service_account is not None:
             verbose_logger.warning(
@@ -619,13 +628,7 @@ def _get_redis_client_logic(**env_overrides):
             if not _uses_tls(redis_kwargs):
                 raise ValueError("AWS ElastiCache IAM Redis authentication requires TLS")
             verbose_logger.debug("Setting up AWS ElastiCache IAM authentication for Redis.")
-            redis_kwargs["credential_provider"] = _build_elasticache_iam_provider(
-                user_name=redis_kwargs.get("aws_iam_user_name"),
-                cache_name=redis_kwargs.get("aws_iam_cache_name"),
-                region=redis_kwargs.get("aws_iam_region")
-                or get_secret_str("AWS_REGION")
-                or get_secret_str("AWS_DEFAULT_REGION"),
-            )
+            redis_kwargs["credential_provider"] = _build_elasticache_iam_provider(redis_kwargs)
 
     redis_kwargs.pop("gcp_service_account", None)
     redis_kwargs.pop("gcp_ssl_ca_certs", None)
@@ -635,10 +638,8 @@ def _get_redis_client_logic(**env_overrides):
     redis_kwargs.pop("azure_client_id", None)
     redis_kwargs.pop("azure_tenant_id", None)
     redis_kwargs.pop("azure_client_secret", None)
-    redis_kwargs.pop("aws_iam_auth", None)
-    redis_kwargs.pop("aws_iam_user_name", None)
-    redis_kwargs.pop("aws_iam_cache_name", None)
-    redis_kwargs.pop("aws_iam_region", None)
+    for aws_iam_key in _AWS_IAM_KWARG_NAMES:
+        redis_kwargs.pop(aws_iam_key, None)
 
     if redis_kwargs.get("credential_provider") is not None:
         redis_kwargs.pop("redis_connect_func", None)
