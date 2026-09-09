@@ -1966,17 +1966,26 @@ async def health_liveliness_options():
     return Response(headers=response_headers, status_code=200)
 
 
-# What a caller admitted through the non-admin path gets to see of the probe:
-# the model and the outcome, none of the deployment's routing configuration.
 _NON_ADMIN_TEST_CONNECTION_RESULT_KEYS: Final[frozenset[str]] = frozenset(("model", "error", "mode_error"))
 
 
-def _test_connection_result_for_display(endpoint_data: dict, *, outcome_only: bool) -> dict:
-    """Clean the probe result for display; ``outcome_only`` hides the deployment's configuration."""
-    cleaned: Final = _clean_endpoint_data(endpoint_data, details=True)
+def _test_connection_result_for_display(
+    litellm_params: Mapping[str, object], result: Mapping[str, object], *, outcome_only: bool
+) -> Mapping[str, object]:
+    cleaned: Final = _clean_endpoint_data({**litellm_params, **result}, details=True)
     if not outcome_only:
         return cleaned
-    return {k: v for k, v in cleaned.items() if k in _NON_ADMIN_TEST_CONNECTION_RESULT_KEYS}
+    return {  # mutable-ok: fresh filtered copy handed to the caller
+        k: v for k, v in cleaned.items() if k in _NON_ADMIN_TEST_CONNECTION_RESULT_KEYS
+    }
+
+
+def _configured_probe_mode(model_info: Mapping[str, object] | None, model: object) -> str | None:
+    configured: Final = model_info.get("mode") if model_info else None
+    if configured is not None:
+        return str(configured)
+    cost_entry: Final = litellm.model_cost.get(model) if isinstance(model, str) else None
+    return cost_entry.get("mode") if cost_entry else None
 
 
 def _probe_is_configured_deployment(
@@ -1987,11 +1996,6 @@ def _probe_is_configured_deployment(
     request_litellm_params: Mapping[str, object],
     requested_mode: str | None,
 ) -> bool:
-    """Whether a probe targets a team-less configured deployment exactly as configured.
-
-    A request value that differs from the configuration (model, provider,
-    endpoint, credentials, mode, ...) describes a different probe.
-    """
     if getattr(model_params.model_info, "team_id", None) is not None:
         return False
     if any(configured_litellm_params.get(key) != value for key, value in request_litellm_params.items()):
@@ -2006,7 +2010,6 @@ async def _assert_caller_can_call_model(
     prisma_client: "PrismaClient",
     llm_router: "Router | None",
 ) -> None:
-    """Raise 403 unless the caller's key and user may call ``model``."""
     from litellm.proxy.auth.auth_checks import (
         UserNotFoundError,
         can_key_call_model,
@@ -2033,7 +2036,10 @@ async def _assert_caller_can_call_model(
             user_object = None
         await can_user_call_model(model=model, llm_router=llm_router, user_object=user_object)
     except ProxyException as e:
-        raise HTTPException(status_code=403, detail={"error": str(e.message)}) from e
+        raise HTTPException(
+            status_code=403,
+            detail={"error": str(e.message)},  # mutable-ok: same 403 payload shape as the rest of this endpoint
+        ) from e
 
 
 async def _authorize_test_connection(
@@ -2049,16 +2055,7 @@ async def _authorize_test_connection(
     request_litellm_params: Mapping[str, object],
     requested_mode: str | None,
 ) -> bool:
-    """Decide whether the caller may probe this model.
-
-    Proxy admins and team admins may probe any model they manage, as before.
-    Any other user may probe a configured deployment that has no team, exactly
-    as configured, when their key and user are allowed to call its model.
-    Anything else stays a management operation.
-
-    Returns True when the caller was admitted through that non-admin path, so
-    the response can be limited to the outcome of the probe.
-    """
+    """Returns True when a non-admin was admitted to probe a team-less deployment as configured."""
     from litellm.proxy.management_endpoints.model_management_endpoints import (
         ModelManagementAuthChecks,
     )
@@ -2286,7 +2283,7 @@ async def test_model_connection(
             llm_router=llm_router,
             configured_model_name=configured_model_name,
             configured_litellm_params=config_litellm_params,
-            configured_mode=(loaded_model_info or {}).get("mode"),
+            configured_mode=_configured_probe_mode(loaded_model_info, config_litellm_params.get("model")),
             request_litellm_params=request_litellm_params,
             requested_mode=mode or request_litellm_params.get("mode"),
         )
@@ -2304,7 +2301,7 @@ async def test_model_connection(
 
         # Clean the result for display
         cleaned_result: Final = _test_connection_result_for_display(
-            {**litellm_params, **result}, outcome_only=admitted_as_caller
+            litellm_params, result, outcome_only=admitted_as_caller
         )
 
         return {
