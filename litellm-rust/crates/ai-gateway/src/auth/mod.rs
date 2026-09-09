@@ -10,7 +10,7 @@
 
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
-use axum::http::header::{AUTHORIZATION, HeaderMap};
+use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -35,15 +35,6 @@ pub fn hash_token(token: &str) -> String {
     hex
 }
 
-/// The trimmed token after `Authorization: Bearer `, if the header carries one.
-pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
-}
-
 /// Extractor that requires the configured master key as a bearer token.
 ///
 /// Rejections: `500` when no master key is configured (permanent
@@ -65,7 +56,13 @@ impl FromRequestParts<AppState> for RequireMasterKey {
                 "gateway auth not configured (set LITELLM_MASTER_KEY)".to_string(),
             ));
         };
-        match bearer_token(&parts.headers) {
+        let provided = parts
+            .headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::trim);
+        match provided {
             Some(token) if bool::from(token.as_bytes().ct_eq(expected.as_bytes())) => Ok(Self),
             _ => Err((
                 StatusCode::UNAUTHORIZED,

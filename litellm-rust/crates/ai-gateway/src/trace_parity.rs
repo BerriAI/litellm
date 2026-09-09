@@ -11,7 +11,6 @@ use serde::Serialize;
 use serde_json::Value;
 use tower::ServiceExt;
 
-use crate::admission::{Admission, IdentityCache, TokenCounter};
 use crate::io::realtime_pool::RealtimePool;
 use crate::routes;
 use crate::state::AppState;
@@ -38,13 +37,6 @@ pub async fn messages_request(
             },
         }])),
         master_key: Some(Arc::from("trace-master-key")),
-        admission: Arc::new(Admission::new(
-            IdentityCache::new(
-                Some(Arc::from("trace-master-key")),
-                "http://127.0.0.1:1".to_string(),
-            ),
-            TokenCounter::approximate(),
-        )),
         loggers: Arc::new(Vec::new()),
         realtime_pool: RealtimePool::disabled(),
     };

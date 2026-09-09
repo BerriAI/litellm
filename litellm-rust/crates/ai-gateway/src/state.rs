@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
+use crate::io::realtime_pool::RealtimePool;
 use litellm_core::router::Router;
 
-use crate::admission::Admission;
 use crate::integrations::custom_logger::CustomLogger;
-use crate::io::realtime_pool::RealtimePool;
 
 /// Shared application state handed to every route handler.
 #[derive(Clone)]
@@ -13,8 +12,6 @@ pub struct AppState {
     /// The gateway master key. Any caller presenting it as a bearer token may
     /// invoke the gateway. `None` → auth not configured (routes fail closed).
     pub master_key: Option<Arc<str>>,
-    /// Per-request admission (identity, model access, size, tokens, limits) for `/v1/messages`.
-    pub admission: Arc<Admission>,
     /// Logging callbacks fanned out at the end of each realtime session.
     pub loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
     /// Pre-warmed upstream realtime connection pool. Disabled

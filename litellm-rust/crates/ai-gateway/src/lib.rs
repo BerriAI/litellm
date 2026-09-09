@@ -18,8 +18,6 @@ pub mod io;
 pub mod ocr;
 
 #[cfg(feature = "server")]
-pub mod admission;
-#[cfg(feature = "server")]
 pub mod auth;
 #[cfg(feature = "server")]
 pub mod routes;

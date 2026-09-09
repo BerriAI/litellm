@@ -239,7 +239,6 @@ async fn bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::admission::{Admission, IdentityCache, TokenCounter};
     use crate::io::realtime_pool::RealtimePool;
     use crate::state::AppState;
     use axum::body::Body;
@@ -317,13 +316,6 @@ mod tests {
         AppState {
             router: Arc::new(ModelRouter::default()),
             master_key: Some(Arc::from("master-key")),
-            admission: Arc::new(Admission::new(
-                IdentityCache::new(
-                    Some(Arc::from("master-key")),
-                    "http://127.0.0.1:1".to_string(),
-                ),
-                TokenCounter::approximate(),
-            )),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
         }

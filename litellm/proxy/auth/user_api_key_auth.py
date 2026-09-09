@@ -91,6 +91,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_query_params,
     _safe_set_request_parsed_body,
     populate_request_with_path_params,
+    read_raw_json_body,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -2650,6 +2651,7 @@ async def _run_centralized_common_checks(
 
     await _reserve_budget_after_common_checks(
         user_api_key_auth_obj=user_api_key_auth_obj,
+        request=request,
         request_data=request_data,
         route=route,
         llm_router=llm_router,
@@ -2685,6 +2687,7 @@ async def _reserve_budget_after_common_checks(
     general_settings: dict,
     end_user_id: str | None = None,
     end_user_object: LiteLLM_EndUserTable | None = None,
+    request: Request | None = None,
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
     if skip_budget_checks:
@@ -2710,6 +2713,7 @@ async def _reserve_budget_after_common_checks(
         end_user_object=end_user_object,
         apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
         fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
+        raw_body=await read_raw_json_body(request=request),
     )
 
 

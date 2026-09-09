@@ -43,3 +43,13 @@ pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
 
 pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
+
+/// Message accounting `litellm.token_counter` adds on top of the raw encoding
+/// for non-OpenAI models (`litellm/litellm_core_utils/token_counter.py`).
+pub(crate) const TOKENS_PER_MESSAGE: usize = 3;
+pub(crate) const TOKENS_PER_NAME: usize = 1;
+pub(crate) const REPLY_PRIMING_TOKENS: usize = 3;
+pub(crate) const TOOL_DEFINITIONS_TOKENS: usize = 9;
+pub(crate) const TOOLS_WITH_SYSTEM_MESSAGE_DISCOUNT: usize = 4;
+pub(crate) const TOOL_CHOICE_NONE_TOKENS: usize = 1;
+pub(crate) const NAMED_TOOL_CHOICE_TOKENS: usize = 7;

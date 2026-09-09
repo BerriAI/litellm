@@ -11,7 +11,6 @@
 
 use std::sync::Arc;
 
-use litellm_ai_gateway::admission::Admission;
 use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
 use litellm_ai_gateway::routes;
 use litellm_ai_gateway::state::AppState;
@@ -50,19 +49,6 @@ async fn main() {
 
     let router = Arc::new(build_router());
 
-    let admission = match Admission::from_env(master_key.clone()) {
-        Ok(admission) => Arc::new(admission),
-        Err(error) => {
-            eprintln!("admission setup failed: {error}");
-            std::process::exit(1);
-        }
-    };
-    if !admission.tokens().is_exact() {
-        eprintln!(
-            "warning: LITELLM_ANTHROPIC_TOKENIZER_PATH is not set; input tokens are approximated"
-        );
-    }
-
     // Build the pre-warmed realtime pool and register each deployment's upstream
     // so the background replenisher starts warming it. `REALTIME_POOL_SIZE=0`
     // yields a disabled pool → every connect fresh-dials (original behavior).
@@ -84,7 +70,6 @@ async fn main() {
     let state = AppState {
         router,
         master_key,
-        admission,
         loggers: Arc::new(loggers),
         realtime_pool,
     };
