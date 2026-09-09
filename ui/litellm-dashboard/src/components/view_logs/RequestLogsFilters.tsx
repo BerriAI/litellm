@@ -6,6 +6,7 @@ import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/u
 import { useInfiniteSpendLogUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogUsers";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { DataTableFilterField } from "@/components/shared/DataTable";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
@@ -71,6 +72,32 @@ function TeamFilterField({
         onValueChange={(next) => onChange(emptyToUndefined(next))}
         placeholder="Search or select a team"
         emptyText="No teams found"
+      />
+    </DataTableFilterField>
+  );
+}
+
+function ProjectFilterField({ value, onChange }: { value: string; onChange: (value: string | undefined) => void }) {
+  const { data: projects, isLoading } = useProjects();
+
+  const options = useMemo<SearchSelectOption[]>(
+    () =>
+      (projects ?? []).map((project) => ({
+        label: project.project_alias || project.project_id,
+        value: project.project_id,
+        sublabel: project.project_id,
+      })),
+    [projects],
+  );
+
+  return (
+    <DataTableFilterField label="Project">
+      <SearchSelect
+        options={options}
+        value={value}
+        onValueChange={(next) => onChange(emptyToUndefined(next))}
+        placeholder="Search or select a project"
+        emptyText={isLoading ? "Loading projects…" : "No projects found"}
       />
     </DataTableFilterField>
   );
@@ -327,6 +354,8 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
         onChange={setter(LOG_FILTER_IDS.TEAM_ID)}
         teams={teams}
       />
+
+      <ProjectFilterField value={valueOf(LOG_FILTER_IDS.PROJECT_ID)} onChange={setter(LOG_FILTER_IDS.PROJECT_ID)} />
 
       <DataTableFilterField label="Status">
         <Select

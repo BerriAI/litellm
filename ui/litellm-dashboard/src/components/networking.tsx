@@ -2075,6 +2075,7 @@ export const userFilterUICall = async (accessToken: string, params: URLSearchPar
 interface UiSpendLogsParams {
   api_key?: string;
   team_id?: string;
+  project_id?: string;
   request_id?: string;
   session_id?: string;
   user_id?: string;
