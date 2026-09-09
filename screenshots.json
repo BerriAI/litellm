@@ -11,12 +11,12 @@
   },
   {
     "file": "after-session.png",
-    "commit": "15392e7b3a298bec57f4aae31e863e39fb182cc6",
-    "sha256": "882d08b2f9d8daa35bd5f6a0bd199c8c059bdbb2165c29a3f987d99503981567"
+    "commit": "7b6ef9206e87c09adfc5844c8f8130da73d794fb",
+    "sha256": "e41f9377ff8177279cffe5d6f48bb872c14946f1d3857f9e5d1979b7dc5cb047"
   },
   {
     "file": "after-happy.png",
-    "commit": "15392e7b3a298bec57f4aae31e863e39fb182cc6",
-    "sha256": "e9bbe32549b6b3430521de22fcbadfc06ebae3be86a6eebb9f6901403f2c3b55"
+    "commit": "7b6ef9206e87c09adfc5844c8f8130da73d794fb",
+    "sha256": "5687390a8e49861615a14074cf67b966a79b3fcaa35d4a30addb7395bec29122"
   }
 ]
