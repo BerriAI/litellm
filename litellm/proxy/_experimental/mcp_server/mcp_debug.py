@@ -308,14 +308,18 @@ class MCPDebug:
 
     @staticmethod
     def wrap_send_with_debug_headers(
-        send: Send, debug_headers: Mapping[str, str], resolution: Callable[[], Mapping[str, str]] | None = None
+        send: Send,
+        debug_headers: Mapping[str, str],
+        resolution: Callable[[], Mapping[str, str]] | None = None,
+        *,
+        request_method: str | None = None,
     ) -> Send:
         """
         Return a new ASGI ``send`` callable that injects *debug_headers*
         into the ``http.response.start`` message.
         """
 
-        if resolution is not None:
+        if resolution is not None and request_method == "POST":
             return _DiagnosticSend(send, debug_headers, resolution)
 
         async def _send_with_debug(message: Message) -> None:
