@@ -367,22 +367,14 @@ def _estimate_absent_usage(
     )
     raw_choices: Final[object | None] = rust_response.get("choices")
     choices: Final[tuple[Mapping[str, object], ...]] = (
-        tuple(_BRIDGE_CHOICES_ADAPTER.validate_python(raw_choices))
-        if raw_choices is not None
-        else ()
+        tuple(_BRIDGE_CHOICES_ADAPTER.validate_python(raw_choices)) if raw_choices is not None else ()
     )
-    first_choice: Final[Mapping[str, object] | None] = (
-        choices[0] if len(choices) > 0 else None
-    )
+    first_choice: Final[Mapping[str, object] | None] = choices[0] if len(choices) > 0 else None
     raw_message: Final[object | None] = first_choice.get("message") if first_choice is not None else None
     message: Final[Mapping[str, object] | None] = (
-        _BRIDGE_MESSAGE_ADAPTER.validate_python(raw_message)
-        if isinstance(raw_message, Mapping)
-        else None
+        _BRIDGE_MESSAGE_ADAPTER.validate_python(raw_message) if isinstance(raw_message, Mapping) else None
     )
-    content: Final[object | None] = (
-        message.get("content") if message is not None else None
-    )
+    content: Final[object | None] = message.get("content") if message is not None else None
     completion_tokens: Final = (
         litellm.token_counter(text=content)  # pyright: ignore[reportUnknownMemberType]  # same upstream-untyped token_counter as above
         if isinstance(content, str) and content
