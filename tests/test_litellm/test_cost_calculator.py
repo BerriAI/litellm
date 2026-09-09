@@ -4746,6 +4746,22 @@ def test_ocr_cost_falls_through_to_cost_map_when_deployment_has_no_ocr_pricing()
     assert cost == pytest.approx(map_price * 2)
 
 
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_ocr_cost_ignores_deployment_credit_pricing_when_response_reports_no_credits():
+    from litellm.cost_calculator import ocr_cost
+
+    map_price: Final = litellm.get_model_info(MAPPED_OCR_MODEL)["ocr_cost_per_page"]
+    assert map_price is not None
+
+    cost, _ = ocr_cost(
+        model=MAPPED_OCR_MODEL,
+        custom_llm_provider="mistral",
+        response=_ocr_response(MAPPED_OCR_MODEL, pages_processed=2),
+        model_info={"ocr_cost_per_credit": 0.5},
+    )
+    assert cost == pytest.approx(map_price * 2)
+
+
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 def test_completion_cost_ocr_reads_deployment_pricing_from_logging_metadata(metadata_key: str):
     logging_obj = _ocr_logging_obj({metadata_key: {"model_info": {"ocr_cost_per_page": 0.004}}})
