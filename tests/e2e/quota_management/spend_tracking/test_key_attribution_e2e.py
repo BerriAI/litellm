@@ -3,7 +3,8 @@
 One virtual key with an alias, owned by a user with an email, drives every spend
 write path a key can reach: /chat/completions, /queue/chat/completions,
 /v1/messages, /v1/responses, /embeddings, the Gemini native passthrough, a batch
-input file upload, and a batch create. Each row those calls write must carry
+input file upload, a batch create, and a replayed callback log (POST
+/v1/rust_control_plane/logs, the writer an external gateway feeds). Each row those calls write must carry
 `api_key` equal to the key's LiteLLM_VerificationToken.token (the sha256 hash
 /key/generate returns as `token`), which is the join /spend/logs?api_key= and
 /user/daily/activity rely on to report key_alias and user_email. A row keyed by a
@@ -11,29 +12,40 @@ re-hashed token (v1.99.0's regression, #39568 and #39572) shows up as a
 key-hash-* row with no alias and no email in the customer's usage exports.
 
 The health-check service account writes rows too; those must stay keyed by the
-literal service-account name, never by a hash of it. The batch cost row is
-written by the CheckBatchCost poller once the batch completes, up to an hour
-later, so it rides a cross-run baton like the batches suite: each run submits a
-one-line marker batch whose metadata records the token it expects on the cost
-row, and asserts on the newest completed marker from any run (a cold start with
-no completed marker is a documented vacuous pass, never a skip).
+literal service-account name, never by a hash of it. A batch's cost row lands
+only once the batch completes, up to 24h later, so the batch cost path rides a
+cross-run baton like the batches suite: each run submits a one-line marker batch
+and never cancels it, and the newest completed marker from any run that this
+proxy has not billed yet is retrieved by its raw provider id with this run's
+key. That retrieve is the writer under test: a raw id is never poller-owned, so
+the proxy prices it inline against the retrieving key, and the
+{provider_batch_id}_batch_cost row must join this run's token with its alias.
+The CheckBatchCost poller's own row (the unified id, billed against the
+submitting key) needs the batch's create row in the same database, which a stack
+booted fresh per run never holds for a completed marker, so that writer is out
+of this test's reach. A cold start with no completed marker is a documented
+vacuous pass, never a skip.
 
 /spend/logs carries no email field, so the email assertion lives on
 /user/daily/activity alone; /spend/logs is held to the alias in metadata.
 """
 
+import base64
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Final, Iterator
+from typing import Final
 
 import pytest
-
-from models import ChatMessage, KeyGenerateBody
+from models import ChatMessage, KeyGenerateBody, SpendLogsParams
 from proxy_client import Converged, await_converged
+from pydantic import BaseModel
 from spend_e2e_client import (
     BatchCreateBody,
     BatchObject,
+    CallbackLogMetadata,
+    CallbackLogPayload,
     DailyActivityKeyBreakdown,
     ResponseIdentity,
     SpendClient,
@@ -41,7 +53,6 @@ from spend_e2e_client import (
     StreamingResponse,
     unique_marker,
 )
-from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -51,14 +62,17 @@ RESPONSES_MODEL: Final = "openai-responses-codex"
 EMBED_MODEL: Final = "openai-text-embedding-3-small"
 BATCH_MODEL: Final = "openai-gpt-4o-mini"
 BATCH_BACKEND_MODEL: Final = "gpt-4o-mini"
+BATCH_PROVIDER: Final = "openai"
 HEALTH_SERVICE_ACCOUNT: Final = "litellm-internal-health-check"
 BATON_MARKER_KEY: Final = "litellm_e2e_suite"
 BATON_MARKER_VALUE: Final = "key-attribution-baton"
-BATON_EXPECTED_TOKEN_KEY: Final = "expected_api_key"
-BATON_POLL_SECONDS: Final = 300.0
+BATON_POLL_SECONDS: Final = 30.0
 BATON_POLL_INTERVAL_SECONDS: Final = 10.0
 BATON_LIST_LIMIT: Final = 100
 MAX_TOKENS: Final = 8
+REPLAY_RESPONSE_COST: Final = 0.0001
+REPLAY_PROMPT_TOKENS: Final = 5
+REPLAY_COMPLETION_TOKENS: Final = 1
 WRITE_PATHS: Final = (
     "chat_completions",
     "queue_chat_completions",
@@ -68,6 +82,7 @@ WRITE_PATHS: Final = (
     "gemini_passthrough",
     "batch_file_upload",
     "batch_create",
+    "callback_replay",
 )
 
 
@@ -138,17 +153,39 @@ def _drive_batch(client: SpendClient, identity: AttributedKey, marker: str) -> t
         BatchCreateBody(
             input_file_id=uploaded.id,
             model=BATCH_MODEL,
-            metadata={
-                BATON_MARKER_KEY: BATON_MARKER_VALUE,
-                BATON_EXPECTED_TOKEN_KEY: identity.token,
-                "run": marker,
-            },
+            metadata={BATON_MARKER_KEY: BATON_MARKER_VALUE, "run": marker},
         ),
     )
     return (
         WritePath(name="batch_file_upload", request_id=uploaded.id),
         WritePath(name="batch_create", request_id=created.id),
     )
+
+
+def _drive_callback_replay(client: SpendClient, identity: AttributedKey, marker: str) -> WritePath:
+    request_id: Final = f"callback-replay-{marker}"
+    finished_at: Final = time.time()
+    replayed: Final = client.replay_callback_log(
+        identity.key,
+        CallbackLogPayload(
+            id=request_id,
+            litellm_call_id=request_id,
+            model=CHAT_MODEL,
+            start_time=finished_at - 1,
+            end_time=finished_at,
+            response_cost=REPLAY_RESPONSE_COST,
+            prompt_tokens=REPLAY_PROMPT_TOKENS,
+            completion_tokens=REPLAY_COMPLETION_TOKENS,
+            total_tokens=REPLAY_PROMPT_TOKENS + REPLAY_COMPLETION_TOKENS,
+            metadata=CallbackLogMetadata(
+                user_api_key_hash=identity.token,
+                user_api_key_alias=identity.alias,
+                user_api_key_user_id=identity.user_id,
+            ),
+        ),
+    )
+    assert replayed.processed == 1 and replayed.failed == 0, f"callback replay rejected the payload: {replayed}"
+    return WritePath(name="callback_replay", request_id=request_id)
 
 
 def _drive_every_write_path(client: SpendClient, identity: AttributedKey) -> tuple[WritePath, ...]:
@@ -163,31 +200,52 @@ def _drive_every_write_path(client: SpendClient, identity: AttributedKey) -> tup
         _call_id("embeddings", client.send_embed(key, EMBED_MODEL, prompt)),
         _call_id("gemini_passthrough", client.send_gemini_generate(key, CHAT_MODEL, prompt, max_tokens=MAX_TOKENS)),
         *_drive_batch(client, identity, marker),
+        _drive_callback_replay(client, identity, marker),
     )
 
 
-def _completed_baton(listed: list[BatchObject]) -> BatchObject | None:
-    return max(
-        (
-            batch
-            for batch in listed
-            if batch.status == "completed" and (batch.metadata or {}).get(BATON_MARKER_KEY) == BATON_MARKER_VALUE
-        ),
-        key=lambda batch: batch.created_at or 0,
-        default=None,
+def _completed_batons(listed: list[BatchObject]) -> tuple[BatchObject, ...]:
+    return tuple(
+        sorted(
+            (
+                batch
+                for batch in listed
+                if batch.status == "completed" and (batch.metadata or {}).get(BATON_MARKER_KEY) == BATON_MARKER_VALUE
+            ),
+            key=lambda batch: batch.created_at or 0,
+            reverse=True,
+        )
     )
 
 
-def _newest_completed_baton(client: SpendClient, key: str) -> BatchObject | None:
+def _provider_batch_id(unified_batch_id: str) -> str:
+    encoded: Final = unified_batch_id.removeprefix("batch_")
+    decoded: Final = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+    return decoded.removeprefix("litellm:").split(";", 1)[0]
+
+
+def _batch_cost_request_id(unified_batch_id: str) -> str:
+    return f"{_provider_batch_id(unified_batch_id)}_batch_cost"
+
+
+def _newest_unbilled_completed_baton(client: SpendClient, key: str) -> BatchObject | None:
     outcome: Final = await_converged(
-        lambda: _completed_baton(client.list_batches(key, BATCH_MODEL, limit=BATON_LIST_LIMIT)),
-        converged=lambda completed: completed is not None,
+        lambda: _completed_batons(client.list_batches(key, BATCH_MODEL, limit=BATON_LIST_LIMIT)),
+        converged=lambda completed: bool(completed),
         timeout=BATON_POLL_SECONDS,
         interval=BATON_POLL_INTERVAL_SECONDS,
         now=time.monotonic,
         sleep=time.sleep,
     )
-    return outcome.result if isinstance(outcome, Converged) else None
+    completed: Final = outcome.result if isinstance(outcome, Converged) else ()
+    return next(
+        (
+            batch
+            for batch in completed
+            if not client.proxy.spend_logs(SpendLogsParams(request_id=_batch_cost_request_id(batch.id)))
+        ),
+        None,
+    )
 
 
 def _health_rows_between(client: SpendClient, started_at: datetime) -> list[SpendLogRow]:
@@ -246,7 +304,16 @@ class TestKeyAttribution:
 
     @pytest.mark.covers(
         "quota_management.spend_tracking.key_attribution.joins_key",
-        exercised_on=["chat_completions", "messages", "responses", "embeddings", "batches", "files", "google_native"],
+        exercised_on=[
+            "chat_completions",
+            "messages",
+            "responses",
+            "embeddings",
+            "batches",
+            "files",
+            "google_native",
+            "rust_control_plane",
+        ],
     )
     def test_every_write_path_row_joins_the_key(self, client: SpendClient, driven: DrivenKey) -> None:
         assert tuple(path.name for path in driven.paths) == WRITE_PATHS
@@ -275,7 +342,16 @@ class TestKeyAttribution:
 
     @pytest.mark.covers(
         "quota_management.spend_tracking.key_attribution.reports_alias_and_email",
-        exercised_on=["chat_completions", "messages", "responses", "embeddings", "batches", "files", "google_native"],
+        exercised_on=[
+            "chat_completions",
+            "messages",
+            "responses",
+            "embeddings",
+            "batches",
+            "files",
+            "google_native",
+            "rust_control_plane",
+        ],
     )
     def test_spend_logs_by_key_return_every_row_with_the_alias(self, client: SpendClient, driven: DrivenKey) -> None:
         expected_ids: Final = frozenset(path.request_id for path in driven.paths)
@@ -294,7 +370,16 @@ class TestKeyAttribution:
 
     @pytest.mark.covers(
         "quota_management.spend_tracking.key_attribution.reports_alias_and_email",
-        exercised_on=["chat_completions", "messages", "responses", "embeddings", "batches", "files", "google_native"],
+        exercised_on=[
+            "chat_completions",
+            "messages",
+            "responses",
+            "embeddings",
+            "batches",
+            "files",
+            "google_native",
+            "rust_control_plane",
+        ],
     )
     def test_user_daily_activity_reports_alias_and_email(self, client: SpendClient, driven: DrivenKey) -> None:
         breakdown: Final[DailyActivityKeyBreakdown | None] = client.poll_daily_activity_for_key(
@@ -332,18 +417,27 @@ class TestKeyAttribution:
         exercised_on=["batches"],
     )
     def test_completed_batch_cost_row_joins_the_key(self, client: SpendClient, driven: DrivenKey) -> None:
-        completed: Final = _newest_completed_baton(client, driven.identity.key)
+        completed: Final = _newest_unbilled_completed_baton(client, driven.identity.key)
         if completed is None:
             return
-        expected_token: Final = (completed.metadata or {}).get(BATON_EXPECTED_TOKEN_KEY)
-        assert expected_token, f"marker batch {completed.id} lost its expected token metadata: {completed.metadata}"
-        fetched: Final = client.retrieve_batch(driven.identity.key, completed.id)
+        provider_batch_id: Final = _provider_batch_id(completed.id)
+        fetched: Final = client.retrieve_batch(driven.identity.key, provider_batch_id, provider=BATCH_PROVIDER)
         assert fetched.status == "completed", f"listed-completed marker retrieved as {fetched.status!r}"
+        cost_request_id: Final = _batch_cost_request_id(completed.id)
         rows: Final = client.proxy.poll_logs_for_request_id(
-            f"{fetched.id}_batch_cost",
+            cost_request_id,
             predicate=lambda found: any((row.spend or 0) > 0 for row in found),
         )
         priced: Final = [row for row in rows if (row.spend or 0) > 0]
-        assert priced, f"completed batch {fetched.id} has no positive-cost spend row under {fetched.id}_batch_cost"
-        unjoined: Final = [(row.call_type, row.api_key) for row in priced if row.api_key != expected_token]
-        assert not unjoined, f"batch cost rows whose api_key does not join the key's token {expected_token}: {unjoined}"
+        assert priced, f"retrieving completed batch {provider_batch_id} wrote no positive-cost row under {cost_request_id}"
+        unjoined: Final = [
+            (row.call_type, row.api_key, row.metadata.user_api_key_alias if row.metadata else None)
+            for row in priced
+            if row.api_key != driven.identity.token
+            or row.metadata is None
+            or row.metadata.user_api_key_alias != driven.identity.alias
+        ]
+        assert not unjoined, (
+            f"batch cost rows that do not join the retrieving key's token {driven.identity.token} "
+            f"with alias {driven.identity.alias!r}: {unjoined}"
+        )

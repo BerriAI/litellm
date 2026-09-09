@@ -17,8 +17,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
-from pydantic import BaseModel, Field
-
 from e2e_config import unique_marker
 from e2e_http import (
     FileUploadForm,
@@ -57,9 +55,12 @@ from models import (
     UserRole,
 )
 from proxy_client import Converged, ProxyClient, await_converged
+from pydantic import BaseModel, Field
 
 __all__ = [
     "BatchCreateBody",
+    "CallbackLogMetadata",
+    "CallbackLogPayload",
     "BatchObject",
     "DailyActivityKeyBreakdown",
     "FileObject",
@@ -145,6 +146,44 @@ class BatchList(BaseModel):
 class BatchListQuery(BaseModel):
     model: str
     limit: int
+
+
+class ProviderQuery(BaseModel):
+    provider: str
+
+
+class CallbackLogMetadata(BaseModel):
+    user_api_key_hash: str
+    user_api_key_alias: str
+    user_api_key_user_id: str
+
+
+class CallbackLogPayload(BaseModel):
+    id: str
+    litellm_call_id: str
+    model: str
+    call_type: str = "acompletion"
+    start_time: float = Field(serialization_alias="startTime")
+    end_time: float = Field(serialization_alias="endTime")
+    response_cost: float
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    metadata: CallbackLogMetadata
+
+
+class CallbackLogRecord(BaseModel):
+    status: str = "success"
+    standard_logging_payload: CallbackLogPayload
+
+
+class CallbackLogsRequest(BaseModel):
+    records: list[CallbackLogRecord]
+
+
+class CallbackLogsResponse(BaseModel):
+    processed: int
+    failed: int
 
 
 class DailyActivityParams(BaseModel):
@@ -445,13 +484,23 @@ class SpendClient:
             )
         ).data
 
-    def retrieve_batch(self, key: str, batch_id: str) -> BatchObject:
+    def retrieve_batch(self, key: str, batch_id: str, *, provider: str) -> BatchObject:
         return unwrap(
             self.proxy.transport.get(
                 f"/v1/batches/{batch_id}",
                 headers=self.proxy.transport.bearer(key),
-                params=NoBody(),
+                params=ProviderQuery(provider=provider),
                 response_type=BatchObject,
+            )
+        )
+
+    def replay_callback_log(self, key: str, payload: CallbackLogPayload) -> CallbackLogsResponse:
+        return unwrap(
+            self.proxy.transport.post(
+                "/v1/rust_control_plane/logs",
+                headers=self.proxy.transport.bearer(key),
+                json=CallbackLogsRequest(records=[CallbackLogRecord(standard_logging_payload=payload)]),
+                response_type=CallbackLogsResponse,
             )
         )
 
