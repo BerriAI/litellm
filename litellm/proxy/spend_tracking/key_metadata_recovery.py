@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final, TypeVar
 
@@ -14,6 +14,7 @@ from litellm.constants import (
     SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
     SPEND_LOG_KEY_METADATA_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
+    SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS,
 )
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.proxy.utils import PrismaClient
@@ -36,16 +37,15 @@ ORDER BY token, deleted_at DESC
 """
 
 _SPEND_LOG_ALIAS_SQL: Final = """
-SELECT DISTINCT ON (api_key)
-    api_key AS digest,
-    key_alias,
-    team_id,
-    user_id,
-    MIN(user_id) OVER (PARTITION BY api_key) AS first_owner,
-    MAX(user_id) OVER (PARTITION BY api_key) AS last_owner
+SELECT api_key AS digest,
+    MIN(key_alias) AS first_alias,
+    MAX(key_alias) AS last_alias,
+    MIN(team_id) AS first_team,
+    MAX(team_id) AS last_team,
+    MIN(user_id) AS first_owner,
+    MAX(user_id) AS last_owner
 FROM (
     SELECT api_key,
-        "startTime",
         NULLIF(metadata->>'user_api_key_alias', '') AS key_alias,
         COALESCE(NULLIF(team_id, ''), NULLIF(metadata->>'user_api_key_team_id', '')) AS team_id,
         COALESCE(NULLIF("user", ''), NULLIF(metadata->>'user_api_key_user_id', '')) AS user_id
@@ -55,8 +55,11 @@ FROM (
       AND "startTime" < $3::timestamp
 ) named
 WHERE COALESCE(key_alias, user_id, team_id) IS NOT NULL
-ORDER BY api_key, "startTime" DESC
+GROUP BY api_key
 """
+
+_SPEND_LOG_STATEMENT_TIMEOUT_SQL: Final = f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
+_SPEND_LOG_TRANSACTION_TIMEOUT: Final = timedelta(milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS)
 
 _HASHED_JWT_PREFIX: Final = "hashed-jwt-"
 
@@ -75,12 +78,25 @@ class _TokenDigestRow(BaseModel):
     user_id: str | None = None
 
 
-class _SpendLogDigestRow(_TokenDigestRow):
+def _unanimous(first: str | None, last: str | None) -> str | None:
+    return first if first == last else None
+
+
+class _SpendLogDigestRow(BaseModel):
+    digest: str
+    first_alias: str | None = None
+    last_alias: str | None = None
+    first_team: str | None = None
+    last_team: str | None = None
     first_owner: str | None = None
     last_owner: str | None = None
 
-    def unanimous_owner(self) -> str | None:
-        return self.user_id if self.first_owner == self.last_owner else None
+    def metadata(self) -> KeyMetadataDict:
+        return KeyMetadataDict(
+            key_alias=_unanimous(self.first_alias, self.last_alias),
+            team_id=_unanimous(self.first_team, self.last_team),
+            user_id=_unanimous(self.first_owner, self.last_owner),
+        )
 
 
 _TOKEN_DIGEST_ROWS: Final = TypeAdapter(tuple[_TokenDigestRow, ...])
@@ -232,14 +248,24 @@ def _cached_spend_log_metadata(
     )
 
 
+async def _spend_log_rows_within_the_statement_timeout(
+    prisma_client: PrismaClient,
+    digests: AbstractSet[str],
+    window: tuple[datetime, datetime],
+) -> Sequence[Mapping[str, object]]:
+    start, end = window
+    async with prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction:
+        await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
+        return await transaction.query_raw(_SPEND_LOG_ALIAS_SQL, sorted(digests), start, end)
+
+
 async def _query_spend_log_metadata(
     prisma_client: PrismaClient,
     digests: AbstractSet[str],
     window: tuple[datetime, datetime],
 ) -> Mapping[str, KeyMetadataDict] | None:
-    start, end = window
     rows: Final = await _db_or_empty(
-        lambda: prisma_client.db.query_raw(_SPEND_LOG_ALIAS_SQL, sorted(digests), start, end),
+        lambda: _spend_log_rows_within_the_statement_timeout(prisma_client, digests, window),
         "Failed spend-log alias recovery for %d missing keys: %s",
         len(digests),
     )
@@ -247,10 +273,10 @@ async def _query_spend_log_metadata(
         return None
     return MappingProxyType(
         {
-            row.digest: KeyMetadataDict(key_alias=row.key_alias, team_id=row.team_id, user_id=owner)
+            row.digest: meta
             for row in _SPEND_LOG_DIGEST_ROWS.validate_python(rows)
-            for owner in (row.unanimous_owner(),)
-            if row.digest in digests and (row.key_alias or owner or row.team_id)
+            for meta in (row.metadata(),)
+            if row.digest in digests and any(meta.values())
         }
     )
 
