@@ -5,7 +5,9 @@ use crate::ocr::error::PagesError;
 use std::time::Duration;
 
 use super::hooks::{OcrDuringCallRequest, OcrPreCallRequest};
-use super::prepare::{OcrProviderKind, OcrProviderRequest, ocr_provider_config};
+use super::prepare::{
+    OcrModel, OcrProvider, OcrProviderKind, OcrProviderRequest, ocr_provider_config,
+};
 use super::types::{OcrConnection, OcrDocument, OcrRequest, OcrRequestFormat, VertexOcrSettings};
 use crate::Error;
 use crate::auth::azure::AzureAuthInputs;
@@ -50,7 +52,12 @@ pub fn decode_request_with_env(
             model: &wire.model,
             custom_llm_provider: "mistral",
         });
-    let kind = ocr_provider_config(provider.custom_llm_provider, provider.model)?;
+    let typed_provider = provider
+        .custom_llm_provider
+        .parse::<OcrProvider>()
+        .map_err(|_| Error::InvalidProvider(provider.custom_llm_provider.to_string()))?;
+    let model = OcrModel::from(provider.model);
+    let kind = ocr_provider_config(typed_provider, &model);
     let params = decode_params(kind, wire.optional_params.clone())?;
     let document = decode_request_value(wire.document, "document")?;
     let key_env = match kind {
@@ -114,7 +121,7 @@ pub fn decode_request_with_env(
         .and_then(|value| value.parse::<f64>().ok())
         .map(|mb| (mb.max(0.0) * 1024.0 * 1024.0) as u64)
         .unwrap_or(defaults.max_download_bytes);
-    let mut request = OcrRequest::new(provider.model.to_string(), document, params);
+    let mut request = OcrRequest::new(model.as_str().to_string(), document, params);
     request.connection = OcrConnection {
         api_key: nonblank(wire.api_key)
             .or_else(|| nonblank(env(key_env)))

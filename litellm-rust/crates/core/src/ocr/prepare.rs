@@ -6,6 +6,7 @@ use crate::providers::mistral::ocr::types::MistralOcrParams;
 use crate::providers::reducto::ocr::types::{ReductoLegacyParams, ReductoV3Params};
 use crate::providers::vertex_ai::ocr::deepseek::types::DeepSeekOcrParams;
 use serde::Serialize;
+use strum::EnumString;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
@@ -29,6 +30,36 @@ pub enum OcrProviderKind {
     ReductoV3,
     ReductoLegacy,
 }
+
+#[derive(Clone, Copy, Debug, EnumString, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
+pub enum OcrProvider {
+    Mistral,
+    AzureAi,
+    VertexAi,
+    Reducto,
+}
+
+#[derive(Clone, Debug, EnumString, PartialEq, Eq)]
+pub enum OcrModel {
+    #[strum(serialize = "parse-v3")]
+    ReductoV3,
+    #[strum(serialize = "parse-legacy")]
+    ReductoLegacy,
+    #[strum(default)]
+    Passthrough(String),
+}
+
+impl OcrModel {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::ReductoV3 => "parse-v3",
+            Self::ReductoLegacy => "parse-legacy",
+            Self::Passthrough(model) => model,
+        }
+    }
+}
+
 impl OcrProviderKind {
     pub fn provider_name(self) -> &'static str {
         match self {
@@ -54,21 +85,22 @@ impl OcrProviderRequest {
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub fn ocr_provider_config(provider: &str, model: &str) -> Result<OcrProviderKind, Error> {
-    let lower = model.to_ascii_lowercase();
-    match provider {
-        "mistral" => Ok(OcrProviderKind::Mistral),
-        "azure_ai"
+pub fn ocr_provider_config(provider: OcrProvider, model: &OcrModel) -> OcrProviderKind {
+    let lower = model.as_str().to_ascii_lowercase();
+    match (provider, model) {
+        (OcrProvider::Mistral, _) => OcrProviderKind::Mistral,
+        (OcrProvider::AzureAi, _)
             if lower.contains("doc-intelligence") || lower.contains("documentintelligence") =>
         {
-            Ok(OcrProviderKind::AzureDocumentIntelligence)
+            OcrProviderKind::AzureDocumentIntelligence
         }
-        "azure_ai" => Ok(OcrProviderKind::AzureAi),
-        "vertex_ai" if lower.contains("deepseek") => Ok(OcrProviderKind::VertexAiDeepSeek),
-        "vertex_ai" => Ok(OcrProviderKind::VertexAi),
-        "reducto" if model == "parse-v3" => Ok(OcrProviderKind::ReductoV3),
-        "reducto" if model == "parse-legacy" => Ok(OcrProviderKind::ReductoLegacy),
-        _ => Err(Error::InvalidProvider(provider.into())),
+        (OcrProvider::AzureAi, _) => OcrProviderKind::AzureAi,
+        (OcrProvider::VertexAi, _) if lower.contains("deepseek") => {
+            OcrProviderKind::VertexAiDeepSeek
+        }
+        (OcrProvider::VertexAi, _) => OcrProviderKind::VertexAi,
+        (OcrProvider::Reducto, OcrModel::ReductoLegacy) => OcrProviderKind::ReductoLegacy,
+        (OcrProvider::Reducto, _) => OcrProviderKind::ReductoV3,
     }
 }
 
@@ -97,3 +129,7 @@ pub(crate) fn prepare_ocr_call<C: OcrProviderConfig>(
         connection,
     })
 }
+
+#[cfg(test)]
+#[path = "../../tests/ocr/prepare.rs"]
+mod tests;
