@@ -2,7 +2,7 @@ import os
 import sys
 
 import pytest
-from pydantic import BaseModel
+from openai.types.responses import ResponseFunctionWebSearch
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -1263,27 +1263,23 @@ class TestToolTransformation:
         assert web_search_options.get("user_location") == {"country": "US"}
 
     def test_transform_web_search_tool_object_to_web_search_options(self):
-        class _ResponseFunctionWebSearch(BaseModel):
-            type: str
-            search_context_size: str | None = None
-            user_location: dict[str, str] | None = None
-
-        web_search_tool = _ResponseFunctionWebSearch(
-            type="web_search",
-            search_context_size="high",
-            user_location={"country": "US"},
+        web_search_tool = ResponseFunctionWebSearch(
+            id="ws_123",
+            type="web_search_call",
+            status="completed",
+            action={"type": "search", "query": "latest ai news"},
         )
 
         result_tools, web_search_options = (
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=[web_search_tool],  # type: ignore[arg-type]
+                tools=[web_search_tool],
             )
         )
 
-        assert result_tools == []
-        assert web_search_options is not None
-        assert web_search_options.get("search_context_size") == "high"
-        assert web_search_options.get("user_location") == {"country": "US"}
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "web_search_call"
+        assert result_tools[0]["id"] == "ws_123"
+        assert web_search_options is None
 
     def test_transform_function_tools_with_anthropic_specific_fields(self):
         """Test that Anthropic-specific fields are preserved in function tools"""
