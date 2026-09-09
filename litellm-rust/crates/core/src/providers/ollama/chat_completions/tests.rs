@@ -204,13 +204,14 @@ fn transform_response_normalizes_a_representative_ollama_reply() {
         Some("Paris")
     );
     assert_eq!(response.choices[0].finish_reason, "stop");
-    assert_eq!(response.usage.prompt_tokens, 8);
-    assert_eq!(response.usage.completion_tokens, 1);
-    assert_eq!(response.usage.total_tokens, 9);
+    let usage = response.usage.as_ref().expect("usage reported");
+    assert_eq!(usage.prompt_tokens, 8);
+    assert_eq!(usage.completion_tokens, 1);
+    assert_eq!(usage.total_tokens, 9);
 }
 
 #[test]
-fn transform_response_defaults_missing_usage_and_done_reason() {
+fn transform_response_leaves_usage_absent_when_counters_are_missing() {
     let response = transform_response(
         "llama3.2",
         json!({
@@ -221,9 +222,33 @@ fn transform_response_defaults_missing_usage_and_done_reason() {
     )
     .expect("response transforms");
     assert_eq!(response.choices[0].finish_reason, "stop");
-    assert_eq!(response.usage.prompt_tokens, 0);
-    assert_eq!(response.usage.completion_tokens, 0);
-    assert_eq!(response.usage.total_tokens, 0);
+    assert!(
+        response.usage.is_none(),
+        "absent counters must signal None so the bridge estimates, got {response:?}"
+    );
+}
+
+#[test]
+fn transform_response_reports_present_but_zero_counters_so_the_bridge_does_not_estimate() {
+    let response = transform_response(
+        "llama3.2",
+        json!({
+            "model": "llama3.2",
+            "message": {"role": "assistant", "content": "hi"},
+            "done": true,
+            "done_reason": "stop",
+            "prompt_eval_count": 0,
+            "eval_count": 0
+        }),
+    )
+    .expect("response transforms");
+    let usage = response
+        .usage
+        .as_ref()
+        .expect("present counters are reported");
+    assert_eq!(usage.prompt_tokens, 0);
+    assert_eq!(usage.completion_tokens, 0);
+    assert_eq!(usage.total_tokens, 0);
 }
 
 #[test]

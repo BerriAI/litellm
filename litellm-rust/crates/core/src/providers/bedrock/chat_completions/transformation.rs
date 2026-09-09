@@ -295,7 +295,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
                 )
                 .to_string(),
             }],
-            usage,
+            usage: Some(usage),
         })
     }
 }

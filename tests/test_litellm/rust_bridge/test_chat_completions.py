@@ -10,8 +10,8 @@ from __future__ import annotations
 import pytest
 
 import litellm
-from litellm.rust_bridge import configuration
 from litellm.rust_bridge import chat_completions as bridge
+from litellm.rust_bridge import configuration
 from litellm.types.utils import ModelResponse
 
 RUST_RESPONSE = {
@@ -393,3 +393,73 @@ class TestFailureClassification:
 
         result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
         assert result == "python"
+
+
+class TestAbsentUsageEstimation:
+    """When the Rust core omits ``usage`` (Ollama with no token counters), the
+    bridge estimates with ``litellm.token_counter`` so spend and the returned
+    ``ModelResponse`` match the Python ollama path. Present counters, including
+    present-but-zero, pass through untouched."""
+
+    @staticmethod
+    def _response_without_usage() -> dict:
+        return {k: v for k, v in RUST_RESPONSE.items() if k != "usage"}
+
+    def test_estimates_prompt_and_completion_from_messages_and_content(self):
+        bridge.set_rust_chat_completions(
+            chat_completions=_RecordingCall(result=self._response_without_usage())
+        )
+        result = bridge.chat_completions(**_call_kwargs(ModelResponse()))
+        assert result is not None
+        expected_prompt = litellm.token_counter(messages=MESSAGES)
+        expected_completion = litellm.token_counter(text="hello from rust")
+        assert result.usage.prompt_tokens == expected_prompt
+        assert result.usage.completion_tokens == expected_completion
+        assert result.usage.total_tokens == expected_prompt + expected_completion
+
+    def test_leaves_present_usage_untouched(self):
+        bridge.set_rust_chat_completions(chat_completions=_RecordingCall())
+        result = bridge.chat_completions(**_call_kwargs(ModelResponse()))
+        assert result is not None
+        assert result.usage.prompt_tokens == 11
+        assert result.usage.completion_tokens == 4
+        assert result.usage.total_tokens == 15
+
+    def test_leaves_present_but_zero_usage_untouched_so_it_is_not_estimated(self):
+        zero_usage = {
+            **RUST_RESPONSE,
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(result=zero_usage))
+        result = bridge.chat_completions(**_call_kwargs(ModelResponse()))
+        assert result is not None
+        assert result.usage.prompt_tokens == 0
+        assert result.usage.completion_tokens == 0
+        assert result.usage.total_tokens == 0
+
+    def test_estimation_runs_before_on_response_so_spend_sees_real_counts(self):
+        seen: list[dict] = []
+        kwargs = _call_kwargs(ModelResponse())
+        kwargs["on_response"] = lambda rust_response: seen.append(dict(rust_response))
+        bridge.set_rust_chat_completions(
+            chat_completions=_RecordingCall(result=self._response_without_usage())
+        )
+        result = bridge.chat_completions(**kwargs)
+        assert result is not None
+        assert seen, "on_response must run after estimation"
+        assert "usage" in seen[0], "the spend callback must see the estimated usage, not the absent one"
+        assert seen[0]["usage"]["prompt_tokens"] == litellm.token_counter(messages=MESSAGES)
+        assert seen[0]["usage"]["completion_tokens"] == litellm.token_counter(text="hello from rust")
+
+    @pytest.mark.asyncio
+    async def test_estimates_on_the_async_path_too(self):
+        bridge.set_rust_chat_completions(
+            achat_completions=_RecordingAsyncCall(result=self._response_without_usage())
+        )
+        result = await bridge.achat_completions(**_call_kwargs(ModelResponse()))
+        assert result is not None
+        expected_prompt = litellm.token_counter(messages=MESSAGES)
+        expected_completion = litellm.token_counter(text="hello from rust")
+        assert result.usage.prompt_tokens == expected_prompt
+        assert result.usage.completion_tokens == expected_completion
+        assert result.usage.total_tokens == expected_prompt + expected_completion

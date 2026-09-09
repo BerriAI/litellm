@@ -713,7 +713,14 @@ mod round_trip {
             response.choices[0].message.content.as_deref(),
             Some("hello")
         );
-        assert_eq!(response.usage.total_tokens, 15);
+        assert_eq!(
+            response
+                .usage
+                .as_ref()
+                .expect("usage reported")
+                .total_tokens,
+            15
+        );
     }
 
     #[tokio::test]
