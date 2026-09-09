@@ -12242,6 +12242,57 @@ class Router:
         """
         return resolve_model_group_alias(self.model_group_alias, model)
 
+    def _team_strategy_marker_model_name(self, model: str, request_kwargs: Mapping[str, object]) -> str | None:
+        if model in self.model_names:
+            return None
+        metadata: Final = request_kwargs.get("metadata") or MappingProxyType({})
+        litellm_metadata: Final = request_kwargs.get("litellm_metadata") or MappingProxyType({})
+        team_id: Final = (metadata.get("user_api_key_team_id") if isinstance(metadata, Mapping) else None) or (
+            litellm_metadata.get("user_api_key_team_id") if isinstance(litellm_metadata, Mapping) else None
+        )
+        if not isinstance(team_id, str):
+            return None
+        indices: Final = self.team_model_to_deployment_indices.get((team_id, model), ())
+        marker_names: Final = tuple(
+            deployment["model_name"]
+            for idx in indices
+            if self._is_strategy_marker_deployment(deployment := self.model_list[idx])
+        )
+        if not marker_names:
+            return None
+        registries: Final = (
+            self.auto_routers,
+            self.complexity_routers,
+            self.adaptive_routers,
+            self.quality_routers,
+        )
+        candidates: Final = tuple(
+            (marker_name, tagged.tags)
+            for marker_name in marker_names
+            for registry in registries
+            for tagged in registry.get(marker_name, ())
+        )
+        if not candidates:
+            return None
+        request_tags: Final = _get_tags_from_request_kwargs(request_kwargs)
+        for marker_name, tags in candidates:
+            if tags and request_tags and is_valid_deployment_tag(tags, request_tags, self.tag_filtering_match_any):
+                return marker_name
+        for marker_name, tags in candidates:
+            if "default" in tags:
+                return marker_name
+        request_scoped_filtering: Final = request_kwargs.get("enable_tag_filtering") is True
+        has_plain_deployment: Final = any(
+            not self._is_strategy_marker_deployment(self.model_list[idx]) for idx in indices
+        )
+        if (
+            (self.enable_tag_filtering or request_scoped_filtering)
+            and all(tags for _, tags in candidates)
+            and has_plain_deployment
+        ):
+            return None
+        return candidates[0][0]
+
     def _get_deployment_by_litellm_model(self, model: str) -> list:
         """
         Get the deployment by litellm model.
@@ -13272,7 +13323,11 @@ class Router:
             bound_model: Final = await self._get_claude_code_session_router_binding(cache_key)
             if not isinstance(bound_model, str):
                 return registered_model_name
-            bound_registered_model: Final = self._get_model_from_alias(model=bound_model) or bound_model
+            bound_registered_model: Final = (
+                self._get_model_from_alias(model=bound_model)
+                or self._team_strategy_marker_model_name(model=bound_model, request_kwargs=request_kwargs)
+                or bound_model
+            )
             if self._select_pre_routing_strategy(bound_registered_model, request_kwargs) is None:
                 await self._delete_claude_code_session_router_binding(cache_key)
                 return registered_model_name
@@ -13310,11 +13365,15 @@ class Router:
 
         `model` is whatever the caller asked for, which may be a `model_group_alias` key, while the
         strategy registries and the marker deployment are keyed by the marker's own `model_name`, so
-        every lookup below resolves the alias first. Only the lookups: the caller-facing name stays
-        the alias, since spend metadata is stamped before routing and the response carries the tier
-        group the strategy picked.
+        every lookup below resolves the alias, then the team public name, first. Only the lookups: the
+        caller-facing name stays the alias, since spend metadata is stamped before routing and the
+        response carries the tier group the strategy picked.
         """
-        requested_registered_model_name: Final = self._get_model_from_alias(model=model) or model
+        requested_registered_model_name: Final = (
+            self._get_model_from_alias(model=model)
+            or self._team_strategy_marker_model_name(model=model, request_kwargs=request_kwargs)
+            or model
+        )
         registered_model_name: Final = await self._resolve_claude_code_session_router(
             model=model,
             registered_model_name=requested_registered_model_name,

@@ -9096,6 +9096,164 @@ class TestPreRoutingStrategyRegistryLifecycle:
             )
             assert actual is expected, params["model"]
 
+    @classmethod
+    def _team_scoped_router(cls) -> "litellm.Router":
+        def params(model: str) -> dict:
+            return {
+                **cls._complexity_router_params(model),
+                "complexity_router_config": {
+                    "tiers": {
+                        "SIMPLE": model,
+                        "MEDIUM": model,
+                        "COMPLEX": model,
+                    }
+                },
+            }
+
+        return litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                {
+                    "model_name": "model_name_team-a_1",
+                    "litellm_params": params("gpt-4o-mini"),
+                    "model_info": {
+                        "team_id": "team-a",
+                        "team_public_model_name": "smart-router",
+                        "id": "router-a",
+                    },
+                },
+                {
+                    "model_name": "model_name_team-b_1",
+                    "litellm_params": params("gpt-4o"),
+                    "model_info": {
+                        "team_id": "team-b",
+                        "team_public_model_name": "smart-router",
+                        "id": "router-b",
+                    },
+                },
+                {
+                    "model_name": "smart-router-global",
+                    "litellm_params": params("gpt-4o"),
+                    "model_info": {"id": "router-global"},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_team_scoped_public_name_routes_to_the_team_strategy(self):
+        router = self._team_scoped_router()
+
+        assert (
+            router._team_strategy_marker_model_name(
+                model="smart-router",
+                request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+            )
+            == "model_name_team-a_1"
+        )
+        response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is not None
+        assert response.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_team_scoped_public_name_uses_request_tags(self):
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}},
+                {"model_name": "gpt-4o-mini", "litellm_params": {"model": "gpt-4o-mini"}},
+                {
+                    "model_name": "model_name_team-a_simple",
+                    "litellm_params": self._complexity_router_params("gpt-4o-mini", tags=["simple"]),
+                    "model_info": {"team_id": "team-a", "team_public_model_name": "smart-router", "id": "router-a-simple"},
+                },
+                {
+                    "model_name": "model_name_team-a_complex",
+                    "litellm_params": {
+                        **self._complexity_router_params("gpt-4o", tags=["complex"]),
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": "gpt-4o", "MEDIUM": "gpt-4o", "COMPLEX": "gpt-4o"}
+                        },
+                    },
+                    "model_info": {"team_id": "team-a", "team_public_model_name": "smart-router", "id": "router-a-complex"},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-a", "tags": ["complex"]}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is not None
+        assert response.model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_global_model_name_takes_precedence_over_team_public_name(self):
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "smart-router", "litellm_params": {"model": "gpt-4o"}},
+                {
+                    "model_name": "model_name_team-a_1",
+                    "litellm_params": self._complexity_router_params("gpt-4o-mini"),
+                    "model_info": {"team_id": "team-a", "team_public_model_name": "smart-router", "id": "router-a"},
+                },
+            ],
+            ignore_invalid_deployments=True,
+        )
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is None
+
+    async def test_team_scoped_public_name_does_not_leak_between_teams(self):
+        router = self._team_scoped_router()
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is not None
+        assert response.model == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_team_scoped_public_name_requires_team_context(self):
+        router = self._team_scoped_router()
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs={"metadata": {}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is None
+
+    @pytest.mark.asyncio
+    async def test_global_complexity_router_still_resolves_without_team_context(self):
+        router = self._team_scoped_router()
+
+        response = await router.async_pre_routing_hook(
+            model="smart-router-global",
+            request_kwargs={"metadata": {}},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert response is not None
+        assert response.model == "gpt-4o"
+
 
 def test_model_info_is_active_for_environment_matrix(monkeypatch):
     """The model-write endpoints consult this predicate to tell a deliberately
@@ -9527,6 +9685,43 @@ class TestClaudeCodeSubagentSessionRouterBinding:
             "proxy_server_request": {"headers": headers},
             **({"fallback_depth": fallback_depth} if fallback_depth is not None else {}),
         }
+
+    @pytest.mark.asyncio
+    async def test_team_public_name_session_binding_replays_for_subagent(self):
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        router = litellm.Router(
+            model_list=[
+                {"model_name": "cheap-model", "litellm_params": {"model": "openai/gpt-4o-mini"}},
+                {
+                    "model_name": "internal-team-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": "cheap-model",
+                    },
+                    "model_info": {"team_id": "team-a", "team_public_model_name": "team-router"},
+                },
+            ],
+            num_retries=0,
+            ignore_invalid_deployments=True,
+        )
+        router.complexity_routers = {
+            "internal-team-router": (TaggedPreRoutingStrategy(tags=(), strategy=self._RewriteStrategy()),)
+        }
+
+        main_kwargs = self._request_kwargs()
+        main_kwargs["metadata"]["user_api_key_team_id"] = "team-a"
+        main = await router.async_pre_routing_hook(model="team-router", request_kwargs=main_kwargs)
+        assert main is not None
+        assert main.model == "cheap-model"
+
+        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+        subagent_kwargs["metadata"]["user_api_key_team_id"] = "team-a"
+        replay = await router.async_pre_routing_hook(model="expensive-model", request_kwargs=subagent_kwargs)
+
+        assert replay is not None
+        assert replay.model == "cheap-model"
+        assert subagent_kwargs["metadata"]["model_group"] == "team-router"
 
     @pytest.mark.asyncio
     async def test_subagent_concrete_model_uses_the_main_sessions_router(self):
