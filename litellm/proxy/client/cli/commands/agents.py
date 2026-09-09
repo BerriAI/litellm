@@ -647,30 +647,33 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
     @click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
     @click.argument("args", nargs=-1, type=click.UNPROCESSED)
     @click.pass_context
-    def _command(ctx: click.Context, skip_verify: bool, args: Sequence[str], sync_models: bool = False) -> None:
+    def command_callback(ctx: click.Context, skip_verify: bool, args: Sequence[str], sync_models: bool = False) -> None:
         base_env: Final = MappingProxyType({**os.environ, CLAUDE_SYNC_MODELS_ENV: "1"}) if sync_models else None
         _launch(ctx, binary, args, skip_verify=skip_verify, base_env=base_env)
 
-    if binary == "claude":
-        _command = click.option(
+    command_with_options: Final = (
+        click.option(
             "--sync-models",
             is_flag=True,
             default=False,
             help="Fill Claude Code's /model picker from the proxy's model list (same as LITELLM_CLAUDE_SYNC_MODELS=1).",
-        )(_command)
-    _command = click.command(
+        )(command_callback)
+        if binary == "claude"
+        else command_callback
+    )
+    command: Final = click.command(
         name=binary,
         context_settings={"ignore_unknown_options": True},
         short_help=f"Run {display_name} through your LiteLLM proxy",
         hidden=binary in _HIDDEN_AGENTS,
-    )(_command)
-    _command.help = (
+    )(command_with_options)
+    command.help = (
         f"Run {display_name} routed through your LiteLLM proxy.\n\n"
         f"Logs in with LiteLLM if needed, verifies your key against the proxy, "
         f"exports the env vars {binary} reads, then hands off. Any arguments are "
         f"forwarded to `{binary}`."
     )
-    return _command
+    return command
 
 
 def agent_commands() -> tuple[click.Command, ...]:
