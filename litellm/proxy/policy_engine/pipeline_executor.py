@@ -70,6 +70,10 @@ def _text_snapshot(texts: Sequence[str] | None) -> tuple[str, ...] | None:
     return None if texts is None else tuple(texts)
 
 
+def _scanned_texts(texts: Sequence[str] | None) -> tuple[str, ...]:
+    return tuple(texts or ())
+
+
 def _tool_call_shapes(tool_calls: Sequence[object] | None) -> tuple[tuple[object, object], ...] | None:
     return None if tool_calls is None else tuple(_tool_call_shape(tool_call) for tool_call in tool_calls)
 
@@ -152,7 +156,9 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     and returned ``None`` for, is re-scanned by the same translation so its texts reach the
     client through the translation's ended-stream write-back. A
     replacement whose scanned texts do not line up with the originals, or whose tool calls
-    differ from them, is undeliverable, so the executor releases the original chunks."""
+    differ from them, is undeliverable, so the executor releases the original chunks. A stream
+    that carried no text to scan, such as a tool-only Anthropic message, stays deliverable as
+    long as the hook left the tool calls alone."""
 
     def __init__(
         self,
@@ -185,15 +191,16 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         rewrite: Final = hooked if replacement is None else replacement
         if rewrite is None:
             return inputs
-        scanned: Final = _text_snapshot(inputs.get("texts"))
         rescanned: Final = await self._rescan(rewrite, logging_obj)
-        if scanned is None or rescanned is None:
+        if rescanned is None:
             raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
         rewritten: Final = rescanned.get("texts")
-        if rewritten is None or len(rewritten) != len(scanned):
+        if len(_scanned_texts(rewritten)) != len(_scanned_texts(inputs.get("texts"))):
             raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
         if _tool_call_shapes(rescanned.get("tool_calls")) != _tool_call_shapes(inputs.get("tool_calls")):
             raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
+        if not rewritten:
+            return inputs
         rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": rewritten}
         return rewritten_inputs
 
