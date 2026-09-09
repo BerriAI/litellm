@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.vertex_ai.common_utils import (
     VERTEX_CUSTOM_ENDPOINT_KEY_FIELD,
     VertexAIError,
+    get_custom_endpoint_id_from_api_base,
     get_vertex_base_url,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
@@ -156,14 +157,29 @@ class VertexAIBatchPrediction(VertexLLM):
                 vertex_location=vertex_location or "us-central1",
             )
         )
-        if custom_endpoint and "/custom-endpoints/" not in transformed_batch_request.get("model", ""):
+        # The endpoint id in a custom-endpoints/ file path is caller-controlled (raw gs:// file
+        # ids are accepted), so it must never pick which container runs: batch jobs execute the
+        # container with the deployment's project credentials. The id has to match the endpoint
+        # the routed deployment's own api_base names, and container resolution only happens for
+        # deployments the admin marked custom_endpoint.
+        job_model: Final = transformed_batch_request.get("model", "")
+        deployment_endpoint_id: Final = get_custom_endpoint_id_from_api_base(api_base)
+        if custom_endpoint and not job_model.endswith(f"/custom-endpoints/{deployment_endpoint_id}"):
             raise VertexAIError(
                 status_code=400,
                 message=(
                     "Vertex AI batch prediction on a `custom_endpoint` deployment requires an input "
-                    "file uploaded through LiteLLM against that deployment (its file id carries a "
-                    "custom-endpoints/<endpoint id> path); this input file targets a publisher or "
-                    "fine-tuned Gemini model instead."
+                    "file uploaded through LiteLLM against that same deployment: the file id's "
+                    "custom-endpoints/<endpoint id> path must name the endpoint the deployment's "
+                    "`api_base` serves from."
+                ),
+            )
+        if not custom_endpoint and "/custom-endpoints/" in job_model:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    "This input file was uploaded for a `custom_endpoint` deployment; create the "
+                    "batch against that deployment instead."
                 ),
             )
         gateway_api_base: Final = _gateway_api_base_or_none(api_base)
@@ -174,12 +190,16 @@ class VertexAIBatchPrediction(VertexLLM):
             api_base=gateway_api_base,
             vertex_location=vertex_location or "us-central1",
         )
-        vertex_batch_request: Final = self._resolve_custom_endpoint_container(
-            vertex_batch_request=resolved_batch_request,
-            headers=headers,
-            sync_handler=sync_handler,
-            api_base=gateway_api_base,
-            vertex_location=vertex_location or "us-central1",
+        vertex_batch_request: Final = (
+            self._resolve_custom_endpoint_container(
+                vertex_batch_request=resolved_batch_request,
+                headers=headers,
+                sync_handler=sync_handler,
+                api_base=gateway_api_base,
+                vertex_location=vertex_location or "us-central1",
+            )
+            if custom_endpoint
+            else resolved_batch_request
         )
         is_unmanaged_container_job: Final = "unmanagedContainerModel" in vertex_batch_request
 

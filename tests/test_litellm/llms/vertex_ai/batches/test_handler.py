@@ -269,6 +269,10 @@ CONTAINER_SPEC = {
     "healthRoute": "/ping",
 }
 MACHINE_SPEC = {"machineType": "g2-standard-12", "acceleratorType": "NVIDIA_L4", "acceleratorCount": 1}
+CUSTOM_ENDPOINT_API_BASE = (
+    f"https://{LOCATION}-aiplatform.googleapis.com/v1/projects/{PROJECT}"
+    f"/locations/{LOCATION}/endpoints/{CUSTOM_ENDPOINT_ID}:rawPredict"
+)
 
 
 def _custom_endpoint_get_response() -> MagicMock:
@@ -317,7 +321,7 @@ def test_create_batch_sync_custom_endpoint_builds_unmanaged_container_job():
         out = h.create_batch(
             _is_async=False,
             create_batch_data=CUSTOM_ENDPOINT_CREATE_DATA,
-            api_base=None,
+            api_base=CUSTOM_ENDPOINT_API_BASE,
             vertex_credentials=None,
             vertex_project=PROJECT,
             vertex_location=LOCATION,
@@ -360,7 +364,7 @@ def test_create_batch_sync_custom_endpoint_without_container_spec_raises_400():
             h.create_batch(
                 _is_async=False,
                 create_batch_data=CUSTOM_ENDPOINT_CREATE_DATA,
-                api_base=None,
+                api_base=CUSTOM_ENDPOINT_API_BASE,
                 vertex_credentials=None,
                 vertex_project=PROJECT,
                 vertex_location=LOCATION,
@@ -371,6 +375,63 @@ def test_create_batch_sync_custom_endpoint_without_container_spec_raises_400():
 
     assert exc_info.value.status_code == 400
     assert "containerSpec" in str(exc_info.value)
+    client.post.assert_not_called()
+
+
+def test_create_batch_sync_custom_endpoint_rejects_file_for_other_endpoint():
+    """The endpoint id in the file path is caller-controlled (raw gs:// ids are accepted), so a
+    file staged for a different endpoint must not make the deployment run that endpoint's
+    container with its own project credentials."""
+    h = _make_handler()
+    client = MagicMock()
+    foreign_file = {"input_file_id": "gs://bucket/litellm-vertex-files/custom-endpoints/999999/file-uuid"}
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get") as safe_get,
+    ):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=foreign_file,
+                api_base=CUSTOM_ENDPOINT_API_BASE,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+                custom_endpoint=True,
+            )
+
+    assert exc_info.value.status_code == 400
+    safe_get.assert_not_called()
+    client.post.assert_not_called()
+
+
+def test_create_batch_sync_non_custom_deployment_rejects_custom_endpoint_file():
+    """A custom-endpoints file id sent through an ordinary Vertex deployment must not trigger
+    container resolution at all."""
+    h = _make_handler()
+    client = MagicMock()
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get") as safe_get,
+    ):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=CUSTOM_ENDPOINT_CREATE_DATA,
+                api_base=None,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+            )
+
+    assert exc_info.value.status_code == 400
+    safe_get.assert_not_called()
     client.post.assert_not_called()
 
 

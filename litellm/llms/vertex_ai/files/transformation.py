@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from types import MappingProxyType
 from typing import Any, Final, TypedDict
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote
 
 import httpx
 from httpx import Headers, Response
@@ -41,6 +41,7 @@ from litellm.llms.base_llm.files.transformation import (
 from litellm.llms.vertex_ai.common_utils import (
     VERTEX_CUSTOM_ENDPOINT_KEY_FIELD,
     _convert_vertex_datetime_to_openai_datetime,
+    get_custom_endpoint_id_from_api_base,
     get_vertex_ai_fine_tuned_endpoint_id,
 )
 from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
@@ -711,23 +712,6 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
 VERTEX_CUSTOM_ENDPOINT_GCS_SEGMENT: Final = "custom-endpoints"
 _VERTEX_CHAT_COMPLETIONS_REQUEST_FORMAT: Final = "chatCompletions"
 _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
-
-
-def get_custom_endpoint_id_from_api_base(api_base: str | None) -> str | None:
-    """
-    The Vertex endpoint a `custom_endpoint` deployment serves from is only recorded in its
-    api_base (`.../endpoints/<id>:rawPredict` or a dedicated-domain equivalent); batch jobs need
-    that id to read the endpoint's containerSpec, so extract it (verb suffix stripped).
-    """
-    if not api_base:
-        return None
-    path_segments: Final = urlparse(api_base).path.split("/")
-    after_endpoints: Final = tuple(
-        segment for prior, segment in zip(path_segments, path_segments[1:]) if prior == "endpoints"
-    )
-    if not after_endpoints:
-        return None
-    return after_endpoints[-1].split(":")[0] or None
 
 
 def _openai_batch_jsonl_entry_to_custom_endpoint_row(openai_entry: Mapping[str, object]) -> Mapping[str, object]:
