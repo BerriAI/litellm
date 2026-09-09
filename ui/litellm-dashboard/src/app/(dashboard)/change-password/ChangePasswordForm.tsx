@@ -75,8 +75,9 @@ export function ChangePasswordForm() {
             <Alert variant="warning" className="mt-4">
               <CircleAlert />
               <AlertTitle>
-                Your password must be changed before you can use the dashboard. After updating it, you will be signed
-                out to log in again.
+                Your password must be changed before you can use the dashboard: it was either found in a known data
+                breach or set by an administrator as a temporary password. After updating it, you will be signed out to
+                log in again.
               </AlertTitle>
             </Alert>
           )}

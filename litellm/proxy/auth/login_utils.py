@@ -5,7 +5,6 @@ This module contains the core login logic that can be reused across different
 login endpoints (e.g., /login and /v2/login).
 """
 
-import asyncio
 import os
 import secrets
 from collections.abc import Mapping
@@ -70,16 +69,16 @@ async def screen_login_password_for_breach(
     general_settings: Mapping[str, object],
     prisma_client: PrismaClient,
     client: AsyncHTTPHandler | None = None,
-) -> None:
-    """Background task behind a successful password login: screens the password
-    against HIBP and stamps ``password_reset_required`` when breached, so the
-    NEXT login is restricted to the change-password flow. Never blocks or fails
-    the login it runs behind, and rechecks a given user at most once per
-    ``BREACH_RECHECK_INTERVAL``."""
+) -> bool:
+    """Screens a successfully verified login password against HIBP, stamps
+    ``password_reset_required`` when breached, and returns whether a breach was
+    found so the login it runs in can restrict the session it is about to mint.
+    Fails open (HIBP or DB trouble never fails the login) and rechecks a given
+    user at most once per ``BREACH_RECHECK_INTERVAL``."""
     if not is_breach_check_enabled(general_settings):
-        return
+        return False
     if not _breach_recheck_due(last_breach_check_at):
-        return
+        return False
     breached: Final = await is_password_breached(password, general_settings, client)
     update_data: Final = {
         "last_breach_check_at": datetime.now(timezone.utc),
@@ -87,8 +86,9 @@ async def screen_login_password_for_breach(
     }
     try:
         await UserRepository(prisma_client).table.update(where={"user_id": user_id}, data=update_data)
-    except Exception as e:  # noqa: BLE001  # fire-and-forget: a failed stamp must never surface into the login
+    except Exception as e:  # noqa: BLE001  # a failed stamp must never surface into the login
         verbose_proxy_logger.warning("Login-time breach screening could not update user %s: %s", user_id, e)
+    return breached
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
@@ -371,17 +371,14 @@ async def authenticate_user(
 
         if verify_password(password, _password):
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
-            if prisma_client is not None:
-                asyncio.create_task(
-                    screen_login_password_for_breach(
-                        user_id=_user_row.user_id,
-                        password=password,
-                        last_breach_check_at=getattr(_user_row, "last_breach_check_at", None),
-                        general_settings=general_settings,
-                        prisma_client=prisma_client,
-                    )
-                )
-            password_reset_required: Final = getattr(_user_row, "password_reset_required", None) is True
+            breached_now: Final = prisma_client is not None and await screen_login_password_for_breach(
+                user_id=_user_row.user_id,
+                password=password,
+                last_breach_check_at=getattr(_user_row, "last_breach_check_at", None),
+                general_settings=general_settings,
+                prisma_client=prisma_client,
+            )
+            password_reset_required: Final = breached_now or getattr(_user_row, "password_reset_required", None) is True
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
