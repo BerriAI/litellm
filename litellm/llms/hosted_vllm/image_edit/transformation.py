@@ -1,5 +1,3 @@
-"""Image edits for Hosted VLLM (vLLM-Omni OpenAI-compatible /v1/images/edits)."""
-
 from typing import Final
 
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
@@ -7,12 +5,6 @@ from litellm.secret_managers.main import get_secret_str
 
 
 class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
-    """
-    vLLM-Omni images edits API follows the OpenAI multipart contract.
-
-    https://docs.vllm.ai/projects/vllm-omni/en/latest/serving/images_api/
-    """
-
     def validate_environment(
         self,
         headers: dict,  # mutable-ok: BaseImageEditConfig contract

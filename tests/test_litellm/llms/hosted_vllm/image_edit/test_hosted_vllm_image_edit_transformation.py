@@ -1,5 +1,3 @@
-"""Tests for hosted_vllm image edits (vLLM-Omni /v1/images/edits)."""
-
 import httpx
 import pytest
 
