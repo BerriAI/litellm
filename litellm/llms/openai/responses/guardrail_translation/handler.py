@@ -101,6 +101,18 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import ResponseInputParam
 
 
+class _ToolCallShape(NamedTuple):
+    name: str | None
+    arguments: str
+
+
+def _tool_call_shapes(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> tuple[_ToolCallShape, ...]:
+    return tuple(
+        _ToolCallShape(name=tool_call["function"].get("name"), arguments=tool_call["function"].get("arguments", ""))
+        for tool_call in tool_calls
+    )
+
+
 class ResponseOutputEnvelope(TypedDict, total=False):
     """Dict form of a Responses API response, as far as guardrail write-back reads it."""
 
@@ -128,6 +140,10 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 )
 
 
+_FUNCTION_CALL_ARGUMENT_EVENT_TYPES: Final = frozenset(
+    {"response.function_call_arguments.delta", "response.function_call_arguments.done"}
+)
+_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "message": "content"}
 )
@@ -340,7 +356,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     Methods can be overridden to customize behavior for different message formats.
     """
 
-    delivers_ended_stream_text_rewrites = True
+    delivers_ended_stream_rewrites = True
 
     def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
         """
@@ -754,6 +770,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if response_model:
                     inputs["model"] = response_model
 
+                pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
                 guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,
                     request_data=request_data,
@@ -762,6 +779,12 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
 
                 guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+                returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
+                post_guardrail_tool_calls: Final = _tool_call_shapes(
+                    returned_tool_calls
+                    if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
+                    else tool_calls_to_check
+                )
 
                 # Write guardrailed texts back into the output items in-place.
                 # final_chunk is a reference into responses_so_far so this
@@ -784,6 +807,13 @@ class OpenAIResponsesHandler(BaseTranslation):
                             stream_events=responses_so_far[:-1],
                             rewrites_by_position=rewrites_by_position,
                         )
+                    self._deliver_ended_stream_tool_call_rewrites(
+                        responses_so_far=responses_so_far,
+                        outputs=outputs,
+                        pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                        post_guardrail_tool_calls=post_guardrail_tool_calls,
+                        guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+                    )
                 return responses_so_far
 
         # ------------------------------------------------------------------ #
@@ -893,6 +923,129 @@ class OpenAIResponsesHandler(BaseTranslation):
             if item_idx != output_index or content_idx >= len(content):
                 continue
             OpenAIResponsesHandler._write_event_field(content[content_idx], "text", rewritten)
+
+    def _deliver_ended_stream_tool_call_rewrites(
+        self,
+        responses_so_far: Sequence[object],
+        outputs: Sequence[object],
+        pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        post_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        guardrail_name: str,
+    ) -> None:
+        """Write ended-stream guardrail tool-call rewrites into the completed
+        envelope's ``function_call`` items and sync the earlier stream events,
+        keyed by ``call_id``. The guardrail sees the envelope's function calls
+        in output order, which is how a rewritten call finds its ``call_id``;
+        the stream events find their call through the ``call_id`` on
+        ``output_item`` events and the ``item_id`` on argument events, since an
+        event's ``output_index`` need not match the envelope's (the chat bridge
+        numbers tool calls from 1 while the envelope lists them after the
+        message). A rewrite whose calls do not line up with the envelope, or
+        whose events cannot be found, is reported as undeliverable, so the
+        pipeline executor discards it and releases the original events."""
+        if post_guardrail_tool_calls == pre_guardrail_tool_calls:
+            return
+        function_call_items: Final = tuple(
+            output_item for output_item in outputs if stream_item_field(output_item, "type") == "function_call"
+        )
+        call_ids: Final = tuple(
+            call_id
+            for output_item in function_call_items
+            if isinstance(call_id := stream_item_field(output_item, "call_id"), str) and call_id
+        )
+        stream_events: Final = responses_so_far[:-1]
+        call_id_by_item_id: Final = self._function_call_ids_by_item_id(stream_events)
+        event_call_ids: Final = tuple(
+            self._function_call_event_call_id(event, call_id_by_item_id) for event in stream_events
+        )
+        rewrites_by_call_id: Final = MappingProxyType(
+            {
+                call_id: after
+                for call_id, before, after in zip(call_ids, pre_guardrail_tool_calls, post_guardrail_tool_calls)
+                if after != before
+            }
+        )
+        unresolved_argument_event: Final = any(
+            call_id is None and stream_item_field(event, "type") in _FUNCTION_CALL_ARGUMENT_EVENT_TYPES
+            for event, call_id in zip(stream_events, event_call_ids)
+        )
+        if (
+            len(call_ids) != len(function_call_items)
+            or len(frozenset(call_ids)) != len(call_ids)
+            or len(call_ids) != len(post_guardrail_tool_calls)
+            or unresolved_argument_event
+            or not rewrites_by_call_id.keys() <= frozenset(event_call_ids)
+        ):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(guardrail_name)
+        for output_item, rewrite in (
+            (output_item, rewrites_by_call_id[call_id])
+            for output_item, call_id in zip(function_call_items, call_ids)
+            if call_id in rewrites_by_call_id
+        ):
+            self._write_function_call_item(output_item, rewrite.name, rewrite.arguments)
+        delta_replacements: Final = MappingProxyType(
+            {call_id: chain((rewrite.arguments,), repeat("")) for call_id, rewrite in rewrites_by_call_id.items()}
+        )
+        for event, call_id in zip(stream_events, event_call_ids):
+            if call_id not in rewrites_by_call_id:
+                continue
+            match stream_item_field(event, "type"):
+                case "response.function_call_arguments.delta":
+                    self._write_event_field(event, "delta", next(delta_replacements[call_id]))
+                case "response.function_call_arguments.done":
+                    self._write_event_field(event, "arguments", rewrites_by_call_id[call_id].arguments)
+                case "response.output_item.added":
+                    self._write_function_call_item(
+                        stream_item_field(event, "item"), rewrites_by_call_id[call_id].name, None
+                    )
+                case "response.output_item.done":
+                    self._write_function_call_item(
+                        stream_item_field(event, "item"),
+                        rewrites_by_call_id[call_id].name,
+                        rewrites_by_call_id[call_id].arguments,
+                    )
+                case _:
+                    pass
+
+    @staticmethod
+    def _function_call_ids_by_item_id(stream_events: Sequence[object]) -> Mapping[str, str]:
+        items: Final = tuple(
+            stream_item_field(event, "item")
+            for event in stream_events
+            if stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
+        )
+        return MappingProxyType(
+            {
+                item_id: call_id
+                for item in items
+                if stream_item_field(item, "type") == "function_call"
+                and isinstance(item_id := stream_item_field(item, "id"), str)
+                and isinstance(call_id := stream_item_field(item, "call_id"), str)
+            }
+        )
+
+    @staticmethod
+    def _function_call_event_call_id(event: object, call_id_by_item_id: Mapping[str, str]) -> str | None:
+        event_type: Final = stream_item_field(event, "type")
+        if event_type in _FUNCTION_CALL_ARGUMENT_EVENT_TYPES:
+            item_id: Final = stream_item_field(event, "item_id")
+            return call_id_by_item_id.get(item_id) if isinstance(item_id, str) else None
+        if event_type not in _OUTPUT_ITEM_EVENT_TYPES:
+            return None
+        item: Final = stream_item_field(event, "item")
+        call_id: Final = stream_item_field(item, "call_id")
+        return call_id if stream_item_field(item, "type") == "function_call" and isinstance(call_id, str) else None
+
+    @staticmethod
+    def _write_function_call_item(item: object, name: str | None, arguments: str | None) -> None:
+        if item is None:
+            return
+        if name is not None:
+            OpenAIResponsesHandler._write_event_field(item, "name", name)
+        if arguments is not None:
+            OpenAIResponsesHandler._write_event_field(item, "arguments", arguments)
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """
