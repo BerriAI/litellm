@@ -2,15 +2,17 @@ package litellm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
 
 func resourceKey() *schema.Resource {
-	return &schema.Resource{
+	r := &schema.Resource{
 		CreateContext: resourceKeyCreate,
 		ReadContext:   resourceKeyRead,
 		UpdateContext: resourceKeyUpdate,
@@ -18,6 +20,7 @@ func resourceKey() *schema.Resource {
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
+		SchemaVersion: 1,
 		Schema: map[string]*schema.Schema{
 			"key": {
 				Type:      schema.TypeString,
@@ -105,9 +108,11 @@ func resourceKey() *schema.Resource {
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
 			"model_max_budget": {
-				Type:     schema.TypeMap,
-				Optional: true,
-				Elem:     &schema.Schema{Type: schema.TypeFloat, Computed: true},
+				Type:             schema.TypeString,
+				Optional:         true,
+				ValidateFunc:     validation.StringIsJSON,
+				DiffSuppressFunc: budgetSuppressEquivalentJSON,
+				Description:      "JSON string of per-model budget config (e.g. '{\"gpt-4o-mini\": {\"budget_limit\": 50, \"time_period\": \"30d\"}}')",
 			},
 			"model_rpm_limit": {
 				Type:     schema.TypeMap,
@@ -182,6 +187,51 @@ func resourceKey() *schema.Resource {
 			},
 		},
 	}
+	r.StateUpgraders = []schema.StateUpgrader{{
+		Version: 0,
+		Type:    resourceKeyV0Type(r.Schema),
+		Upgrade: resourceKeyStateUpgradeV0,
+	}}
+	return r
+}
+
+// Schema version 0 typed model_max_budget as map(number), which the proxy
+// rejects; version 1 stores the per-model BudgetConfig objects as a JSON string.
+func resourceKeyV0Type(current map[string]*schema.Schema) cty.Type {
+	v0 := make(map[string]*schema.Schema, len(current))
+	for k, v := range current {
+		v0[k] = v
+	}
+	v0["model_max_budget"] = &schema.Schema{
+		Type:     schema.TypeMap,
+		Optional: true,
+		Elem:     &schema.Schema{Type: schema.TypeFloat},
+	}
+	return (&schema.Resource{Schema: v0}).CoreConfigSchema().ImpliedType()
+}
+
+func resourceKeyStateUpgradeV0(_ context.Context, rawState map[string]interface{}, _ interface{}) (map[string]interface{}, error) {
+	delete(rawState, "model_max_budget")
+	return rawState, nil
+}
+
+func parseKeyModelMaxBudget(raw string) map[string]interface{} {
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil || parsed == nil {
+		return map[string]interface{}{}
+	}
+	return parsed
+}
+
+func keyModelMaxBudgetJSON(modelMaxBudget map[string]interface{}) string {
+	if len(modelMaxBudget) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(modelMaxBudget)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
@@ -285,7 +335,7 @@ func mapResourceDataToKey(d *schema.ResourceData, key *Key) {
 	key.Aliases = d.Get("aliases").(map[string]interface{})
 	key.Config = d.Get("config").(map[string]interface{})
 	key.Permissions = d.Get("permissions").(map[string]interface{})
-	key.ModelMaxBudget = d.Get("model_max_budget").(map[string]interface{})
+	key.ModelMaxBudget = parseKeyModelMaxBudget(d.Get("model_max_budget").(string))
 	key.ModelRPMLimit = d.Get("model_rpm_limit").(map[string]interface{})
 	key.ModelTPMLimit = d.Get("model_tpm_limit").(map[string]interface{})
 	key.Guardrails = expandStringList(d.Get("guardrails").([]interface{}))
@@ -358,9 +408,7 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 	if key.Permissions != nil {
 		d.Set("permissions", key.Permissions)
 	}
-	if key.ModelMaxBudget != nil {
-		d.Set("model_max_budget", key.ModelMaxBudget)
-	}
+	d.Set("model_max_budget", keyModelMaxBudgetJSON(key.ModelMaxBudget))
 	if key.ModelRPMLimit != nil {
 		d.Set("model_rpm_limit", key.ModelRPMLimit)
 	}
