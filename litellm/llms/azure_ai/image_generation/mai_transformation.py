@@ -151,7 +151,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
             if k in supported_params:
                 if k == "size" and v:
                     self._map_size_param(v, optional_params, model)
-                elif k == "n" and v is not None and int(v) > self.MAX_IMAGES_PER_REQUEST:
+                elif k == "n" and v is not None and self._image_count(v, model) != self.MAX_IMAGES_PER_REQUEST:
                     if not drop_params:
                         raise self._unsupported(
                             model,
@@ -184,6 +184,14 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
     @staticmethod
     def _unsupported(model: str, message: str) -> UnsupportedParamsError:
         return UnsupportedParamsError(message=message, llm_provider="azure_ai", model=model)
+
+    def _image_count(self, n: object, model: str) -> int:
+        if isinstance(n, int):
+            return n
+        try:
+            return int(str(n))
+        except ValueError:
+            raise self._unsupported(model, f"n={n!r} is not a whole number of images for model {model}.")
 
     def _map_size_param(self, size: str, optional_params: dict, model: str) -> None:
         size_mapping: Final = {

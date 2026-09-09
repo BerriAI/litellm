@@ -253,8 +253,8 @@ class TestAzureMAIImageGeneration:
         assert optional_params["width"] == 1792
         assert optional_params["height"] == 1024
 
-    @pytest.mark.parametrize("n", [2, 4, "2"])
-    def test_map_openai_params_multi_image_n_raises(self, n):
+    @pytest.mark.parametrize("n", [2, 4, "2", 0, -1])
+    def test_map_openai_params_n_other_than_one_raises(self, n):
         config = AzureFoundryMAIImageGenerationConfig()
         with pytest.raises(UnsupportedParamsError, match="returns exactly 1 image per request"):
             config.map_openai_params(
@@ -262,6 +262,38 @@ class TestAzureMAIImageGeneration:
                 optional_params={},
                 model="MAI-Image-2.5",
                 drop_params=False,
+            )
+
+    def test_map_openai_params_non_numeric_n_raises_400(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        with pytest.raises(UnsupportedParamsError, match="not a whole number of images") as exc_info:
+            config.map_openai_params(
+                non_default_params={"n": "abc"},
+                optional_params={},
+                model="MAI-Image-2.5",
+                drop_params=False,
+            )
+        assert exc_info.value.status_code == 400
+
+    def test_get_optional_params_image_gen_global_drop_params_drops_multi_image_n(self, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", True)
+        optional_params = get_optional_params_image_gen(
+            model="MAI-Image-2.5",
+            n=4,
+            custom_llm_provider="azure_ai",
+            provider_config=AzureFoundryMAIImageGenerationConfig(),
+        )
+        assert "n" not in optional_params
+        assert optional_params["width"] == 1024
+
+    def test_get_optional_params_image_gen_without_any_drop_params_still_raises(self, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(UnsupportedParamsError, match="returns exactly 1 image per request"):
+            get_optional_params_image_gen(
+                model="MAI-Image-2.5",
+                n=4,
+                custom_llm_provider="azure_ai",
+                provider_config=AzureFoundryMAIImageGenerationConfig(),
             )
 
     def test_map_openai_params_multi_image_n_dropped_with_drop_params(self):
@@ -284,7 +316,7 @@ class TestAzureMAIImageGeneration:
         )
         assert optional_params["n"] == 1
 
-    @pytest.mark.parametrize("params", [{"n": 2}, {"size": "512x512"}, {"size": "1792x1024"}])
+    @pytest.mark.parametrize("params", [{"n": 2}, {"n": "abc"}, {"size": "512x512"}, {"size": "1792x1024"}])
     def test_image_generation_rejected_params_surface_as_400(self, params):
         with pytest.raises(litellm.BadRequestError) as exc_info:
             litellm.image_generation(
