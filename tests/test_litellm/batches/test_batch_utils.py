@@ -1787,3 +1787,86 @@ class TestBatchCostIsFinal:
     @pytest.mark.parametrize("status", ["failed", "expired", "cancelled"])
     def test_other_terminal_statuses_are_final(self, status):
         assert bu.batch_cost_is_final(_retrieved_batch(status)) is True
+
+
+# =========================================================================== #
+# OCR batch output lines (Mistral /v1/ocr batches) are billed per page, not per token
+# =========================================================================== #
+
+
+def _ocr_row(pages_processed, annotation_pages=None, model="mistral-ocr-latest"):
+    usage_info = {"pages_processed": pages_processed, "doc_size_bytes": 4096}
+    if annotation_pages is not None:
+        usage_info["pages_processed_annotation"] = annotation_pages
+    return _success_row(model=model, pages=[{"index": i, "markdown": "x"} for i in range(pages_processed)], usage_info=usage_info)
+
+
+def test_ocr_rows_are_priced_per_page_at_batch_rate(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "get_model_info",
+        lambda model, custom_llm_provider=None: {"ocr_cost_per_page": 0.004, "ocr_cost_per_page_batches": 0.002},
+    )
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[_ocr_row(3), _ocr_row(5), _failed_row(model="mistral-ocr-latest")],
+        custom_llm_provider="mistral",
+        model_name="mistral/mistral-ocr-latest",
+    )
+    assert result.cost == pytest.approx(8 * 0.002)
+    assert result.prompt_cost == pytest.approx(8 * 0.002)
+    assert result.completion_cost == 0.0
+    assert (result.successful_requests, result.failed_requests) == (2, 1)
+    assert result.usage.total_tokens == 0
+    assert result.models == ["mistral/mistral-ocr-latest"]
+
+
+def test_ocr_rows_fall_back_to_sync_page_rate_without_batch_price(monkeypatch):
+    monkeypatch.setattr(litellm, "get_model_info", lambda model, custom_llm_provider=None: {"ocr_cost_per_page": 0.004})
+    result = bu._aggregate_batch_cost_usage_models(entries=[_ocr_row(2)], custom_llm_provider="mistral")
+    assert result.cost == pytest.approx(2 * 0.004)
+
+
+def test_ocr_rows_bill_annotation_pages_separately(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "get_model_info",
+        lambda model, custom_llm_provider=None: {
+            "ocr_cost_per_page_batches": 0.002,
+            "annotation_cost_per_page_batches": 0.0025,
+        },
+    )
+    result = bu._aggregate_batch_cost_usage_models(entries=[_ocr_row(4, annotation_pages=4)], custom_llm_provider="mistral")
+    assert result.cost == pytest.approx(4 * 0.002 + 4 * 0.0025)
+
+
+def test_ocr_rows_use_deployment_model_info_pricing_over_cost_map(monkeypatch):
+    monkeypatch.setattr(
+        litellm, "get_model_info", lambda model, custom_llm_provider=None: pytest.fail("cost map must not be consulted")
+    )
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[_ocr_row(10)],
+        custom_llm_provider="mistral",
+        model_info={"ocr_cost_per_page_batches": 0.001},
+    )
+    assert result.cost == pytest.approx(0.01)
+
+
+def test_ocr_rows_without_pricing_bill_zero_but_count_as_successful(monkeypatch):
+    monkeypatch.setattr(litellm, "get_model_info", lambda model, custom_llm_provider=None: {"mode": "ocr"})
+    result = bu._aggregate_batch_cost_usage_models(entries=[_ocr_row(3)], custom_llm_provider="mistral")
+    assert result.cost == 0.0
+    assert (result.successful_requests, result.failed_requests) == (1, 0)
+
+
+def test_chat_rows_from_mistral_still_use_token_pricing(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "get_model_info",
+        lambda model, custom_llm_provider=None: {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+    )
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[_success_row(model="mistral-small-latest", usage=_usage(10, 5))],
+        custom_llm_provider="mistral",
+    )
+    assert result.cost == pytest.approx((10 * 0.001 + 5 * 0.002) / 2)
+    assert result.usage.total_tokens == 15

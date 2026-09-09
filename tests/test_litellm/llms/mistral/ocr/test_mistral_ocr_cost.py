@@ -72,9 +72,11 @@ def test_ocr3_pricing_entry(cost_map_path: Path) -> None:
     assert info is not None, f"{OCR3_MODEL} missing from {cost_map_path.name}"
     assert info["litellm_provider"] == "mistral"
     assert info["mode"] == "ocr"
-    assert info["supported_endpoints"] == ["/v1/ocr"]
+    assert info["supported_endpoints"] == ["/v1/ocr", "/v1/batch"]
     assert info["ocr_cost_per_page"] == OCR3_COST_PER_PAGE
     assert info["annotation_cost_per_page"] == OCR3_ANNOTATION_COST_PER_PAGE
+    assert info["ocr_cost_per_page_batches"] == OCR3_COST_PER_PAGE / 2
+    assert info["annotation_cost_per_page_batches"] == OCR3_ANNOTATION_COST_PER_PAGE / 2
 
 
 def test_ocr3_model_info_price(local_model_cost_map) -> None:
