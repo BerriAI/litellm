@@ -688,7 +688,7 @@ async def test_deferred_stream_guardrails_skip_pipeline_managed_native_hook(monk
             "messages": [{"role": "user", "content": "hi"}],
             "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
         },
-        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
         captured_logging_obj=_streaming_logging_obj(),
         assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
         cache_hit=False,
