@@ -170,7 +170,7 @@ if MCP_AVAILABLE:
     from mcp.shared.exceptions import McpError
     from mcp.types import Tool as MCPTool
 
-    from litellm.experimental_mcp_client.client import MCPClient, _as_read_timeout
+    from litellm.experimental_mcp_client.client import MCPClient, as_mcp_read_timeout
     from litellm.llms.litellm_proxy.skills.skill_search import (
         DEFAULT_SKILL_SEARCH_TOP_K,
     )
@@ -1410,7 +1410,7 @@ if MCP_AVAILABLE:
             effective_timeout: Final = (
                 min(request.timeout if request.timeout is not None else MCP_CLIENT_TIMEOUT, timeout_seconds)
                 if any(
-                    isinstance(cause, McpError) and _as_read_timeout(cause) is not None
+                    isinstance(cause, McpError) and as_mcp_read_timeout(cause) is not None
                     for cause in iter_exception_tree(e)
                 )
                 else timeout_seconds

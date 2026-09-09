@@ -3453,7 +3453,8 @@ class TestConnectionErrorMessage:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("sdk_timeout", [True, False])
-    async def test_timeout_message_uses_the_deadline_that_expired(self, sdk_timeout: bool) -> None:
+    @pytest.mark.parametrize("read_timeout", [0, 1])
+    async def test_timeout_message_uses_the_deadline_that_expired(self, sdk_timeout: bool, read_timeout: int) -> None:
         from mcp import McpError
         from mcp.types import ErrorData
 
@@ -3469,10 +3470,10 @@ class TestConnectionErrorMessage:
                     raise TimeoutError() from sdk_error
 
         payload: Final = NewMCPServerRequest(
-            server_name="timeout", url="https://example.com", auth_type=MCPAuth.none, timeout=1
+            server_name="timeout", url="https://example.com", auth_type=MCPAuth.none, timeout=read_timeout
         )
         result: Final = await rest_endpoints._execute_with_mcp_client(payload, operation, timeout_seconds=30)
-        assert ("within 1s" if sdk_timeout else "within 30s") in result["message"]
+        assert (f"within {read_timeout}s" if sdk_timeout else "within 30s") in result["message"]
         assert "secret" not in result["message"]
 
     def test_unknown_error_falls_back_to_generic(self):

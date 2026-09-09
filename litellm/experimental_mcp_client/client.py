@@ -150,8 +150,8 @@ _SDK_READ_TIMEOUT_CODE: Final = int(httpx.codes.REQUEST_TIMEOUT)
 otherwise carries JSON-RPC error codes."""
 
 
-def _as_read_timeout(exc: BaseException) -> TimeoutError | None:
-    """The session read timeout elapsing, re-expressed as a ``TimeoutError``, or ``None``.
+def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
+    """Normalize an MCP SDK read timeout for client and gateway diagnostics, or return ``None``.
 
     The SDK reports its own elapsed read timeout as ``McpError`` carrying an HTTP status code in a
     field that otherwise holds JSON-RPC error codes, and it relays an upstream's JSON-RPC error
@@ -522,7 +522,7 @@ class MCPClient:
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception as e:
-            read_timeout: Final = _as_read_timeout(e)
+            read_timeout: Final = as_mcp_read_timeout(e)
             if read_timeout is not None:
                 verbose_logger.warning(
                     "MCP client timed out after %ss waiting for a valid MCP response from %s",
