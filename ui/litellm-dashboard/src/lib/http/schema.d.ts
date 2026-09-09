@@ -30578,6 +30578,12 @@ export interface components {
              */
             block_failures?: boolean | null;
             /**
+             * Block Mode
+             * @description If True, blocks responses that exceed the uncertainty threshold or trigger mode collapse.
+             * @default false
+             */
+            block_mode: boolean | null;
+            /**
              * Block On Error
              * @description Whether to block the request when the PromptGuard API is unreachable. Defaults to true (fail-closed). Set to false for fail-open behaviour.
              */
@@ -30760,6 +30766,12 @@ export interface components {
              * @description Strictness level for XecGuard context-grounding validation. 'BALANCED' (default) treats INCOMPLETE answers as SAFE; 'STRICT' flags them as UNSAFE. Grounding only runs in post_call when `metadata.xecguard_grounding_documents` is provided.
              */
             grounding_strictness?: ("BALANCED" | "STRICT") | null;
+            /**
+             * Grounding Threshold
+             * @description Grounding residual threshold for Tier-2 hallucination and mode collapse detection.
+             * @default 0.15
+             */
+            grounding_threshold: number | null;
             /**
              * Guard Name
              * @description Name of the Javelin guard to use
@@ -31184,6 +31196,12 @@ export interface components {
              * @description API key for the Ovalix Tracker service.
              */
             tracker_api_key?: string | null;
+            /**
+             * Uncertainty Threshold
+             * @description Epistemic uncertainty threshold (R_sc). Responses with R_sc exceeding this threshold are flagged.
+             * @default 0.35
+             */
+            uncertainty_threshold: number | null;
             /**
              * Unreachable Fallback
              * @description Behavior when the headroom compression service is unreachable or errors. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and forwards the request uncompressed instead of blocking it.

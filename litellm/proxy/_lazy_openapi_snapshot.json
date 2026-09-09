@@ -11222,6 +11222,19 @@
               "description": "If True, blocks requests on API failures. Defaults to True if not provided",
               "title": "Block Failures"
             },
+            "block_mode": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "If True, blocks responses that exceed the uncertainty threshold or trigger mode collapse.",
+              "title": "Block Mode"
+            },
             "block_on_error": {
               "anyOf": [
                 {
@@ -11653,6 +11666,19 @@
               ],
               "description": "Strictness level for XecGuard context-grounding validation. 'BALANCED' (default) treats INCOMPLETE answers as SAFE; 'STRICT' flags them as UNSAFE. Grounding only runs in post_call when `metadata.xecguard_grounding_documents` is provided.",
               "title": "Grounding Strictness"
+            },
+            "grounding_threshold": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0.15,
+              "description": "Grounding residual threshold for Tier-2 hallucination and mode collapse detection.",
+              "title": "Grounding Threshold"
             },
             "guard_name": {
               "anyOf": [
@@ -12692,6 +12718,19 @@
               ],
               "description": "API key for the Ovalix Tracker service.",
               "title": "Tracker Api Key"
+            },
+            "uncertainty_threshold": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": 0.35,
+              "description": "Epistemic uncertainty threshold (R_sc). Responses with R_sc exceeding this threshold are flagged.",
+              "title": "Uncertainty Threshold"
             },
             "unreachable_fallback": {
               "default": "fail_closed",

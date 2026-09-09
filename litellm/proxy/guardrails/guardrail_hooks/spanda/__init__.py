@@ -8,14 +8,14 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> SpandaGuardrail:
     import litellm
 
     _spanda_callback: Final = SpandaGuardrail(
         api_base=getattr(litellm_params, "api_base", None),
-        uncertainty_threshold=getattr(litellm_params, "uncertainty_threshold", 0.35),
-        grounding_threshold=getattr(litellm_params, "grounding_threshold", 0.15),
-        block_mode=getattr(litellm_params, "block_mode", False),
+        uncertainty_threshold=getattr(litellm_params, "uncertainty_threshold", 0.35) or 0.35,
+        grounding_threshold=getattr(litellm_params, "grounding_threshold", 0.15) or 0.15,
+        block_mode=bool(getattr(litellm_params, "block_mode", False)),
         guardrail_name=guardrail.get("guardrail_name", "spanda"),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,

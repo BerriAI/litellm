@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -19,13 +19,14 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import (
-    GenericGuardrailAPIInputs,
-)
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
+    )
+    from litellm.types.proxy.guardrails.guardrail_hooks.spanda import (
+        SpandaGuardrailConfigModel,
     )
 
 # Try importing from the installed spnda library if present
@@ -79,9 +80,9 @@ class SpandaGuardrail(CustomGuardrail):
         grounding_threshold: float = 0.15,
         block_mode: bool = False,
         guardrail_name: str = "spanda",
-        event_hook: Any = None,
+        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | str | None = None,
         default_on: bool = False,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> None:
         super().__init__(
             guardrail_name=guardrail_name,
@@ -111,14 +112,14 @@ class SpandaGuardrail(CustomGuardrail):
         ]
 
     @staticmethod
-    def get_config_model():
+    def get_config_model() -> type[SpandaGuardrailConfigModel]:
         from litellm.types.proxy.guardrails.guardrail_hooks.spanda import (
             SpandaGuardrailConfigModel,
         )
 
         return SpandaGuardrailConfigModel
 
-    def evaluate_texts(self, texts: list[str], context: str | None = None) -> dict[str, Any]:
+    def evaluate_texts(self, texts: list[str], context: str | None = None) -> dict[str, object]:
         """Evaluate text responses through Spanda 2-tier cascade."""
         if self._guardrail is not None and len(texts) >= 2:
             receipt = self._guardrail.evaluate(sampled_responses=texts, context=context)
@@ -151,7 +152,7 @@ class SpandaGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
@@ -165,7 +166,8 @@ class SpandaGuardrail(CustomGuardrail):
 
         # Extract context if present in request messages
         context = None
-        messages = request_data.get("messages") or []
+        raw_messages = request_data.get("messages")
+        messages = raw_messages if isinstance(raw_messages, list) else []
         for m in messages:
             role = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
             if role in ("system", "developer"):
@@ -187,7 +189,7 @@ class SpandaGuardrail(CustomGuardrail):
             rsc = receipt.get("rsc", 0.0)
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
-                message=f"Spanda guardrail intervention: {decision} (R_sc={rsc:.3f})",
+                message=f"Spanda guardrail intervention: {decision} (R_sc={rsc})",
                 should_wrap_with_default_message=False,
                 blocked_content=True,
             )
@@ -196,9 +198,9 @@ class SpandaGuardrail(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
-        user_api_key_dict: Any,
-        response: Any,
+        data: dict[str, object],
+        user_api_key_dict: object,
+        response: object,
     ) -> None:
         """Hook called when LiteLLM completion call succeeds."""
         try:
@@ -218,7 +220,8 @@ class SpandaGuardrail(CustomGuardrail):
 
             if samples:
                 context = None
-                messages = data.get("messages") or []
+                raw_messages = data.get("messages")
+                messages = raw_messages if isinstance(raw_messages, list) else []
                 for m in messages:
                     role = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
                     if role in ("system", "developer"):
@@ -226,18 +229,24 @@ class SpandaGuardrail(CustomGuardrail):
                         break
 
                 receipt = self.evaluate_texts(texts=samples, context=context)
-                setattr(response, "_spanda_receipt", receipt)
+                if isinstance(response, dict):
+                    response["_spanda_receipt"] = receipt
+                elif hasattr(response, "__dict__"):
+                    try:
+                        response._spanda_receipt = receipt  # pyright: ignore[reportAttributeAccessIssue]
+                    except (AttributeError, TypeError):
+                        pass
 
                 if self.block_mode and not receipt.get("is_safe", True):
                     decision = receipt.get("decision", "HIGH_UNCERTAINTY")
                     rsc = receipt.get("rsc", 0.0)
                     raise GuardrailRaisedException(
                         guardrail_name=self.guardrail_name,
-                        message=f"Spanda guardrail intervention: {decision} (R_sc={rsc:.3f})",
+                        message=f"Spanda guardrail intervention: {decision} (R_sc={rsc})",
                         should_wrap_with_default_message=False,
                         blocked_content=True,
                     )
         except GuardrailRaisedException:
             raise
-        except Exception as exc:
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
             verbose_proxy_logger.debug("Spanda async_post_call_success_hook error: %s", exc)
