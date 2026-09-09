@@ -1172,6 +1172,29 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert chunks[3].choices[0].finish_reason == "tool_calls"
 
     @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_tool_call_name_back_into_chunks(self):
+        class RenameTool(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                for tool_call in inputs.get("tool_calls", []):
+                    tool_call["function"]["name"] = "lookup_fruit_reviewed"
+                return inputs
+
+        handler = OpenAIChatCompletionsHandler()
+        chunks = self._ended_tool_call_stream_chunks()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=RenameTool(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        fragments = [chunk.choices[0].delta.tool_calls[0] for chunk in chunks[:3]]
+        assert [fragment.function.name for fragment in fragments] == ["lookup_fruit_reviewed", None, None]
+        assert json.loads("".join(fragment.function.arguments for fragment in fragments)) == {"fruit": "persimmon"}
+        assert fragments[0].id == "call_1"
+
+    @pytest.mark.asyncio
     async def test_ended_stream_tool_call_rewrite_leaves_chunks_untouched_by_default(self):
         handler = OpenAIChatCompletionsHandler()
         guardrail = MockGuardrail(guardrail_name="test")
