@@ -12,7 +12,9 @@ owned like any other key and stripped.
 
 import hashlib
 import json
+import os
 import shlex
+import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -69,8 +71,15 @@ _BASE_URL_PATH: Final = f"{ENV_KEY}.{ANTHROPIC_BASE_URL_KEY}"
 _MODEL_PATHS: Final = (MODEL_KEY, f"{ENV_KEY}.{ANTHROPIC_MODEL_KEY}")
 STARTING_MODEL_ROLE: Final = "the /model picker's default row, the model Claude Code starts and resumes on"
 
-CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
 CLAUDE_CONFIG_DIR_ENV: Final = "CLAUDE_CONFIG_DIR"
+
+
+def claude_config_dir() -> Path:
+    override: Final = os.environ.get(CLAUDE_CONFIG_DIR_ENV)
+    return Path(override).expanduser() if override else Path.home() / ".claude"
+
+
+CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
 BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
 AUTOROUTE_BACKUP_PATH: Final = Path.home() / ".litellm" / "autorouter" / "claude_settings_backup.json"
 CONFIGURE_STATE_PATH: Final = Path.home() / ".litellm" / "claude_configure_state.json"
@@ -130,6 +139,16 @@ class StaticToken:
     """A long-lived virtual key, written into env.ANTHROPIC_AUTH_TOKEN."""
 
     token: str
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyHelper:
+    """A `lite auth print-token` command Claude Code runs per request."""
+
+    command: str
+
+
+ClaudeCredential: TypeAlias = StaticToken | ApiKeyHelper
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,7 +348,7 @@ def with_status_line(settings: Mapping[str, JsonValue], command: str) -> Mapping
 def merge_claude_settings(
     settings: Mapping[str, JsonValue],
     base_url: str,
-    credential: StaticToken,
+    credential: ClaudeCredential,
     default_model: str | None = None,
     tier_model: str | None = None,
     *,
@@ -353,7 +372,8 @@ def merge_claude_settings(
                 (ENABLE_GATEWAY_MODEL_DISCOVERY_KEY, ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE),
             ),
             ((key, value) for key, value in current_env.items() if key not in _CREDENTIAL_ENV_KEYS),
-            ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")), (ANTHROPIC_AUTH_TOKEN_KEY, credential.token)),
+            ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")),),
+            ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token),) if isinstance(credential, StaticToken) else (),
             ((ANTHROPIC_MODEL_KEY, default_model),) if default_model is not None else (),
             ((key, tier_model) for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS if tier_model is not None),
         )
@@ -366,9 +386,24 @@ def merge_claude_settings(
                 if key not in (API_KEY_HELPER_KEY, ENV_KEY)
             ),
             ((ENV_KEY, env),),
+            ((API_KEY_HELPER_KEY, credential.command),) if isinstance(credential, ApiKeyHelper) else (),
             ((MODEL_KEY, default_model),) if default_model is not None else (),
         )
     )
+
+
+def resolve_api_key_helper(base_url: str, platform: str = sys.platform) -> str:
+    quote: Final = quote_for_cmd if platform.startswith("win") else shlex.quote
+    return " ".join(quote(token) for token in print_token_command(base_url))
+
+
+def print_token_command(base_url: str) -> tuple[str, ...]:
+    lite_path: Final = shutil.which("lite")
+    if lite_path is None:
+        raise ClaudeSettingsError(
+            "Could not find `lite` on your PATH. The agent credential command needs an absolute path to it."
+        )
+    return (str(Path(lite_path).resolve()), "--base-url", base_url, "auth", "print-token")
 
 
 def _owned(container: Mapping[str, JsonValue], key: str) -> OwnedValue:
@@ -535,6 +570,10 @@ def _endpoint_text(endpoint: OwnedValue) -> str:
     return endpoint.value if isinstance(endpoint.value, str) else json.dumps(endpoint.value)
 
 
+def _withheld_text(item: WithheldCredential) -> str:
+    return f"{item.key} (captured with {item.endpoint})"
+
+
 def unconfigure_claude_settings(
     settings_path: Path, state_path: Path, owners: Sequence[SettingsFileOwner]
 ) -> UnconfigureOutcome:
@@ -616,6 +655,8 @@ __all__ = (
     "STARTING_MODEL_ROLE",
     "STATUSLINE_SCRIPT_PATH",
     "STATUS_LINE_KEY",
+    "ApiKeyHelper",
+    "ClaudeCredential",
     "ClaudeSettingsError",
     "ConfigureReceipt",
     "KeepModel",
@@ -627,13 +668,16 @@ __all__ = (
     "UnconfigureOutcome",
     "UnpinModel",
     "WithheldCredential",
+    "claude_config_dir",
     "claude_settings_path",
     "configure_claude_settings",
     "configure_state_path",
     "load_json_or_empty",
     "merge_claude_settings",
+    "print_token_command",
     "read_configure_receipt",
     "refuse_while_owned",
+    "resolve_api_key_helper",
     "settings_file_owners",
     "unconfigure_claude_settings",
     "write_claude_settings",

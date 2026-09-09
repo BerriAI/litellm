@@ -124,7 +124,7 @@ def _stored_login_is_pkce(vault: SecretVault) -> bool:
     return token_data is not None and token_data.get("refresh_token") is not None
 
 
-def ensure_fresh_login(ctx: click.Context) -> None:
+def ensure_fresh_login(ctx: click.Context, reader: str = "the agent") -> None:
     ctx_obj: Final[CliContextObj] = ctx.obj
     base_url: Final = ctx_obj["base_url"].rstrip("/")
     vault: Final = context_secret_vault(ctx)
@@ -134,7 +134,7 @@ def ensure_fresh_login(ctx: click.Context) -> None:
     pkce: Final = _stored_login_is_pkce(vault)
     login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
-        raise UpError(f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first.")
+        raise UpError(f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first ({reader}).")
 
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
     ctx.invoke(login, config_claude=False, pkce=pkce)

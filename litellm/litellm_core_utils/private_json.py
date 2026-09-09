@@ -2,9 +2,9 @@ import json
 import os
 import stat
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Final
+from typing import IO, Final
 
 PRIVATE_DIR_MODE: Final = 0o700
 
@@ -16,24 +16,37 @@ def ensure_private_dir(directory: Path) -> None:
         directory.chmod(PRIVATE_DIR_MODE)
 
 
-def stage_private_json(path: str, data: Mapping[str, object]) -> str:
-    """Write JSON to a private temp file beside `path`, ready for `commit_staged_json`.
-
-    Staging is the half that can fail on a read-only or full directory, so callers with something
-    to lose can find that out before they act on the assumption that the rewrite will land.
-    """
+def _stage(path: str, write: Callable[[IO[str]], None]) -> str:
     parent: Final = Path(path).parent
     parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=str(parent), prefix=".tmp-", suffix=".json")
+    fd, tmp_path = tempfile.mkstemp(dir=str(parent), prefix=".tmp-", suffix=Path(path).suffix or ".json")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
+            write(f)
             f.flush()
             os.fsync(f.fileno())
     except BaseException:
         Path(tmp_path).unlink(missing_ok=True)
         raise
     return tmp_path
+
+
+def stage_private_text(path: str, text: str) -> str:
+    """Write text to a private temp file beside `path`, ready for `commit_staged_json`.
+
+    Staging is the half that can fail on a read-only or full directory, so callers with something
+    to lose can find that out before they act on the assumption that the rewrite will land.
+    """
+
+    def write(f: IO[str]) -> None:
+        f.write(text)
+
+    return _stage(path, write)
+
+
+def stage_private_json(path: str, data: Mapping[str, object]) -> str:
+    """Write JSON to a private temp file beside `path`, ready for `commit_staged_json`"""
+    return _stage(path, lambda f: json.dump(data, f, indent=2))
 
 
 def stage_private_bytes(path: str, data: bytes) -> str:

@@ -1,16 +1,26 @@
+import asyncio
+import io
 import json
 import os
+import shlex
 import stat
+import subprocess
+import sys
 
 import click
 import pytest
 import requests
 import responses
+import tomlkit
 from click.testing import CliRunner
+from prompt_toolkit.application import create_app_session
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
 from litellm.proxy.client.cli.commands import configure as configure_module
+from litellm.proxy.client.cli.commands.agent_config import AgentConfigError
 from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 from litellm.proxy.client.cli.commands.configure import configure_claude, configure_group, interactive_configure
 
@@ -68,7 +78,122 @@ def lite_up_backup(monkeypatch, tmp_path):
 
 
 def _configure(runner, *args):
-    return runner.invoke(cli, ["--base-url", PROXY, "configure", "claude", *args])
+    return runner.invoke(cli, ["--base-url", PROXY, "configure", "--api-key", VALID_KEY, "claude", *args])
+
+
+@responses.activate
+@pytest.mark.parametrize("reconfigure", [False, True], ids=["direct-undo", "reconfigure-then-undo"])
+def test_claude_commands_accept_pre_codex_flat_receipts(runner, paths, reconfigure):
+    settings_path, state_path = paths
+    settings_path.parent.mkdir(parents=True)
+    state_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps(
+            {
+                "theme": "dark",
+                "model": "claude-auto",
+                "env": {"ANTHROPIC_BASE_URL": PROXY, "ANTHROPIC_AUTH_TOKEN": "sk-legacy-login"},
+            }
+        )
+    )
+    state_path.write_text(
+        json.dumps(
+            {
+                "file_existed": True,
+                "env_present": True,
+                "env_was_object": True,
+                "previous": {
+                    "model": {"present": True, "value": "original-model"},
+                    "env.ANTHROPIC_BASE_URL": {"present": True, "value": "https://old-proxy.example"},
+                    "env.ANTHROPIC_AUTH_TOKEN": {"present": True, "value": "original-token"},
+                },
+                "written": {
+                    "model": "bbeb00a33788020610852e74a0af54a7ff3262d60f35be0cc38eb763ad9d1b23",
+                    "env.ANTHROPIC_BASE_URL": "162f7a3bcb1750dd476b303bd2207abe025abd249bf00612580b58d1005b3bda",
+                    "env.ANTHROPIC_AUTH_TOKEN": "b8edb3ee4e755b11d291a7e83af0536797d2ab5f315d13e52f31d6dee858dec1",
+                },
+                "endpoints": {
+                    "env.ANTHROPIC_AUTH_TOKEN": {"present": True, "value": "https://old-proxy.example"},
+                },
+            }
+        )
+    )
+    if reconfigure:
+        _mock_models()
+        result = _configure(runner, "--model", "claude-auto")
+        assert result.exit_code == 0, result.output
+        assert "sections" not in json.loads(state_path.read_text())
+    result = runner.invoke(cli, ["unconfigure", "claude"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(settings_path.read_text()) == {
+        "theme": "dark",
+        "model": "original-model",
+        "env": {"ANTHROPIC_BASE_URL": "https://old-proxy.example", "ANTHROPIC_AUTH_TOKEN": "original-token"},
+    }
+    assert not state_path.exists()
+
+
+class TestConfigureCodexErrors:
+    @responses.activate
+    @pytest.mark.parametrize("command", ["configure", "unconfigure"])
+    def test_reports_agent_config_errors_without_a_traceback(self, runner, monkeypatch, command):
+        if command == "configure":
+            _mock_models()
+            monkeypatch.setattr(
+                configure_module,
+                "configure_codex_config",
+                lambda *args, **kwargs: (_ for _ in ()).throw(AgentConfigError("bad codex config")),
+            )
+            result = runner.invoke(cli, ["--base-url", PROXY, "configure", "--api-key", VALID_KEY, "codex"])
+        else:
+            monkeypatch.setattr(
+                configure_module,
+                "unconfigure_codex_config",
+                lambda *args, **kwargs: (_ for _ in ()).throw(AgentConfigError("bad codex config")),
+            )
+            result = runner.invoke(cli, ["unconfigure", "codex"])
+        assert result.exit_code != 0
+        assert "Error: bad codex config" in result.output
+        assert "Traceback" not in result.output
+
+    @responses.activate
+    def test_reports_an_invalid_codex_receipt_without_a_traceback(self, runner, monkeypatch, tmp_path):
+        _mock_models()
+        config_path = tmp_path / "codex" / "config.toml"
+        state_path = tmp_path / "codex" / ".litellm-configure-state.json"
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text("not json")
+        monkeypatch.setattr(configure_module, "codex_config_path", lambda environ: config_path)
+        monkeypatch.setattr(configure_module, "codex_configure_state_path", lambda path: state_path)
+
+        result = runner.invoke(cli, ["--base-url", PROXY, "configure", "--api-key", VALID_KEY, "codex"])
+
+        assert result.exit_code != 0
+        assert "Error:" in result.output
+        assert "Traceback" not in result.output
+
+
+class TestApiKeyOptionOrdering:
+    @responses.activate
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ("configure", "--api-key", VALID_KEY, "claude"),
+            ("configure", "claude", "--api-key", VALID_KEY),
+            ("configure", "--api-key", VALID_KEY, "codex"),
+            ("configure", "codex", "--api-key", VALID_KEY),
+        ],
+    )
+    def test_accepts_parent_and_legacy_subcommand_order(self, runner, paths, tmp_path, monkeypatch, args):
+        _mock_models()
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+        result = runner.invoke(cli, ["--base-url", PROXY, *args])
+        assert result.exit_code == 0, result.output
+        if "claude" in args:
+            assert json.loads(paths[0].read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == VALID_KEY
+        else:
+            provider = tomlkit.parse((tmp_path / "codex" / "config.toml").read_text())["model_providers"]["litellm"]
+            assert provider["experimental_bearer_token"] == VALID_KEY
 
 
 class TestConfigureClaudeWithAVirtualKey:
@@ -76,7 +201,7 @@ class TestConfigureClaudeWithAVirtualKey:
     def test_writes_settings_and_reports_without_echoing_the_key(self, runner, paths):
         _mock_models()
         settings_path, state_path = paths
-        result = _configure(runner, "--api-key", VALID_KEY, "--model", "claude-auto")
+        result = _configure(runner, "--model", "claude-auto")
         assert result.exit_code == 0, result.output
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == PROXY
@@ -107,7 +232,7 @@ class TestConfigureClaudeWithAVirtualKey:
     def test_refuses_a_model_the_proxy_does_not_list(self, runner, paths):
         _mock_models()
         settings_path, _ = paths
-        result = _configure(runner, "--api-key", VALID_KEY, "--model", "claude-nope")
+        result = _configure(runner, "--model", "claude-nope")
         assert result.exit_code != 0
         assert "'claude-nope' is not served" in result.output
         assert "claude-auto, gpt-5.6-luna" in result.output
@@ -117,7 +242,7 @@ class TestConfigureClaudeWithAVirtualKey:
     def test_refuses_a_key_the_proxy_rejects(self, runner, paths):
         _mock_models()
         settings_path, _ = paths
-        result = _configure(runner, "--api-key", "sk-wrong")
+        result = runner.invoke(cli, ["--base-url", PROXY, "configure", "--api-key", "sk-wrong", "claude"])
         assert result.exit_code != 0
         assert "rejected your key (HTTP 401)" in result.output
         assert not settings_path.exists()
@@ -154,7 +279,7 @@ class TestConfigureClaudeWithAVirtualKey:
         # empty list prove it is up, and the hint says so instead.
         mock()
         settings_path, _ = paths
-        result = _configure(runner, "--api-key", VALID_KEY)
+        result = _configure(runner)
         assert result.exit_code != 0
         assert expected in result.output and unexpected not in result.output
         assert not settings_path.exists()
@@ -166,10 +291,15 @@ class TestConfigureClaudeWithAVirtualKey:
         if entry == "interactive":
             ctx = click.Context(configure_group, obj={"base_url": PROXY, "api_key": VALID_KEY})
             with pytest.raises(click.ClickException, match="lite down"):
-                interactive_configure(ctx, pick_targets=lambda: ("claude",), pick_model=lambda listed: None)
+                interactive_configure(
+                    ctx,
+                    pick_targets=lambda: ("claude",),
+                    pick_model=lambda _agent, listed: None,
+                    confirm_launch=lambda _agent: False,
+                )
         else:
-            args = ["--api-key", VALID_KEY] if entry == "virtual-key" else []
-            result = runner.invoke(configure_claude, args, obj={"base_url": PROXY, "api_key": None})
+            args = ["--api-key", VALID_KEY, "claude"] if entry == "virtual-key" else ["claude"]
+            result = runner.invoke(configure_group, args, obj={"base_url": PROXY, "api_key": None})
             assert result.exit_code != 0 and "lite down" in result.output
         assert len(responses.calls) == 0
         assert not paths[0].exists()
@@ -183,7 +313,7 @@ class TestConfigureClaudeWithAVirtualKey:
         target.write_text("{}")
         settings_path.parent.mkdir(parents=True)
         settings_path.symlink_to(target)
-        result = _configure(runner, "--api-key", VALID_KEY)
+        result = _configure(runner)
         assert result.exit_code == 0, result.output
         assert "keep it out of version control" in result.output
         assert json.loads(target.read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == VALID_KEY
@@ -212,13 +342,154 @@ class TestConfigureClaudeWithoutAKey:
         _mock_models()
         settings_path, _ = paths
         result = runner.invoke(
-            configure_claude,
-            ["--api-key", VALID_KEY],
+            configure_group,
+            ["--api-key", VALID_KEY, "claude"],
             obj={"base_url": PROXY, "api_key": "sk-login-jwt", "api_key_from_token_file": True},
         )
         assert result.exit_code == 0, result.output
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == VALID_KEY and "apiKeyHelper" not in written
+
+
+class _TerminalInput(io.StringIO):
+    def isatty(self):
+        return True
+
+
+@pytest.mark.timeout(20)
+@responses.activate
+@pytest.mark.parametrize(
+    ("keys", "claude_model", "codex_model", "launched"),
+    [
+        (("\r", "\r", "n"), None, None, None),
+        (("\r", "\x1b[B\r", "y"), "claude-router", None, "claude"),
+        ((" \x1b[B \r", "\x1b[B\r", "n"), None, "route", None),
+        (("\x1b[B \r", "\x1b[B\r", "\x1b[B\r", "n", "y"), "claude-router", "route", "codex"),
+    ],
+    ids=["default-decline", "claude-launch", "codex-decline", "both-launch-second"],
+)
+def test_bare_configure_drives_real_prompts(keys, claude_model, codex_model, launched, paths, tmp_path, monkeypatch):
+    codex_home = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(sys, "stdin", _TerminalInput())
+    responses.get(
+        f"{PROXY}/v1/models",
+        json={"data": [{"id": "claude-router", "source_model": "route"}]},
+        match=[responses.matchers.header_matcher({"x-gateway-client": "claude-code"})],
+    )
+    responses.get(f"{PROXY}/v1/models", json={"data": [{"id": "route"}]})
+    responses.get(
+        f"{PROXY}/model_group/info",
+        json={"data": [{"model_group": "route", "max_input_tokens": 200000, "max_output_tokens": 64000}]},
+    )
+    launches = []
+
+    def launch(agents, *, started_interactive):
+        assert started_interactive
+        assert paths[0].exists() or (codex_home / "config.toml").exists()
+        launches.extend(agents)
+
+    monkeypatch.setattr(configure_module, "launch_configured_agents", launch)
+
+    async def drive():
+        with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()) as session:
+            task = asyncio.create_task(
+                asyncio.to_thread(
+                    cli.main, args=["--base-url", PROXY, "--api-key", VALID_KEY, "configure"], standalone_mode=False
+                )
+            )
+            previous = None
+            try:
+                for text in keys:
+
+                    async def next_prompt(previous=previous):
+                        while (app := session.app) is None or app is previous or not app.is_running:
+                            if task.done():
+                                await task
+                                raise AssertionError("CLI ended before the next prompt")
+                            await asyncio.sleep(0.01)
+                        return app
+
+                    previous = await asyncio.wait_for(next_prompt(), timeout=5)
+                    pipe.send_text(text)
+                await asyncio.wait_for(task, timeout=5)
+            finally:
+                pipe.close()
+
+    asyncio.run(drive())
+    assert launches == ([] if launched is None else [launched])
+    if claude_model is not None or len(keys) == 3 and keys[1] == "\r":
+        settings = json.loads(paths[0].read_text())
+        assert settings.get("model") == claude_model
+        assert settings["env"]["ANTHROPIC_AUTH_TOKEN"] == VALID_KEY
+    else:
+        assert not paths[0].exists()
+    if codex_model is not None:
+        config = tomlkit.parse((codex_home / "config.toml").read_text())
+        assert config["model"] == codex_model and config["model_context_window"] == 200000
+        assert config["model_providers"]["litellm"]["experimental_bearer_token"] == VALID_KEY
+    else:
+        assert not (codex_home / "config.toml").exists()
+
+
+@responses.activate
+@pytest.mark.parametrize("entry", ["subcommand", "interactive"])
+def test_codex_login_writes_executable_argv(entry, paths, tmp_path, monkeypatch, runner):
+    codex_home = tmp_path / "codex"
+    bin_dir = tmp_path / "bin with spaces"
+    bin_dir.mkdir()
+    lite = bin_dir / "lite"
+    lite.write_text(
+        f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -c 'import json, sys; print(json.dumps(sys.argv[1:]))' \"$@\"\n"
+    )
+    lite.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(sys, "stdin", _TerminalInput())
+
+    def login(ctx, reader):
+        monkeypatch.setattr(sys, "stdin", io.StringIO())
+
+    monkeypatch.setattr(configure_module, "ensure_fresh_login", login)
+    monkeypatch.setattr(configure_module, "get_stored_api_key", lambda **kwargs: "short-lived-login")
+    responses.get(f"{PROXY}/v1/models", json={"data": [{"id": "route"}]})
+    responses.get(f"{PROXY}/model_group/info", json={"data": []})
+    launches = []
+    monkeypatch.setattr(
+        configure_module,
+        "launch_configured_agents",
+        lambda agents, *, started_interactive: launches.extend((tuple(agents), started_interactive)),
+    )
+    if entry == "interactive":
+        ctx = click.Context(configure_group, obj={"base_url": PROXY, "api_key": None})
+        interactive_configure(
+            ctx,
+            pick_targets=lambda: ("codex",),
+            pick_model=lambda agent, listed: "route",
+            confirm_launch=lambda agent: True,
+        )
+        assert launches == [("codex",), True]
+    else:
+        result = runner.invoke(configure_module.configure_codex, [], obj={"base_url": PROXY, "api_key": None})
+        assert result.exit_code == 0, result.output
+    provider = tomlkit.parse((codex_home / "config.toml").read_text())["model_providers"]["litellm"]
+    auth = provider["auth"]
+    assert auth["command"] == str(lite)
+    executed = subprocess.run([auth["command"], *auth["args"]], capture_output=True, text=True, check=True, timeout=10)
+    assert json.loads(executed.stdout) == ["--base-url", PROXY, "auth", "print-token"]
+    assert "short-lived-login" not in (codex_home / "config.toml").read_text()
+    assert "experimental_bearer_token" not in provider
+
+
+@responses.activate
+@pytest.mark.parametrize("agent,label", [("claude", "Claude Code"), ("codex", "Codex")])
+def test_empty_listing_names_selected_agent(agent, label, runner, paths, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    responses.get(f"{PROXY}/v1/models", json={"data": []})
+    result = runner.invoke(cli, ["--base-url", PROXY, "--api-key", VALID_KEY, "configure", agent])
+    assert result.exit_code == 1
+    assert f"{label} would have nothing to run" in result.output
+    assert not paths[0].exists() and not (tmp_path / "codex" / "config.toml").exists()
 
 
 class TestInteractiveConfigure:
@@ -228,14 +499,17 @@ class TestInteractiveConfigure:
         settings_path, _ = paths
         asked = {}
 
-        def pick_model(listed):
+        def pick_model(agent, listed):
+            assert agent == "claude"
             asked["listed"] = tuple(listed)
             return "claude-auto"
 
         ctx = click.Context(
             configure_group, obj={"base_url": PROXY, "api_key": VALID_KEY, "api_key_from_token_file": False}
         )
-        interactive_configure(ctx, pick_targets=lambda: ("claude",), pick_model=pick_model)
+        interactive_configure(
+            ctx, pick_targets=lambda: ("claude",), pick_model=pick_model, confirm_launch=lambda _agent: False
+        )
         assert asked["listed"] == LISTED_MODELS
         assert json.loads(settings_path.read_text())["model"] == "claude-auto"
 
@@ -244,13 +518,13 @@ class TestInteractiveConfigure:
         ctx = click.Context(
             configure_group, obj={"base_url": PROXY, "api_key": VALID_KEY, "api_key_from_token_file": False}
         )
-        interactive_configure(ctx, pick_targets=lambda: (), pick_model=lambda listed: None)
+        interactive_configure(ctx, pick_targets=lambda: (), pick_model=lambda _agent, listed: None)
         assert not settings_path.exists()
 
     def test_bare_configure_without_a_terminal_names_the_non_interactive_command(self, runner, paths):
         result = runner.invoke(cli, ["--base-url", PROXY, "configure"])
         assert result.exit_code != 0
-        assert "lite configure claude --api-key" in result.output
+        assert "lite configure --api-key" in result.output
 
 
 class TestUnconfigureClaude:
@@ -261,7 +535,7 @@ class TestUnconfigureClaude:
         settings_path.parent.mkdir(parents=True)
         original = {"theme": "dark", "model": "claude-opus-5"}
         settings_path.write_text(json.dumps(original))
-        assert _configure(runner, "--api-key", VALID_KEY, "--model", "claude-auto").exit_code == 0
+        assert _configure(runner, "--model", "claude-auto").exit_code == 0
 
         result = runner.invoke(cli, ["unconfigure", "claude"])
         assert result.exit_code == 0, result.output
@@ -274,7 +548,7 @@ class TestUnconfigureClaude:
     def test_a_file_only_configure_created_is_reported_removed_not_restored(self, runner, paths):
         _mock_models()
         settings_path, _ = paths
-        assert _configure(runner, "--api-key", VALID_KEY).exit_code == 0
+        assert _configure(runner).exit_code == 0
         result = runner.invoke(cli, ["unconfigure", "claude"])
         assert result.exit_code == 0, result.output
         assert not settings_path.exists()
@@ -286,7 +560,7 @@ class TestUnconfigureClaude:
         settings_path, _ = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(json.dumps({"theme": "dark"}))
-        assert _configure(runner, "--api-key", VALID_KEY, "--model", "claude-auto").exit_code == 0
+        assert _configure(runner, "--model", "claude-auto").exit_code == 0
         edited = json.loads(settings_path.read_text())
         edited["env"] = {key: f"{value}-edited" for key, value in edited["env"].items()}
         edited["model"] = "mine"
@@ -306,7 +580,7 @@ class TestUnconfigureClaude:
         settings_path.write_text(
             json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://api.anthropic.com", "ANTHROPIC_API_KEY": "sk-ant"}})
         )
-        assert _configure(runner, "--api-key", VALID_KEY).exit_code == 0
+        assert _configure(runner).exit_code == 0
         edited = json.loads(settings_path.read_text())
         edited["env"]["ANTHROPIC_BASE_URL"] = "http://other-proxy:4000"
         settings_path.write_text(json.dumps(edited))
@@ -332,7 +606,7 @@ class TestUnconfigureClaude:
         (work_dir / "settings.json").write_text(json.dumps(original))
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(work_dir))
 
-        configured = _configure(runner, "--api-key", VALID_KEY, "--model", "claude-auto")
+        configured = _configure(runner, "--model", "claude-auto")
         assert configured.exit_code == 0, configured.output
         assert f"Configured Claude Code: {work_dir / 'settings.json'}" in configured.output
         assert json.loads((work_dir / "settings.json").read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == VALID_KEY
@@ -381,7 +655,7 @@ class TestClaudeCodeView:
             ]
         )
         settings_path, _ = paths
-        result = _configure(runner, "--api-key", VALID_KEY, "--model", model)
+        result = _configure(runner, "--model", model)
         assert result.exit_code == 0, result.output
         assert json.loads(settings_path.read_text())["model"] == pinned
         assert f"Starting model: {pinned}" in result.output
@@ -391,7 +665,7 @@ class TestClaudeCodeView:
     def test_refuses_unknown_short_suffix(self, runner, paths):
         self._mock([{"id": "emitted-router-source", "source_model": "literal-router-source"}])
         settings_path, _ = paths
-        result = _configure(runner, "--api-key", VALID_KEY, "--model", "source")
+        result = _configure(runner, "--model", "source")
         assert result.exit_code != 0
         assert "'source' is not served" in result.output
         assert not settings_path.exists()
@@ -405,17 +679,20 @@ class TestClaudeCodeView:
             configure_group, obj={"base_url": PROXY, "api_key": VALID_KEY, "api_key_from_token_file": False}
         )
 
-        def pick_model(listed):
+        def pick_model(agent, listed):
+            assert agent == "claude"
             asked["listed"] = tuple(listed)
             return "source"
 
-        interactive_configure(ctx, pick_targets=lambda: ("claude",), pick_model=pick_model)
+        interactive_configure(
+            ctx, pick_targets=lambda: ("claude",), pick_model=pick_model, confirm_launch=lambda _agent: False
+        )
         assert asked["listed"] == ("source",)
         assert json.loads(settings_path.read_text())["model"] == "emitted"
 
     @responses.activate
     def test_counts_what_an_older_proxy_lets_the_picker_show(self, runner, paths):
         _mock_models()
-        result = _configure(runner, "--api-key", VALID_KEY)
+        result = _configure(runner)
         assert result.exit_code == 0, result.output
         assert "/model will list 1 of the proxy's 2 models: Claude Code shows only ids containing" in result.output

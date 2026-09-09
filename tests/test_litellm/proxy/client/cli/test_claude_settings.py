@@ -3,13 +3,12 @@ import os
 import pathlib
 import shlex
 import stat
+import subprocess
 import sys
-import time
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from click.testing import CliRunner
 
 from litellm.litellm_core_utils.private_json import commit_staged_json
 from litellm.proxy.client.cli.commands.claude_settings import (
@@ -17,7 +16,6 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     AUTOROUTE_BACKUP_PATH,
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
-    CONFIGURE_STATE_PATH,
     OWNED_ENV_KEYS,
     OWNED_TOP_LEVEL_KEYS,
     SETTINGS_FILE_OWNERS,
@@ -29,9 +27,10 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     UnpinModel,
     claude_settings_path,
     configure_claude_settings,
-    install_statusline_script,
     configure_state_path,
+    install_statusline_script,
     merge_claude_settings,
+    print_token_command,
     statusline_command,
     unconfigure_claude_settings,
     with_status_line,
@@ -45,6 +44,8 @@ def _owners(*backup_paths):
 
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
 AUTH_MODULE = "litellm.proxy.client.cli.commands.auth"
+
+
 @pytest.fixture
 def paths(tmp_path):
     return tmp_path / "claude" / "settings.json", tmp_path / "backup.json"
@@ -53,7 +54,21 @@ def paths(tmp_path):
 def _static_configure(base_url, settings_path, owners, state_path=None):
     """`lite configure claude --api-key`'s shape: a virtual key as a static token, no pinned model."""
     state = state_path if state_path is not None else settings_path.parent.parent / "state.json"
-    configure_claude_settings(base_url.rstrip("/"), StaticToken("sk-virtual-key"), KeepModel(), settings_path, state, owners)
+    configure_claude_settings(
+        base_url.rstrip("/"), StaticToken("sk-virtual-key"), KeepModel(), settings_path, state, owners
+    )
+
+
+def test_print_token_command_persists_an_absolute_executable(monkeypatch, tmp_path):
+    worktree = tmp_path / "untrusted-project"
+    relative_bin = worktree / "tools"
+    relative_bin.mkdir(parents=True)
+    lite = relative_bin / "lite"
+    lite.touch()
+    lite.chmod(0o700)
+    monkeypatch.chdir(worktree)
+    monkeypatch.setenv("PATH", f"tools{os.pathsep}{os.environ.get('PATH', '')}")
+    assert print_token_command("https://proxy.example.com")[0] == str(lite.resolve())
 
 
 class TestConfigureClaudeSettings:
@@ -98,7 +113,9 @@ class TestConfigureClaudeSettings:
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(
-            json.dumps({"apiKeyHelper": "/usr/local/bin/lite auth print-token", "env": {"ANTHROPIC_API_KEY": "sk-leaked"}})
+            json.dumps(
+                {"apiKeyHelper": "/usr/local/bin/lite auth print-token", "env": {"ANTHROPIC_API_KEY": "sk-leaked"}}
+            )
         )
 
         _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
@@ -244,6 +261,29 @@ class TestClaudeSettingsPath:
         assert claude_settings_path({"CLAUDE_CONFIG_DIR": "~/.claude-work"}) == (
             Path.home() / ".claude-work" / "settings.json"
         )
+
+    def test_an_import_time_override_does_not_redefine_the_default_file(self, tmp_path):
+        home = tmp_path / "home"
+        profile = tmp_path / "profile"
+        script = """
+import os
+from pathlib import Path
+from litellm.proxy.client.cli.commands.claude_settings import (
+    CLAUDE_SETTINGS_PATH,
+    configure_state_path,
+    settings_file_owners,
+)
+profile = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "settings.json"
+print(CLAUDE_SETTINGS_PATH)
+print(configure_state_path(profile))
+print(len(settings_file_owners(profile)))
+"""
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "CLAUDE_CONFIG_DIR": str(profile)}
+        result = subprocess.run([sys.executable, "-c", script], env=env, check=True, capture_output=True, text=True)
+        default, receipt, owners = result.stdout.splitlines()
+        assert Path(default) == home / ".claude" / "settings.json"
+        assert Path(receipt).parent == home / ".litellm" / "claude_configure_state"
+        assert owners == "0"
 
 
 class TestConfigureStatePath:

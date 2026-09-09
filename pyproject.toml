@@ -72,6 +72,7 @@ proxy = [
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
+    "tomlkit>=0.13.0,<1.0",
     "polars>=1.38.1,<2.0",
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
@@ -88,6 +89,7 @@ cli = [
     "requests>=2.32.0,<3.0",
     "InquirerPy>=0.3.4,<1.0",
     "keyring>=25.6.0,<26.0",
+    "tomlkit>=0.13.0,<1.0",
 ]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",
