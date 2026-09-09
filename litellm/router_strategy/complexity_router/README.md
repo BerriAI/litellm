@@ -207,9 +207,19 @@ custom_dimensions:
   - name: sqlMigration
     weight: 0.7
     patterns: ['\b(create|alter|drop)\s{1,4}table\b']
+  - name: dataPipeline
+    weight: 0.4
+    scoring_mode: match_count
+    keywords: [airflow, dbt, snowflake]
 ```
 
 Each dimension contributes its weight once when any matcher hits the current ask. Repeated matches do not increase it. The built-in score and tier boundaries are unchanged, and the total score is not renormalized. Keywords use the existing case-insensitive word-boundary and CJK rules. Regexes search the first 2048 characters case-insensitively and compile during configuration validation and router initialization, never per request
+
+`scoring_mode` is optional and defaults to `binary`, the behavior above. `match_count` grades the dimension by how many distinct matchers hit: none scores 0 and emits no signal, one scores half the weight, two or more score the full weight. Repeated occurrences of one matcher never raise the count, keywords are distinct case-insensitively, patterns are distinct by source, and a keyword and a pattern are always distinct from each other. Matching stops as soon as the selected mode's maximum is reached, so a binary dimension still stops at its first hit. Existing configurations without the field keep binary scoring and the same tuning fingerprint, so the field only counts as a tuning change when set to `match_count`
+
+### Weights through the API versus the dashboard
+
+The API and YAML store exactly the weights written. A `dimension_weights` map and inline custom weights are read literally, missing recognized built-in names score zero, and nothing renormalizes the vector, so a total other than 1 is legal and scores accordingly. The dashboard's heuristic scoring editor is the one place that rebalances: editing one weight there holds it and redistributes the remainder across the other active dimensions in the draft, then Save sends the resulting explicit values, which the backend stores and scores as written. Opening a router, applying a preset, editing matchers, changing `scoring_mode`, or saving unrelated fields never normalizes existing weights
 
 Only `heuristic`, `heuristic_first` and `hybrid` accept custom dimensions. Each name must be a unique ASCII identifier starting with a letter, at most 64 characters, and cannot reuse a built-in dimension name or a key in `dimension_weights`. Set its weight inline, greater than zero and at most one
 
@@ -217,7 +227,7 @@ Patterns are checked at configuration time against a grammar whose worst case st
 
 Limits are 16 dimensions, 32 combined keywords/patterns per dimension, 256 characters per matcher and 4096 matcher characters per dimension. Matching runs inline on the request path with no timeout and no worker thread, because the grammar is what bounds the cost. These are routing hints, not security enforcement rules
 
-The existing heuristic-v1 tuning quota covers custom dimensions and their weights: one changed router without an auto-router license, unlimited with the entitlement. Omitting `custom_dimensions` preserves existing scoring. Routing decisions and spend logs include signals such as `custom (sqlMigration)` without recording the configured pattern or matched text. The field is configured through YAML or the model API; this change adds no dashboard editor
+The existing heuristic-v1 tuning quota covers custom dimensions, their weights and their scoring mode: one changed router without an auto-router license, unlimited with the entitlement. Omitting `custom_dimensions` preserves existing scoring. Routing decisions and spend logs include signals such as `custom (sqlMigration)` without recording the configured pattern or matched text. The field is configured through YAML, the model API, or the dashboard's heuristic scoring editor
 
 ## Usage
 

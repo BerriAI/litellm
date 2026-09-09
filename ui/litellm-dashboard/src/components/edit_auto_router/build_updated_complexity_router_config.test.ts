@@ -63,6 +63,54 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
     expect(result.some_future_backend_key).toEqual({ nested: true });
   });
 
+  describe("custom dimensions", () => {
+    const stored = [
+      { name: "internalFrameworks", weight: 0.7, keywords: ["orbitmesh"] },
+      { name: "sqlDdl", weight: 0.3, patterns: ["create table"], scoring_mode: "match_count" },
+    ];
+    const withDimensions = { ...STORED, custom_dimensions: stored };
+
+    it("round-trips stored rows through hydration and save without dropping or reshaping one", () => {
+      const hydrated = hydrateComplexityRouterConfig(withDimensions, null);
+      expect(hydrated.custom_dimensions).toEqual([
+        { id: "stored-0", ...stored[0] },
+        { id: "stored-1", ...stored[1] },
+      ]);
+      const saved = buildUpdatedComplexityRouterConfig(withDimensions, {
+        ...FORM_VALUE,
+        custom_dimensions: hydrated.custom_dimensions,
+      });
+      expect(saved.custom_dimensions).toEqual(stored);
+    });
+
+    it("is a managed key, so removing the last row does not resurrect the stored dimensions", () => {
+      expect(MANAGED_COMPLEXITY_ROUTER_KEYS.has("custom_dimensions")).toBe(true);
+      const saved = buildUpdatedComplexityRouterConfig(withDimensions, { ...FORM_VALUE, custom_dimensions: [] });
+      expect(saved.custom_dimensions).toEqual([]);
+    });
+
+    it("omits the key entirely when the editor never held rows, so an untouched router gains nothing", () => {
+      expect(hydrateComplexityRouterConfig(STORED, null).custom_dimensions).toBeUndefined();
+      expect(buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE)).not.toHaveProperty("custom_dimensions");
+    });
+
+    it("drops rows a custom tier set forbids rather than sending them to a scorer that never runs", () => {
+      const customTierStored = storedCustomConfig({ custom_dimensions: stored });
+      const saved = buildUpdatedComplexityRouterConfig(customTierStored, {
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "llm" as const,
+        custom_tier_set: {
+          tiers: [
+            { id: "a", name: "CASUAL", definition: "small talk", models: ["gpt-4o-mini"] },
+            { id: "b", name: "AUDIT", definition: "security review", models: ["o1"] },
+          ],
+          fallback_tier_id: "a",
+        },
+      });
+      expect(saved).not.toHaveProperty("custom_dimensions");
+    });
+  });
+
   it("persists an edited keyword rule", () => {
     const result = buildUpdatedComplexityRouterConfig(STORED, FORM_VALUE, undefined, {
       ...hydratedState,
@@ -580,6 +628,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     tier_boundaries: { simple_medium: 0.2, medium_complex: 0.4, complex_reasoning: 0.7 },
     token_thresholds: { simple: 20, complex: 500 },
     dimension_weights: { tokenCount: 0.1 },
+    custom_dimensions: [{ name: "domain", weight: 0.9, keywords: ["orbitmesh"] }],
     reasoning_override_min_score: 0.3,
     enable_context_window_escalation: false,
     context_window_escalation_buffer: 0.9,

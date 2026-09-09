@@ -4918,6 +4918,24 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   }
 };
 
+export interface ConnectFlowStatus {
+  state: "unscoped" | "interactive" | "m2m" | "stale";
+  client_origin: string;
+  server_id: string | null;
+  server_name: string | null;
+  connected: boolean | null;
+}
+
+/**
+ * What the gateway says about one in-flight connect flow, read from the sealed HttpOnly
+ * flow cookie rather than from the address bar (LIT-7075): the client asking, the server
+ * the flow is scoped to, and whether that server's vendor OAuth is already done. Sent with
+ * no access token; the flow and session cookies are the credential, exactly as they are for
+ * the finish form this page posts.
+ */
+export const fetchConnectFlow = async (flowHandle: string): Promise<ConnectFlowStatus> =>
+  apiClient.get(`/authorize/flow`, { query: { flow: flowHandle }, credentials: "include" });
+
 export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
   try {
     return await apiClient.get(`/v1/mcp/server`, {

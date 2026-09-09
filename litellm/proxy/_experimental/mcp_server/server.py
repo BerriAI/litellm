@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import AnyUrl, ConfigDict
+from pydantic import AnyUrl, ConfigDict, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
 from starlette.types import Message, Receive, Scope, Send
@@ -108,9 +108,9 @@ _MAX_STATEFUL_SESSIONS_PER_OWNER: Final = 100
 # prevents an authenticated client from forcing the proxy to buffer an
 # arbitrarily large body just to make a routing decision.
 _MCP_ROUTING_PEEK_MAX_BYTES: Final = 4096
-# ASGI scope key holding the tracing span of the request carrying an MCP
-# message, written on the request task and read back by the message handler.
+# ASGI scope keys carrying OTel request state into a stateful MCP message handler.
 _MCP_TRANSPORT_SPAN_SCOPE_KEY: Final = "litellm_otel_transport_span"
+_MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -328,18 +328,17 @@ def _otel_publish_transport_span_on_scope(scope: Scope) -> None:
         scope[_MCP_TRANSPORT_SPAN_SCOPE_KEY] = span
 
 
-def _otel_transport_span_from_message(req_ctx: object) -> object:
-    """The tracing span of the HTTP request that carried this MCP message.
-
-    Read off that request's ASGI scope, reached through the ``Request`` the
-    streamable-HTTP transport attaches to each message, so it is this message's
-    transport and not whichever request happens to have touched the session last.
-    Returns whatever the scope holds; the otel plumbing validates it."""
+def _otel_value_from_message_scope(req_ctx: object, key: str) -> object:
     request: Final = getattr(req_ctx, "request", None)
     scope: Final = getattr(request, "scope", None)
     if not isinstance(scope, Mapping):
         return None
-    return scope.get(_MCP_TRANSPORT_SPAN_SCOPE_KEY)
+    return scope.get(key)
+
+
+def _otel_transport_span_from_message(req_ctx: object) -> object:
+    """The tracing span of the HTTP request that carried this MCP message."""
+    return _otel_value_from_message_scope(req_ctx, _MCP_TRANSPORT_SPAN_SCOPE_KEY)
 
 
 def _otel_set_mcp_transport_span(span: object) -> object:
@@ -368,6 +367,44 @@ def _otel_reset_mcp_transport_span(token: object) -> None:
         )
 
         reset_mcp_message_transport_span(token)
+    except ImportError:
+        return
+
+
+def _otel_publish_request_destinations_on_scope(scope: Scope) -> None:
+    try:
+        from litellm.integrations.otel.plumbing.context import request_destinations
+
+        scope[_MCP_DESTINATIONS_SCOPE_KEY] = request_destinations()
+    except ImportError:
+        return
+
+
+def _otel_set_mcp_request_destinations(req_ctx: object) -> object:
+    destinations: Final = _otel_value_from_message_scope(req_ctx, _MCP_DESTINATIONS_SCOPE_KEY)
+    if not isinstance(destinations, tuple):
+        return None
+    try:
+        from litellm.integrations.otel.model.destination import OtelDestination
+        from litellm.integrations.otel.plumbing.context import set_request_destinations
+
+        destination_adapter: Final[TypeAdapter[tuple[OtelDestination, ...]]] = TypeAdapter(
+            tuple[OtelDestination, ...],
+            config=ConfigDict(revalidate_instances="always"),
+        )
+        validated_destinations: Final = destination_adapter.validate_python(destinations, strict=True)
+        return set_request_destinations(validated_destinations)
+    except (ImportError, ValidationError):
+        return None
+
+
+def _otel_reset_mcp_request_destinations(token: object) -> None:
+    if token is None:
+        return
+    try:
+        from litellm.integrations.otel.plumbing.context import reset_request_destinations
+
+        reset_request_destinations(token)
     except ImportError:
         return
 
@@ -763,10 +800,12 @@ if MCP_AVAILABLE:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
         _trace_token = None
         _transport_token = None
+        _destinations_token = None
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
             _transport_token = _otel_set_mcp_transport_span(_otel_transport_span_from_message(req_ctx))
+            _destinations_token = _otel_set_mcp_request_destinations(req_ctx)
             # Get user authentication from context variable
             (
                 user_api_key_auth,
@@ -828,6 +867,7 @@ if MCP_AVAILABLE:
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
         finally:
+            _otel_reset_mcp_request_destinations(_destinations_token)
             _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
@@ -1021,10 +1061,12 @@ if MCP_AVAILABLE:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
         _trace_token = None
         _transport_token = None
+        _destinations_token = None
 
         try:
             _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
             _transport_token = _otel_set_mcp_transport_span(_otel_transport_span_from_message(req_ctx))
+            _destinations_token = _otel_set_mcp_request_destinations(req_ctx)
             # Validate arguments
             (
                 user_api_key_auth,
@@ -1163,6 +1205,7 @@ if MCP_AVAILABLE:
 
             return response
         finally:
+            _otel_reset_mcp_request_destinations(_destinations_token)
             _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
@@ -4493,6 +4536,7 @@ if MCP_AVAILABLE:
 
             async def _dispatch() -> None:
                 _otel_publish_transport_span_on_scope(scope)
+                _otel_publish_request_destinations_on_scope(scope)
                 auth_user: Final = _set_or_update_auth_context(
                     user_api_key_auth=user_api_key_auth,
                     mcp_auth_header=mcp_auth_header,
