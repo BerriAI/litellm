@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runti
 
 import httpx
 from openai._streaming import SSEDecoder
+from pydantic import ValidationError
 from typing_extensions import TypeIs
 
 import litellm
@@ -544,7 +545,7 @@ class BaseResponsesAPIStreamingIterator:
     def _record_failed_response_usage(self, response_obj: ResponsesAPIResponse | None) -> None:
         if response_obj is None or self.logging_obj is None:
             return
-        usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+        usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
         if usage_obj is None:
             return
         try:
@@ -1293,14 +1294,26 @@ def _add_text_like_part_events(
         )
 
 
+def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
+    if isinstance(usage, ResponseAPIUsage):
+        return usage
+    if not isinstance(usage, dict):
+        return None
+    try:
+        return ResponseAPIUsage.model_validate(usage)
+    except ValidationError:
+        return None
+
+
 def _stamp_responses_usage_cost(
     response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
 ) -> None:
     if response_obj is None or logging_obj is None:
         return
-    usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+    usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
     if usage_obj is None:
         return
+    response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
     if isinstance(getattr(usage_obj, "cost", None), (int, float)):
         return
     try:
