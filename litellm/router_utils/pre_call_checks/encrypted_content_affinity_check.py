@@ -37,7 +37,6 @@ Safe to enable globally:
 """
 
 import time
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
 
 import httpx
@@ -149,8 +148,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _extract_model_id_from_messages(messages: Sequence[AllMessageValues] | None) -> str | None:
-        for message in messages or ():
+    def _extract_model_id_from_messages(messages: list[AllMessageValues] | None) -> str | None:
+        if messages is None:
+            return None
+        for message in messages:
             if message.get("role") != "assistant":
                 continue
             model_id: Final = EncryptedContentAffinityCheck._extract_model_id_from_input(message.get("reasoning_items"))
