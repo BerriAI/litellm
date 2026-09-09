@@ -1,11 +1,27 @@
+from collections.abc import Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from typing import Final
 
 import litellm
 from litellm._logging import print_verbose
-from litellm.utils import get_optional_params
+from litellm.utils import get_model_info, get_optional_params
 
 from ..llms.vllm.completion import handler as vllm_handler
+
+
+def _model_info_for_batch(
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    kwargs: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    from_kwargs: Final = kwargs.get("model_info")
+    if isinstance(from_kwargs, Mapping):
+        return from_kwargs
+    try:
+        return get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # get_model_info raises Exception for unmapped models
+        return None
 
 
 def batch_completion(
@@ -79,9 +95,13 @@ def batch_completion(
             frequency_penalty=frequency_penalty,
             logit_bias=logit_bias,
             user=user,
-            # params to identify the model
             model=model,
             custom_llm_provider=custom_llm_provider,
+            model_info=_model_info_for_batch(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+            ),
         )
         results = vllm_handler.batch_completions(
             model=model,
