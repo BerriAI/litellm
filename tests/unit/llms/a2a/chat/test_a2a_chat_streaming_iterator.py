@@ -129,6 +129,10 @@ def test_kagent_stream_finishes_on_completed_state():
             id="multipart_snapshot_extends",
         ),
         pytest.param(["", "OK", ""], "OK", id="empty_events_ignored"),
+        # A whitespace-only delta carries no non-whitespace text, so it must not be
+        # mistaken for a snapshot repeating the tail of the stream.
+        pytest.param(["Hello", " "], "Hello ", id="whitespace_only_delta_kept"),
+        pytest.param(["chatter", "answer", "answer"], "chatteranswer", id="snapshot_repeats_only_tail"),
     ],
 )
 def test_incremental_text_reduction(texts, expected):
@@ -169,3 +173,37 @@ def test_single_delta_then_snapshot_is_not_duplicated():
     """Regression: snapshot suppression must not depend on how many deltas preceded it."""
     iterator = _iterator()
     assert "".join(iterator.chunk_parser(e)["text"] for e in SINGLE_DELTA_STREAM) == "OK"
+
+
+# A delegating agent reports sub-agent progress into the same task before producing its own
+# answer. Modelled on kagent's ADK executor, which enqueues a status-update for every ADK event
+# and then re-sends the aggregated answer as BOTH a terminal status-update and a final artifact
+# (kagent-adk/src/kagent/adk/_agent_executor.py: run loop, then task result publication).
+ANSWER = "Diagnosis: optic degraded on emm001a-jnx-01."
+
+DELEGATING_AGENT_STREAM = [
+    _status_update(text="Diagnose the optical alarm on emm001a-jnx-01.", role="user", state="submitted"),
+    _status_update(text="Calling telemetry-agent..."),
+    _status_update(text="telemetry-agent: no anomalies found."),
+    _status_update(text="Diagnosis: optic degraded"),
+    _status_update(text=" on emm001a-jnx-01."),
+    _status_update(text=ANSWER),
+    _artifact_update(ANSWER),
+    _status_update(state="completed", final=True),
+]
+
+
+def test_delegating_agent_answer_is_not_repeated_after_tool_chatter():
+    """
+    Regression: a terminal snapshot repeats only the agent's answer, not the progress text
+    streamed ahead of it, so snapshot suppression cannot depend on the snapshot extending
+    everything emitted so far.
+
+    Without this, a delegating agent renders its answer three times: once from the deltas,
+    once from the terminal status-update and once from the final artifact.
+    """
+    iterator = _iterator()
+    rendered = "".join(iterator.chunk_parser(e)["text"] for e in DELEGATING_AGENT_STREAM)
+
+    assert rendered.count(ANSWER) == 1
+    assert rendered == f"Calling telemetry-agent...telemetry-agent: no anomalies found.{ANSWER}"
