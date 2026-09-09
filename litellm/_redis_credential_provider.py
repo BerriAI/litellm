@@ -4,15 +4,13 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import quote
 
 from redis.credentials import CredentialProvider
 
 if TYPE_CHECKING:
     from botocore.credentials import Credentials
-else:
-    Credentials = Any  # rebind-ok: runtime alias for the type-checking-only botocore import
 
 # Azure AD scope for Redis Cache for Azure.
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
