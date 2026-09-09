@@ -44,4 +44,28 @@ describe("PromptCodeSnippets", () => {
 
     expect(screen.getByRole("combobox", { name: "Language" })).toHaveTextContent("Python (OpenAI SDK)");
   });
+
+  it("includes the viewed environment in every generated request", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    render(
+      <PromptCodeSnippets
+        promptId="welcome"
+        model="gpt-4o"
+        accessToken="token"
+        version="2"
+        environment="development"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /get code/i }));
+    await screen.findByText("Generated Code");
+
+    await user.click(screen.getByRole("button", { name: /copy to clipboard/i }));
+    expect(await navigator.clipboard.readText()).toContain('"prompt_environment": "development"');
+
+    await user.click(screen.getByRole("tab", { name: "With Version" }));
+    await user.click(screen.getByRole("button", { name: /copy to clipboard/i }));
+    const versionSnippet = await navigator.clipboard.readText();
+    expect(versionSnippet).toContain('"prompt_environment": "development"');
+    expect(versionSnippet).toContain('"prompt_version": 2');
+  });
 });

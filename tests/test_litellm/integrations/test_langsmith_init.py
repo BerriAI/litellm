@@ -432,3 +432,103 @@ class TestLangsmithRedactUserApiKeyInfo:
         )
 
         assert data["inputs"]["metadata"]["user_api_key_hash"] == "abc123"
+
+
+class TestLangsmithRootRunIdConsistency:
+    """Regression tests for LIT-5878 / #37269.
+
+    A request that carries a session/trace header (e.g. x-claude-code-session-id)
+    fans the header value out into litellm metadata as both trace_id and
+    session_id. LangSmith then rejected the whole ingest batch twice over:
+    a root run whose trace_id does not match the run id embedded in dotted_order
+    (400), and a run-body session_id that does not reference an existing tracer
+    session (404, or 422 for non-UUID values).
+    """
+
+    def _prepare(self, request_metadata):
+        payload = {
+            "id": "slp-1",
+            "response": {"choices": []},
+            "metadata": {},
+            "startTime": 1.0,
+            "endTime": 2.0,
+            "request_tags": [],
+            "error_str": None,
+            "status": "success",
+            "response_cost": 0.0,
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+        logger = LangsmithLogger(
+            langsmith_api_key="test-key",
+            langsmith_project="test-project",
+        )
+        return logger._prepare_log_data(
+            kwargs={
+                "litellm_params": {"metadata": request_metadata},
+                "standard_logging_object": payload,
+            },
+            response_obj=None,
+            start_time=1.0,
+            end_time=2.0,
+            credentials={
+                "LANGSMITH_API_KEY": "test-key",
+                "LANGSMITH_PROJECT": "test-project",
+                "LANGSMITH_BASE_URL": "https://api.smith.langchain.com",
+            },
+        )
+
+    def test_header_derived_ids_yield_self_consistent_root_run(self):
+        header_value = "ed29c3bb-44fa-4eec-9b7b-fecaa3e82d64"
+        data = self._prepare({"trace_id": header_value, "session_id": header_value})
+
+        assert data["trace_id"] == data["id"]
+        assert data["trace_id"] != header_value
+        assert data["dotted_order"].endswith(data["id"])
+        assert len(data["dotted_order"]) == 22 + len(data["id"])
+        assert "session_id" not in data
+
+    def test_distinct_session_id_is_still_forwarded(self):
+        data = self._prepare({"session_id": "11111111-2222-3333-4444-555555555555"})
+
+        assert data["session_id"] == "11111111-2222-3333-4444-555555555555"
+
+    def test_trace_id_only_root_run_is_overridden(self):
+        data = self._prepare({"trace_id": "ed29c3bb-44fa-4eec-9b7b-fecaa3e82d64"})
+
+        assert data["trace_id"] == data["id"]
+        assert data["trace_id"] != "ed29c3bb-44fa-4eec-9b7b-fecaa3e82d64"
+        assert data["dotted_order"].endswith(data["id"])
+
+    def test_root_run_without_caller_ids_is_self_consistent(self):
+        data = self._prepare({})
+
+        assert data["trace_id"] == data["id"]
+        assert data["dotted_order"].endswith(data["id"])
+
+    def test_child_run_keeps_caller_trace_id(self):
+        data = self._prepare(
+            {
+                "trace_id": "trace-1",
+                "parent_run_id": "parent-1",
+                "run_id": "child-1",
+            }
+        )
+
+        assert data["trace_id"] == "trace-1"
+        assert data["id"] == "child-1"
+        assert data["parent_run_id"] == "parent-1"
+
+    def test_caller_supplied_dotted_order_and_trace_id_are_untouched(self):
+        dotted = "20260820T000000000000Ztrace-1.20260820T000001000000Zrun-1"
+        data = self._prepare(
+            {
+                "trace_id": "trace-1",
+                "run_id": "run-1",
+                "dotted_order": dotted,
+            }
+        )
+
+        assert data["trace_id"] == "trace-1"
+        assert data["dotted_order"] == dotted

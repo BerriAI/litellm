@@ -245,6 +245,24 @@ class TestOAuthM2M:
             assert "/serving-endpoints" not in call_url
             assert call_url == "https://adb-123.azuredatabricks.net/oidc/v1/token"
 
+    def test_oauth_m2m_strips_ai_gateway_path(self):
+        """OAuth M2M derives the token URL from the workspace origin."""
+        databricks_base = DatabricksBase()
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"access_token": "token"}
+
+        with patch("requests.post", return_value=mock_response) as mock_post:
+            databricks_base._get_oauth_m2m_token(
+                api_base="https://adb-123.azuredatabricks.net/ai-gateway/mlflow/v1",
+                client_id="id",
+                client_secret="secret",
+            )
+
+            call_url = mock_post.call_args[0][0]
+            assert call_url == "https://adb-123.azuredatabricks.net/oidc/v1/token"
+
 
 class TestValidateEnvironmentWithOAuth:
     """Test OAuth M2M is used when credentials are available."""

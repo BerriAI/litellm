@@ -9,4 +9,6 @@ flowchart LR
   C[client] <--> G[Rust ai-gateway<br/>LLM inference]
   G <--> O[OpenAI realtime]
   G -. spend tracking callback .-> P[litellm proxy]
+  F[litellm-config<br/>load-time only] --> G
+  F -. Python backend .-> P
 ```

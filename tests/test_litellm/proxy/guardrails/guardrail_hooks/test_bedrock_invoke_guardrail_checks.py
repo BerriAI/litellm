@@ -833,3 +833,31 @@ async def test_many_blocks_scanned_at_request_level_and_can_block():
     sent_texts = [c["text"] for m in body_messages for c in m["content"]]
     assert sent_texts == [f"b{i}" for i in range(25)]
     assert all(len(m["content"]) <= 10 for m in body_messages)
+
+
+@pytest.mark.asyncio
+async def test_checks_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """Same bearer-token rule as ApplyGuardrail: the guardrail's AWS profile does
+    not exist, yet the InvokeGuardrailChecks call still goes out on the bearer
+    token and its verdict is enforced."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    g = BedrockGuardrail(
+        checks=CONTENT_FILTER_CHECKS,
+        content_filter_threshold=0.5,
+        aws_profile_name="litellm-no-such-aws-profile",
+    )
+    payload = {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.8}]}}}
+    post = AsyncMock(return_value=_mock_http_response(200, payload))
+
+    with patch.object(g.async_handler, "post", new=post):
+        with pytest.raises(HTTPException) as exc:
+            await g.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "hi"}],
+                request_data={"messages": []},
+            )
+
+    assert exc.value.detail["bedrock_guardrail_checks"] == [
+        {"check": "contentFilter", "category": "VIOLENCE", "severityScore": 0.8}
+    ]
+    assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"

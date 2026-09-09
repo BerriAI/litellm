@@ -194,7 +194,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
               <SelectTrigger id={`${fieldId}-type`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 {INTENT_TYPES.map((type) => (
                   <SelectItem key={type.value} value={type.value} title={type.label}>
                     {type.label}
@@ -268,7 +268,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
               <SelectTrigger id={`${fieldId}-competitor-comparison`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 {COMPETITOR_COMPARISON_POLICIES.map((policy) => (
                   <SelectItem key={policy.value} value={policy.value} title={policy.label}>
                     {policy.label}
@@ -292,7 +292,7 @@ const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps
               <SelectTrigger id={`${fieldId}-possible-competitor-comparison`} className="w-full">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent alignItemWithTrigger={false}>
+              <SelectContent>
                 {POSSIBLE_COMPETITOR_COMPARISON_POLICIES.map((policy) => (
                   <SelectItem key={policy.value} value={policy.value} title={policy.label}>
                     {policy.label}

@@ -157,6 +157,7 @@ class TestUpCommand:
         assert captured["settings"]["theme"] == "dark"
         assert captured["settings"]["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:5483"
         assert captured["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == "fixed-master-key"
+        assert captured["settings"]["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert "apiKeyHelper" not in captured["settings"]
         assert captured["settings_mode"] == 0o600
 

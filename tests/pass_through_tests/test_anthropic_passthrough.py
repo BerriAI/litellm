@@ -50,9 +50,9 @@ async def test_anthropic_basic_completion_with_headers():
             anthropic_api_output_tokens = (
                 reported_usage.get("output_tokens", None) if reported_usage else None
             )
-            litellm_call_id = response_headers.get("x-litellm-call-id")
+            anthropic_message_id = response_json.get("id")
 
-            print(f"LiteLLM Call ID: {litellm_call_id}")
+            print(f"Anthropic message ID: {anthropic_message_id}")
 
             # Wait for spend to be logged
             await asyncio.sleep(15)
@@ -64,7 +64,7 @@ async def test_anthropic_basic_completion_with_headers():
                 print(f"Attempt {attempt + 1}/{max_retries} to check spend logs")
 
                 async with session.get(
-                    f"http://0.0.0.0:4000/spend/logs?request_id={litellm_call_id}",
+                    f"http://0.0.0.0:4000/spend/logs?request_id={anthropic_message_id}",
                     headers={"Authorization": "Bearer sk-1234"},
                 ) as spend_response:
                     print("text spend response")
@@ -84,17 +84,15 @@ async def test_anthropic_basic_completion_with_headers():
                             print("Waiting 10 seconds before retry...")
                             await asyncio.sleep(10)
 
-            # Spend data might be unavailable (auth error, slow DB write, etc.)
-            if (
-                spend_data is None
-                or not isinstance(spend_data, list)
-                or len(spend_data) == 0
-                or not isinstance(spend_data[0], dict)
-                or "request_id" not in spend_data[0]
-            ):
-                print(f"Spend data not available or is error response: {spend_data}")
-                print("Skipping spend assertions (DB write may be slow in CI)")
+            if not isinstance(spend_data, list):
+                print(f"Spend endpoint answered with an error response: {spend_data}")
+                print("Skipping spend assertions (spend logs unreachable in CI)")
                 return
+
+            assert spend_data, (
+                f"GET /spend/logs?request_id={anthropic_message_id} found no row for the id "
+                "the caller received"
+            )
 
             log_entry = spend_data[0]
 
@@ -102,7 +100,9 @@ async def test_anthropic_basic_completion_with_headers():
             assert isinstance(log_entry, dict), "Log entry should be a dictionary"
 
             # Request metadata assertions
-            assert log_entry["request_id"] == litellm_call_id, "Request ID should match"
+            assert (
+                log_entry["request_id"] == anthropic_message_id
+            ), "Request ID should be the message id the caller received"
             assert (
                 log_entry["call_type"] == "pass_through_endpoint"
             ), "Call type should be pass_through_endpoint"
@@ -182,8 +182,6 @@ async def test_anthropic_streaming_with_headers():
             assert response.status == 200, "Response should be successful"
             response_headers = response.headers
             print(f"Response headers: {response_headers}")
-            litellm_call_id = response_headers.get("x-litellm-call-id")
-            print(f"LiteLLM Call ID: {litellm_call_id}")
 
             collected_output = []
             async for line in response.content:
@@ -194,12 +192,17 @@ async def test_anthropic_streaming_with_headers():
 
             print("Collected output:", "".join(collected_output))
             anthropic_api_usage_chunks = []
+            anthropic_message_id = None
             for chunk in collected_output:
                 chunk_json = json.loads(chunk)
+                if chunk_json.get("type") == "message_start":
+                    anthropic_message_id = chunk_json.get("message", {}).get("id")
                 if "usage" in chunk_json:
                     anthropic_api_usage_chunks.append(chunk_json["usage"])
                 elif "message" in chunk_json and "usage" in chunk_json["message"]:
                     anthropic_api_usage_chunks.append(chunk_json["message"]["usage"])
+
+            print(f"Anthropic message ID: {anthropic_message_id}")
 
             print(
                 "anthropic_api_usage_chunks",
@@ -232,7 +235,7 @@ async def test_anthropic_streaming_with_headers():
                 print(f"Attempt {attempt + 1}/{max_retries} to check spend logs")
 
                 async with session.get(
-                    f"http://0.0.0.0:4000/spend/logs?request_id={litellm_call_id}",
+                    f"http://0.0.0.0:4000/spend/logs?request_id={anthropic_message_id}",
                     headers={"Authorization": "Bearer sk-1234"},
                 ) as spend_response:
                     spend_data = await spend_response.json()
@@ -250,17 +253,15 @@ async def test_anthropic_streaming_with_headers():
                             print("Waiting 10 seconds before retry...")
                             await asyncio.sleep(10)
 
-            # Spend data might be unavailable (auth error, slow DB write, etc.)
-            if (
-                spend_data is None
-                or not isinstance(spend_data, list)
-                or len(spend_data) == 0
-                or not isinstance(spend_data[0], dict)
-                or "request_id" not in spend_data[0]
-            ):
-                print(f"Spend data not available or is error response: {spend_data}")
-                print("Skipping spend assertions (DB write may be slow in CI)")
+            if not isinstance(spend_data, list):
+                print(f"Spend endpoint answered with an error response: {spend_data}")
+                print("Skipping spend assertions (spend logs unreachable in CI)")
                 return
+
+            assert spend_data, (
+                f"GET /spend/logs?request_id={anthropic_message_id} found no row for the id "
+                "the caller received"
+            )
 
             log_entry = spend_data[0]
 
@@ -268,7 +269,9 @@ async def test_anthropic_streaming_with_headers():
             assert isinstance(log_entry, dict), "Log entry should be a dictionary"
 
             # Request metadata assertions
-            assert log_entry["request_id"] == litellm_call_id, "Request ID should match"
+            assert (
+                log_entry["request_id"] == anthropic_message_id
+            ), "Request ID should be the message id the caller received"
             assert (
                 log_entry["call_type"] == "pass_through_endpoint"
             ), "Call type should be pass_through_endpoint"

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -10,6 +10,7 @@ from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
 
 if TYPE_CHECKING:
+    import tiktoken
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
 
 
@@ -51,7 +52,7 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
