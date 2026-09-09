@@ -3357,21 +3357,9 @@ async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncreme
     ]
     try:
         results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
-    except Exception:  # noqa: BLE001  # spend tracking must degrade to per-key increments on any pipeline error
-        # Degrade to the pre-pipeline per-key path: each key applies or
-        # invalidates itself, so one failure cannot drop increments that
-        # already landed on the shared counters.
-        fallback_results: Final = await asyncio.gather(
-            *(
-                _increment_spend_counter_cache(counter_key=item.counter_key, increment=item.increment)
-                for item in pending
-            ),
-            return_exceptions=True,
-        )
-        fallback_errors: Final = tuple(r for r in fallback_results if isinstance(r, BaseException))
-        if fallback_errors:
-            raise fallback_errors[0]
-        return
+    except Exception:
+        await asyncio.gather(*(_invalidate_spend_counter(counter_key=item.counter_key) for item in pending))
+        raise
     for item, current_value in zip(pending, results or ()):
         spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
 

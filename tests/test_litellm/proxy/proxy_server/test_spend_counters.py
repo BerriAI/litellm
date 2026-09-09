@@ -830,12 +830,12 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_pipeline_failure_falls_back_per_key(
+async def test_increment_spend_counters_pipeline_failure_invalidates_all_counters(
     monkeypatch,
 ):
-    """When the pipeline fails, each counter falls back to its own increment so
-    increments that can still land are not lost; a counter is invalidated only
-    when its own fallback write fails."""
+    """A failing pipeline must invalidate every pending counter so the next
+    request reseeds from the DB (which already holds this request's cost)
+    instead of trusting a value the write may have partially applied."""
     from redis.exceptions import MaxConnectionsError
 
     counter_cache = ps.DualCache()
@@ -854,13 +854,7 @@ async def test_increment_spend_counters_pipeline_failure_falls_back_per_key(
     fake_redis = AsyncMock()
     fake_redis.async_get_cache = AsyncMock(return_value=1.0)  # counters warm
     fake_redis.async_increment_pipeline = AsyncMock(side_effect=MaxConnectionsError())
-
-    async def _per_key(*, key, value, **kwargs):
-        if key == "spend:tag:tag-b":
-            raise MaxConnectionsError()
-        return 2.5
-
-    fake_redis.async_increment = AsyncMock(side_effect=_per_key)
+    fake_redis.async_increment = AsyncMock()
     fake_redis.async_delete_cache = AsyncMock()
     fake_redis.get_ttl = MagicMock(return_value=None)
     counter_cache.redis_cache = fake_redis
@@ -879,15 +873,11 @@ async def test_increment_spend_counters_pipeline_failure_falls_back_per_key(
             tags=["tag-a", "tag-b"],
         )
 
-    # every pending counter got its own increment attempt, applied per key
-    assert fake_redis.async_increment.await_count == len(pending_keys)
+    assert fake_redis.async_increment.await_count == 0
+    deleted_keys = {call.kwargs["key"] for call in fake_redis.async_delete_cache.await_args_list}
+    assert deleted_keys == set(pending_keys)
     for key in pending_keys:
-        if key == "spend:tag:tag-b":
-            assert counter_cache.in_memory_cache.get_cache(key=key) is None
-        else:
-            assert counter_cache.in_memory_cache.get_cache(key=key) == 2.5
-    # only the key whose own write failed is invalidated
-    assert {call.kwargs["key"] for call in fake_redis.async_delete_cache.await_args_list} == {"spend:tag:tag-b"}
+        assert counter_cache.in_memory_cache.get_cache(key=key) is None
 
 
 # ---------------------------------------------------------------------------
