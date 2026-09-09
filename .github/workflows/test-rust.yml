@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "litellm-rust/**"
+      - "tests/test_litellm_rust/**"
       - ".cargo/**"
       - "pyproject.toml"
       - "rust-toolchain.toml"
@@ -20,6 +21,7 @@ on:
       - "litellm_**"
     paths:
       - "litellm-rust/**"
+      - "tests/test_litellm_rust/**"
       - ".cargo/**"
       - "pyproject.toml"
       - "rust-toolchain.toml"
