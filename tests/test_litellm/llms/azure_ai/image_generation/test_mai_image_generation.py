@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.image_generation import get_azure_image_generation_config
 from litellm.llms.azure.image_generation.http_utils import (
@@ -180,7 +181,7 @@ class TestAzureMAIImageGeneration:
 
     def test_map_openai_params_unsupported_size_raises(self):
         config = AzureFoundryMAIImageGenerationConfig()
-        with pytest.raises(ValueError, match="Unsupported size value: 'auto'"):
+        with pytest.raises(UnsupportedParamsError, match="Unsupported size value: 'auto'"):
             config.map_openai_params(
                 non_default_params={"size": "auto"},
                 optional_params={},
@@ -190,7 +191,7 @@ class TestAzureMAIImageGeneration:
 
     def test_map_openai_params_invalid_custom_size_raises(self):
         config = AzureFoundryMAIImageGenerationConfig()
-        with pytest.raises(ValueError, match="Invalid size format: '1024xabc'"):
+        with pytest.raises(UnsupportedParamsError, match="Invalid size format: '1024xabc'"):
             config.map_openai_params(
                 non_default_params={"size": "1024xabc"},
                 optional_params={},
@@ -200,9 +201,8 @@ class TestAzureMAIImageGeneration:
 
     @pytest.mark.parametrize("size", ["512x512", "256x256", "700x1400"])
     def test_map_openai_params_size_below_minimum_dimension_raises(self, size):
-        """MAI requires >= 768px per side; the OpenAI size table offered smaller ones."""
         config = AzureFoundryMAIImageGenerationConfig()
-        with pytest.raises(ValueError, match="at least 768 pixels"):
+        with pytest.raises(UnsupportedParamsError, match="at least 768 pixels"):
             config.map_openai_params(
                 non_default_params={"size": size},
                 optional_params={},
@@ -212,9 +212,8 @@ class TestAzureMAIImageGeneration:
 
     @pytest.mark.parametrize("size", ["1792x1024", "1024x1792"])
     def test_map_openai_params_size_over_total_pixel_budget_raises(self, size):
-        """MAI caps total pixels at 1024*1024, so both landscape/portrait sizes 400 upstream."""
         config = AzureFoundryMAIImageGenerationConfig()
-        with pytest.raises(ValueError, match="at most 1048576 total pixels"):
+        with pytest.raises(UnsupportedParamsError, match="at most 1048576 total pixels"):
             config.map_openai_params(
                 non_default_params={"size": size},
                 optional_params={},
@@ -223,7 +222,6 @@ class TestAzureMAIImageGeneration:
             )
 
     def test_map_openai_params_explicit_width_height_not_range_checked(self):
-        """width/height pass through unmapped, so a future model's bounds stay reachable."""
         config = AzureFoundryMAIImageGenerationConfig()
         optional_params = config.map_openai_params(
             non_default_params={"width": 1792, "height": 1024},
@@ -234,11 +232,10 @@ class TestAzureMAIImageGeneration:
         assert optional_params["width"] == 1792
         assert optional_params["height"] == 1024
 
-    @pytest.mark.parametrize("n", [2, 4])
+    @pytest.mark.parametrize("n", [2, 4, "2"])
     def test_map_openai_params_multi_image_n_raises(self, n):
-        """The MAI endpoint returns one image and ignores any count, so n>1 must not pass silently."""
         config = AzureFoundryMAIImageGenerationConfig()
-        with pytest.raises(ValueError, match="returns exactly 1 image per request"):
+        with pytest.raises(UnsupportedParamsError, match="returns exactly 1 image per request"):
             config.map_openai_params(
                 non_default_params={"n": n},
                 optional_params={},
@@ -266,9 +263,21 @@ class TestAzureMAIImageGeneration:
         )
         assert optional_params["n"] == 1
 
+    @pytest.mark.parametrize("params", [{"n": 2}, {"size": "512x512"}, {"size": "1792x1024"}])
+    def test_image_generation_rejected_params_surface_as_400(self, params):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.image_generation(
+                model="azure_ai/MAI-Image-2.5",
+                prompt="A photograph of a red fox",
+                api_key="test-key",
+                api_base="https://my-resource.services.ai.azure.com",
+                **params,
+            )
+        assert exc_info.value.status_code == 400
+
     def test_map_openai_params_unsupported_param_raises(self):
         config = AzureFoundryMAIImageGenerationConfig()
-        with pytest.raises(ValueError, match="Parameter quality is not supported"):
+        with pytest.raises(UnsupportedParamsError, match="Parameter quality is not supported"):
             config.map_openai_params(
                 non_default_params={"quality": "hd"},
                 optional_params={},
