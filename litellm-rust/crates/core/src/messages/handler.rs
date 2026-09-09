@@ -16,6 +16,46 @@ pub(super) async fn execute_messages_provider_call(
     execute_provider_messages_request(request).await
 }
 
+pub(crate) async fn execute_messages_provider_call_with_transport(
+    environment: &dyn crate::providers::auth::Environment,
+    transport: &dyn crate::runtime::HttpTransport,
+    request: MessagesRequest,
+) -> Result<AnthropicMessagesResponse, Error> {
+    let request =
+        build_provider_request_with_environment(request, &|key| environment.environment(key))?;
+    let super::types::ProviderMessagesRequest {
+        model,
+        config,
+        url,
+        http,
+        timeout,
+        ..
+    } = request;
+    let (body, headers) = http.into_parts();
+    let response = transport
+        .execute(crate::runtime::HttpRequest {
+            method: reqwest::Method::POST,
+            url,
+            headers,
+            body,
+            timeout,
+        })
+        .await?;
+    let text = String::from_utf8(response.body).map_err(|error| {
+        Error::InvalidResponse(format!("invalid messages response body: {error}"))
+    })?;
+    if !(200..300).contains(&response.status) {
+        return Err(Error::Http {
+            status: response.status,
+            body: truncate_error_body(&text),
+        });
+    }
+    let response = serde_json::from_str(&text).map_err(|error| {
+        Error::InvalidResponse(format!("invalid messages response JSON: {error}"))
+    })?;
+    config.transform_response(&model, response)
+}
+
 pub async fn execute_provider_messages_request(
     request: super::types::ProviderMessagesRequest,
 ) -> Result<AnthropicMessagesResponse, Error> {

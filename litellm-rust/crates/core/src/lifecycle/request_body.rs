@@ -108,6 +108,14 @@ impl<T> PreCallBody<T> {
             Self::SerializedAtBuild { .. } => None,
         }
     }
+
+    pub fn authorized(&self) -> Option<&AuthorizedBody> {
+        match self {
+            Self::StructuredAtSend { .. } => None,
+            Self::StructuredAtBuild { authorized, .. }
+            | Self::SerializedAtBuild { authorized, .. } => Some(authorized),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

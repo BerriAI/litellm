@@ -7,7 +7,6 @@
 //! is the streaming variant.
 
 use crate::Error;
-use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 pub mod common_utils;
 mod handler;
 pub mod lifecycle;
@@ -16,30 +15,14 @@ pub mod transformation;
 pub mod types;
 
 use crate::lifecycle::StreamingCall;
-pub(crate) use handler::execute_messages_provider_stream_with_transport;
 pub use handler::execute_provider_messages_request;
+pub(crate) use handler::{
+    execute_messages_provider_call_with_transport, execute_messages_provider_stream_with_transport,
+};
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
 pub async fn messages(request: MessagesRequest) -> Result<AnthropicMessagesResponse, Error> {
-    let provider = request
-        .custom_llm_provider
-        .as_deref()
-        .or_else(|| request.model.split_once('/').map(|(provider, _)| provider))
-        .unwrap_or(ANTHROPIC_MESSAGES_PROVIDER);
-    let context = crate::lifecycle::CallLifecycleContext::new(
-        "messages",
-        &request.model,
-        provider,
-        format!("{:032x}", rand::random::<u128>()),
-    );
-    lifecycle::messages(
-        &lifecycle::NoopServices,
-        request,
-        lifecycle::Options::default(),
-        context,
-    )
-    .await
-    .into_result()
+    crate::runtime::LiteLlm::new().messages(request).await
 }
 
 pub async fn messages_stream(request: MessagesRequest) -> Result<StreamingCall, Error> {

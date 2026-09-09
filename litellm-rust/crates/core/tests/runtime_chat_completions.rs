@@ -4,7 +4,10 @@ use std::time::SystemTime;
 
 use litellm_core::Error;
 use litellm_core::chat_completions::types::ChatCompletionsRequest;
-use litellm_core::lifecycle::CallLifecycleContext;
+use litellm_core::integrations::custom_logger::{LogError, LogFuture};
+use litellm_core::lifecycle::{
+    ActionResult, CallLifecycleContext, Clock, RequestPolicy, TerminalDispatcher, TerminalRecord,
+};
 use litellm_core::providers::auth::{AwsMechanisms, Environment, SigningClock};
 use litellm_core::runtime::{
     CallServices, ChatCompletionsServices, HttpFuture, HttpRequest, HttpResponse, HttpStreamFuture,
@@ -19,6 +22,7 @@ const RESPONSE: &str = r#"{"model":"claude-sonnet-4-5","content":[{"type":"text"
 #[derive(Clone)]
 struct RecordingTransport {
     requests: Arc<Mutex<Vec<HttpRequest>>>,
+    status: u16,
     response: &'static str,
 }
 
@@ -26,7 +30,7 @@ impl HttpTransport for RecordingTransport {
     fn execute(&self, request: HttpRequest) -> HttpFuture<'_> {
         self.requests.lock().unwrap().push(request);
         Box::pin(std::future::ready(Ok(HttpResponse {
-            status: 200,
+            status: self.status,
             body: self.response.as_bytes().to_vec(),
         })))
     }
@@ -41,12 +45,89 @@ impl HttpTransport for RecordingTransport {
 #[derive(Clone)]
 struct RecordingCalls {
     opened: Arc<Mutex<Vec<(String, u64)>>>,
+    terminals: Arc<Mutex<Vec<TerminalRecord>>>,
 }
 
-struct RecordingSession;
+#[derive(Clone, Copy)]
+struct Bindings {
+    id: u64,
+    reject: bool,
+}
+
+impl Bindings {
+    fn new(id: u64) -> Self {
+        Self { id, reject: false }
+    }
+}
+
+struct RecordingSession {
+    terminals: Arc<Mutex<Vec<TerminalRecord>>>,
+    reject: bool,
+}
+
+impl Clock for RecordingSession {
+    fn now(&self) -> f64 {
+        10.0
+    }
+}
+
+impl<'request>
+    RequestPolicy<
+        litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+        litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+    > for RecordingSession
+{
+    type PreCallFuture<'a>
+        = std::future::Ready<
+        ActionResult<
+            litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+            Error,
+        >,
+    >
+    where
+        Self: 'a;
+    type DuringCallFuture<'a>
+        = std::future::Ready<
+        ActionResult<
+            litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+            Error,
+        >,
+    >
+    where
+        Self: 'a;
+
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+    ) -> Self::PreCallFuture<'a> {
+        std::future::ready(if self.reject {
+            ActionResult::Reject(Error::InvalidRequest("blocked by session".into()))
+        } else {
+            ActionResult::Continue(request)
+        })
+    }
+
+    fn async_during_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+    ) -> Self::DuringCallFuture<'a> {
+        std::future::ready(ActionResult::Continue(request))
+    }
+}
+
+impl TerminalDispatcher for RecordingSession {
+    fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
+        Box::pin(async move {
+            self.terminals.lock().unwrap().push(terminal.clone());
+            Ok::<(), LogError>(())
+        })
+    }
+}
 
 impl CallServices for RecordingCalls {
-    type Bindings = u64;
+    type Bindings = Bindings;
     type Session = RecordingSession;
     type OpenFuture<'a> = SessionFuture<'a, RecordingSession>;
 
@@ -58,8 +139,11 @@ impl CallServices for RecordingCalls {
         self.opened
             .lock()
             .unwrap()
-            .push((context.litellm_call_id, bindings));
-        Box::pin(std::future::ready(Ok(RecordingSession)))
+            .push((context.litellm_call_id, bindings.id));
+        Box::pin(std::future::ready(Ok(RecordingSession {
+            terminals: self.terminals.clone(),
+            reject: bindings.reject,
+        })))
     }
 }
 
@@ -108,10 +192,12 @@ fn services() -> Services {
     Services {
         transport: RecordingTransport {
             requests: Arc::new(Mutex::new(Vec::new())),
+            status: 200,
             response: RESPONSE,
         },
         calls: RecordingCalls {
             opened: Arc::new(Mutex::new(Vec::new())),
+            terminals: Arc::new(Mutex::new(Vec::new())),
         },
         environment_reads: AtomicUsize::new(0),
         #[cfg(feature = "bedrock-auth")]
@@ -146,7 +232,7 @@ async fn bedrock_client_signs_the_exact_body_given_to_the_transport() {
     };
 
     let response = client
-        .chat_completions_with(call, context("bedrock"), 33)
+        .chat_completions_with(call, context("bedrock"), Bindings::new(33))
         .await
         .unwrap();
     assert_eq!(
@@ -198,7 +284,7 @@ async fn admission_failure_opens_no_session_and_performs_no_effects() {
         .chat_completions_with(
             request("declined", Map::from_iter([("stream".into(), json!(true))])),
             context("declined"),
-            1,
+            Bindings::new(1),
         )
         .await
         .expect_err("streaming is not admitted");
@@ -227,8 +313,16 @@ async fn clones_share_application_services_but_open_isolated_sessions() {
     assert!(std::ptr::eq(client.services(), clone.services()));
 
     let (first, second) = tokio::join!(
-        client.chat_completions_with(request("first", Map::new()), context("outer"), 11),
-        clone.chat_completions_with(request("second", Map::new()), context("inner"), 22),
+        client.chat_completions_with(
+            request("first", Map::new()),
+            context("outer"),
+            Bindings::new(11),
+        ),
+        clone.chat_completions_with(
+            request("second", Map::new()),
+            context("inner"),
+            Bindings::new(22),
+        ),
     );
     assert_eq!(
         first.unwrap().choices[0].message.content.as_deref(),
@@ -260,6 +354,70 @@ async fn clones_share_application_services_but_open_isolated_sessions() {
                 .iter()
                 .any(|(name, value)| name == "x-api-key" && value == "sk-test")
     }));
+    assert_eq!(client.services().calls.terminals.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn session_rejection_is_terminal_and_never_reaches_transport() {
+    let client = LiteLlm::from_services(services());
+    let error = client
+        .chat_completions_with(
+            request("blocked", Map::new()),
+            context("blocked"),
+            Bindings {
+                id: 44,
+                reject: true,
+            },
+        )
+        .await
+        .expect_err("session rejects the request");
+
+    assert_eq!(error, Error::InvalidRequest("blocked by session".into()));
+    assert!(
+        client
+            .services()
+            .transport
+            .requests
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+    let terminals = client.services().calls.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(terminals[0].call_id, "blocked");
+    assert!(matches!(
+        terminals[0].classification,
+        litellm_core::lifecycle::TerminalClassification::Failure { .. }
+    ));
+}
+
+#[tokio::test]
+async fn provider_failure_is_dispatched_once_by_the_open_session() {
+    let mut application = services();
+    application.transport.status = 429;
+    application.transport.response = r#"{"error":"rate limited"}"#;
+    let client = LiteLlm::from_services(application);
+    let error = client
+        .chat_completions_with(
+            request("provider failure", Map::new()),
+            context("provider-failure"),
+            Bindings::new(55),
+        )
+        .await
+        .expect_err("provider rejects the request");
+
+    assert!(matches!(error, Error::Http { status: 429, .. }));
+    assert_eq!(
+        client.services().transport.requests.lock().unwrap().len(),
+        1
+    );
+    let terminals = client.services().calls.terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(terminals[0].call_id, "provider-failure");
+    assert!(matches!(
+        terminals[0].classification,
+        litellm_core::lifecycle::TerminalClassification::Failure { .. }
+    ));
 }
 
 #[tokio::test]

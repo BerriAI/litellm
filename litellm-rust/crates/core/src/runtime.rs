@@ -11,7 +11,7 @@ use crate::lifecycle::{
     TerminalDispatcher, TerminalRecord,
 };
 use crate::messages::lifecycle::{MessagesServices, Options as MessagesOptions};
-use crate::messages::types::MessagesRequest;
+use crate::messages::types::{AnthropicMessagesResponse, MessagesRequest};
 
 pub struct HttpRequest {
     pub method: reqwest::Method,
@@ -194,6 +194,48 @@ impl RequestPolicy<MessagesRequest, MessagesRequest> for NativeSession {
     }
 }
 
+impl<'request>
+    RequestPolicy<
+        crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+        crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+    > for NativeSession
+{
+    type PreCallFuture<'a>
+        = std::future::Ready<
+        ActionResult<
+            crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+            Error,
+        >,
+    >
+    where
+        Self: 'a;
+    type DuringCallFuture<'a>
+        = std::future::Ready<
+        ActionResult<
+            crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+            Error,
+        >,
+    >
+    where
+        Self: 'a;
+
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+    ) -> Self::PreCallFuture<'a> {
+        std::future::ready(ActionResult::Continue(request))
+    }
+
+    fn async_during_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+    ) -> Self::DuringCallFuture<'a> {
+        std::future::ready(ActionResult::Continue(request))
+    }
+}
+
 impl TerminalDispatcher for NativeSession {
     fn dispatch<'a>(&'a self, _: &'a TerminalRecord) -> LogFuture<'a> {
         Box::pin(async { Ok::<(), LogError>(()) })
@@ -362,6 +404,24 @@ impl LiteLlm<NativeServices> {
         self.messages_stream_with(request, MessagesOptions::default(), context, NativeBindings)
             .await
     }
+
+    pub async fn messages(
+        &self,
+        request: MessagesRequest,
+    ) -> Result<AnthropicMessagesResponse, Error> {
+        let provider = request
+            .custom_llm_provider
+            .as_deref()
+            .or_else(|| request.model.split_once('/').map(|(provider, _)| provider))
+            .unwrap_or(crate::constants::ANTHROPIC_MESSAGES_PROVIDER);
+        let context = CallLifecycleContext::new(
+            "messages",
+            &request.model,
+            provider,
+            format!("{:032x}", rand::random::<u128>()),
+        );
+        self.messages_with(request, context, NativeBindings).await
+    }
 }
 
 impl Default for LiteLlm<NativeServices> {
@@ -373,6 +433,8 @@ impl Default for LiteLlm<NativeServices> {
 impl<S> LiteLlm<S>
 where
     S: ChatCompletionsServices,
+    <<S as ChatCompletionsServices>::Calls as CallServices>::Session:
+        crate::chat_completions::lifecycle::ChatCompletionsSession,
 {
     pub async fn chat_completions_with(
         &self,
@@ -381,13 +443,54 @@ where
         bindings: <<S as ChatCompletionsServices>::Calls as CallServices>::Bindings,
     ) -> Result<ChatCompletionsResponse, Error> {
         let request = crate::chat_completions::request::resolve_request(request)?;
-        let _session = self.services.calls().open(context, bindings).await?;
-        crate::chat_completions::handler::execute_chat_completions_provider_call_with_transport(
+        let session = self
+            .services
+            .calls()
+            .open(context.clone(), bindings)
+            .await?;
+        crate::chat_completions::lifecycle::execute(
             &*self.services,
             self.services.transport(),
+            &session,
             request,
+            context,
         )
         .await
+        .into_result()
+    }
+}
+
+impl<S> LiteLlm<S>
+where
+    S: MessagesRuntimeServices,
+    <<S as MessagesRuntimeServices>::Calls as CallServices>::Session: MessagesServices,
+{
+    pub async fn messages_with(
+        &self,
+        request: MessagesRequest,
+        context: CallLifecycleContext,
+        bindings: <<S as MessagesRuntimeServices>::Calls as CallServices>::Bindings,
+    ) -> Result<AnthropicMessagesResponse, Error> {
+        let invocation = self
+            .services
+            .calls()
+            .open(context.clone(), bindings)
+            .await?;
+        crate::messages::lifecycle::messages_with_provider(
+            &invocation,
+            request,
+            context,
+            |request| async move {
+                crate::messages::execute_messages_provider_call_with_transport(
+                    &*self.services,
+                    self.services.transport(),
+                    request,
+                )
+                .await
+            },
+        )
+        .await
+        .into_result()
     }
 }
 

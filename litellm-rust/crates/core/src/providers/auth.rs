@@ -13,7 +13,7 @@ pub type AwsCredentialState = litellm_auth_aws::CredentialState<
 >;
 
 #[cfg(feature = "bedrock-auth")]
-pub(crate) fn native_aws_credential_state() -> AwsCredentialState {
+pub fn native_aws_credential_state() -> AwsCredentialState {
     AwsCredentialState::with_clock(
         Arc::new(litellm_auth_aws::NativeCredentialRuntime),
         MAX_CACHED_CREDENTIALS,

@@ -1,6 +1,16 @@
 use crate::Error;
+use crate::integrations::custom_logger::{LogError, LogFuture};
+use crate::integrations::types::Usage;
 use crate::lifecycle::program::{CallProgram, ProgramOptions, actions_for};
-use crate::lifecycle::{ActionBinding, Lifecycle, LifecycleRoute, Outcome};
+use crate::lifecycle::{
+    ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall,
+    Lifecycle, LifecycleRoute, Outcome, RequestPolicy, SystemClock, TerminalDispatcher,
+    TerminalRecord,
+};
+
+use super::handler::execute_chat_completions_provider_call_with_transport;
+use super::types::SettledChatRequest;
+use super::types::{ChatCompletionsResponse, ResolvedChatCompletionsRequest};
 
 use super::chat_completions_decline_reason;
 
@@ -105,6 +115,114 @@ pub fn machine(
     options: Options,
 ) -> Result<Result<Lifecycle<ChatCompletionsRoute>, Decline>, Error> {
     Lifecycle::admit(admission, options)
+}
+
+pub trait ChatCompletionsSession:
+    for<'request> RequestPolicy<
+        ResolvedChatCompletionsRequest<'request>,
+        ResolvedChatCompletionsRequest<'request>,
+    > + TerminalDispatcher
+    + Clock
+{
+}
+
+impl<T> ChatCompletionsSession for T where
+    T: for<'request> RequestPolicy<
+            ResolvedChatCompletionsRequest<'request>,
+            ResolvedChatCompletionsRequest<'request>,
+        > + TerminalDispatcher
+        + Clock
+{
+}
+
+pub async fn execute<'request, S, T, A>(
+    application: &A,
+    transport: &T,
+    session: &S,
+    request: ResolvedChatCompletionsRequest<'request>,
+    context: CallLifecycleContext,
+) -> ExecutedCall<ChatCompletionsResponse, Error>
+where
+    S: ChatCompletionsSession,
+    T: crate::runtime::HttpTransport,
+    A: crate::providers::auth::ChatAuthorizationServices,
+{
+    CallLifecycle
+        .run_with_usage(
+            (context, request),
+            session,
+            session,
+            session,
+            |request| async move {
+                execute_chat_completions_provider_call_with_transport(
+                    application,
+                    transport,
+                    request,
+                )
+                .await
+            },
+            response_usage,
+        )
+        .await
+}
+
+fn response_usage(response: &ChatCompletionsResponse) -> Option<Usage> {
+    Some(Usage {
+        prompt_tokens: response.usage.prompt_tokens,
+        completion_tokens: response.usage.completion_tokens,
+        total_tokens: response.usage.total_tokens,
+    })
+}
+
+struct UndispatchedSession;
+
+impl Clock for UndispatchedSession {
+    fn now(&self) -> f64 {
+        SystemClock.now()
+    }
+}
+
+impl RequestPolicy<SettledChatRequest, SettledChatRequest> for UndispatchedSession {
+    type PreCallFuture<'a> = std::future::Ready<ActionResult<SettledChatRequest, Error>>;
+    type DuringCallFuture<'a> = std::future::Ready<ActionResult<SettledChatRequest, Error>>;
+
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: SettledChatRequest,
+    ) -> Self::PreCallFuture<'a> {
+        std::future::ready(ActionResult::Continue(request))
+    }
+
+    fn async_during_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: SettledChatRequest,
+    ) -> Self::DuringCallFuture<'a> {
+        std::future::ready(ActionResult::Continue(request))
+    }
+}
+
+impl TerminalDispatcher for UndispatchedSession {
+    fn dispatch<'a>(&'a self, _: &'a TerminalRecord) -> LogFuture<'a> {
+        Box::pin(async { Ok::<(), LogError>(()) })
+    }
+}
+
+pub(crate) async fn execute_settled(
+    request: SettledChatRequest,
+    context: CallLifecycleContext,
+) -> ExecutedCall<ChatCompletionsResponse, Error> {
+    CallLifecycle
+        .run_with_usage(
+            (context, request),
+            &UndispatchedSession,
+            &UndispatchedSession,
+            &UndispatchedSession,
+            |request| async move { super::handler::execute_settled_request(request).await },
+            response_usage,
+        )
+        .await
 }
 
 #[cfg(test)]

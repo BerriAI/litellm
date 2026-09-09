@@ -205,6 +205,29 @@ pub async fn messages<S: MessagesServices>(
         .await
 }
 
+pub(crate) async fn messages_with_provider<S, ProviderCall, ProviderFuture>(
+    services: &S,
+    request: MessagesRequest,
+    context: CallLifecycleContext,
+    provider_call: ProviderCall,
+) -> ExecutedCall<AnthropicMessagesResponse, Error>
+where
+    S: MessagesServices,
+    ProviderCall: FnOnce(MessagesRequest) -> ProviderFuture,
+    ProviderFuture: Future<Output = Result<AnthropicMessagesResponse, Error>>,
+{
+    CallLifecycle
+        .run_with_usage(
+            (context, request),
+            services,
+            services,
+            services,
+            provider_call,
+            anthropic_response_usage,
+        )
+        .await
+}
+
 fn anthropic_response_usage(response: &AnthropicMessagesResponse) -> Option<Usage> {
     let usage = response.usage.as_ref()?;
     let prompt_tokens = usage.get("input_tokens")?.as_u64()?;

@@ -4,12 +4,12 @@ use litellm_core::Error;
 use litellm_core::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use litellm_core::integrations::custom_logger::CustomLogger;
 use litellm_core::lifecycle::{CallLifecycleContext, StreamingCall};
-use litellm_core::messages::lifecycle::{self, Options};
+use litellm_core::messages::lifecycle::Options;
 use litellm_core::messages::types::{AnthropicMessagesRequest, MessagesRequest};
 use litellm_core::router::Router;
 use serde_json::{Map, Value};
 
-use crate::state::{GatewayMessagesServices, GatewayMessagesSession};
+use crate::state::GatewayMessagesServices;
 
 pub(crate) enum MessagesResponse {
     Json(Value),
@@ -67,7 +67,6 @@ pub async fn run(
         extra_headers,
         timeout: None,
     };
-    let services = Arc::new(GatewayMessagesSession::new(loggers.clone()));
     let context = CallLifecycleContext::new(
         "messages",
         provider_model,
@@ -88,9 +87,7 @@ pub async fn run(
             .map(MessagesResponse::Stream);
     }
 
-    let response = lifecycle::messages(&*services, request, Options::default(), context)
-        .await
-        .into_result()?;
+    let response = client.messages_with(request, context, loggers).await?;
     serde_json::to_value(response)
         .map(MessagesResponse::Json)
         .map_err(|err| {

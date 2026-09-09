@@ -109,6 +109,16 @@ pub struct ChatPreCallRequest {
     pub headers: Vec<(String, String)>,
 }
 
+pub enum ChatPreCallReadback {
+    StructuredAtSend {
+        body: crate::lifecycle::WireBody,
+        headers: Vec<(String, String)>,
+    },
+    CapturedAtBuild {
+        headers: Vec<(String, String)>,
+    },
+}
+
 impl ChatEndpoint {
     pub async fn authorize(
         self,

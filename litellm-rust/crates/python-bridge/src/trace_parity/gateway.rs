@@ -40,6 +40,9 @@ async fn messages_request(
         master_key: Some(Arc::from("trace-master-key")),
         loggers: Arc::new(Vec::new()),
         realtime_pool: RealtimePool::disabled(),
+        messages_client: litellm_core::runtime::LiteLlm::from_services(
+            litellm_ai_gateway::state::GatewayMessagesServices::new(|_| None),
+        ),
     };
     let request = Request::builder()
         .method("POST")

@@ -4,22 +4,14 @@ use crate::error::Error;
 use crate::http_utils::{HttpClientProfile, http_client, http_request, truncate_error_body};
 use crate::runtime::{HttpRequest, HttpTransport};
 
-use super::request::build_provider_request_with_services;
-use super::types::{
-    ChatCompletionsResponse, ChatEndpoint, ProviderChatCompletionsRequest,
-    ProviderChatResponseData, ResolvedChatCompletionsRequest, SettledChatRequest,
+use super::request::{
+    build_resolved_pre_call_request_with_services, settle_pre_call_request_with_services,
+    unchanged_pre_call_readback,
 };
-
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(super) async fn execute_chat_completions_provider_call<S>(
-    services: &S,
-    request: ResolvedChatCompletionsRequest<'_>,
-) -> Result<ChatCompletionsResponse, Error>
-where
-    S: crate::providers::auth::ChatAuthorizationServices,
-{
-    execute_settled_request(settle_provider_request(services, request).await?).await
-}
+use super::types::{
+    ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
+    ResolvedChatCompletionsRequest, SettledChatRequest,
+};
 
 pub(crate) async fn execute_chat_completions_provider_call_with_transport<S, T>(
     services: &S,
@@ -30,37 +22,10 @@ where
     S: crate::providers::auth::ChatAuthorizationServices,
     T: HttpTransport,
 {
-    execute_settled_request_with_transport(
-        transport,
-        settle_provider_request(services, request).await?,
-    )
-    .await
-}
-
-async fn settle_provider_request<S>(
-    services: &S,
-    request: ResolvedChatCompletionsRequest<'_>,
-) -> Result<SettledChatRequest, Error>
-where
-    S: crate::providers::auth::ChatAuthorizationServices,
-{
-    let request = build_provider_request_with_services(services, request)?;
-    let body = crate::lifecycle::WireBody::encode(&request.body, "chat completions request")?;
-    let authorized = request
-        .config
-        .authorize(services, request.authorization_context(), body)
-        .await?;
-    Ok(SettledChatRequest {
-        endpoint: ChatEndpoint {
-            model: request.model,
-            config: request.config,
-            url: request.url,
-            auth: request.auth,
-            optional_params: request.optional_params,
-            timeout: request.timeout,
-        },
-        http: authorized.settle(),
-    })
+    let prepared = build_resolved_pre_call_request_with_services(services, request).await?;
+    let readback = unchanged_pre_call_readback(&prepared)?;
+    let settled = settle_pre_call_request_with_services(services, prepared, readback).await?;
+    execute_settled_request_with_transport(transport, settled).await
 }
 
 pub(crate) async fn execute_settled_request_with_transport<T>(

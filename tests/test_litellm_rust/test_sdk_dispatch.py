@@ -19,9 +19,7 @@ def _verify_sigv4(request: RecordedRequest, secret_key: str) -> None:
     attributes: Final = dict(item.split("=", 1) for item in attributes_text.split(", "))
     credential_scope: Final = attributes["Credential"].split("/", 1)[1]
     signed_names: Final = attributes["SignedHeaders"].split(";")
-    canonical_headers: Final = "".join(
-        f"{name}:{' '.join(request.headers[name].split())}\n" for name in signed_names
-    )
+    canonical_headers: Final = "".join(f"{name}:{' '.join(request.headers[name].split())}\n" for name in signed_names)
     parsed_path: Final = urlsplit(request.path)
     canonical_request: Final = "\n".join(
         (
@@ -282,3 +280,164 @@ async def test_bedrock_callbacks_share_state_without_replacing_signed_transport(
     assert recorded.headers["x-callback-header"] == "in-place"
     assert recorded.headers["authorization"].startswith("AWS4-HMAC-SHA256 ")
     _verify_sigv4(recorded, "test-secret")
+
+
+@pytest.mark.asyncio
+async def test_native_chat_pre_call_preserves_the_caller_task_and_context(
+    recording_server: RecordingServer,
+) -> None:
+    import asyncio
+    from contextvars import ContextVar
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
+
+    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    marker: Final[ContextVar[str]] = ContextVar("native_chat_marker", default="missing")
+    marker.set("caller")
+    caller_task: Final = asyncio.current_task()
+    observations: Final = []
+
+    class Observe(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            observations.append((asyncio.current_task(), marker.get()))
+            marker.set("callback")
+
+    response: Final = await litellm.acompletion(
+        model="anthropic/claude-opus-5",
+        messages=[{"role": "user", "content": "task context"}],
+        max_tokens=16,
+        api_key="test-key",
+        api_base=recording_server.base_url,
+        callbacks=[Observe()],
+        num_retries=0,
+    )
+
+    assert response._hidden_params["additional_headers"]["x-litellm-rust"] == "true"
+    assert observations == [(caller_task, "caller")]
+    assert marker.get() == "callback"
+
+
+@pytest.mark.asyncio
+async def test_native_chat_concurrent_calls_keep_callback_roots_isolated(
+    recording_server: RecordingServer,
+) -> None:
+    import asyncio
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
+
+    call_ids: Final = tuple(f"chat-{index}" for index in range(4))
+    recording_server.expected_requests = len(call_ids)
+    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+
+    class Correlate(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            body: Final = kwargs["additional_args"]["complete_input_dict"]
+            body["messages"][0]["content"][0]["text"] = kwargs["litellm_call_id"]
+
+    logger: Final = Correlate()
+
+    async def invoke(call_id: str) -> None:
+        await litellm.acompletion(
+            model="anthropic/claude-opus-5",
+            messages=[{"role": "user", "content": call_id}],
+            max_tokens=16,
+            api_key="test-key",
+            api_base=recording_server.base_url,
+            callbacks=[logger],
+            litellm_call_id=call_id,
+            num_retries=0,
+        )
+
+    await asyncio.gather(*(invoke(call_id) for call_id in call_ids))
+
+    sent: Final = {request.body["messages"][0]["content"][0]["text"] for request in recording_server.requests}
+    assert sent == set(call_ids)
+
+
+@pytest.mark.asyncio
+async def test_native_chat_callback_can_make_a_nested_native_call(
+    recording_server: RecordingServer,
+) -> None:
+    import threading
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
+
+    recording_server.expected_requests = 2
+    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    nested_responses: Final = []
+    nested_started: Final = threading.Event()
+
+    class NestedCall(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            if nested_started.is_set():
+                return
+            nested_started.set()
+            nested_responses.append(
+                litellm.completion(
+                    model="anthropic/claude-opus-5",
+                    messages=[{"role": "user", "content": "nested"}],
+                    max_tokens=16,
+                    api_key="test-key",
+                    api_base=recording_server.base_url,
+                    num_retries=0,
+                )
+            )
+
+    outer: Final = await litellm.acompletion(
+        model="anthropic/claude-opus-5",
+        messages=[{"role": "user", "content": "outer"}],
+        max_tokens=16,
+        api_key="test-key",
+        api_base=recording_server.base_url,
+        callbacks=[NestedCall()],
+        num_retries=0,
+    )
+
+    assert outer._hidden_params["additional_headers"]["x-litellm-rust"] == "true"
+    assert nested_responses[0]._hidden_params["additional_headers"]["x-litellm-rust"] == "true"
+    sent: Final = {request.body["messages"][0]["content"][0]["text"] for request in recording_server.requests}
+    assert sent == {"outer", "nested"}
+
+
+@pytest.mark.asyncio
+async def test_native_chat_cancellation_during_io_does_not_publish_a_terminal(
+    recording_server: RecordingServer,
+) -> None:
+    import asyncio
+
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from tests.test_litellm_rust.callback_recorder import RecordingLogger
+    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
+
+    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE, delay=0.5)
+    recorder: Final = RecordingLogger()
+    task: Final = asyncio.create_task(
+        litellm.acompletion(
+            model="anthropic/claude-opus-5",
+            messages=[{"role": "user", "content": "cancel"}],
+            max_tokens=16,
+            api_key="test-key",
+            api_base=recording_server.base_url,
+            callbacks=[recorder],
+            num_retries=0,
+        )
+    )
+    async with asyncio.timeout(10):
+        while not recording_server.requests:
+            await asyncio.sleep(0.01)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert recorder.names.count("log_pre_api_call") == 1
+    assert not {
+        "log_success_event",
+        "async_log_success_event",
+        "log_failure_event",
+        "async_log_failure_event",
+    }.intersection(recorder.names)

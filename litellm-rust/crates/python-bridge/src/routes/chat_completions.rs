@@ -2,8 +2,12 @@ use litellm_core::Error;
 use litellm_core::chat_completions::lifecycle::{
     Admission, ChatCompletionsRoute, Observations, Operation, Options, machine,
 };
-use litellm_core::chat_completions::request::build_pre_call_request_with_services;
-use litellm_core::chat_completions::types::ChatCompletionsRequest;
+use litellm_core::chat_completions::request::{
+    build_pre_call_request_with_services, settle_pre_call_request_with_services,
+};
+use litellm_core::chat_completions::types::{
+    ChatCompletionsRequest, ChatPreCallReadback, ChatPreCallRequest,
+};
 use litellm_core::chat_completions::{
     chat_completions_decline_reason, execute_settled_with_terminal,
 };
@@ -28,7 +32,7 @@ struct ChatCompletionsState {
     roots: Option<RequestRoots>,
     logging: Option<Py<PyAny>>,
     pre_call: Option<Py<PyDict>>,
-    pending: Option<PendingChatRequest>,
+    pending: Option<ChatPreCallRequest>,
     context: Option<CallLifecycleContext>,
     terminal: Option<TerminalRecord>,
 }
@@ -167,22 +171,12 @@ fn invoke(
     crate::driver::invoke(py, operation, asynchronous, "chat completions", host)
 }
 
-enum PendingChatRequest {
-    ReadBodyAtSend(litellm_core::chat_completions::types::ChatEndpoint),
-    AuthorizedAtBuild {
-        endpoint: litellm_core::chat_completions::types::ChatEndpoint,
-        authorized: litellm_core::lifecycle::AuthorizedBody,
-    },
-}
-
 #[pyfunction]
 fn build_request(
     py: Python<'_>,
     arguments: Py<PyDict>,
     logging: Py<PyAny>,
 ) -> PyResult<Py<ChatCompletionsState>> {
-    use litellm_core::chat_completions::types::ChatPreCallRequest;
-
     let bag = arguments.bind(py);
     let admission = admission(bag)?;
     let api_key = scalar(bag, "api_key")?;
@@ -220,13 +214,7 @@ fn build_request(
         },
         core_error_to_pyerr,
     )?;
-    let ChatPreCallRequest {
-        endpoint,
-        body: pre_call_body,
-        parameter_fields,
-        headers: header_values,
-    } = built;
-    let (body, pending) = match pre_call_body {
+    let body = match &built.body {
         litellm_core::lifecycle::PreCallBody::StructuredAtSend {
             callback: generated,
         } => {
@@ -235,25 +223,16 @@ fn build_request(
                 body.set_item(name, to_py(py, &value)?)?;
             }
             if let Some(params) = bag.get_item("optional_params")? {
-                for name in parameter_fields {
-                    body.set_item(&name, params.get_item(&name)?)?;
+                for name in &built.parameter_fields {
+                    body.set_item(name, params.get_item(name)?)?;
                 }
             }
-            (
-                body.into_any(),
-                PendingChatRequest::ReadBodyAtSend(endpoint),
-            )
+            body.into_any()
         }
         litellm_core::lifecycle::PreCallBody::SerializedAtBuild {
             callback: logging_body,
-            authorized,
-        } => (
-            logging_body.into_pyobject(py)?.into_any(),
-            PendingChatRequest::AuthorizedAtBuild {
-                endpoint,
-                authorized,
-            },
-        ),
+            ..
+        } => logging_body.into_pyobject(py)?.into_any(),
         litellm_core::lifecycle::PreCallBody::StructuredAtBuild { .. } => {
             return Err(PyRuntimeError::new_err(
                 "chat structured-at-build body is not registered",
@@ -261,11 +240,11 @@ fn build_request(
         }
     };
     let headers = PyDict::new(py);
-    for (name, value) in header_values {
+    for (name, value) in &built.headers {
         headers.set_item(name, value)?;
     }
-    let headers = match &pending {
-        PendingChatRequest::ReadBodyAtSend(_) => {
+    let headers = match &built.body {
+        litellm_core::lifecycle::PreCallBody::StructuredAtSend { .. } => {
             match bag
                 .get_item("extra_headers")?
                 .filter(|value| !value.is_none())
@@ -277,10 +256,11 @@ fn build_request(
                 None => headers.into_any(),
             }
         }
-        PendingChatRequest::AuthorizedAtBuild { .. } => py
+        litellm_core::lifecycle::PreCallBody::SerializedAtBuild { .. } => py
             .import("botocore.awsrequest")?
             .getattr("HeadersDict")?
             .call1((headers,))?,
+        litellm_core::lifecycle::PreCallBody::StructuredAtBuild { .. } => unreachable!(),
     };
     let additional = PyDict::new(py);
     additional.set_item(COMPLETE_INPUT_DICT, &body)?;
@@ -300,7 +280,7 @@ fn build_request(
             )),
             logging: Some(logging),
             pre_call: Some(kwargs.unbind()),
-            pending: Some(pending),
+            pending: Some(built),
             context: Some(context),
             terminal: None,
         },
@@ -330,21 +310,9 @@ fn pre_call(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<()> {
 }
 
 struct OwnedRequest {
-    request: OwnedChatRequest,
+    request: ChatPreCallRequest,
+    readback: ChatPreCallReadback,
     context: CallLifecycleContext,
-}
-
-enum OwnedChatRequest {
-    StructuredAtSend {
-        endpoint: litellm_core::chat_completions::types::ChatEndpoint,
-        body: litellm_core::lifecycle::WireBody,
-        headers: Vec<(String, String)>,
-    },
-    AuthorizedAtBuild {
-        endpoint: litellm_core::chat_completions::types::ChatEndpoint,
-        authorized: litellm_core::lifecycle::AuthorizedBody,
-        headers: Vec<(String, String)>,
-    },
 }
 
 fn take_request(py: Python<'_>, state: &Py<ChatCompletionsState>) -> PyResult<OwnedRequest> {
@@ -368,26 +336,27 @@ fn take_request(py: Python<'_>, state: &Py<ChatCompletionsState>) -> PyResult<Ow
         .try_iter()?
         .map(|item| item?.extract::<(String, String)>())
         .collect::<PyResult<_>>()?;
-    let request = match pending {
-        PendingChatRequest::ReadBodyAtSend(endpoint) => OwnedChatRequest::StructuredAtSend {
-            endpoint,
-            body: litellm_core::lifecycle::WireBody::encode(
-                &from_py::<Value>(&body)?,
-                "chat completions request",
-            )
-            .map_err(core_error_to_pyerr)?,
-            headers,
-        },
-        PendingChatRequest::AuthorizedAtBuild {
-            endpoint,
-            authorized,
-        } => OwnedChatRequest::AuthorizedAtBuild {
-            endpoint,
-            authorized,
-            headers,
-        },
+    let readback = match &pending.body {
+        litellm_core::lifecycle::PreCallBody::StructuredAtSend { .. } => {
+            ChatPreCallReadback::StructuredAtSend {
+                body: litellm_core::lifecycle::WireBody::encode(
+                    &from_py::<Value>(&body)?,
+                    "chat completions request",
+                )
+                .map_err(core_error_to_pyerr)?,
+                headers,
+            }
+        }
+        litellm_core::lifecycle::PreCallBody::SerializedAtBuild { .. }
+        | litellm_core::lifecycle::PreCallBody::StructuredAtBuild { .. } => {
+            ChatPreCallReadback::CapturedAtBuild { headers }
+        }
     };
-    Ok(OwnedRequest { request, context })
+    Ok(OwnedRequest {
+        request: pending,
+        readback,
+        context,
+    })
 }
 
 async fn execute(
@@ -396,26 +365,12 @@ async fn execute(
     ExecutedCall<litellm_core::chat_completions::types::ChatCompletionsResponse, Error>,
     Error,
 > {
-    let settled = match request.request {
-        OwnedChatRequest::StructuredAtSend {
-            endpoint,
-            body,
-            headers,
-        } => {
-            endpoint
-                .authorize(
-                    crate::runtime::authorization_services().as_ref(),
-                    body,
-                    headers,
-                )
-                .await
-        }
-        OwnedChatRequest::AuthorizedAtBuild {
-            endpoint,
-            authorized,
-            headers,
-        } => Ok(endpoint.settle_authorized(authorized, headers)),
-    };
+    let settled = settle_pre_call_request_with_services(
+        crate::runtime::authorization_services().as_ref(),
+        request.request,
+        request.readback,
+    )
+    .await;
     Ok(execute_settled_with_terminal(settled?, request.context).await)
 }
 
@@ -552,15 +507,14 @@ mod tests {
     #[pyfunction]
     fn snapshot(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<Py<PyAny>> {
         let request = take_request(py, &state)?;
-        let (body, headers) = match &request.request {
-            OwnedChatRequest::StructuredAtSend { body, headers, .. } => {
+        let (body, headers) = match &request.readback {
+            ChatPreCallReadback::StructuredAtSend { body, headers } => {
                 (body.as_bytes(), headers.as_slice())
             }
-            OwnedChatRequest::AuthorizedAtBuild {
-                authorized,
-                headers,
-                ..
-            } => (authorized.body(), headers.as_slice()),
+            ChatPreCallReadback::CapturedAtBuild { headers } => (
+                request.request.body.authorized().unwrap().body(),
+                headers.as_slice(),
+            ),
         };
         to_py(
             py,

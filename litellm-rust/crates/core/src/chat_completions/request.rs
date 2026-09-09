@@ -169,10 +169,17 @@ pub async fn build_pre_call_request_with_services(
     services: &impl crate::providers::auth::ChatAuthorizationServices,
     request: ChatCompletionsRequest<'_>,
 ) -> Result<super::types::ChatPreCallRequest, Error> {
+    build_resolved_pre_call_request_with_services(services, resolve_request(request)?).await
+}
+
+pub(crate) async fn build_resolved_pre_call_request_with_services(
+    services: &impl crate::providers::auth::ChatAuthorizationServices,
+    request: ResolvedChatCompletionsRequest<'_>,
+) -> Result<super::types::ChatPreCallRequest, Error> {
     use super::types::{ChatEndpoint, ChatPreCallRequest};
     use crate::lifecycle::{PreCallBody, RequestBodyPolicy, WireBody};
 
-    let built = build_provider_request_with_services(services, resolve_request(request)?)?;
+    let built = build_provider_request_with_services(services, request)?;
     let endpoint = ChatEndpoint {
         model: built.model.clone(),
         config: built.config,
@@ -231,6 +238,58 @@ pub async fn build_pre_call_request_with_services(
         }
         RequestBodyPolicy::StructuredAtBuild => Err(Error::Unsupported(
             "chat structured-at-build request body policy",
+        )),
+    }
+}
+
+pub fn unchanged_pre_call_readback(
+    request: &super::types::ChatPreCallRequest,
+) -> Result<super::types::ChatPreCallReadback, Error> {
+    use super::types::ChatPreCallReadback;
+    use crate::lifecycle::{PreCallBody, WireBody};
+
+    match &request.body {
+        PreCallBody::StructuredAtSend { callback } => {
+            let mut body = callback.clone();
+            for name in &request.parameter_fields {
+                if let Some(value) = request.endpoint.optional_params.get(name) {
+                    body.insert(name.clone(), value.clone());
+                }
+            }
+            Ok(ChatPreCallReadback::StructuredAtSend {
+                body: WireBody::encode(&body, "chat completions request")?,
+                headers: request.headers.clone(),
+            })
+        }
+        PreCallBody::SerializedAtBuild { .. } | PreCallBody::StructuredAtBuild { .. } => {
+            Ok(ChatPreCallReadback::CapturedAtBuild {
+                headers: request.headers.clone(),
+            })
+        }
+    }
+}
+
+pub async fn settle_pre_call_request_with_services(
+    services: &dyn crate::providers::auth::ChatAuthorizationServices,
+    request: super::types::ChatPreCallRequest,
+    readback: super::types::ChatPreCallReadback,
+) -> Result<super::types::SettledChatRequest, Error> {
+    use super::types::{ChatPreCallReadback, ChatPreCallRequest};
+    use crate::lifecycle::PreCallBody;
+
+    let ChatPreCallRequest { endpoint, body, .. } = request;
+    match (body, readback) {
+        (
+            PreCallBody::StructuredAtSend { .. },
+            ChatPreCallReadback::StructuredAtSend { body, headers },
+        ) => endpoint.authorize(services, body, headers).await,
+        (
+            PreCallBody::SerializedAtBuild { authorized, .. }
+            | PreCallBody::StructuredAtBuild { authorized, .. },
+            ChatPreCallReadback::CapturedAtBuild { headers },
+        ) => Ok(endpoint.settle_authorized(authorized, headers)),
+        _ => Err(Error::InvalidRequest(
+            "chat completions pre-call readback did not match its body policy".into(),
         )),
     }
 }
