@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
 GRAYSWAN_BLOCK_ERROR_MSG: Final = "Blocked by Gray Swan Guardrail"
 _DECODED_JSON: Final = TypeAdapter(object)
+_MONITOR_RESPONSE_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class _GraySwanMonitorResponse(TypedDict):
@@ -46,6 +47,7 @@ class _GraySwanMonitorResponse(TypedDict):
     violated_rule_descriptions: ReadOnly[NotRequired[list[object]]]
     mutation: ReadOnly[NotRequired[bool | None]]
     ipi: ReadOnly[NotRequired[bool | None]]
+    error: ReadOnly[NotRequired[bool]]
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
@@ -113,6 +115,20 @@ class GraySwanGuardrailAPIError(Exception):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _validated_violation_score(response_json: object) -> float:
+    """Do not interpret an unevaluated or malformed response as a clean decision."""
+    try:
+        response: Final = _MONITOR_RESPONSE_ADAPTER.validate_python(response_json, strict=True)
+    except ValidationError:
+        raise GraySwanGuardrailAPIError("Gray Swan returned an invalid monitor response") from None
+    if response.get("error"):
+        raise GraySwanGuardrailAPIError("Gray Swan moderation failed")
+    score: Final = response.get("violation")
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1:
+        raise GraySwanGuardrailAPIError("Gray Swan returned an invalid violation score")
+    return float(score)
 
 
 class GraySwanGuardrail(CustomGuardrail):
@@ -405,7 +421,7 @@ class GraySwanGuardrail(CustomGuardrail):
             data: Optional request data (for passthrough exceptions)
             hook_type: Optional GuardrailEventHooks for determining behavior
         """
-        violation_score: Final = float(response_json.get("violation", 0.0) or 0.0)
+        violation_score: Final = _validated_violation_score(response_json)
         violated_rules: Final = response_json.get("violated_rules", [])
         mutation_detected: Final = response_json.get("mutation")
         ipi_detected: Final = response_json.get("ipi")
@@ -530,7 +546,7 @@ class GraySwanGuardrail(CustomGuardrail):
         Raises:
             HTTPException: If content is blocked (block mode)
         """
-        violation_score: Final = float(response_json.get("violation", 0.0) or 0.0)
+        violation_score: Final = _validated_violation_score(response_json)
         violated_rules: Final = response_json.get("violated_rule_descriptions", [])
         mutation_detected: Final = response_json.get("mutation")
         ipi_detected: Final = response_json.get("ipi")
