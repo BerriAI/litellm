@@ -7,11 +7,13 @@ Mistral only accepts ``fine-tune``, ``batch`` and ``ocr`` as upload purposes.
 """
 
 import time
-from typing import Final, Literal
+from collections.abc import Mapping, Sequence
+from typing import Final, Literal, TypeAlias
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -29,7 +31,16 @@ from litellm.types.utils import LlmProviders
 
 from ..common_utils import get_mistral_api_base, get_mistral_auth_headers, mistral_error
 
-MistralFilePurpose = Literal["fine-tune", "batch", "ocr"]
+MistralFilePurpose: TypeAlias = Literal["fine-tune", "batch", "ocr"]
+
+_NO_QUERY_PARAMS: Final[dict[str, str]] = {}  # mutable-ok: BaseFilesConfig request transforms return tuple[str, dict]
+
+
+class MistralMultipartUpload(TypedDict):
+    """``files=`` payload for ``POST /v1/files``: each value is an httpx multipart tuple."""
+
+    file: ReadOnly[tuple[str, object, str]]
+    purpose: ReadOnly[tuple[None, MistralFilePurpose]]
 
 
 class MistralFile(BaseModel):
@@ -85,6 +96,11 @@ def _to_mistral_purpose(purpose: str) -> MistralFilePurpose:
             return "batch"
 
 
+def _api_base_from(litellm_params: Mapping[str, object]) -> str:
+    api_base: Final = litellm_params.get("api_base")
+    return get_mistral_api_base(api_base if isinstance(api_base, str) else None)
+
+
 class MistralFilesConfig(BaseFilesConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -95,99 +111,103 @@ class MistralFilesConfig(BaseFilesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         return f"{get_mistral_api_base(api_base)}/v1/files"
 
-    def _file_url(self, file_id: str, litellm_params: dict, suffix: str = "") -> str:
+    def _file_url(self, file_id: str, litellm_params: Mapping[str, object], suffix: str = "") -> str:
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
-        return f"{get_mistral_api_base(litellm_params.get('api_base'))}/v1/files/{encoded_file_id}{suffix}"
+        return f"{_api_base_from(litellm_params)}/v1/files/{encoded_file_id}{suffix}"
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
+    ) -> BaseLLMException:
         return mistral_error(error_message, status_code, headers)
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:  # mutable-ok: BaseFilesConfig signature
         return get_mistral_auth_headers(headers, api_key)
 
-    def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
-        return ["purpose"]
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[OpenAICreateFileRequestOptionalParams]:  # mutable-ok: BaseFilesConfig signature
+        return ["purpose"]  # mutable-ok: BaseFilesConfig signature
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature, returned as-is
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
         return optional_params
 
     def transform_create_file_request(
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> dict:
-        file_data: Final = create_file_data.get("file")
-        if file_data is None:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: BaseFilesConfig signature
+        if "file" not in create_file_data:
             raise ValueError("File data is required")
-        extracted: Final = extract_file_data(file_data)
+        extracted: Final = extract_file_data(create_file_data["file"])
         filename: Final = extracted["filename"] or f"file_{int(time.time())}.jsonl"
         content_type: Final = extracted.get("content_type") or "application/octet-stream"
-        return {
-            "file": (filename, extracted["content"], content_type),
-            "purpose": (None, _to_mistral_purpose(create_file_data.get("purpose", "batch"))),
-        }
+        upload: Final = MistralMultipartUpload(
+            file=(filename, extracted["content"], content_type),
+            purpose=(None, _to_mistral_purpose(create_file_data.get("purpose", "batch"))),
+        )
+        return dict(upload)  # mutable-ok: BaseFilesConfig signature
 
     def transform_create_file_response(
         self,
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         return _to_openai_file_object(MistralFile.model_validate(raw_response.json()))
 
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
-        return self._file_url(file_id, litellm_params), {}
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+        return self._file_url(file_id, litellm_params), _NO_QUERY_PARAMS
 
     def transform_retrieve_file_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         return _to_openai_file_object(MistralFile.model_validate(raw_response.json()))
 
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
-        return self._file_url(file_id, litellm_params), {}
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+        return self._file_url(file_id, litellm_params), _NO_QUERY_PARAMS
 
     def transform_delete_file_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileDeleted:
         deleted: Final = MistralFileDeleted.model_validate(raw_response.json())
         return FileDeleted(id=deleted.id, deleted=deleted.deleted, object="file")
@@ -195,32 +215,39 @@ class MistralFilesConfig(BaseFilesConfig):
     def transform_list_files_request(
         self,
         purpose: str | None,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
-        params: Final = {"purpose": _to_mistral_purpose(purpose)} if purpose else {}
-        return f"{get_mistral_api_base(litellm_params.get('api_base'))}/v1/files", params
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+        url: Final = f"{_api_base_from(litellm_params)}/v1/files"
+        if not purpose:
+            return url, _NO_QUERY_PARAMS
+        return url, {"purpose": _to_mistral_purpose(purpose)}  # mutable-ok: BaseFilesConfig signature returns dict
 
     def transform_list_files_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
-    ) -> list[OpenAIFileObject]:
-        return [_to_openai_file_object(f) for f in MistralFileList.model_validate(raw_response.json()).data]
+        litellm_params: Mapping[str, object],
+    ) -> list[OpenAIFileObject]:  # mutable-ok: BaseFilesConfig signature
+        return [  # mutable-ok: BaseFilesConfig signature
+            _to_openai_file_object(f) for f in MistralFileList.model_validate(raw_response.json()).data
+        ]
 
     def transform_file_content_request(
         self,
         file_content_request: FileContentRequest,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
-        return self._file_url(file_content_request["file_id"], litellm_params, suffix="/content"), {}
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+        file_id: Final = file_content_request.get("file_id")
+        if file_id is None:
+            raise ValueError("file_id is required to download file content")
+        return self._file_url(file_id, litellm_params, suffix="/content"), _NO_QUERY_PARAMS
 
     def transform_file_content_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         return HttpxBinaryResponseContent(response=raw_response)

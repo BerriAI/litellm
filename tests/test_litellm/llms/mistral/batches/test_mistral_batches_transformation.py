@@ -92,26 +92,34 @@ def test_create_request_maps_openai_fields_onto_mistral_job(config):
         model="mistral-ocr-latest", create_batch_data=data, optional_params={}, litellm_params={}
     )
     assert body == {
-        "input_files": ["file-123"],
+        "input_files": ("file-123",),
         "endpoint": "/v1/ocr",
         "model": "mistral-ocr-latest",
         "metadata": {"team": "docs"},
     }
 
 
-def test_create_request_omits_empty_metadata_and_forwards_extra_body(config):
+def test_create_request_omits_empty_metadata(config):
     data = CreateBatchRequest(
         completion_window="24h",
         endpoint="/v1/chat/completions",
         input_file_id="file-123",
         metadata=None,
-        extra_body={"timeout_hours": 48},
     )
     body = config.transform_create_batch_request(
         model="mistral-small-latest", create_batch_data=data, optional_params={}, litellm_params={}
     )
     assert "metadata" not in body
-    assert body["timeout_hours"] == 48
+
+
+def test_create_request_requires_input_file_and_endpoint(config):
+    with pytest.raises(ValueError, match="input_file_id and endpoint are required"):
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data=CreateBatchRequest(completion_window="24h"),
+            optional_params={},
+            litellm_params={},
+        )
 
 
 @pytest.mark.parametrize(

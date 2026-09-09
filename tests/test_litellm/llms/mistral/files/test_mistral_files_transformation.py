@@ -79,7 +79,9 @@ def test_validate_environment_uses_bearer_auth(config, api_key):
 def test_upload_request_is_multipart_with_batch_purpose(config):
     body = config.transform_create_file_request(
         model="",
-        create_file_data=CreateFileRequest(file=("in.jsonl", b'{"custom_id":"0"}\n', "application/jsonl"), purpose="batch"),
+        create_file_data=CreateFileRequest(
+            file=("in.jsonl", b'{"custom_id":"0"}\n', "application/jsonl"), purpose="batch"
+        ),
         optional_params={},
         litellm_params={},
     )
@@ -181,7 +183,9 @@ def test_list_request_filters_by_mapped_purpose(config):
 
 def test_list_response(config):
     out = config.transform_list_files_response(
-        raw_response=_response({"data": [_file(), _file(id="second", filename="b.jsonl")], "object": "list", "total": 2}),
+        raw_response=_response(
+            {"data": [_file(), _file(id="second", filename="b.jsonl")], "object": "list", "total": 2}
+        ),
         logging_obj=None,
         litellm_params={},
     )
