@@ -380,9 +380,7 @@ class VertexAIBatchPrediction(VertexLLM):
             model=deployed_model_resource,
             vertex_location=vertex_location,
         )
-        model_fetched: Final[_FetchedResponseView] = {
-            "response": safe_get(sync_handler, model_url, headers=headers)
-        }
+        model_fetched: Final[_FetchedResponseView] = {"response": safe_get(sync_handler, model_url, headers=headers)}
         model_response: Final = model_fetched["response"]
         if model_response.status_code != 200:
             raise VertexAIError(
@@ -410,10 +408,12 @@ class VertexAIBatchPrediction(VertexLLM):
                     "spec to size the batch replicas from"
                 ),
             )
+        # A scale-to-zero online endpoint reports minReplicaCount 0, but a batch job must start
+        # at least one replica.
         batch_resources: Final[BatchDedicatedResources] = {
             "machineSpec": machine_spec,
-            "startingReplicaCount": online_resources.get("minReplicaCount", 1),
-            "maxReplicaCount": online_resources.get("maxReplicaCount", 1),
+            "startingReplicaCount": max(online_resources.get("minReplicaCount", 1), 1),
+            "maxReplicaCount": max(online_resources.get("maxReplicaCount", 1), 1),
         }
         unmanaged: Final[UnmanagedContainerModel] = {"containerSpec": container_spec}
         resolved: Final[VertexAIBatchPredictionJob] = {
@@ -471,7 +471,9 @@ class VertexAIBatchPrediction(VertexLLM):
         """Return the base url for the vertex garden models"""
         #  POST https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/batchPredictionJobs
         base_url: Final = get_vertex_base_url(vertex_location)
-        return f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/batchPredictionJobs"
+        return (
+            f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/batchPredictionJobs"
+        )
 
     def retrieve_batch(
         self,

@@ -666,7 +666,9 @@ def _custom_endpoint_row_to_openai_batch_output_row(row: Mapping[str, object]) -
     """
     key: Final = row.get("key")
     instance: Final = row.get("instance")
-    tagged_custom_id: Final = instance.get(VERTEX_CUSTOM_ENDPOINT_KEY_FIELD, "") if isinstance(instance, Mapping) else ""
+    tagged_custom_id: Final = (
+        instance.get(VERTEX_CUSTOM_ENDPOINT_KEY_FIELD, "") if isinstance(instance, Mapping) else ""
+    )
     custom_id: Final = str(key if key is not None else tagged_custom_id)
 
     prediction: Final = row.get("prediction")
@@ -833,8 +835,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         if purpose == "batch" and custom_endpoint_id is not None:
             safe_endpoint_id: Final = sanitize_cloud_object_path(custom_endpoint_id, fallback="endpoint")
             return (
-                f"{VERTEX_AI_MANAGED_GCS_PREFIX}{VERTEX_CUSTOM_ENDPOINT_GCS_SEGMENT}/"
-                f"{safe_endpoint_id}/{uuid.uuid4()}"
+                f"{VERTEX_AI_MANAGED_GCS_PREFIX}{VERTEX_CUSTOM_ENDPOINT_GCS_SEGMENT}/{safe_endpoint_id}/{uuid.uuid4()}"
             )
         if purpose == "batch":
             ## 1. If jsonl, derive the object name from the deployment model (or the first entry's)
@@ -881,9 +882,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         configured_model: Final = litellm_params.get("model")
         deployment_api_base: Final = litellm_params.get("api_base")
         custom_endpoint_id: Final = (
-            get_custom_endpoint_id_from_api_base(
-                deployment_api_base if isinstance(deployment_api_base, str) else None
-            )
+            get_custom_endpoint_id_from_api_base(deployment_api_base if isinstance(deployment_api_base, str) else None)
             if litellm_params.get("custom_endpoint")
             else None
         )

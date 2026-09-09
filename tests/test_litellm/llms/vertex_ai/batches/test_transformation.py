@@ -36,8 +36,7 @@ INPUT_FILE = (
 
 ENDPOINT_ID = "7768560373388541952"
 ENDPOINT_INPUT_FILE = (
-    f"gs://litellm-testing-bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/"
-    "e9412502-2c91-42a6-8e61-f5c294cc0fc8"
+    f"gs://litellm-testing-bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/e9412502-2c91-42a6-8e61-f5c294cc0fc8"
 )
 
 

@@ -97,7 +97,13 @@ class VertexAIFilesHandler(GCSBucketBase):
             allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
         )
 
-    _SHARDED_RESULTS_PATTERN: Final = re.compile(r"^(?P<stem>.*-)(?P<index>\d{5})(?P<sep>-of-)(?P<total>\d{5})$")
+    # Only the exact directory/file layout Vertex writes for unmanaged-container batch outputs,
+    # pinned to shard zero: the object path is derived from a caller-controlled file id, so a
+    # looser pattern would let a crafted upload filename trigger shard fan-out.
+    _SHARDED_RESULTS_PATTERN: Final = re.compile(
+        r"^(?P<stem>.*/prediction-custom-unmanaged-model-[^/]+/prediction\.results-)00000(?P<sep>-of-)(?P<total>\d{5})$"
+    )
+    _MAX_RESULT_SHARDS: Final = 512
 
     async def _download_all_result_shards(
         self,
@@ -119,14 +125,20 @@ class VertexAIFilesHandler(GCSBucketBase):
         total_shards: Final = int(shard_match["total"])
         if total_shards <= 1:
             return first_shard
-        remaining: Final = await asyncio.gather(
-            *(
-                self.download_gcs_object(
+        if total_shards > self._MAX_RESULT_SHARDS:
+            raise ValueError(
+                f"Vertex batch output claims {total_shards} shards, above the supported maximum "
+                f"of {self._MAX_RESULT_SHARDS}"
+            )
+        # Sequential fetch keeps memory and connection use bounded by one shard at a time.
+        remaining: Final = tuple(
+            [
+                await self.download_gcs_object(
                     object_name=f"{shard_match['stem']}{index:05d}{shard_match['sep']}{shard_match['total']}",
                     standard_callback_dynamic_params=standard_callback_dynamic_params,
                 )
                 for index in range(1, total_shards)
-            )
+            ]
         )
         if any(shard is None for shard in remaining):
             return None
