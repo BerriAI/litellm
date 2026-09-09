@@ -248,6 +248,36 @@ async def test_async_failure_metrics_prefer_stamped_failed_deployment_id():
     assert _model_id_values(logger.litellm_deployment_failure_responses) == {"deployment-a"}
 
 
+def test_deployment_failure_model_id_falls_back_to_nested_metadata():
+    logger = PrometheusLogger()
+
+    model_id = logger._get_deployment_failure_model_id(
+        request_kwargs={
+            "litellm_params": {"litellm_metadata": {"model_info": {"id": "deployment-a"}}},
+        },
+        standard_logging_payload={},
+    )
+
+    assert model_id == "deployment-a"
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {},
+        {"litellm_params": {"metadata": {"model_info": {}}}},
+    ],
+)
+def test_deployment_failure_model_id_returns_none_without_a_model_id(request_kwargs):
+    assert (
+        PrometheusLogger._get_deployment_failure_model_id(
+            request_kwargs=request_kwargs,
+            standard_logging_payload={},
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio
 async def test_sdk_fallback_labels_survive_non_import_errors_from_proxy_module(monkeypatch):
     logger = PrometheusLogger()

@@ -6,13 +6,14 @@ regardless of the routing strategy being used.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -353,3 +354,37 @@ class TestModelRateLimitConcurrency:
 
         assert len(successes) == 2, f"Expected 2 successes, got {len(successes)}"
         assert len(failures) == 2, f"Expected 2 rate limit errors, got {len(failures)}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hook_error",
+    [
+        litellm.RateLimitError(message="rpm exceeded", llm_provider="openai", model="gpt-5.6"),
+        RuntimeError("pre call check blew up"),
+    ],
+)
+async def test_router_async_pre_call_checks_stamp_the_refusing_deployment(hook_error):
+    class _RaisingPreCallCheck(CustomLogger):
+        async def async_pre_call_check(self, deployment, parent_otel_span):
+            raise hook_error
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake"},
+                "model_info": {"id": "deployment-a"},
+            }
+        ]
+    )
+    deployment = router.model_list[0]
+
+    with patch.object(litellm, "callbacks", [_RaisingPreCallCheck()]):  # test-quality-ok: router reads this global
+        with pytest.raises(type(hook_error)):
+            await router.async_routing_strategy_pre_call_checks(
+                deployment=deployment,
+                parent_otel_span=None,
+            )
+
+    assert hook_error.failed_deployment_id == "deployment-a"
