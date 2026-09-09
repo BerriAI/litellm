@@ -4761,6 +4761,25 @@ def test_completion_cost_ocr_reads_deployment_pricing_from_logging_metadata(meta
     assert cost == pytest.approx(0.004 * 3)
 
 
+def test_completion_cost_ocr_prefers_pricing_registered_under_router_model_id(monkeypatch: pytest.MonkeyPatch):
+    deployment_id: Final = "ocr-deployment-priced-through-litellm-params"
+    monkeypatch.setitem(
+        litellm.model_cost, deployment_id, {"mode": "ocr", "litellm_provider": "azure_ai", "ocr_cost_per_page": 0.05}
+    )
+    logging_obj = _ocr_logging_obj({"metadata": {"model_info": {"mode": "ocr"}}})
+
+    cost = completion_cost(
+        completion_response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=3),
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(0.05 * 3)
+
+
 def test_completion_cost_ocr_ignores_deployment_pricing_without_custom_pricing_flag():
     logging_obj = _ocr_logging_obj({"metadata": {"model_info": {"ocr_cost_per_page": 0.004}}})
 
