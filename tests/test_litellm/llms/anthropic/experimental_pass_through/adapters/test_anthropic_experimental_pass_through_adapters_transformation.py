@@ -1,4 +1,5 @@
 import base64
+import json
 from typing import Any, Final, cast
 
 import pytest
@@ -724,9 +725,14 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
     ]
 
 
-def _translate_with_metadata(
-    model: str, metadata: dict[str, str], custom_llm_provider: str | None
-) -> dict[str, Any]:
+def _claude_code_user_id(session_id: str) -> str:
+    return json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": session_id})
+
+
+CLAUDE_CODE_USER_ID: Final = _claude_code_user_id("session-abc")
+
+
+def _translate_with_metadata(model: str, metadata: dict[str, str], custom_llm_provider: str | None) -> dict[str, Any]:
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         anthropic_message_request={
             "model": model,
@@ -739,23 +745,51 @@ def _translate_with_metadata(
     return cast(dict[str, Any], openai_request)
 
 
-def test_translate_anthropic_to_openai_maps_user_id_to_prompt_cache_key_for_openai():
-    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, "openai")
-    assert openai_request["user"] == "session-abc"
+def test_translate_anthropic_to_openai_maps_claude_code_session_id_to_prompt_cache_key_for_openai():
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": CLAUDE_CODE_USER_ID}, "openai")
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert openai_request["prompt_cache_key"] == "session-abc"
 
 
-def test_translate_anthropic_to_openai_truncates_prompt_cache_key_but_keeps_full_user():
-    long_id = "".join(str(i % 10) for i in range(100))
-    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": long_id}, "openai")
-    assert openai_request["user"] == long_id
-    assert openai_request["prompt_cache_key"] == long_id[:64]
-    assert len(openai_request["prompt_cache_key"]) == 64
+def test_translate_anthropic_to_openai_gives_each_claude_code_session_its_own_prompt_cache_key():
+    """BerriAI/litellm#39145: the first 64 chars of Claude Code's user_id are the per-install device_id."""
+    keys = tuple(
+        _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": _claude_code_user_id(session_id)}, "openai")[
+            "prompt_cache_key"
+        ]
+        for session_id in ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+    )
+    assert keys == ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+
+
+def test_translate_anthropic_to_openai_truncates_long_session_id_to_openai_limit():
+    long_session_id = "".join(str(i % 10) for i in range(100))
+    openai_request = _translate_with_metadata(
+        "openai/gpt-5.6-luna", {"user_id": _claude_code_user_id(long_session_id)}, "openai"
+    )
+    assert openai_request["prompt_cache_key"] == long_session_id[:64]
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        "alice",
+        "".join(str(i % 10) for i in range(100)),
+        json.dumps({"device_id": "d" * 64, "account_uuid": ""}),
+        json.dumps({"session_id": ""}),
+        json.dumps({"session_id": 123}),
+        "{not json",
+    ],
+)
+def test_translate_anthropic_to_openai_keeps_plain_user_id_off_prompt_cache_key(user_id: str):
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": user_id}, "openai")
+    assert openai_request["user"] == user_id
+    assert "prompt_cache_key" not in openai_request
 
 
 @pytest.mark.parametrize("model", ["azure/my-gpt-5-deployment", "my-gpt-5-deployment"])
 def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: str):
-    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, "azure")
+    openai_request = _translate_with_metadata(model, {"user_id": CLAUDE_CODE_USER_ID}, "azure")
     assert openai_request["prompt_cache_key"] == "session-abc"
 
 
@@ -772,8 +806,8 @@ def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: st
 def test_translate_anthropic_to_openai_skips_prompt_cache_key_when_provider_lacks_it(
     model: str, custom_llm_provider: str
 ):
-    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, custom_llm_provider)
-    assert openai_request["user"] == "session-abc"
+    openai_request = _translate_with_metadata(model, {"user_id": CLAUDE_CODE_USER_ID}, custom_llm_provider)
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
 
 
@@ -781,14 +815,14 @@ def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_chained_litell
     assert "prompt_cache_key" in litellm.get_supported_openai_params(
         model="xai", custom_llm_provider="litellm_proxy"
     )
-    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": "session-abc"}, "litellm_proxy")
-    assert openai_request["user"] == "session-abc"
+    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": CLAUDE_CODE_USER_ID}, "litellm_proxy")
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
 
 
 def test_translate_anthropic_to_openai_skips_prompt_cache_key_without_provider():
-    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, None)
-    assert openai_request["user"] == "session-abc"
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": CLAUDE_CODE_USER_ID}, None)
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
 
 
