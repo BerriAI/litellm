@@ -424,6 +424,7 @@ from litellm.proxy.db.exception_handler import (
 )
 from litellm.proxy.db.gateway_request_tracking import (
     GatewayRequestAccumulator,
+    GatewayRequestRedisBuffer,
     flush_gateway_requests,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import (
@@ -2355,6 +2356,17 @@ open_telemetry_logger: OpenTelemetry | None = None
 gateway_request_accumulator: Final = GatewayRequestAccumulator()
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
+
+
+def _gateway_request_redis_buffer() -> GatewayRequestRedisBuffer | None:
+    """Shares the spend writer's transaction-buffer Redis and pod lock when use_redis_transaction_buffer is on."""
+    writer: Final = proxy_logging_obj.db_spend_update_writer
+    redis_cache: Final = writer.redis_update_buffer.redis_cache
+    if redis_cache is None or not writer.redis_update_buffer._should_commit_spend_updates_to_redis():
+        return None
+    return GatewayRequestRedisBuffer(redis_cache=redis_cache, pod_lock_manager=writer.pod_lock_manager)
+
+
 ### REDIS QUEUE ###
 async_result: Final = None
 celery_app_conn: Final = None
@@ -9633,7 +9645,7 @@ class ProxyStartupEvent:
             flush_gateway_requests,
             "interval",
             seconds=batch_writing_interval,
-            args=(prisma_client, gateway_request_accumulator),
+            args=(prisma_client, gateway_request_accumulator, _gateway_request_redis_buffer()),
             id="update_gateway_requests_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
