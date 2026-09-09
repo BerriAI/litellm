@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import time
 from collections.abc import Coroutine, Mapping
 from typing import Any, Final
@@ -96,6 +97,41 @@ class VertexAIFilesHandler(GCSBucketBase):
             allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
         )
 
+    _SHARDED_RESULTS_PATTERN: Final = re.compile(r"^(?P<stem>.*-)(?P<index>\d{5})(?P<sep>-of-)(?P<total>\d{5})$")
+
+    async def _download_all_result_shards(
+        self,
+        object_path: str,
+        standard_callback_dynamic_params: StandardCallbackDynamicParams,
+    ) -> bytes | None:
+        """
+        An unmanaged-container batch writes its output as `prediction.results-000NN-of-000NN`
+        shards; a file id names shard zero, so when the shard count is above one the remaining
+        shards are fetched and concatenated (each shard is newline-delimited JSONL).
+        """
+        first_shard: Final = await self.download_gcs_object(
+            object_name=object_path,
+            standard_callback_dynamic_params=standard_callback_dynamic_params,
+        )
+        shard_match: Final = self._SHARDED_RESULTS_PATTERN.match(object_path)
+        if first_shard is None or shard_match is None:
+            return first_shard
+        total_shards: Final = int(shard_match["total"])
+        if total_shards <= 1:
+            return first_shard
+        remaining: Final = await asyncio.gather(
+            *(
+                self.download_gcs_object(
+                    object_name=f"{shard_match['stem']}{index:05d}{shard_match['sep']}{shard_match['total']}",
+                    standard_callback_dynamic_params=standard_callback_dynamic_params,
+                )
+                for index in range(1, total_shards)
+            )
+        )
+        if any(shard is None for shard in remaining):
+            return None
+        return b"\n".join((first_shard.rstrip(b"\n"), *(shard.rstrip(b"\n") for shard in remaining if shard)))
+
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
@@ -141,14 +177,13 @@ class VertexAIFilesHandler(GCSBucketBase):
             litellm_params=litellm_params,
         )
 
-        download_kwargs: Final = {
-            "standard_callback_dynamic_params": {
-                "gcs_bucket_name": bucket_name,
-                "gcs_path_service_account": gcs_logging_config["path_service_account"],
-            }
-        }
-
-        file_content: Final = await self.download_gcs_object(object_name=object_path, **download_kwargs)
+        file_content: Final = await self._download_all_result_shards(
+            object_path=object_path,
+            standard_callback_dynamic_params=StandardCallbackDynamicParams(
+                gcs_bucket_name=bucket_name,
+                gcs_path_service_account=gcs_logging_config["path_service_account"],
+            ),
+        )
         decoded_file_id: Final = unquote(file_id)
 
         if file_content is None:

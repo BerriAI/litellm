@@ -378,6 +378,42 @@ def test_create_batch_sync_custom_endpoint_without_container_spec_raises_400():
     client.post.assert_not_called()
 
 
+def test_create_batch_sync_custom_endpoint_rejects_multi_deployment_endpoint():
+    """An endpoint behind a traffic split has no single container to replicate; index-zero
+    selection could run a different container than online traffic."""
+    h = _make_handler()
+    client = MagicMock()
+    multi = MagicMock()
+    multi.status_code = 200
+    multi.json.return_value = {
+        "deployedModels": [
+            {"model": CONTAINER_MODEL_RESOURCE},
+            {"model": f"projects/{PROJECT}/locations/{LOCATION}/models/other"},
+        ]
+    }
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(f"{HMOD}.safe_get", return_value=multi),
+    ):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=CUSTOM_ENDPOINT_CREATE_DATA,
+                api_base=CUSTOM_ENDPOINT_API_BASE,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+                custom_endpoint=True,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "traffic split" in str(exc_info.value)
+    client.post.assert_not_called()
+
+
 def test_create_batch_sync_custom_endpoint_rejects_file_for_other_endpoint():
     """The endpoint id in the file path is caller-controlled (raw gs:// ids are accepted), so a
     file staged for a different endpoint must not make the deployment run that endpoint's

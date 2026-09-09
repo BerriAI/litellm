@@ -157,11 +157,8 @@ class VertexAIBatchPrediction(VertexLLM):
                 vertex_location=vertex_location or "us-central1",
             )
         )
-        # The endpoint id in a custom-endpoints/ file path is caller-controlled (raw gs:// file
-        # ids are accepted), so it must never pick which container runs: batch jobs execute the
-        # container with the deployment's project credentials. The id has to match the endpoint
-        # the routed deployment's own api_base names, and container resolution only happens for
-        # deployments the admin marked custom_endpoint.
+        # The file-path endpoint id is caller-controlled and the job runs with the deployment's
+        # credentials, so it must match the endpoint the deployment's own api_base names.
         job_model: Final = transformed_batch_request.get("model", "")
         deployment_endpoint_id: Final = get_custom_endpoint_id_from_api_base(api_base)
         if custom_endpoint and not job_model.endswith(f"/custom-endpoints/{deployment_endpoint_id}"):
@@ -358,6 +355,15 @@ class VertexAIBatchPrediction(VertexLLM):
             )
         endpoint_view: Final[_VertexEndpointPayloadView] = {"payload": endpoint_response.json()}
         deployed_models: Final = endpoint_view["payload"].get("deployedModels") or ()
+        if len(deployed_models) > 1:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    f"Vertex endpoint '{endpoint_resource}' serves {len(deployed_models)} deployed "
+                    "models behind a traffic split, so there is no single container to replicate "
+                    "for batch prediction; use an endpoint with exactly one deployed model"
+                ),
+            )
         deployed: Final = deployed_models[0] if deployed_models else _VertexEndpointDeployedModel()
         deployed_model_resource: Final = deployed.get("model", "")
         if not deployed_model_resource:
@@ -416,10 +422,8 @@ class VertexAIBatchPrediction(VertexLLM):
             "outputConfig": vertex_batch_request["outputConfig"],
             "unmanagedContainerModel": unmanaged,
             "dedicatedResources": batch_resources,
-            # excludedFields strips the custom_id tag from each instance before it reaches the
-            # container (vLLM rejects unknown fields) and attaches it to the output row's
-            # instance echo; keyField does NOT strip (probed live: the container still received
-            # the tag and 400'd every row).
+            # excludedFields (not keyField, which does not actually strip and 400s vLLM) removes
+            # the custom_id tag before the container sees it and echoes it in the output row.
             "instanceConfig": {
                 "instanceType": "object",
                 "excludedFields": (VERTEX_CUSTOM_ENDPOINT_KEY_FIELD,),

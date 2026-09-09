@@ -744,11 +744,9 @@ class _OpenAIToCustomEndpointBatchUploadStream(BaseFileUploadStream):
         self._openai_file_content = openai_file_content
 
     def iter_bytes(self) -> Iterator[bytes]:
-        first = True
-        for entry in _iter_openai_jsonl_entries(self._openai_file_content):
+        for index, entry in enumerate(_iter_openai_jsonl_entries(self._openai_file_content)):
             row = _openai_batch_jsonl_entry_to_custom_endpoint_row(entry)
-            prefix = b"" if first else b"\n"
-            first = False
+            prefix = b"" if index == 0 else b"\n"
             yield prefix + json.dumps(row, default=dict).encode("utf-8")
 
 
