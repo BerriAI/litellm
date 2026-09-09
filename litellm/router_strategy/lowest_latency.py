@@ -439,7 +439,6 @@ class LowestLatencyLoggingHandler(CustomLogger):
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
-            # get latency or ttft (depending on streaming/non-streaming)
             use_ttft = (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None

@@ -11,6 +11,7 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.router import Router
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler, RoutingArgs
 
 DEPLOYMENT_ID = "9876"
@@ -396,3 +397,60 @@ async def test_async_get_available_deployments_treats_missing_samples_as_zero_la
 
     assert picked is not None
     assert picked["model_info"]["id"] == DEPLOYMENT_ID
+
+
+def _latency_router(routing_strategy_args: dict) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP,
+                "litellm_params": {"model": f"openai/{MODEL_GROUP}", "api_key": "sk-fake"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in (FAST_TTFT_ID, SLOW_TTFT_ID)
+        ],
+        routing_strategy="latency-based-routing",
+        routing_strategy_args=routing_strategy_args,
+    )
+
+
+def _seed_streaming_ttft(router: Router) -> None:
+    router.cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={
+            FAST_TTFT_ID: {"time_to_first_token_seconds": [0.1, 0.1, 1.0]},
+            SLOW_TTFT_ID: {"time_to_first_token_seconds": [0.3, 0.3, 0.3]},
+        },
+    )
+
+
+async def _pick_streaming(router: Router) -> str:
+    picked = await router.async_get_available_deployment(
+        model=MODEL_GROUP,
+        request_kwargs={"stream": True, "metadata": {}},
+    )
+    return picked["model_info"]["id"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_routing_strategy_args_update_applies_ttft_percentile():
+    """A config reload that adds ttft_percentile must reach the live selector,
+    not sit unused until the proxy restarts."""
+    router = _latency_router({"max_latency_list_size": 50})
+    _seed_streaming_ttft(router)
+
+    assert await _pick_streaming(router) == SLOW_TTFT_ID
+
+    router.update_settings(routing_strategy_args={"max_latency_list_size": 50, "ttft_percentile": 0.5})
+
+    assert await _pick_streaming(router) == FAST_TTFT_ID
+
+
+@pytest.mark.asyncio
+async def test_runtime_routing_strategy_args_update_keeps_previous_args_when_invalid():
+    router = _latency_router({"ttft_percentile": 0.5})
+    _seed_streaming_ttft(router)
+
+    router.update_settings(routing_strategy_args={"ttft_percentile": 5})
+
+    assert await _pick_streaming(router) == FAST_TTFT_ID
