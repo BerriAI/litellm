@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import litellm
+from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # Mock responses for different embedding models
@@ -1059,3 +1060,182 @@ def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(mo
 
     assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
     assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+marengo_3_embedding_response = {"data": [{"embedding": [0.01 * i for i in range(512)]}]}
+MARENGO_3_DUCK = "data:image/png;base64,ZHVjaw=="
+
+
+@pytest.mark.parametrize(
+    "model,kwargs,expected_body,expected_usage_details",
+    [
+        (
+            "bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            {"input_type": "text"},
+            {"inputType": "text", "text": {"inputText": "a duck on water"}},
+            {"query_count": 1},
+        ),
+        (
+            "bedrock/twelvelabs.marengo-embed-3-0-v1:0",
+            {"input_type": "text"},
+            {"inputType": "text", "text": {"inputText": "a duck on water"}},
+            {"query_count": 1},
+        ),
+        (
+            "bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            {"input_type": "text_image", "media_source": MARENGO_3_DUCK},
+            {
+                "inputType": "text_image",
+                "text_image": {"inputText": "a duck on water", "mediaSource": {"base64String": "ZHVjaw=="}},
+            },
+            {"query_count": 1, "image_count": 1},
+        ),
+        (
+            "bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            {"input_type": "multi_input", "media_sources": {"bird": MARENGO_3_DUCK}},
+            {
+                "inputType": "multi_input",
+                "multi_input": {
+                    "inputText": "a duck on water",
+                    "mediaSources": [{"name": "bird", "mediaType": "image", "base64String": "ZHVjaw=="}],
+                },
+            },
+            {"query_count": 1, "image_count": 1},
+        ),
+    ],
+)
+def test_marengo_3_embedding_sends_the_nested_payload_and_parses_512_dims(
+    model, kwargs, expected_body, expected_usage_details
+):
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(marengo_3_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model=model,
+            input="a duck on water",
+            client=client,
+            aws_region_name="us-east-1",
+            api_key="test-bearer-token-12345",
+            **kwargs,
+        )
+
+    assert json.loads(mock_post.call_args.kwargs["data"]) == expected_body
+    assert mock_post.call_args.kwargs["url"].endswith(f"/model/{model.removeprefix('bedrock/').replace(':', '%3A')}/invoke")
+    assert len(response.data[0]["embedding"]) == 512
+    assert response.data[0]["embedding"][:2] == [0.0, 0.01]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.total_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == expected_usage_details
+
+
+def test_marengo_3_image_embedding_sends_the_media_under_the_image_key():
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(marengo_3_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            input=MARENGO_3_DUCK,
+            client=client,
+            aws_region_name="us-east-1",
+            api_key="test-bearer-token-12345",
+            input_type="image",
+        )
+
+    assert json.loads(mock_post.call_args.kwargs["data"]) == {
+        "inputType": "image",
+        "image": {"mediaSource": {"base64String": "ZHVjaw=="}},
+    }
+    assert len(response.data[0]["embedding"]) == 512
+    assert response.data[0]["embedding"][:2] == [0.0, 0.01]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == {"image_count": 1}
+
+
+def test_marengo_2_7_embedding_keeps_the_flat_payload():
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(twelvelabs_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/us.twelvelabs.marengo-embed-2-7-v1:0",
+            input="a duck on water",
+            client=client,
+            aws_region_name="us-east-1",
+            api_key="test-bearer-token-12345",
+            input_type="text",
+        )
+
+    assert json.loads(mock_post.call_args.kwargs["data"]) == {
+        "inputType": "text",
+        "inputText": "a duck on water",
+        "textTruncate": "end",
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == {"query_count": 1}
+
+
+def test_marengo_usage_counts_text_requests_and_images_across_a_batch():
+    duck = {"mediaType": "image", "base64String": "ZHVjaw=="}
+    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+        response_list=[marengo_3_embedding_response, marengo_3_embedding_response, marengo_3_embedding_response],
+        model="us.twelvelabs.marengo-embed-3-0-v1:0",
+        batch_data=[
+            {"inputType": "text", "text": {"inputText": "a duck"}},
+            {"inputType": "image", "image": {"mediaSource": {"base64String": "ZHVjaw=="}}},
+            {"inputType": "multi_input", "multi_input": {"mediaSources": [{"name": "a", **duck}, {"name": "b", **duck}]}},
+        ],
+    )
+
+    assert [item["index"] for item in response.data] == [0, 1, 2]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.total_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == {"query_count": 1, "image_count": 3}
+
+
+def test_marengo_usage_without_request_data_bills_nothing():
+    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+        response_list=[marengo_3_embedding_response], model="us.twelvelabs.marengo-embed-3-0-v1:0"
+    )
+
+    assert len(response.data[0]["embedding"]) == 512
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.prompt_tokens_details is None
+
+
+def test_marengo_response_items_without_an_embedding_are_skipped():
+    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+        response_list=[{"data": [{"embeddingOption": "visual-text", "startSec": 0.0}, {"embedding": [0.1, 0.2, 0.3]}]}],
+        model="us.twelvelabs.marengo-embed-3-0-v1:0",
+    )
+
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2, 0.3]]
+    assert response.data[0]["index"] == 0
+
+
+def test_marengo_3_text_image_without_media_source_is_a_bad_request():
+    with pytest.raises(litellm.BadRequestError, match=r"text_image.*media_source"):
+        litellm.embedding(
+            model="bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
+            input="a duck on water",
+            aws_region_name="us-east-1",
+            api_key="test-bearer-token-12345",
+            input_type="text_image",
+        )
