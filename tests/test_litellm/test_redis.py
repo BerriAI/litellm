@@ -10,13 +10,16 @@ from redis.credentials import CredentialProvider
 
 import litellm
 from litellm._redis import (
+    _AWS_IAM_KWARG_NAMES,
     _async_auth_kwargs,
+    _coerce_redis_kwargs_types,
     _get_redis_client_logic,
     _get_redis_cluster_kwargs,
     _get_redis_env_kwarg_mapping,
     _get_redis_kwargs,
     _get_redis_url_kwargs,
     _pretty_print_redis_config,
+    _uses_tls,
     get_redis_async_client,
     get_redis_client,
     get_redis_connection_pool,
@@ -31,6 +34,7 @@ from litellm._redis_credential_provider import (
 from litellm.caching.redis_cache import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import REDIS_CLUSTER_HEALTH_CHECK_INTERVAL
+from litellm.proxy._types import CoordinationRedisParams
 
 
 class _StubCredentialProvider(CredentialProvider):
@@ -127,6 +131,8 @@ def test_aws_iam_settings_are_environment_derived():
     mapping = _get_redis_env_kwarg_mapping()
 
     assert _AWS_IAM_SETTINGS <= allowed
+    assert set(_AWS_IAM_KWARG_NAMES) == _AWS_IAM_SETTINGS
+    assert {f for f in CoordinationRedisParams.model_fields if f.startswith("aws_iam_")} == _AWS_IAM_SETTINGS
     assert mapping["REDIS_AWS_IAM_AUTH"] == "aws_iam_auth"
     assert mapping["REDIS_AWS_IAM_USER_NAME"] == "aws_iam_user_name"
     assert mapping["REDIS_AWS_IAM_CACHE_NAME"] == "aws_iam_cache_name"
@@ -348,6 +354,7 @@ def test_aws_iam_environment_settings_install_provider(clean_redis_environment, 
         pytest.param({"host": "cache.example.com", "port": 6379, "ssl": "false"}, id="host_ssl_false_string"),
         pytest.param({"host": "cache.example.com", "port": 6379, "ssl": "0"}, id="host_ssl_zero_string"),
         pytest.param({"host": "cache.example.com", "port": 6379, "ssl": "no"}, id="host_ssl_no_string"),
+        pytest.param({"host": "cache.example.com", "port": 6379, "ssl": "off"}, id="host_ssl_off_string"),
         pytest.param({"url": "redis://cache.example.com:6379", "ssl": True}, id="plaintext_url"),
         pytest.param(
             {"startup_nodes": [{"host": "cache.example.com", "port": 6379}]},
@@ -385,6 +392,7 @@ def test_aws_iam_auth_rejects_non_tls_connections(clean_redis_environment, trans
     [
         pytest.param({"host": "cache.example.com", "port": 6379, "ssl": True}, id="host"),
         pytest.param({"host": "cache.example.com", "port": 6379, "ssl": "true"}, id="host_ssl_true_string"),
+        pytest.param({"host": "cache.example.com", "port": 6379, "ssl": "True"}, id="host_ssl_true_capitalized"),
         pytest.param({"host": "cache.example.com", "port": 6379, "ssl": "1"}, id="host_ssl_one_string"),
         pytest.param({"host": "cache.example.com", "port": 6379, "ssl": "yes"}, id="host_ssl_yes_string"),
         pytest.param(
@@ -419,6 +427,11 @@ def test_aws_iam_auth_accepts_tls_connections(clean_redis_environment, transport
     )
 
     assert isinstance(redis_kwargs["credential_provider"], ElastiCacheIAMCredentialProvider)
+
+
+@pytest.mark.parametrize("ssl", ["true", "True", "TRUE", "1", "yes", "YES", "false", "0", "no", "off", "", "maybe"])
+def test_tls_detection_agrees_with_the_ssl_kwarg_coercion(ssl):
+    assert _uses_tls({"ssl": ssl}) is _coerce_redis_kwargs_types({"ssl": ssl})["ssl"]
 
 
 def test_aws_iam_settings_are_removed_for_url_and_static_credentials(clean_redis_environment):
@@ -522,7 +535,7 @@ def test_aws_iam_settings_map_to_distinct_provider_fields(clean_redis_environmen
     assert provider._region == "iam-region-value"
 
 
-@pytest.mark.parametrize("aws_iam_auth", [None, False, "", "false", "0", "no"])
+@pytest.mark.parametrize("aws_iam_auth", [None, False, "", "false", "0", "no", "off"])
 def test_aws_iam_auth_disabled_does_not_install_provider(clean_redis_environment, aws_iam_auth):
     redis_kwargs = _get_redis_client_logic(
         host="cache.example.com",
