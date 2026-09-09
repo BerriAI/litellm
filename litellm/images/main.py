@@ -102,7 +102,9 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model, api_base=kwargs.get("api_base", None), litellm_params=GenericLiteLLMParams(**kwargs)
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
@@ -227,6 +229,7 @@ def image_generation(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
+                litellm_params=GenericLiteLLMParams(**kwargs),
             )
         else:
             model = "dall-e-2"
@@ -377,6 +380,7 @@ def image_generation(
         # Providers using llm_http_handler
         #########################################################
         elif custom_llm_provider in (
+            litellm.LlmProviders.CHATGPT,
             litellm.LlmProviders.RECRAFT,
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
@@ -785,6 +789,7 @@ def image_edit(
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
         )
 
         # Check for custom provider
@@ -965,9 +970,9 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes | list[FileTypes],
-    model: str,
-    prompt: str,
+    image: FileTypes | list[FileTypes] | None = None,
+    model: str = "",
+    prompt: str = "",
     mask: str | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
@@ -1002,14 +1007,12 @@ async def aimage_edit(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model, api_base=local_vars.get("base_url", None), litellm_params=GenericLiteLLMParams(**kwargs)
             )
-
-        images: Final = image if isinstance(image, list) else [image]
 
         func: Final = partial(
             image_edit,
-            image=images,
+            image=image,
             prompt=prompt,
             mask=mask,
             model=model,

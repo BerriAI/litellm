@@ -89,7 +89,11 @@ def _get_realtime_http_provider_config(
     )
 
     provider_config: BaseRealtimeHTTPConfig | None = None
-    if custom_llm_provider in LlmProviders._member_map_.values():
+    if custom_llm_provider == "chatgpt":
+        from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
+
+        provider_config = ChatGPTRealtimeHTTPConfig(litellm_params)
+    elif custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_http_config(
             model="",
             provider=LlmProviders(custom_llm_provider),
@@ -137,6 +141,7 @@ async def acreate_realtime_client_secret(
         model=model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+        litellm_params=litellm_params,
     )
     (
         provider_config,
@@ -205,6 +210,7 @@ async def acreate_realtime_transcription_session(
         model=model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+        litellm_params=litellm_params,
     )
     (
         provider_config,
@@ -266,6 +272,7 @@ async def arealtime_calls(
         model=model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+        litellm_params=litellm_params,
     )
     provider_config, resolved_api_base, _ = _get_realtime_http_provider_config(
         custom_llm_provider=custom_llm_provider,
@@ -282,7 +289,7 @@ async def arealtime_calls(
         litellm_params={"api_base": resolved_api_base},
         custom_llm_provider=custom_llm_provider,
     )
-    return await base_llm_http_handler.async_realtime_calls_handler(
+    response: Final = await base_llm_http_handler.async_realtime_calls_handler(
         api_base=resolved_api_base,
         openai_ephemeral_key=openai_ephemeral_key,
         sdp_body=sdp_body,
@@ -295,6 +302,13 @@ async def arealtime_calls(
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
+    if custom_llm_provider == "chatgpt":
+        response.extensions["chatgpt_realtime"] = MappingProxyType(
+            {
+                "model": model_name,
+            }
+        )
+    return response
 
 
 async def vertex_access_token_resolver(
@@ -366,6 +380,7 @@ async def _arealtime(
         model=model,
         api_base=api_base,
         api_key=api_key,
+        litellm_params=litellm_params,
     )
 
     # If the client supplied `model` in the URL, ensure it uses the normalized
@@ -435,6 +450,20 @@ async def _arealtime(
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             realtime_protocol=realtime_protocol,
+            query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
+    elif _custom_llm_provider == "chatgpt":
+        from litellm.llms.chatgpt.realtime import ChatGPTRealtime
+
+        await ChatGPTRealtime(litellm_params, websocket.headers).async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base or "https://api.openai.com/v1",
+            api_key="chatgpt-oauth",
+            timeout=timeout,
             query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),

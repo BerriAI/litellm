@@ -375,6 +375,11 @@ async def proxy_realtime_calls(
     request: Request,
     fastapi_response: Response,
 ) -> Response:
+    if request.headers.get("content-type", "").split(";", 1)[0] in ("application/json", "multipart/form-data"):
+        from litellm.proxy.realtime_endpoints.codex import create_codex_realtime_call
+
+        return await create_codex_realtime_call(request)
+
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,

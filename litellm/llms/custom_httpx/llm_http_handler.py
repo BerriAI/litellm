@@ -6411,7 +6411,7 @@ class BaseLLMHTTPHandler:
 
         # Build multipart form data: sdp + session JSON
         session_data: Final = session_config or {}
-        if "type" not in session_data:
+        if "type" not in session_data and not getattr(provider_config, "realtime_calls_json", False):
             session_data["type"] = "realtime"
         if "model" not in session_data and model:
             session_data["model"] = model
@@ -6434,6 +6434,13 @@ class BaseLLMHTTPHandler:
         )
 
         try:
+            if getattr(provider_config, "realtime_calls_json", False):
+                return await async_httpx_client.post(
+                    url=url,
+                    headers=headers,
+                    json={"sdp": sdp_text, "session": session_data},  # mutable-ok: JSON signaling payload
+                    timeout=timeout,
+                )
             return await async_httpx_client.post(
                 url=url,
                 headers=headers,
