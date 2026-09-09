@@ -8,8 +8,8 @@ from prometheus_client import CollectorRegistry, Counter
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils import litellm_logging
+from tests._prometheus_helpers import isolated_prometheus_registry
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.prometheus import isolated_prometheus_registry
 from tests.test_litellm_rust.support.requests import MESSAGES_EVENTS
 from tests.test_litellm_rust.integrations import (
     ALL_ROUTES,

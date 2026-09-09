@@ -6,6 +6,6 @@ Use `backend` with `"python"` and `"rust"` for parity tests. Keep callback mutat
 
 Run the suite with `LITELLM_RUST=1 uv run pytest tests/test_litellm_rust`.
 
-The newly ported suite is marked as a non-strict expected failure until the retained callback implementation from #40070 lands. Passing cases appear as XPASS so staging coverage remains visible
+The retained callback contract modules are marked as non-strict expected failures until the implementation from #40070 lands. Harness tests remain strict, and passing contract cases appear as XPASS so staging coverage stays visible
 
 `isolated_backend` restores the previous backend override and callback state on exit, including after exceptions or cancellation. Scopes can nest in the same task. Run backend comparisons sequentially: overlapping scopes in different tasks raise before changing process-global state. Use separate worker processes for parallel backend comparisons

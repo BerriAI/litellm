@@ -21,8 +21,8 @@ from litellm.rust_bridge.configuration import (  # pyright: ignore[reportPrivate
     _CONFIGURATION,
     _parse_env_bool,
 )
+from tests._prometheus_helpers import isolated_prometheus_registry
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
-from tests.test_litellm_rust.support.prometheus import isolated_prometheus_registry
 from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
 
 CALLBACK_ATTRIBUTES: Final = (
@@ -35,6 +35,20 @@ CALLBACK_ATTRIBUTES: Final = (
     "_async_failure_callback",
 )
 Backend = Literal["python", "rust"]
+EXPECTED_FAILURE_FILES: Final = frozenset(
+    {
+        "chat/test_callback_mutation.py",
+        "integrations/test_composition.py",
+        "integrations/test_exporters.py",
+        "integrations/test_guardrails.py",
+        "messages/test_callback_mutation.py",
+        "messages/test_streaming.py",
+        "ocr/test_callbacks.py",
+        "ocr/test_dispatch.py",
+        "ocr/test_requests.py",
+        "test_provenance.py",
+    }
+)
 
 
 class _BackendScopes:
@@ -143,16 +157,19 @@ def recording_server() -> Generator[RecordingServer]:
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    expected_failure = pytest.mark.xfail(
+    expected_failure: Final = pytest.mark.xfail(
         reason="requires the retained callback implementation from #40070",
         strict=False,
     )
     for item in items:
-        if "test_litellm_rust" in item.path.parts and item.path.name != "test_ocr.py":
+        if "test_litellm_rust" not in item.path.parts:
+            continue
+        relative_path: Final = "/".join(item.path.parts[item.path.parts.index("test_litellm_rust") + 1 :])
+        if relative_path in EXPECTED_FAILURE_FILES:
             item.add_marker(expected_failure)
 
     if not _parse_env_bool(os.environ.get("LITELLM_RUST")):
-        skip = pytest.mark.skip(reason="requires LITELLM_RUST=1 and a compiled Rust extension")
+        skip: Final = pytest.mark.skip(reason="requires LITELLM_RUST=1 and a compiled Rust extension")
         for item in items:
             if "test_litellm_rust" in item.path.parts:
                 item.add_marker(skip)
