@@ -1,9 +1,11 @@
 import asyncio
 import base64
+import json
 import os
 import sys
 from importlib import metadata
 from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anyio
@@ -11,6 +13,8 @@ import httpx
 import pytest
 from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
 from mcp import McpError
+from mcp.client.streamable_http import streamable_http_client
+from pydantic import ValidationError
 from mcp.shared.message import SessionMessage
 from mcp.types import (
     LATEST_PROTOCOL_VERSION,
@@ -1224,14 +1228,14 @@ def test_without_a_configured_slot_the_existing_precedence_is_unchanged():
 
 
 _REDIRECT_CASES = [
-    ("https://upstream.example.com/mcp", "https://upstream.example.com/other"),      # same origin
+    ("https://upstream.example.com/mcp", "https://upstream.example.com/other"),  # same origin
     ("https://upstream.example.com/mcp", "https://upstream.example.com:443/other"),  # explicit default port
-    ("https://upstream.example.com/mcp", "https://attacker.example.com/collect"),    # different host
-    ("https://upstream.example.com/mcp", "http://upstream.example.com/collect"),     # scheme downgrade
-    ("https://upstream.example.com/mcp", "https://upstream.example.com:8443/other"), # different port
-    ("https://upstream.example.com/mcp", "https://sub.upstream.example.com/x"),      # different host
-    ("http://upstream.example.com/mcp", "https://upstream.example.com/other"),       # http -> https upgrade
-    ("http://upstream.example.com/mcp", "http://upstream.example.com/other"),        # same origin, plain http
+    ("https://upstream.example.com/mcp", "https://attacker.example.com/collect"),  # different host
+    ("https://upstream.example.com/mcp", "http://upstream.example.com/collect"),  # scheme downgrade
+    ("https://upstream.example.com/mcp", "https://upstream.example.com:8443/other"),  # different port
+    ("https://upstream.example.com/mcp", "https://sub.upstream.example.com/x"),  # different host
+    ("http://upstream.example.com/mcp", "https://upstream.example.com/other"),  # http -> https upgrade
+    ("http://upstream.example.com/mcp", "http://upstream.example.com/other"),  # same origin, plain http
 ]
 
 
@@ -1283,3 +1287,109 @@ def test_a_differently_cased_injected_header_cannot_shadow_the_slot() -> None:
     headers = client._get_auth_headers()
     assert [v for k, v in headers.items() if k.lower() == "esb-oauth"] == ["Bearer minted-token"]
     assert headers["X-Trace"] == "keep"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content_type", "body", "expected_type"),
+    [
+        ("text/html", b"<html>secret-page</html>", ValueError),
+        ("application/json", b"secret-invalid-json", ValidationError),
+        ("application/json", b'{"secret":"invalid-rpc"}', ValidationError),
+        ("application/json", b'{"jsonrpc":"2.0","id":0,"result":{"secret":"invalid-schema"}}', ValidationError),
+    ],
+)
+async def test_invalid_http_response_surfaces_without_waiting_for_timeout(
+    content_type: str, body: bytes, expected_type: type[Exception]
+) -> None:
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"Content-Type": content_type}, content=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+        with pytest.raises(expected_type) as caught:
+            await asyncio.wait_for(
+                client._execute_session_operation(
+                    streamable_http_client(client.server_url, http_client=http_client),
+                    lambda session: session.list_tools(),
+                ),
+                timeout=3,
+            )
+
+    message: Final = _connection_error_message(caught.value, client.server_url, 30)
+    assert "unsupported content type" in message or "invalid MCP response" in message
+    assert "secret" not in message
+    assert "timed out" not in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [200, 401, 503])
+async def test_http_response_handler_preserves_success_and_http_errors(status_code: int) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(200)
+        payload: Final = json.loads(request.content)
+        if "id" not in payload:
+            return httpx.Response(202)
+        result: Final = (
+            {
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
+                "capabilities": {},
+                "serverInfo": {"name": "test", "version": "1"},
+            }
+            if payload["method"] == "initialize"
+            else {"tools": []}
+        )
+        return httpx.Response(status_code, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+        operation: Final = client._execute_session_operation(
+            streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
+        )
+        if status_code == 200:
+            result: Final = await asyncio.wait_for(operation, timeout=3)
+            assert result.tools == []
+        else:
+            with pytest.raises(httpx.HTTPStatusError) as caught:
+                await asyncio.wait_for(operation, timeout=3)
+            assert caught.value.response.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_invalid_tool_list_schema_is_identified_as_an_upstream_response() -> None:
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(200)
+        payload: Final = json.loads(request.content)
+        if "id" not in payload:
+            return httpx.Response(202)
+        result: Final = (
+            {
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
+                "capabilities": {},
+                "serverInfo": {"name": "test", "version": "1"},
+            }
+            if payload["method"] == "initialize"
+            else {"tools": "secret-invalid-tools"}
+        )
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+        with pytest.raises(ValidationError) as caught:
+            await asyncio.wait_for(
+                client._execute_session_operation(
+                    streamable_http_client(client.server_url, http_client=http_client),
+                    lambda session: session.list_tools(),
+                ),
+                timeout=3,
+            )
+
+    message: Final = _connection_error_message(caught.value, client.server_url, 30)
+    assert "invalid MCP response" in message
+    assert "secret" not in message
