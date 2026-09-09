@@ -8687,7 +8687,7 @@ async def test_retry_breadcrumbs_never_carry_a_forwarded_credential(container_ke
     assert _BREADCRUMB_CREDENTIAL_CANARY not in dumped
 
 
-def _always_failing_router(num_retries):
+def _always_failing_router(num_retries: int) -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
@@ -8703,7 +8703,7 @@ def _always_failing_router(num_retries):
     )
 
 
-async def _fail_one_proxy_shaped_request(router, request_marker):
+async def _fail_one_proxy_shaped_request(router: litellm.Router, request_marker: str):
     """The proxy hands the router a metadata dict and a proxy_server_request whose body is a
     shallow copy of the request, so body["metadata"] is the very same dict the router later
     stamps previous_models onto."""
@@ -8723,7 +8723,7 @@ async def _fail_one_proxy_shaped_request(router, request_marker):
     return metadata["previous_models"]
 
 
-def _nested_breadcrumb_lists(node):
+def _nested_breadcrumb_lists(node: object) -> list[object]:
     if isinstance(node, dict):
         return [v for k, v in node.items() if k == "previous_models"] + [
             found for v in node.values() for found in _nested_breadcrumb_lists(v)
