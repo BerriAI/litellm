@@ -1,0 +1,22 @@
+[
+  {
+    "file": "before-session.png",
+    "commit": "ee7c7e14f3dd7c4c3930a423440ec26427e2c554",
+    "sha256": "57ebec7c81cc38bfc68275ca88a6e3b3237de07d84569673b0647a9ad8e19e3e"
+  },
+  {
+    "file": "before-happy.png",
+    "commit": "ee7c7e14f3dd7c4c3930a423440ec26427e2c554",
+    "sha256": "5687390a8e49861615a14074cf67b966a79b3fcaa35d4a30addb7395bec29122"
+  },
+  {
+    "file": "after-session.png",
+    "commit": "15392e7b3a298bec57f4aae31e863e39fb182cc6",
+    "sha256": "882d08b2f9d8daa35bd5f6a0bd199c8c059bdbb2165c29a3f987d99503981567"
+  },
+  {
+    "file": "after-happy.png",
+    "commit": "15392e7b3a298bec57f4aae31e863e39fb182cc6",
+    "sha256": "e9bbe32549b6b3430521de22fcbadfc06ebae3be86a6eebb9f6901403f2c3b55"
+  }
+]
