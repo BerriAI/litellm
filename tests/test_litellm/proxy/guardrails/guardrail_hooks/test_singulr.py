@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -496,6 +497,59 @@ class TestSingulrResponsePayload:
         sent_payload = mock_post.call_args.kwargs["json"]
         assert sent_payload["response"]["tool_calls"] == []
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_type, expected_type",
+        [(None, "function"), ("custom", "custom")],
+        ids=["type_missing", "type_not_function"],
+    )
+    async def test_tool_call_type_other_than_function_is_still_scanned(
+        self, singulr_guardrail, raw_type, expected_type
+    ):
+        """Regression: a tool call whose type is absent or isn't "function" used
+        to raise a pydantic ValidationError while building the payload, which
+        escaped apply_guardrail as a 500 instead of reaching the scan at all."""
+        resp = _make_response({"should_block": False})
+        tool_call = {"id": "call_1", "function": {"name": "get_current_time", "arguments": "{}"}}
+        inputs = {
+            "texts": [],
+            "tool_calls": [tool_call if raw_type is None else {**tool_call, "type": raw_type}],
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
+        sent_tool_calls = mock_post.call_args.kwargs["json"]["response"]["tool_calls"]
+        assert [call["type"] for call in sent_tool_calls] == [expected_type]
+        assert sent_tool_calls[0]["function"]["name"] == "get_current_time"
+
+    @pytest.mark.asyncio
+    async def test_non_string_tool_call_arguments_are_serialized(self, singulr_guardrail):
+        """Some providers hand back already-parsed arguments; they must be
+        scanned as JSON text rather than crashing the payload build."""
+        resp = _make_response({"should_block": False})
+        inputs = {
+            "texts": [],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "rm", "arguments": {"path": "/etc/passwd"}}}
+            ],
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            await singulr_guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
+        sent_tool_calls = mock_post.call_args.kwargs["json"]["response"]["tool_calls"]
+        assert json.loads(sent_tool_calls[0]["function"]["arguments"]) == {"path": "/etc/passwd"}
+
+    @pytest.mark.asyncio
+    async def test_block_verdict_still_raises_for_a_non_function_tool_call(self, singulr_guardrail):
+        """The point of scanning these calls: the verdict must still be enforced."""
+        resp = _make_response({"should_block": True, "blocking_due_to": "dangerous_tool"})
+        inputs = {
+            "texts": [],
+            "tool_calls": [{"id": "call_1", "function": {"name": "rm", "arguments": "{}"}}],
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            with pytest.raises(GuardrailRaisedException) as exc_info:
+                await singulr_guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
+        assert "dangerous_tool" in str(exc_info.value)
+
 
 # ---------------------------------------------------------------------------
 # Allow / block decisions
@@ -543,9 +597,7 @@ class TestSingulrAllowAction:
             block_on_error=False,
         )
         inputs = {"texts": ["Here is your answer."]}
-        with patch.object(
-            guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")
-        ):
+        with patch.object(guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")):
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data={},
@@ -647,9 +699,7 @@ class TestSingulrMcpRequest:
             block_on_error=False,
         )
         request_data = {"mcp_tool_name": "search_docs", "mcp_arguments": {"query": "reset password"}}
-        with patch.object(
-            guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")
-        ):
+        with patch.object(guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")):
             result = await guardrail.apply_guardrail(
                 inputs={"texts": []},
                 request_data=request_data,
@@ -772,9 +822,7 @@ class TestSingulrMcpResponse:
         )
         request_data = {"call_type": "call_mcp_tool", "mcp_tool_name": "search_docs"}
         inputs = {"texts": ["leaked secret"]}
-        with patch.object(
-            guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")
-        ):
+        with patch.object(guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")):
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -899,6 +947,50 @@ class TestSingulrLoggingHook:
         assert len(guardrail_information) == 1
         assert guardrail_information[0]["guardrail_name"] == "test-singulr"
         assert guardrail_information[0]["guardrail_status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_request_block_verdict_marks_guardrail_status_intervened(self, singulr_guardrail):
+        """Regression: a successful HTTP call whose body says should_block is a
+        real intervention. logging_only can't fail the request, so the verdict
+        only ever surfaces through guardrail_status, and it used to be recorded
+        as a plain success."""
+        resp = _make_response({"should_block": True, "blocking_due_to": "pii"})
+        kwargs = {"messages": [{"role": "user", "content": "my ssn is 123-45-6789"}]}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            updated_kwargs, result = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result=None, call_type="acompletion"
+            )
+        assert result is None
+        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
+        assert guardrail_information[0]["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
+    async def test_response_block_verdict_marks_guardrail_status_intervened(self, singulr_guardrail):
+        """Only the response leg blocks here, so a request verdict of False must
+        not mask it."""
+        responses = [_make_response({"should_block": False}), _make_response({"should_block": True})]
+        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+        with patch.object(singulr_guardrail.async_handler, "post", side_effect=responses):
+            updated_kwargs, _ = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result={"choices": []}, call_type="acompletion"
+            )
+        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
+        assert guardrail_information[0]["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
+    async def test_block_verdict_still_reports_both_legs_and_returns_result(self, singulr_guardrail):
+        """A block verdict on the request leg is logging-only: it must not
+        short-circuit the response report or alter what the hook returns."""
+        resp = _make_response({"should_block": True})
+        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+        result = {"choices": [{"finish_reason": "stop", "message": {"content": "hello"}}]}
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
+            returned_kwargs, returned_result = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result=result, call_type="acompletion"
+            )
+        assert [call.kwargs["json"]["guardrail_scope"] for call in mock_post.call_args_list] == ["request", "response"]
+        assert returned_result is result
+        assert returned_kwargs is kwargs
 
     @pytest.mark.asyncio
     async def test_api_error_marks_guardrail_status_intervened(self, singulr_guardrail):

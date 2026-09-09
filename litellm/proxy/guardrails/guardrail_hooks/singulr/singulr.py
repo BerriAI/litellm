@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
@@ -341,10 +342,14 @@ class SingulrGuardrail(CustomGuardrail):
         args: Final = fun.get("arguments")
         if not func_name or args is None:
             return None
+        call_type: Final = tool_call.get("type")
         return ToolCall(
             id=tool_call_id,
-            type=tool_call.get("type"),
-            function=ToolCallFunction(name=func_name, arguments=args),
+            type=call_type if isinstance(call_type, str) and call_type else "function",
+            function=ToolCallFunction(
+                name=func_name,
+                arguments=args if isinstance(args, str) else json.dumps(args, default=str),
+            ),
         )
 
     async def _apply_guardrail_on_response(
@@ -391,6 +396,69 @@ class SingulrGuardrail(CustomGuardrail):
             )
         return inputs
 
+    def _logging_only_response_payload(
+        self,
+        kwargs: Mapping[str, Any],
+        result: Any,  # noqa: ANN401  # result can be any callback shape
+    ) -> Mapping[str, Any]:
+        metadata: Final = self._build_metadata(request_data=kwargs)
+        try:
+            return SingulrGuardrailPayload(
+                correlation_id=kwargs.get("litellm_call_id"),
+                guardrail_scope="response",
+                response=result,
+                metadata=metadata,
+            ).model_dump(mode="json")
+        except Exception as exc:  # noqa: BLE001  # result can be any callback shape; fall back to a stringified report
+            verbose_proxy_logger.debug("Singulr: could not JSON-serialize response, falling back: %s", exc)
+            return {  # mutable-ok: short-lived JSON payload dict
+                "correlation_id": kwargs.get("litellm_call_id"),
+                "guardrail_scope": "response",
+                "response": str(result),
+                "metadata": metadata,
+            }
+
+    async def _report_logging_only(
+        self,
+        kwargs: Mapping[str, Any],
+        result: Any,  # noqa: ANN401  # result can be any callback shape
+    ) -> tuple[SingulrGuardrailResponse | None, ...]:
+        messages: Final = kwargs.get("messages") or ()
+        request_verdict: Final = (
+            await self._call_api(
+                SingulrGuardrailPayload(
+                    correlation_id=kwargs.get("litellm_call_id"),
+                    model_name=kwargs.get("model"),
+                    guardrail_scope="request",
+                    messages=messages,
+                    metadata=self._build_metadata(request_data=kwargs),
+                ).model_dump(mode="json")
+            )
+            if messages
+            else None
+        )
+        response_verdict: Final = (
+            await self._call_api(self._logging_only_response_payload(kwargs=kwargs, result=result)) if result else None
+        )
+        return (request_verdict, response_verdict)
+
+    async def _logging_only_guardrail_status(
+        self,
+        kwargs: Mapping[str, Any],
+        result: Any,  # noqa: ANN401  # result can be any callback shape
+    ) -> GuardrailStatus | None:
+        """``None`` means no verdict was reached, so nothing should be logged."""
+        try:
+            verdicts: Final = await self._report_logging_only(kwargs=kwargs, result=result)
+        except GuardrailRaisedException:
+            return "guardrail_intervened"
+        except Exception as exc:  # noqa: BLE001  # logging_only must never break the request
+            verbose_proxy_logger.debug("Singulr: logging_only hook swallowed exception: %s", exc)
+            return None
+        if any(verdict is not None and verdict.should_block for verdict in verdicts):
+            return "guardrail_intervened"
+        return "success"
+
     async def async_logging_hook(
         self,
         kwargs: dict,  # mutable-ok: matches CustomLogger override; mutated via setdefault
@@ -398,44 +466,8 @@ class SingulrGuardrail(CustomGuardrail):
         call_type: str,
     ) -> tuple[dict, Any]:
         start_time: Final = datetime.now(timezone.utc)
-        guardrail_status: GuardrailStatus = "success"
-        try:
-            messages: Final = kwargs.get("messages") or ()
-            if messages:
-                request_metadata: Final = self._build_metadata(request_data=kwargs)
-                singulr_req_obj = SingulrGuardrailPayload(
-                    correlation_id=kwargs.get("litellm_call_id"),
-                    model_name=kwargs.get("model"),
-                    guardrail_scope="request",
-                    messages=messages,
-                    metadata=request_metadata,
-                )
-                payload_req = singulr_req_obj.model_dump(mode="json")
-                await self._call_api(payload_req)
-
-            if result:
-                response_metadata: Final = self._build_metadata(request_data=kwargs)
-                singulr_res_obj = SingulrGuardrailPayload(
-                    correlation_id=kwargs.get("litellm_call_id"),
-                    guardrail_scope="response",
-                    response=result,
-                    metadata=response_metadata,
-                )
-                try:
-                    payload = singulr_res_obj.model_dump(mode="json")
-                except Exception as exc:  # noqa: BLE001  # result can be any callback shape; fall back to a stringified report
-                    verbose_proxy_logger.debug("Singulr: could not JSON-serialize response, falling back: %s", exc)
-                    payload = {
-                        "correlation_id": kwargs.get("litellm_call_id"),
-                        "guardrail_scope": "response",
-                        "response": str(result),
-                        "metadata": response_metadata,
-                    }
-                await self._call_api(payload)
-        except GuardrailRaisedException:
-            guardrail_status = "guardrail_intervened"
-        except Exception as exc:  # noqa: BLE001  # logging_only must never break the request
-            verbose_proxy_logger.debug("Singulr: logging_only hook swallowed exception: %s", exc)
+        guardrail_status: Final = await self._logging_only_guardrail_status(kwargs=kwargs, result=result)
+        if guardrail_status is None:
             return kwargs, result
 
         end_time: Final = datetime.now(timezone.utc)
