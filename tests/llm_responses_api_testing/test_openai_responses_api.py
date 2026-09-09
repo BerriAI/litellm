@@ -1,5 +1,4 @@
 import os
-import sys
 import pytest
 import asyncio
 from typing import Optional, cast
@@ -10,10 +9,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 import time
 import json
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-import json
 from litellm.types.utils import StandardLoggingPayload
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
@@ -1643,9 +1640,12 @@ async def test_openai_responses_api_token_limit_error():
         model="gpt-5-mini", input=oversized_text, stream=True
     )
 
-    with pytest.raises(litellm.APIError) as exc_info:
+    async def _drain():
         async for event in response:
             print(event)
+
+    with pytest.raises(litellm.APIError) as exc_info:
+        await _drain()
 
     assert exc_info.value.status_code == 400
     assert "exceeds the context window" in str(exc_info.value)
@@ -1816,7 +1816,7 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         await litellm.aresponses(
             model="gpt-5.5",
             input="Test",
-            temperature=0.7,
+            temperature=1,
             max_output_tokens=20,
             extra_body={
                 "custom_field": "custom_value",

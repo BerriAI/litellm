@@ -15,22 +15,22 @@ Pydantic ValidationError (previously typed as Optional[str]).
 """
 
 import json
-import os
-import sys
+from importlib import import_module
 from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
+    _ERROR_CODE_HTTP_STATUS,
     BaseResponsesAPIStreamingIterator,
     ResponsesAPIStreamingIterator,
     SyncResponsesAPIStreamingIterator,
+    _status_code_for_error_fields,
 )
 from litellm.types.llms.openai import (
     ErrorEvent,
@@ -206,9 +206,12 @@ async def test_async_iterator_error_after_first_chunk_carries_generated_content(
     )
 
     chunks = []
-    with pytest.raises(MidStreamFallbackError) as exc_info:
+    async def _drain():
         async for chunk in iterator:
             chunks.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await _drain()
     assert len(chunks) == 2
     assert exc_info.value.status_code == 500
     assert exc_info.value.is_pre_first_chunk is False
@@ -257,8 +260,8 @@ def test_handle_logging_failed_response_maps_rate_limit_to_429():
         {"type": "tokens", "code": "rate_limit_exceeded", "message": "throttled"}
     )
     with (
-        patch("litellm.responses.streaming_iterator.run_async_function") as mock_run_async,
-        patch("litellm.responses.streaming_iterator.executor"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function") as mock_run_async,
+        patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
     ):
         iterator._handle_logging_failed_response()
     logged_exception = mock_run_async.call_args.kwargs["exception"]
@@ -274,8 +277,8 @@ def test_handle_logging_failed_response_maps_type_field_to_400():
         {"type": "invalid_request_error", "code": "invalid_prompt", "message": "bad prompt"}
     )
     with (
-        patch("litellm.responses.streaming_iterator.run_async_function") as mock_run_async,
-        patch("litellm.responses.streaming_iterator.executor"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function") as mock_run_async,
+        patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
     ):
         iterator._handle_logging_failed_response()
     logged_exception = mock_run_async.call_args.kwargs["exception"]
@@ -294,8 +297,8 @@ def test_handle_logging_failed_response_records_usage_and_cost():
     iterator.completed_response = chunk
     iterator.logging_obj._response_cost_calculator.return_value = 0.0042
     with (
-        patch("litellm.responses.streaming_iterator.run_async_function"),
-        patch("litellm.responses.streaming_iterator.executor"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
     ):
         iterator._handle_logging_failed_response()
     combined_usage = iterator.logging_obj.model_call_details["combined_usage_object"]
@@ -313,8 +316,8 @@ def test_handle_logging_failed_response_without_usage_skips_recording():
         {"type": "server_error", "code": "server_error", "message": "boom"}
     )
     with (
-        patch("litellm.responses.streaming_iterator.run_async_function"),
-        patch("litellm.responses.streaming_iterator.executor"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function"),
+        patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
     ):
         iterator._handle_logging_failed_response()
     assert "combined_usage_object" not in iterator.logging_obj.model_call_details
@@ -355,3 +358,70 @@ def test_sync_iterator_raises_mid_stream_fallback_on_rate_limit_error_event():
             pass
     assert exc_info.value.status_code == 429
     assert isinstance(exc_info.value.original_exception, litellm.APIError)
+
+
+def test_every_openai_sdk_response_error_code_has_explicit_status_mapping():
+    from typing import get_args
+
+    from openai.types.responses.response_error import ResponseError
+
+    sdk_codes = set(get_args(ResponseError.model_fields["code"].annotation))
+    unmapped = sdk_codes - set(_ERROR_CODE_HTTP_STATUS)
+    assert unmapped == set(), (
+        f"OpenAI SDK ResponseError codes missing from _ERROR_CODE_HTTP_STATUS: {sorted(unmapped)}; "
+        "classify each new code with an explicit HTTP status instead of letting it default to 500"
+    )
+
+
+@pytest.mark.parametrize(
+    "code,expected_status",
+    [
+        ("server_error", 500),
+        ("rate_limit_exceeded", 429),
+        ("insufficient_quota", 429),
+        ("vector_store_timeout", 504),
+        ("invalid_prompt", 400),
+        ("invalid_image", 400),
+        ("invalid_image_format", 400),
+        ("invalid_base64_image", 400),
+        ("invalid_image_url", 400),
+        ("image_too_large", 400),
+        ("image_too_small", 400),
+        ("image_parse_error", 400),
+        ("image_content_policy_violation", 400),
+        ("invalid_image_mode", 400),
+        ("image_file_too_large", 400),
+        ("unsupported_image_media_type", 400),
+        ("empty_image_file", 400),
+        ("failed_to_download_image", 400),
+        ("image_file_not_found", 400),
+        ("totally_unknown_future_code", 500),
+    ],
+)
+def test_status_code_for_documented_response_error_codes(code: str, expected_status: int):
+    assert _status_code_for_error_fields(None, code) == expected_status
+
+
+def test_specific_error_code_wins_over_generic_error_type():
+    assert _status_code_for_error_fields("server_error", "invalid_image") == 400
+
+
+def test_maybe_raise_for_response_failed_event_maps_image_code_to_400():
+    iterator = _make_iterator()
+    mock_response_obj = Mock()
+    mock_response_obj.error = {"code": "image_content_policy_violation", "message": "image rejected"}
+    chunk = Mock()
+    chunk.type = "response.failed"
+    chunk.response = mock_response_obj
+    with pytest.raises(litellm.APIError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert exc_info.value.status_code == 400
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+
+
+def test_maybe_raise_for_error_event_maps_vector_store_timeout_to_retriable_504():
+    iterator = _make_iterator()
+    chunk = _make_error_chunk("server_error", "vector_store_timeout", "vector store timed out")
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        iterator._maybe_raise_for_error_event(chunk)
+    assert exc_info.value.status_code == 504

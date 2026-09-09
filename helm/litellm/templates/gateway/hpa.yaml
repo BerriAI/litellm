@@ -30,4 +30,8 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.gateway.hpa.targetMemoryUtilizationPercentage }}
     {{- end }}
+  {{- with .Values.gateway.hpa.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}

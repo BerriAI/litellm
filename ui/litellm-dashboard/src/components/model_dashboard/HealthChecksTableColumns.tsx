@@ -105,7 +105,7 @@ function runButtonLabel(isLoading: boolean, hasExistingStatus: boolean): string 
 
 function RunButtonIcon({ isLoading, hasExistingStatus }: { isLoading: boolean; hasExistingStatus: boolean }) {
   if (isLoading) {
-    return <DotPulse className="size-1 bg-gray-400" />;
+    return <DotPulse className="size-1 bg-border" />;
   }
   if (hasExistingStatus) {
     return <RefreshCw className="size-4" />;
@@ -135,8 +135,8 @@ function RunHealthCheckButton({
       className={cn(
         "rounded-md p-2 transition-colors",
         isLoading
-          ? "cursor-not-allowed bg-gray-100 text-gray-400"
-          : "text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700",
+          ? "cursor-not-allowed bg-muted text-muted-foreground"
+          : "text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 dark:text-indigo-300 dark:hover:bg-indigo-950 dark:hover:text-indigo-200",
       )}
     >
       <RunButtonIcon isLoading={isLoading} hasExistingStatus={hasExistingStatus} />
@@ -314,7 +314,7 @@ export const getHealthChecksTableColumns = ({
             <DetailButton
               label="View response details"
               testId="view-health-success-btn"
-              className="text-green-600 hover:bg-green-50 hover:text-green-800"
+              className="text-success hover:bg-success/10 "
               onClick={() => onShowSuccess(displayName, successResponse)}
             />
           )}
@@ -344,14 +344,14 @@ export const getHealthChecksTableColumns = ({
 
       return (
         <div className="flex items-center space-x-2">
-          <span className="block max-w-50 truncate text-sm text-red-600" title={cleanedError}>
+          <span className="block max-w-50 truncate text-sm text-destructive" title={cleanedError}>
             {cleanedError}
           </span>
           {fullError !== cleanedError && (
             <DetailButton
               label="View full error details"
               testId="view-health-error-btn"
-              className="text-red-600 hover:bg-red-50 hover:text-red-800"
+              className="text-destructive hover:bg-destructive/10 "
               onClick={() => onShowError(displayName, cleanedError, fullError)}
             />
           )}

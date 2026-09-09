@@ -86,12 +86,8 @@ function formatDuration(row: LogRow): string {
 function StatusBadge({ status }: { status?: string }) {
   const isFailure = status === "failure";
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 text-xs ${
-        isFailure ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"
-      }`}
-    >
-      <span className={`h-1.5 w-1.5 rounded-full ${isFailure ? "bg-red-500" : "bg-emerald-500"}`} />
+    <span className={`inline-flex items-center gap-1.5 text-xs ${isFailure ? "text-destructive" : "text-success"}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${isFailure ? "bg-destructive" : "bg-success"}`} />
       {isFailure ? "Failure" : "Success"}
     </span>
   );

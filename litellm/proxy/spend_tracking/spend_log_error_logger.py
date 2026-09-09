@@ -25,12 +25,12 @@ troubleshoot. The UI suppression follows the same gate.
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
 
-SUPPRESS_SPEND_LOG_TRACEBACKS_ENV = "LITELLM_SUPPRESS_SPEND_LOG_TRACEBACKS"
+SUPPRESS_SPEND_LOG_TRACEBACKS_ENV: Final = "LITELLM_SUPPRESS_SPEND_LOG_TRACEBACKS"
 
 
 def _is_suppression_env_enabled() -> bool:
@@ -59,7 +59,7 @@ def should_suppress_spend_log_tracebacks() -> bool:
 def spend_log_error(
     message: str,
     *args: Any,
-    exc: Optional[BaseException] = None,
+    exc: BaseException | None = None,
 ) -> None:
     """Log a spend-tracking error, with the traceback gated on the env var.
 

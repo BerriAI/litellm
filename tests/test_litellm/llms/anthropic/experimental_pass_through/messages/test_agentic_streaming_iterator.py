@@ -2,17 +2,17 @@
 Tests for AgenticAnthropicStreamingIterator and SSE rebuild helpers.
 """
 
+import asyncio
 import json
-import os
-import sys
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
     AgenticAnthropicStreamingIterator,
     _handle_content_block_delta,
     _handle_content_block_start,
@@ -228,6 +228,53 @@ class MockAsyncStream:
         chunk = self._chunks[self._idx]
         self._idx += 1
         return chunk
+
+
+class MockSlowAsyncStream(MockAsyncStream):
+    """Async iterator that sleeps before every chunk."""
+
+    def __init__(self, chunks: List[bytes], delay_seconds: float):
+        super().__init__(chunks)
+        self._delay_seconds = delay_seconds
+
+    async def __anext__(self) -> bytes:
+        await asyncio.sleep(self._delay_seconds)
+        return await super().__anext__()
+
+
+class MockFailingAsyncStream(MockAsyncStream):
+    """Async iterator that raises after yielding its chunks."""
+
+    def __init__(self, chunks: List[bytes], error: Exception):
+        super().__init__(chunks)
+        self._error = error
+
+    async def __anext__(self) -> bytes:
+        if self._idx >= len(self._chunks):
+            raise self._error
+        return await super().__anext__()
+
+
+def _build_hold_back_iterator(
+    stream: MockAsyncStream,
+    mock_handler: MagicMock,
+    ping_interval_seconds: float = 15.0,
+    server_fulfilled_tool_names: frozenset = frozenset({"litellm_content_retrieve"}),
+) -> AgenticAnthropicStreamingIterator:
+    return AgenticAnthropicStreamingIterator(
+        completion_stream=stream,
+        http_handler=mock_handler,
+        model="claude-sonnet-4-20250514",
+        messages=[],
+        anthropic_messages_provider_config=MagicMock(),
+        anthropic_messages_optional_request_params={},
+        logging_obj=MagicMock(),
+        custom_llm_provider="anthropic",
+        kwargs={},
+        hold_back=True,
+        server_fulfilled_tool_names=server_fulfilled_tool_names,
+        ping_interval_seconds=ping_interval_seconds,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -790,3 +837,269 @@ class TestAgenticStreamingIteratorErrorHandling:
 
         call_kwargs = mock_handler._call_agentic_completion_hooks.call_args
         assert call_kwargs.kwargs["stream"] is True
+
+
+class TestAgenticStreamingIteratorHoldBack:
+    @pytest.mark.asyncio
+    async def test_should_not_leak_intercepted_message_when_follow_up_fires(self):
+        """The buffered tool_use message must be dropped: only pings and follow-up bytes reach the client."""
+        phase1_chunks = _build_tool_use_stream()
+        phase2_chunks = [b"follow-up-chunk-1", b"follow-up-chunk-2"]
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(return_value=MockAsyncStream(phase2_chunks))
+
+        iterator = _build_hold_back_iterator(MockAsyncStream(phase1_chunks), mock_handler)
+
+        collected = []
+        async for chunk in iterator:
+            collected.append(chunk)
+
+        non_ping = [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES]
+        assert non_ping == phase2_chunks
+        assert b"litellm_content_retrieve" not in b"".join(collected)
+        assert collected[0] == STREAM_SSE_KEEPALIVE_PING_BYTES
+
+    @pytest.mark.asyncio
+    async def test_should_replay_buffer_verbatim_when_no_hook_fires(self):
+        """Without interception the buffered message is replayed byte-identical after the pings."""
+        chunks = _build_simple_text_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(return_value=None)
+
+        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), mock_handler)
+
+        collected = []
+        async for chunk in iterator:
+            collected.append(chunk)
+
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == chunks
+        mock_handler._call_agentic_completion_hooks.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_should_emit_pings_while_upstream_is_slow(self):
+        """Pings keep the client connection alive while the upstream message is buffered."""
+        chunks = _build_simple_text_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(return_value=None)
+
+        iterator = _build_hold_back_iterator(
+            MockSlowAsyncStream(chunks, delay_seconds=0.05),
+            mock_handler,
+            ping_interval_seconds=0.02,
+        )
+
+        collected = []
+        async for chunk in iterator:
+            collected.append(chunk)
+
+        assert collected.count(STREAM_SSE_KEEPALIVE_PING_BYTES) >= 2
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == chunks
+
+    @pytest.mark.asyncio
+    async def test_should_propagate_upstream_error_instead_of_partial_message(self):
+        """An upstream failure surfaces as an error; the client never receives a truncated message."""
+        chunks = _build_simple_text_stream()[:2]
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(return_value=None)
+
+        iterator = _build_hold_back_iterator(
+            MockFailingAsyncStream(chunks, RuntimeError("upstream died")),
+            mock_handler,
+        )
+
+        collected = []
+
+        async def _drain():
+            async for chunk in iterator:
+                collected.append(chunk)
+
+        with pytest.raises(RuntimeError, match="upstream died"):
+            await _drain()
+
+        assert all(c == STREAM_SSE_KEEPALIVE_PING_BYTES for c in collected)
+        mock_handler._call_agentic_completion_hooks.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_should_emit_pings_while_hooks_are_slow(self):
+        """Retrieval and follow-up generation can outlast a client's idle timeout, so hooks get keepalives too."""
+        chunks = _build_tool_use_stream()
+        phase2_chunks = [b"follow-up-chunk"]
+
+        async def slow_hooks(**_kwargs):
+            await asyncio.sleep(0.12)
+            return MockAsyncStream(phase2_chunks)
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(side_effect=slow_hooks)
+
+        iterator = _build_hold_back_iterator(
+            MockAsyncStream(chunks),
+            mock_handler,
+            ping_interval_seconds=0.02,
+        )
+
+        collected = []
+        async for chunk in iterator:
+            collected.append(chunk)
+
+        assert collected.count(STREAM_SSE_KEEPALIVE_PING_BYTES) >= 4
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == phase2_chunks
+
+    @pytest.mark.asyncio
+    async def test_should_error_instead_of_replaying_server_fulfilled_tool_use_when_hook_crashes(self):
+        """A hook crash must not replay the buffered retrieval tool_use: that is the unknown-tool bug."""
+        chunks = _build_tool_use_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(side_effect=RuntimeError("hook exploded"))
+
+        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), mock_handler)
+
+        collected = []
+        async for chunk in iterator:
+            collected.append(chunk)
+
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == [SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
+        assert b"litellm_content_retrieve" not in b"".join(collected)
+
+    @pytest.mark.asyncio
+    async def test_should_error_instead_of_replaying_when_no_hook_fires_on_tool_use(self):
+        """Hooks returning None on a retrieval tool_use is still a leak, so the turn fails loudly."""
+        chunks = _build_tool_use_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(return_value=None)
+
+        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), mock_handler)
+
+        collected = []
+        async for chunk in iterator:
+            collected.append(chunk)
+
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == [SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
+
+    @pytest.mark.asyncio
+    async def test_should_replay_client_owned_tool_use_verbatim(self):
+        """Only server-fulfilled tools are withheld: a client's own tool_use still reaches it byte-identical."""
+        chunks = _build_tool_use_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(return_value=None)
+
+        iterator = _build_hold_back_iterator(
+            MockAsyncStream(chunks),
+            mock_handler,
+            server_fulfilled_tool_names=frozenset({"headroom_retrieve"}),
+        )
+
+        collected = []
+        async for chunk in iterator:
+            collected.append(chunk)
+
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == chunks
+
+    @pytest.mark.asyncio
+    async def test_should_emit_pings_while_the_follow_up_stream_is_slow(self):
+        """The corrected answer can be slow to generate, so the follow-up stream gets keepalives too."""
+        chunks = _build_tool_use_stream()
+        phase2_chunks = [b"follow-up-chunk-1", b"follow-up-chunk-2"]
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            return_value=MockSlowAsyncStream(phase2_chunks, delay_seconds=0.06)
+        )
+
+        iterator = _build_hold_back_iterator(
+            MockAsyncStream(chunks),
+            mock_handler,
+            ping_interval_seconds=0.02,
+        )
+
+        collected = []
+        async for chunk in iterator:
+            collected.append(chunk)
+
+        first_follow_up_index = collected.index(phase2_chunks[0])
+        assert collected[first_follow_up_index + 1] == STREAM_SSE_KEEPALIVE_PING_BYTES
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == phase2_chunks
+
+    @pytest.mark.asyncio
+    async def test_should_propagate_follow_up_stream_error(self):
+        """A failing follow-up stream surfaces its error instead of hanging on pings forever."""
+        chunks = _build_tool_use_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            return_value=MockFailingAsyncStream([b"follow-up-chunk"], RuntimeError("follow-up died"))
+        )
+
+        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), mock_handler, ping_interval_seconds=0.02)
+
+        with pytest.raises(RuntimeError, match="follow-up died"):
+            async for _ in iterator:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_aclose_cancels_in_flight_follow_up_chunk_task(self):
+        """Closing while a follow-up chunk is pending must not orphan that task."""
+        chunks = _build_tool_use_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(
+            return_value=MockSlowAsyncStream([b"follow-up-chunk"], delay_seconds=5.0)
+        )
+
+        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), mock_handler, ping_interval_seconds=0.02)
+
+        while iterator._follow_up_chunk_task is None:
+            await iterator.__anext__()
+
+        await iterator.aclose()
+        assert iterator._follow_up_chunk_task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_aclose_cancels_drain_task(self):
+        """Closing the iterator mid-buffer must cancel the background drain task."""
+        chunks = _build_simple_text_stream()
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(return_value=None)
+
+        iterator = _build_hold_back_iterator(
+            MockSlowAsyncStream(chunks, delay_seconds=5.0),
+            mock_handler,
+        )
+
+        first = await iterator.__anext__()
+        assert first == STREAM_SSE_KEEPALIVE_PING_BYTES
+        assert iterator._drain_task is not None
+
+        await iterator.aclose()
+        assert iterator._drain_task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_aclose_cancels_in_flight_hook_task(self):
+        """Closing while hooks are running must not leave the retrieval follow-up task orphaned."""
+        chunks = _build_tool_use_stream()
+
+        async def never_finishing_hooks(**_kwargs):
+            await asyncio.sleep(5.0)
+
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(side_effect=never_finishing_hooks)
+
+        iterator = _build_hold_back_iterator(
+            MockAsyncStream(chunks),
+            mock_handler,
+            ping_interval_seconds=0.02,
+        )
+
+        while iterator._hook_task is None:
+            await iterator.__anext__()
+
+        await iterator.aclose()
+        assert iterator._hook_task.cancelled()
