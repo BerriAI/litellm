@@ -88,8 +88,8 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,
     _is_user_team_admin,
     _set_object_metadata_field,
-    _team_member_has_permission,
     _user_has_admin_view,
+    team_member_has_permission,
     validate_budget_duration,
     validate_finite_spend,
 )
@@ -5889,7 +5889,7 @@ def _get_team_ids_with_key_list_permission_from_objects(
         team.team_id
         for team in team_objects
         if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
-        and _team_member_has_permission(
+        and team_member_has_permission(
             user_api_key_dict=user_api_key_dict,
             team_obj=team,
             permission=KeyManagementRoutes.KEY_LIST.value,

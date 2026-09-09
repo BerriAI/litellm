@@ -280,6 +280,12 @@ class KeyManagementRoutes(str, enum.Enum):
     # `access_group_ids` on keys they create/update. Default-deny.
     KEY_ACCESS_GROUP_ASSIGNMENT = "/key/access_group_assignment"
 
+    # Field-level opt-in permission (not a real HTTP route). When present in a
+    # team's `team_member_permissions`, non-admin members of that team may create,
+    # update and delete the team's auto-routers (`litellm_params.model` under
+    # `auto_router/`) through the model management endpoints. Default-deny.
+    AUTO_ROUTER_MANAGEMENT = "/model/auto_router_management"
+
     # info and health routes
     KEY_INFO = "/key/info"
     KEY_HEALTH = "/key/health"
@@ -642,6 +648,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_RESET_SPEND.value,
         KeyManagementRoutes.KEY_ALIASES.value,
         KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value,
+        KeyManagementRoutes.AUTO_ROUTER_MANAGEMENT.value,
     ]
 
     management_routes = (

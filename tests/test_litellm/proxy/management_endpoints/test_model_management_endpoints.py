@@ -7,8 +7,10 @@ from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm._uuid import uuid
 
 from litellm.proxy._types import (
@@ -23,6 +25,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.model_management_endpoints import (
+    ModelWrite,
     ModelManagementAuthChecks,
     _get_team_deployments,
     _raise_if_rate_limits_required_but_missing,
@@ -48,10 +51,12 @@ class MockPrismaClient:
         team_exists: bool = True,
         user_admin: bool = True,
         sibling_deployments: list = None,
+        team_member_permissions: list = None,
     ):
         self.team_exists = team_exists
         self.user_admin = user_admin
         self.sibling_deployments = sibling_deployments or []
+        self.team_member_permissions = team_member_permissions
         self.db = self
 
     async def find_unique(self, where):
@@ -64,6 +69,7 @@ class MockPrismaClient:
                         user_id="test_user", role="admin" if self.user_admin else "user"
                     )
                 ],
+                team_member_permissions=self.team_member_permissions,
             )
         return None
 
@@ -176,6 +182,253 @@ class TestModelManagementAuthChecks:
             premium_user=True,
         )
         assert result is True
+
+    @staticmethod
+    def _team_with_member(member_id: str, permissions: list[str] | None) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(
+            team_id="test_team",
+            team_alias="test_team",
+            members_with_roles=[Member(user_id="someone-else", role="admin"), Member(user_id=member_id, role="user")],
+            team_member_permissions=permissions,
+        )
+
+    @staticmethod
+    def _named_router(public_name: str) -> Deployment:
+        return Deployment(
+            model_name=public_name,
+            litellm_params=LiteLLM_Params(model="auto_router/complexity_router"),
+            model_info={"team_id": "test_team"},
+        )
+
+    @staticmethod
+    def _router_row(
+        created_by: str | None, model: str = "auto_router/complexity_router", public_name: str = "my-router"
+    ) -> Deployment:
+        return Deployment(
+            model_name="model_name_test_team_abc",
+            litellm_params=LiteLLM_Params(model=model, complexity_router_default_model="haiku"),
+            model_info={"team_id": "test_team", "team_public_model_name": public_name},
+            created_by=created_by,
+        )
+
+    # Every dimension the member arm judges, one row each, on the write's RESULT: the grant, the
+    # kind before and after, the row's creator, and the public name's effect on team access.
+    @pytest.mark.parametrize(
+        "case, permissions, write, allowed",
+        [
+            ("create router", ["/model/auto_router_management"], ModelWrite(None, _router_row.__func__(None)), True),
+            ("create regular model", ["/model/auto_router_management"], ModelWrite(None, _router_row.__func__(None, "azure/gpt-4o")), False),
+            ("create without grant", ["/key/generate"], ModelWrite(None, _router_row.__func__(None)), False),
+            ("create with empty grant list", [], ModelWrite(None, _router_row.__func__(None)), False),
+            ("create with no grant list", None, ModelWrite(None, _router_row.__func__(None)), False),
+            ("edit own router", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(litellm_params=updateLiteLLMParams(complexity_router_default_model="sonnet"))), True),
+            ("delete own router", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), None), True),
+            ("edit a teammate's router", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("someone-else"), updateDeployment(litellm_params=updateLiteLLMParams(complexity_router_default_model="sonnet"))), False),
+            ("delete a teammate's router", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("someone-else"), None), False),
+            ("edit a legacy row with no creator", ["/model/auto_router_management"], ModelWrite(_router_row.__func__(None), None), False),
+            ("turn own router into a regular model", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(litellm_params=updateLiteLLMParams(model="azure/gpt-4o"))), False),
+            ("turn own regular model into a router", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user", "azure/gpt-4o"), updateDeployment(litellm_params=updateLiteLLMParams(model="auto_router/complexity_router"))), False),
+            ("create named *", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("*")), False),
+            ("create named all-proxy-models", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("all-proxy-models")), False),
+            ("create named after a served model group", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("gpt-4o")), False),
+            ("rename own router onto a served model group", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(model_name="gpt-4o")), False),
+            ("create named after a model_group_alias", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("smart")), False),
+            ("create named after a routing group", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("grp")), False),
+            ("create named after an access group", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("tier-1")), False),
+            ("create named after a global model_alias_map alias", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("global-alias")), False),
+            ("create named under a wildcard deployment", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("anthropic/claude-sonnet-5")), False),
+            ("create named after a deployment id", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("dep-id-1")), False),
+            ("create named after a raw litellm_params.model", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("openai/gpt-4o")), False),
+            ("create named after another team's public name", ["/model/auto_router_management"], ModelWrite(None, _named_router.__func__("other-team-router")), False),
+            # auto_router_config_path is opened on the proxy host at router init; a member configures inline.
+            ("create a semantic router from a server file path", ["/model/auto_router_management"], ModelWrite(None, Deployment(model_name="file-router", litellm_params=LiteLLM_Params(model="auto_router/custom", auto_router_config_path="/dev/zero", auto_router_default_model="gpt-4o", auto_router_embedding_model="emb"), model_info={"team_id": "test_team"})), False),
+            ("point own router at a server file path", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(litellm_params=updateLiteLLMParams(auto_router_config_path="/etc/passwd"))), False),
+            # The dashboard echoes the current public name (and historically the internal key) on
+            # every save; neither is a rename, so neither is checked against the resolvers.
+            ("edit own router echoing its public name", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user", public_name="gpt-4o"), updateDeployment(model_name="gpt-4o", litellm_params=updateLiteLLMParams(complexity_router_default_model="sonnet"))), True),
+            ("edit own router echoing its internal name", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user", public_name="gpt-4o"), updateDeployment(model_name="model_name_test_team_abc")), True),
+            ("POST /model/update own router echoing its internal name", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user", public_name="gpt-4o"), Deployment(model_name="model_name_test_team_abc", litellm_params=LiteLLM_Params(model="auto_router/complexity_router"), model_info={"team_id": "test_team"})), True),
+            ("POST /model/update own router renaming onto a served name", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), Deployment(model_name="gpt-4o", litellm_params=LiteLLM_Params(model="auto_router/complexity_router"), model_info={"team_id": "test_team"})), False),
+            # A move re-homes the grant; a member's router stays on the team that granted it.
+            ("move own router to another team", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(model_info=ModelInfo(team_id="other_team"))), False),
+            # The team update path renames a public name only when the payload names the team; a rename
+            # sent without it would land on the internal routing key and skip the team list.
+            ("rename own router without naming the team", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(model_name="fresh-name")), False),
+            ("rename own router naming the team", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(model_name="fresh-name", model_info=ModelInfo(team_id="test_team"))), True),
+            ("edit own router without naming the team, echoing its internal name", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(model_name="model_name_test_team_abc", litellm_params=updateLiteLLMParams(complexity_router_default_model="sonnet"))), True),
+            # model_info.team_public_model_name is merged straight into the row, bypassing the rename
+            # channel's collision check and team list bookkeeping, so a member may only echo it.
+            ("set model_info.team_public_model_name to a served name", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(model_info=ModelInfo(team_public_model_name="gpt-4o"))), False),
+            ("set model_info.team_public_model_name to a fresh name", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(model_info=ModelInfo(team_public_model_name="brand-new"))), False),
+            ("POST /model/update setting team_public_model_name to a served name", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), Deployment(model_name="model_name_test_team_abc", litellm_params=LiteLLM_Params(model="auto_router/complexity_router"), model_info={"team_id": "test_team", "team_public_model_name": "gpt-4o"})), False),
+            ("edit own router echoing model_info.team_public_model_name", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user"), updateDeployment(model_info=ModelInfo(team_id="test_team", team_public_model_name="my-router"), litellm_params=updateLiteLLMParams(complexity_router_default_model="sonnet"))), True),
+            # A dry run rehearses a create with no name; the name guard has nothing to judge, so a
+            # router the proxy already serves under a colliding name cannot deny the rehearsal.
+            ("rehearse a create with no name", ["/model/auto_router_management"], ModelWrite(None, updateDeployment(litellm_params=updateLiteLLMParams(model="auto_router/complexity_router"), model_info=ModelInfo(team_id="test_team"))), True),
+            ("create a semantic router configured inline", ["/model/auto_router_management"], ModelWrite(None, Deployment(model_name="inline-router", litellm_params=LiteLLM_Params(model="auto_router/custom", auto_router_config='{"routes": []}', auto_router_default_model="gpt-4o", auto_router_embedding_model="emb"), model_info={"team_id": "test_team"})), True),
+            # The stored name became a collision after the router was created: the member still
+            # edits and deletes what they own, since neither write registers a name.
+            ("edit own router whose name is now served", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user", public_name="gpt-4o"), updateDeployment(litellm_params=updateLiteLLMParams(complexity_router_default_model="sonnet"))), True),
+            ("delete own router whose name is now served", ["/model/auto_router_management"], ModelWrite(_router_row.__func__("test_user", public_name="gpt-4o"), None), True),
+        ],
+    )
+    def test_member_auto_router_arm_judges_the_write_result(self, monkeypatch, case, permissions, write, allowed):
+        team_obj = self._team_with_member(self.normal_user.user_id, permissions)
+        # Every identifier the serving path resolves a request by, each in its own slot.
+        llm_router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+                    "model_info": {"id": "dep-id-1", "access_groups": ["tier-1"]},
+                },
+                {"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "k"}},
+                {
+                    "model_name": "model_name_other_team_xyz",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+                    "model_info": {"team_id": "other_team", "team_public_model_name": "other-team-router", "db_model": True},
+                },
+            ],
+            model_group_alias={"smart": "gpt-4o"},
+            routing_groups=[{"group_name": "grp", "models": ["gpt-4o"], "routing_strategy": "simple-shuffle"}],
+        )
+        monkeypatch.setattr(litellm, "model_alias_map", {"global-alias": "gpt-4o"})
+        if allowed:
+            assert (
+                ModelManagementAuthChecks.can_user_make_team_model_call(
+                    team_id="test_team",
+                    user_api_key_dict=self.normal_user,
+                    team_obj=team_obj,
+                    premium_user=True,
+                    member_write=write,
+                    llm_router=llm_router,
+                )
+                is True
+            ), case
+            return
+        with pytest.raises(HTTPException) as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="test_team",
+                user_api_key_dict=self.normal_user,
+                team_obj=team_obj,
+                premium_user=True,
+                member_write=write,
+                llm_router=llm_router,
+            )
+        assert exc_info.value.status_code == 403, case
+        assert "/model/auto_router_management" in str(exc_info.value.detail)
+
+    def test_auto_router_permission_does_not_reach_a_non_member(self):
+        team_obj = self._team_with_member("a-real-member", ["/model/auto_router_management"])
+        with pytest.raises(HTTPException) as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="test_team",
+                user_api_key_dict=self.normal_user,
+                team_obj=team_obj,
+                premium_user=True,
+                member_write=ModelWrite(None, self._router_row(None)),
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_auto_router_permission_is_still_premium_gated(self):
+        team_obj = self._team_with_member(self.normal_user.user_id, ["/model/auto_router_management"])
+        with pytest.raises(HTTPException) as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="test_team",
+                user_api_key_dict=self.normal_user,
+                team_obj=team_obj,
+                premium_user=False,
+                member_write=ModelWrite(None, self._router_row(None)),
+            )
+        assert exc_info.value.status_code == 403
+
+    # A name can only be cleared against a router; with none to ask, a create is refused.
+    def test_member_create_fails_closed_without_a_router(self):
+        team_obj = self._team_with_member(self.normal_user.user_id, ["/model/auto_router_management"])
+        with pytest.raises(HTTPException) as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="test_team",
+                user_api_key_dict=self.normal_user,
+                team_obj=team_obj,
+                premium_user=True,
+                member_write=ModelWrite(None, self._router_row(None)),
+                llm_router=None,
+            )
+        assert exc_info.value.status_code == 403
+
+    # Route RBAC lets view-only roles reach the self-managed model routes; the grant never does.
+    @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+    def test_view_only_roles_never_get_the_member_grant(self, role):
+        viewer = UserAPIKeyAuth(user_id="test_user", user_role=role)
+        team_obj = self._team_with_member(viewer.user_id, ["/model/auto_router_management"])
+        with pytest.raises(HTTPException) as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="test_team",
+                user_api_key_dict=viewer,
+                team_obj=team_obj,
+                premium_user=True,
+                member_write=ModelWrite(None, self._router_row(None)),
+                llm_router=Router(model_list=[]),
+            )
+        assert exc_info.value.status_code == 403
+
+    # A caller that passes no write (the health probe) keeps the team-admin-only verdict.
+    def test_member_arm_is_off_when_the_caller_passes_no_write(self):
+        team_obj = self._team_with_member(self.normal_user.user_id, ["/model/auto_router_management"])
+        with pytest.raises(HTTPException):
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="test_team", user_api_key_dict=self.normal_user, team_obj=team_obj, premium_user=True
+            )
+
+    # The stored row decides the kind and the creator, and encryption at rest hides neither; the
+    # caller-writable model_info.created_by is never what the check reads.
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stored_model, encrypted, row_created_by, info_created_by, allowed",
+        [
+            ("auto_router/complexity_router", False, "test_user", None, True),
+            ("auto_router/complexity_router", True, "test_user", None, True),
+            ("auto_router/my-semantic", True, "test_user", None, True),
+            ("auto_router/complexity_router", True, "someone-else", "test_user", False),
+            ("azure/gpt-4o-mini", False, "test_user", None, False),
+            ("azure/gpt-4o-mini", True, "test_user", None, False),
+        ],
+    )
+    async def test_can_user_make_model_call_classifies_the_stored_deployment(
+        self, monkeypatch, stored_model, encrypted, row_created_by, info_created_by, allowed
+    ):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        model_params = Deployment(
+            model_name="model_name_test_team_abc",
+            litellm_params=LiteLLM_Params(model=encrypt_value_helper(stored_model) if encrypted else stored_model),
+            model_info={"team_id": "test_team", "team_public_model_name": "my-router", "created_by": info_created_by},
+            created_by=row_created_by,
+        )
+        prisma_client = MockPrismaClient(
+            team_exists=True, user_admin=False, team_member_permissions=["/model/auto_router_management"]
+        )
+        write = ModelWrite(stored=model_params, incoming=None)
+        if allowed:
+            assert (
+                await ModelManagementAuthChecks.can_user_make_model_call(
+                    model_params=model_params,
+                    user_api_key_dict=self.normal_user,
+                    prisma_client=prisma_client,
+                    premium_user=True,
+                    member_write=write,
+                )
+                is True
+            )
+            return
+        with pytest.raises(HTTPException) as exc_info:
+            await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=model_params,
+                user_api_key_dict=self.normal_user,
+                prisma_client=prisma_client,
+                premium_user=True,
+                member_write=write,
+            )
+        assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
     async def test_allow_team_model_action_success(self):
@@ -1226,7 +1479,7 @@ class TestTeamModelSiblingRouting:
                     side_effect=mock_add_model_to_db,
                 ),
                 patch(
-                    "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+                    "litellm.proxy.management_endpoints.model_management_endpoints._register_team_models",
                     mock_team_model_add,
                 ),
             ):
@@ -1373,7 +1626,7 @@ class TestTeamModelUpdate:
                 True,
             ),
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+                "litellm.proxy.management_endpoints.model_management_endpoints._register_team_models"
             ) as mock_team_model_add,
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.update_team"
@@ -1559,17 +1812,16 @@ class TestTeamModelUpdate:
 
         with (
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+                "litellm.proxy.management_endpoints.model_management_endpoints._unregister_team_models"
             ) as mock_delete,
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+                "litellm.proxy.management_endpoints.model_management_endpoints._register_team_models"
             ) as mock_add,
         ):
             await _update_existing_team_model_assignment(
                 team_id="team_123",
                 public_model_name="new-public-name",
                 db_model=db_model,
-                user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,  # type: ignore
             )
 
@@ -1604,17 +1856,16 @@ class TestTeamModelUpdate:
 
         with (
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+                "litellm.proxy.management_endpoints.model_management_endpoints._unregister_team_models"
             ) as mock_delete,
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+                "litellm.proxy.management_endpoints.model_management_endpoints._register_team_models"
             ) as mock_add,
         ):
             await _update_existing_team_model_assignment(
                 team_id="team_123",
                 public_model_name="new-public-name",
                 db_model=db_model,
-                user_api_key_dict=user_api_key_dict,
                 prisma_client=None,
             )
 
@@ -1654,7 +1905,7 @@ class TestTeamModelUpdate:
             written.update(update_data)
             return update_data
 
-        async def team_add(**_):
+        async def team_add(*_: object):
             events.append("team_model_add")
 
         with (
@@ -1664,7 +1915,7 @@ class TestTeamModelUpdate:
             ),
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: team models are premium-gated through a proxy global with no injection seam
             patch(  # test-quality-ok: the team list write is the collaborator whose ordering is asserted
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+                "litellm.proxy.management_endpoints.model_management_endpoints._register_team_models",
                 side_effect=team_add,
             ),
         ):
@@ -1729,17 +1980,16 @@ class TestTeamModelUpdate:
 
         with (
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+                "litellm.proxy.management_endpoints.model_management_endpoints._unregister_team_models"
             ) as mock_delete,
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+                "litellm.proxy.management_endpoints.model_management_endpoints._register_team_models"
             ) as mock_add,
         ):
             await _update_existing_team_model_assignment(
                 team_id="team_123",
                 public_model_name="new-public-name",
                 db_model=db_model,
-                user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,  # type: ignore
             )
 
@@ -2055,10 +2305,10 @@ class TestTeamModelUpdate:
                 True,
             ),
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+                "litellm.proxy.management_endpoints.model_management_endpoints._register_team_models"
             ) as mock_team_model_add,
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+                "litellm.proxy.management_endpoints.model_management_endpoints._unregister_team_models"
             ) as mock_team_model_delete,
         ):
             result = await _update_team_model_in_db(
@@ -4962,7 +5212,7 @@ class TestStrategyRouterWriteValidation:
             yield MagicMock(create=AsyncMock(return_value=created))
             events.append("slot-exit")
 
-        async def team_model_add(**_: object) -> None:
+        async def team_model_add(*_: object) -> None:
             events.append("team_model_add")
 
         deployment = Deployment(
@@ -4976,7 +5226,7 @@ class TestStrategyRouterWriteValidation:
                 lambda value, new_encryption_key=None: value,
             ),
             patch(  # test-quality-ok: the team list write is the collaborator whose ordering is asserted
-                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add",
+                "litellm.proxy.management_endpoints.model_management_endpoints._register_team_models",
                 side_effect=team_model_add,
             ),
         ):

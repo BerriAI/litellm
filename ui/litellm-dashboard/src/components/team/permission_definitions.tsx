@@ -21,6 +21,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   "/key/block": "Member can block a virtual key belonging to this team",
   "/key/unblock": "Member can unblock a virtual key belonging to this team",
   "/key/access_group_assignment": "Member can assign access groups to virtual keys for this team",
+  "/model/auto_router_management": "Member can create, edit and delete this team's auto-routers (not other models)",
   "/team/daily/activity": "Member can view all team usage data (not just their own)",
   "/spend/logs": "Member can view spend logs for the entire team (not just their own)",
 };

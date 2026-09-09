@@ -812,7 +812,7 @@ class TestIsUserOrgAdminForTeam:
 class TestTeamMemberHasPermission:
     def test_requires_caller_to_be_a_team_member(self):
         from litellm.proxy.management_endpoints.common_utils import (
-            _team_member_has_permission,
+            team_member_has_permission,
         )
 
         team = LiteLLM_TeamTable(
@@ -823,7 +823,7 @@ class TestTeamMemberHasPermission:
         key = UserAPIKeyAuth(
             user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
         )
-        assert _team_member_has_permission(key, team, "/key/generate") is False
+        assert team_member_has_permission(key, team, "/key/generate") is False
 
 
 class TestUserHasAdminPrivilegesGuard:

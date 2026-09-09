@@ -17,6 +17,21 @@ def _make_team_table(team_member_permissions):
     return team
 
 
+def test_auto_router_management_is_grantable_and_leaves_key_permissions_intact():
+    """The grant has to be an enum value: a stored permission outside the enum breaks
+    key-permission resolution for the whole team, and /team/permissions_list only offers
+    what this helper returns."""
+    available = TeamMemberPermissionChecks.get_all_available_team_member_permissions()
+    assert KeyManagementRoutes.AUTO_ROUTER_MANAGEMENT.value in available
+
+    team = _make_team_table(["/key/generate", KeyManagementRoutes.AUTO_ROUTER_MANAGEMENT.value])
+    result = TeamMemberPermissionChecks.get_permissions_for_team_member(
+        team_member_object=MagicMock(spec=Member), team_table=team
+    )
+    assert KeyManagementRoutes.KEY_GENERATE in result
+    assert KeyManagementRoutes.AUTO_ROUTER_MANAGEMENT in result
+
+
 class TestGetPermissionsForTeamMember:
     def test_none_permissions_returns_defaults(self):
         """When team_member_permissions is None, return DEFAULT_TEAM_MEMBER_PERMISSIONS."""

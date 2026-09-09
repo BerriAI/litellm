@@ -15,6 +15,7 @@ import datetime
 import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from json import JSONDecodeError
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeVar, cast
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeVar, 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
@@ -37,6 +39,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
+    KeyManagementRoutes,
     LiteLLM_ProxyModelTable,
     LiteLLM_TeamTable,
     LitellmTableNames,
@@ -46,10 +49,10 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     ReconcileOutcome,
-    TeamModelAddRequest,
-    TeamModelDeleteRequest,
+    SpecialModelNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import get_team_object
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -62,11 +65,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin, team_member_has_permission
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
-    team_model_add,
-    team_model_delete,
+    add_models_to_team,
+    remove_models_from_team,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
@@ -101,8 +104,10 @@ from litellm.router_strategy.complexity_router import (
 from litellm.router_utils.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
+    StrategyRouterKind,
     capability_limit_violation,
     carries_complexity_router_settings,
+    classify_strategy_router_model,
     count_capability_routers,
     gated_capability_of,
     is_complexity_router_model,
@@ -337,6 +342,162 @@ def _effective_model(
         return_original_value=True,
     )
     return decrypted if isinstance(decrypted, str) else None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelWrite:
+    """The deployment a write touches (``stored``, None on create) and what the caller sends (None on delete)."""
+
+    stored: Deployment | None
+    incoming: Deployment | updateDeployment | None
+
+    def kinds(self) -> tuple[StrategyRouterKind | None, StrategyRouterKind | None]:
+        """(stored kind, kind the write leaves), each None for a regular model."""
+        stored_params: Final = None if self.stored is None else self.stored.litellm_params
+        incoming_params: Final = None if self.incoming is None else self.incoming.litellm_params
+        stored_model: Final = _effective_model(None, stored_params)
+        effective_model: Final = _effective_model(incoming_params, stored_params)
+        return (
+            None if stored_model is None else classify_strategy_router_model(stored_model),
+            None if effective_model is None else classify_strategy_router_model(effective_model),
+        )
+
+    def registered_name(self) -> str | None:
+        """The public name this write puts on ``team.models``, None when it keeps the stored one.
+
+        A create registers its ``model_name``; a rehearsed create with no name (a dry run) registers
+        nothing. On an existing row the rename channel is judged by the same owner the update path
+        uses (``_get_public_model_name``), so a dashboard save that echoes the current public name or
+        the internal ``model_name_{team}_{uuid}`` key is not a rename, and neither a config-only
+        update nor a delete registers anything.
+        """
+        if self.incoming is None:
+            return None
+        if self.stored is None:
+            return self.incoming.model_name
+        if not isinstance(self.incoming, updateDeployment):
+            return None if self.incoming.model_name == self.stored.model_name else self.incoming.model_name
+        public_name: Final = _get_public_model_name(patch_data=self.incoming, db_model=self.stored)
+        current_public_name: Final = self.stored.model_info.team_public_model_name or self.stored.model_name
+        return None if public_name == current_public_name else public_name
+
+    def moves_team(self) -> bool:
+        """Whether the write re-homes an existing row onto a different team."""
+        if self.stored is None or self.incoming is None or self.incoming.model_info is None:
+            return False
+        target: Final = self.incoming.model_info.team_id
+        return target is not None and target != self.stored.model_info.team_id
+
+    def renames_outside_the_rename_channel(self) -> bool:
+        """Whether the write changes the stored ``model_info.team_public_model_name`` directly.
+
+        ``update_db_model`` merges the payload's ``model_info`` into the row, so that field is a
+        second way to change the name the router serves the team by, and it bypasses both the
+        collision check and the team list bookkeeping that ``model_name`` goes through. Echoing
+        the current value, which every dashboard save does, is not a change.
+        """
+        if self.stored is None or self.incoming is None or self.incoming.model_info is None:
+            return False
+        candidate: Final = self.incoming.model_info.team_public_model_name
+        return candidate is not None and candidate != self.stored.model_info.team_public_model_name
+
+    def renames_off_team(self) -> bool:
+        """Whether the write renames a team row without naming its team.
+
+        The team update path treats a rename as a public rename only when the payload carries
+        ``model_info.team_id``; without it the new ``model_name`` lands on the internal routing key
+        and ``team.models`` never learns the name. A member's rename must go the route the team
+        list can follow.
+        """
+        if (
+            self.stored is None
+            or self.stored.model_info.team_id is None
+            or not isinstance(self.incoming, updateDeployment)
+        ):
+            return False
+        scoped: Final = self.incoming.model_info is not None and self.incoming.model_info.team_id is not None
+        return not scoped and self.registered_name() is not None
+
+    def created_by(self) -> str | None:
+        """The row column the create path wrote, never the caller-writable ``model_info.created_by``."""
+        value: Final = None if self.stored is None else (self.stored.model_extra or {}).get("created_by")
+        return value if isinstance(value, str) else None
+
+    def reads_server_file(self) -> bool:
+        """Whether the deployment this write leaves names a file on the proxy host.
+
+        ``auto_router_config_path`` is opened at router init, so it is a file-read primitive; a
+        delegated write must configure its router inline.
+        """
+        return any(
+            params is not None and params.auto_router_config_path is not None
+            for params in (
+                None if self.incoming is None else self.incoming.litellm_params,
+                None if self.stored is None else self.stored.litellm_params,
+            )
+        )
+
+
+def _name_grants_extra_access(public_name: str | None, llm_router: Router | None) -> bool:
+    """Whether registering ``public_name`` on ``team.models`` would grant models beyond the router itself.
+
+    Two families. Names the team access check reads as a grant on their own: a wildcard, the
+    all-models sentinel, an access group name, a global ``litellm.model_alias_map`` alias. And every
+    identifier the request dispatch in ``route_llm_request`` can resolve: the serving path's own
+    predicate (``Router.is_recognized_model``: model names, deployment ids, ``model_group_alias``,
+    routing groups), the team-scoped public names it resolves through ``map_team_model``, and the two
+    fallbacks it leaves to callers, a wildcard deployment that would match the name and a raw
+    ``litellm_params.model`` deployment name. Such a grant can outlive the router, since unbacked name
+    cleanup keeps names the router still serves. Without a router to ask, nothing can be cleared.
+    """
+    if public_name is None or llm_router is None:
+        return True
+    if "*" in public_name or public_name == SpecialModelNames.all_proxy_models.value:
+        return True
+    if litellm.model_alias_map and public_name in litellm.model_alias_map:
+        return True
+    return (
+        llm_router.is_recognized_model(public_name)
+        or public_name in llm_router.team_public_model_names
+        or public_name in llm_router.get_model_access_groups()
+        or bool(llm_router.pattern_router.route(public_name))
+        or public_name in llm_router.deployment_names
+    )
+
+
+# The model write routes are self-managed, so route RBAC admits view-only roles; the grant is a
+# write and must not reach them.
+_VIEW_ONLY_ROLES: Final = frozenset({LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY})
+
+
+def member_may_write_auto_router(
+    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable, write: ModelWrite, llm_router: Router | None
+) -> bool:
+    """The whole shape the auto-router member permission covers, judged on the write's RESULT.
+
+    The member must hold a write-capable role and the team grant; the row must be a strategy router before and after the
+    write (so neither a router nor a regular model can be converted), configured inline rather than
+    from a file on the proxy host, and stay on its team under its public name unless renamed
+    through ``model_name`` with the team named; an existing row must be one the member created; and a
+    public name the write registers must not widen the team's model access.
+    """
+    if user_api_key_dict.user_role in _VIEW_ONLY_ROLES or not team_member_has_permission(
+        user_api_key_dict=user_api_key_dict,
+        team_obj=team_obj,
+        permission=KeyManagementRoutes.AUTO_ROUTER_MANAGEMENT.value,
+    ):
+        return False
+    stored_kind, effective_kind = write.kinds()
+    if effective_kind is None or (write.stored is not None and stored_kind is None) or write.reads_server_file():
+        return False
+    if write.moves_team() or write.renames_outside_the_rename_channel() or write.renames_off_team():
+        return False
+    if write.stored is not None and (
+        user_api_key_dict.user_id is None or write.created_by() != user_api_key_dict.user_id
+    ):
+        return False
+    registered_name: Final = write.registered_name()
+    return registered_name is None or not _name_grants_extra_access(registered_name, llm_router)
 
 
 def _effective_complexity_router_params(
@@ -880,6 +1041,8 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            member_write=ModelWrite(stored=db_model, incoming=patch_data),
+            llm_router=llm_router,
         )
 
         # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
@@ -1252,16 +1415,41 @@ async def _add_team_model_to_db(
     )
 
     if original_model_name:
-        await team_model_add(
-            data=TeamModelAddRequest(
-                team_id=_team_id,
-                models=[original_model_name],
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=user_api_key_dict,
-        )
+        await _register_team_models(_team_id, (original_model_name,), prisma_client)
 
     return model_response
+
+
+async def _register_team_models(team_id: str, models: Sequence[str], prisma_client: PrismaClient) -> None:
+    """Register public names on the team after the caller's own auth check on the deployment passed."""
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    await add_models_to_team(
+        team_id=team_id,
+        models=models,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _unregister_team_models(team_id: str, models: Sequence[str], prisma_client: PrismaClient) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    team_obj: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=True,
+    )
+    await remove_models_from_team(
+        team_obj=team_obj,
+        models=models,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 async def _update_team_model_in_db(
@@ -1283,13 +1471,15 @@ async def _update_team_model_in_db(
     refused or failed write leaves the team as it was (the create path orders itself the same way).
     """
     # Validate team_id if present in patch_data
-    from litellm.proxy.proxy_server import premium_user
+    from litellm.proxy.proxy_server import llm_router, premium_user
 
     await ModelManagementAuthChecks.allow_team_model_action(
         model_params=patch_data,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
         premium_user=premium_user,
+        member_write=ModelWrite(stored=db_model, incoming=patch_data),
+        llm_router=llm_router,
     )
 
     # Validated before the row write, beside the premium check the create path already runs here.
@@ -1339,14 +1529,13 @@ async def _update_team_model_in_db(
         await _setup_new_team_model_assignment(
             team_id=patch_team_id,
             public_model_name=public_model_name,
-            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
     else:
         await _update_existing_team_model_assignment(
             team_id=patch_team_id,
             public_model_name=public_model_name,
             db_model=db_model,
-            user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
 
@@ -1402,17 +1591,10 @@ def _get_public_model_name(
 async def _setup_new_team_model_assignment(
     team_id: str,
     public_model_name: str,
-    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
 ) -> None:
     """Register a newly team-assigned model's public name on the team."""
-    await team_model_add(
-        data=TeamModelAddRequest(
-            team_id=team_id,
-            models=[public_model_name],
-        ),
-        http_request=Request(scope={"type": "http"}),
-        user_api_key_dict=user_api_key_dict,
-    )
+    await _register_team_models(team_id, (public_model_name,), prisma_client)
 
 
 async def _get_team_deployments(
@@ -1597,7 +1779,6 @@ async def _update_existing_team_model_assignment(
     team_id: str,
     public_model_name: str,
     db_model: Deployment,
-    user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
 ) -> None:
     """Update an existing team model if the public name changed.
@@ -1635,37 +1816,16 @@ async def _update_existing_team_model_assignment(
         ]
 
         # Add new name first, then delete old name to prevent access loss on partial failure
-        await team_model_add(
-            data=TeamModelAddRequest(
-                team_id=team_id,
-                models=[public_model_name],
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=user_api_key_dict,
-        )
+        await _register_team_models(team_id, (public_model_name,), prisma_client)
 
         if not other_deployments_with_old_name:
-            await team_model_delete(
-                data=TeamModelDeleteRequest(
-                    team_id=team_id,
-                    models=[old_public_name],
-                ),
-                http_request=Request(scope={"type": "http"}),
-                user_api_key_dict=user_api_key_dict,
-            )
+            await _unregister_team_models(team_id, (old_public_name,), prisma_client)
     elif not old_public_name and public_model_name:
         # First-time assignment of public name on an existing team deployment:
         # ensure the team's models list is updated so team routing can resolve it.
-        await team_model_add(
-            data=TeamModelAddRequest(
-                team_id=team_id,
-                models=[public_model_name],
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=user_api_key_dict,
-        )
+        await _register_team_models(team_id, (public_model_name,), prisma_client)
     # else: old_public_name == public_model_name (no rename needed)
-    # No team_model_add/delete calls required; public name is already registered
+    # No team list writes required; public name is already registered
 
 
 class ModelManagementAuthChecks:
@@ -1679,7 +1839,12 @@ class ModelManagementAuthChecks:
         user_api_key_dict: UserAPIKeyAuth,
         team_obj: LiteLLM_TeamTable | None = None,
         premium_user: bool = False,
+        member_write: ModelWrite | None = None,
+        llm_router: Router | None = None,
     ) -> Literal[True]:
+        """``member_write`` is the write a non-admin team member asks for, judged by
+        ``member_may_write_auto_router``; callers that pass none keep the team-admin-only verdict.
+        """
         if premium_user is False:
             raise HTTPException(
                 status_code=403,
@@ -1687,14 +1852,20 @@ class ModelManagementAuthChecks:
             )
         if user_api_key_dict.user_role and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
-        elif team_obj is None or not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": f"Team ID={team_id} does not match the API key's team ID={user_api_key_dict.team_id}, OR you are not the admin for this team. Check `/user/info` to verify your team admin status."
-                },
-            )
-        return True
+        if team_obj is not None and _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+            return True
+        if (
+            team_obj is not None
+            and member_write is not None
+            and member_may_write_auto_router(user_api_key_dict, team_obj, member_write, llm_router)
+        ):
+            return True
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Team ID={team_id} does not match the API key's team ID={user_api_key_dict.team_id}, OR you are not the admin for this team. Check `/user/info` to verify your team admin status. Team members may create auto-routers, and manage the ones they created, when the team grants the '{KeyManagementRoutes.AUTO_ROUTER_MANAGEMENT.value}' member permission."
+            },
+        )
 
     @staticmethod
     def can_user_attach_credential(
@@ -1728,6 +1899,8 @@ class ModelManagementAuthChecks:
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
         premium_user: bool,
+        member_write: ModelWrite | None = None,
+        llm_router: Router | None = None,
     ) -> Literal[True]:
         if model_params.model_info is None or model_params.model_info.team_id is None:
             return True
@@ -1753,6 +1926,8 @@ class ModelManagementAuthChecks:
             user_api_key_dict=user_api_key_dict,
             team_obj=existing_team_row,
             premium_user=premium_user,
+            member_write=member_write,
+            llm_router=llm_router,
         )
         return True
 
@@ -1763,6 +1938,8 @@ class ModelManagementAuthChecks:
         prisma_client: PrismaClient,
         premium_user: bool,
         allow_missing_team: bool = False,
+        member_write: ModelWrite | None = None,
+        llm_router: Router | None = None,
     ) -> Literal[True]:
         ## Check team model auth
         if model_params.model_info is not None and model_params.model_info.team_id is not None:
@@ -1791,6 +1968,8 @@ class ModelManagementAuthChecks:
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_obj,
                 premium_user=premium_user,
+                member_write=member_write,
+                llm_router=llm_router,
             )
         ## Check non-team model auth
         elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -1859,6 +2038,8 @@ async def delete_model(
             prisma_client=prisma_client,
             premium_user=premium_user,
             allow_missing_team=True,
+            member_write=ModelWrite(stored=model_params, incoming=None),
+            llm_router=llm_router,
         )
 
         # update DB
@@ -2026,6 +2207,7 @@ async def add_new_model(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        llm_router,
         premium_user,
         prisma_client,
         proxy_config,
@@ -2048,6 +2230,8 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            member_write=ModelWrite(stored=None, incoming=model_params),
+            llm_router=llm_router,
         )
 
         ModelManagementAuthChecks.can_user_attach_credential(
@@ -2231,6 +2415,8 @@ async def update_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            member_write=ModelWrite(stored=deployment, incoming=model_params),
+            llm_router=llm_router,
         )
 
         ModelManagementAuthChecks.can_user_attach_credential(

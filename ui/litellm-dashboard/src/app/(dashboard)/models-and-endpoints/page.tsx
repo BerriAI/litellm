@@ -7,7 +7,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
-import { canCreateModels } from "@/utils/modelPermissions";
+import { autoRouterCreationScope, canCreateModels } from "@/utils/modelPermissions";
 import BetaBadge from "@/components/BetaBadge";
 import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
 import ModelInfoView from "@/components/model_info_view";
@@ -91,21 +91,21 @@ export default function ModelsAndEndpointsPage() {
   const [lastRefreshed, setLastRefreshed] = useState("");
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
-  const canCreate = canCreateModels(
-    { userRole, userID, isViewOnly },
-    {
-      teams: teams ?? null,
-      disabledForInternalUsers:
-        isInternalUser === true && uiSettings?.values?.disable_model_add_for_internal_users === true,
-    },
-  );
+  const modelActor = { userRole, userID, isViewOnly };
+  const creationLimits = {
+    teams: teams ?? null,
+    disabledForInternalUsers:
+      isInternalUser === true && uiSettings?.values?.disable_model_add_for_internal_users === true,
+  };
+  const canCreate = canCreateModels(modelActor, creationLimits);
+  const canCreateAutoRouters = autoRouterCreationScope(modelActor, creationLimits) !== "forbidden";
   const isAdmin = all_admin_roles.includes(userRole);
 
   const visibleSlugs = useMemo<Array<"" | ModelTabSlug>>(
     () => [
       "",
       ...(canCreate ? (["add"] as const) : []),
-      ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
+      ...(isAdmin || canCreateAutoRouters ? (["auto-routers"] as const) : []),
       ...(isAdmin
         ? ([
             "llm-credentials",
@@ -118,7 +118,7 @@ export default function ModelsAndEndpointsPage() {
           ] as const)
         : []),
     ],
-    [canCreate, isAdmin],
+    [canCreate, canCreateAutoRouters, isAdmin],
   );
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";

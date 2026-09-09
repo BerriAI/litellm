@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import { Team } from "@/components/networking";
-import { canCreateModels, canModifyModel, modelCreationScope } from "./modelPermissions";
+import { autoRouterCreationScope, canCreateModels, canModifyModel, modelCreationScope } from "./modelPermissions";
 
-const teamWhere = (userId: string, role: string, teamId = "team-1"): Team[] =>
-  [{ team_id: teamId, members_with_roles: [{ user_id: userId, user_email: "t@test.com", role }] }] as unknown as Team[];
+const teamWhere = (userId: string, role: string, teamId = "team-1", permissions?: string[]): Team[] =>
+  [
+    {
+      team_id: teamId,
+      members_with_roles: [{ user_id: userId, user_email: "t@test.com", role }],
+      team_member_permissions: permissions,
+    },
+  ] as unknown as Team[];
+
+const AUTO_ROUTER_GRANT = ["/key/generate", "/model/auto_router_management"];
 
 const PROXY_ADMIN = { userRole: "Admin", userID: "u-admin", isViewOnly: false };
 const TEAM_ADMIN = { userRole: "Internal User", userID: "u-team-admin", isViewOnly: false };
@@ -62,8 +70,80 @@ describe("modelCreationScope", () => {
   });
 });
 
+// Mirrors the server: /model/new admits a non-admin member for an auto_router/ deployment
+// only when their team grants the permission, and the write must still name that team.
+describe("autoRouterCreationScope", () => {
+  it("lets a granted member create, scoped to a team", () => {
+    expect(
+      autoRouterCreationScope(MEMBER, {
+        teams: teamWhere("u-member", "user", "team-1", AUTO_ROUTER_GRANT),
+        ...noLimits,
+      }),
+    ).toBe("team-required");
+  });
+
+  it("still forbids a member whose team grants only key permissions", () => {
+    expect(
+      autoRouterCreationScope(MEMBER, {
+        teams: teamWhere("u-member", "user", "team-1", ["/key/generate"]),
+        ...noLimits,
+      }),
+    ).toBe("forbidden");
+  });
+
+  // The grant is team-scoped: it opens nothing for a user who is not on that team.
+  it("does not extend another team's grant to a non-member", () => {
+    expect(
+      autoRouterCreationScope(MEMBER, {
+        teams: teamWhere("someone-else", "user", "team-1", AUTO_ROUTER_GRANT),
+        ...noLimits,
+      }),
+    ).toBe("forbidden");
+  });
+
+  it("keeps the internal-user kill switch and the view-only rule ahead of the grant", () => {
+    const teams = teamWhere("u-member", "user", "team-1", AUTO_ROUTER_GRANT);
+    expect(autoRouterCreationScope(MEMBER, { teams, disabledForInternalUsers: true })).toBe("forbidden");
+    expect(autoRouterCreationScope({ ...MEMBER, isViewOnly: true }, { teams, ...noLimits })).toBe("forbidden");
+  });
+
+  // The Add Model form must never learn about the grant: the server 403s a regular model.
+  it("never widens modelCreationScope", () => {
+    expect(
+      modelCreationScope(MEMBER, { teams: teamWhere("u-member", "user", "team-1", AUTO_ROUTER_GRANT), ...noLimits }),
+    ).toBe("forbidden");
+  });
+
+  it("agrees with modelCreationScope for everyone the grant does not concern", () => {
+    expect(autoRouterCreationScope(PROXY_ADMIN, { teams: null, ...noLimits })).toBe("unscoped-ok");
+    expect(autoRouterCreationScope(TEAM_ADMIN, { teams: teamWhere("u-team-admin", "admin"), ...noLimits })).toBe(
+      "team-required",
+    );
+  });
+});
+
 describe("canModifyModel", () => {
   const teamRow = { teamId: "team-1", isDbModel: true };
+
+  // The member permission reaches exactly the auto-routers the member created on their own team,
+  // so the row has to say what it is and who made it; a teammate's router and a regular model on
+  // the same team stay team-admin only.
+  it("lets a granted member act on their own auto-router only", () => {
+    const teams = teamWhere("u-member", "user", "team-1", AUTO_ROUTER_GRANT);
+    const own = { ...teamRow, isAutoRouter: true, createdBy: "u-member" };
+    expect(canModifyModel(MEMBER, teams, own)).toBe(true);
+    expect(canModifyModel(MEMBER, teams, { ...own, createdBy: "u-teammate" })).toBe(false);
+    expect(canModifyModel(MEMBER, teams, { ...own, createdBy: null })).toBe(false);
+    expect(canModifyModel(MEMBER, teams, { ...own, isAutoRouter: false })).toBe(false);
+    expect(canModifyModel(MEMBER, teams, teamRow)).toBe(false);
+  });
+
+  it("refuses a granted member on another team's auto-router and on an unscoped one", () => {
+    const teams = teamWhere("u-member", "user", "team-1", AUTO_ROUTER_GRANT);
+    const own = { isDbModel: true, isAutoRouter: true, createdBy: "u-member" };
+    expect(canModifyModel(MEMBER, teams, { ...own, teamId: "other-team" })).toBe(false);
+    expect(canModifyModel(MEMBER, teams, { ...own, teamId: null })).toBe(false);
+  });
 
   // config.yaml rows: PATCH /model/{id}/update 404s and POST /model/delete 400s for everyone.
   it("refuses a config-defined row even to a proxy admin", () => {

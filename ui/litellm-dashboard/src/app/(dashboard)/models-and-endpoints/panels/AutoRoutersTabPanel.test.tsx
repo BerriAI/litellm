@@ -12,8 +12,9 @@ vi.mock("../components/AutoRouters/AutoRoutersPanel", () => ({
 }));
 
 const mockUseAuthorized = vi.fn();
+const mockTeams = vi.fn(() => [] as unknown[]);
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => mockUseAuthorized() }));
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: [] }) }));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: mockTeams() }) }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: () => ({ data: { values: {} } }),
 }));
@@ -35,5 +36,20 @@ describe("AutoRoutersTabPanel", () => {
     mockUseAuthorized.mockReturnValue({ ...SESSION, isViewOnly: true });
     render(<AutoRoutersTabPanel />);
     expect(lastProps().createScope).toBe("forbidden");
+  });
+
+  // This tab, unlike Add Model, also opens to a plain member whose team grants the
+  // auto-router permission, and the create must then name that team.
+  it("scopes a granted team member's create to a team", () => {
+    mockUseAuthorized.mockReturnValue({ ...SESSION, userRole: "Internal User", userId: "u-member" });
+    mockTeams.mockReturnValue([
+      {
+        team_id: "team-1",
+        members_with_roles: [{ user_id: "u-member", user_email: "m@t", role: "user" }],
+        team_member_permissions: ["/model/auto_router_management"],
+      },
+    ]);
+    render(<AutoRoutersTabPanel />);
+    expect(lastProps().createScope).toBe("team-required");
   });
 });

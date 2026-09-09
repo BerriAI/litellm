@@ -30,7 +30,8 @@ vi.mock("@/components/team/TeamInfo", () => ({
 
 const mockUseAuthorized = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => mockUseAuthorized() }));
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: [] }) }));
+const mockTeams = vi.fn(() => [] as unknown[]);
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({ useTeams: () => ({ data: mockTeams() }) }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: () => ({ data: { values: {} } }),
 }));
@@ -151,6 +152,23 @@ describe("ModelsAndEndpointsPage", () => {
       renderPage();
 
       expect(screen.queryByRole("tab", { name: /Auto-Routers/ })).not.toBeInTheDocument();
+    });
+
+    // The one grant that opens model writes to a plain member opens only this tab: Add Model
+    // stays hidden because POST /model/new still 403s a regular model from them.
+    it("shows for a member whose team grants auto-router management, without Add Model", () => {
+      mockUseAuthorized.mockReturnValue(NON_ADMIN);
+      mockTeams.mockReturnValue([
+        {
+          team_id: "team-1",
+          members_with_roles: [{ user_id: "u1", user_email: "u@t", role: "user" }],
+          team_member_permissions: ["/model/auto_router_management"],
+        },
+      ]);
+      renderPage();
+
+      expect(screen.getByRole("tab", { name: /Auto-Routers/ })).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Add Model" })).not.toBeInTheDocument();
     });
   });
 });
