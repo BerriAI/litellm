@@ -7,6 +7,7 @@ regardless of the routing strategy being used.
 
 import asyncio
 from datetime import datetime, timezone
+from functools import partial
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,7 +19,7 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, RedisCircuitBreaker
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -140,6 +141,38 @@ async def test_deployment_tpm_redis_failure_keeps_local_enforcement(
             assert await check.async_pre_call_check(deployment) == deployment
         else:
             assert check.pre_call_check(deployment) == deployment
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_tpm", [None, 100])
+async def test_open_redis_circuit_preserves_async_rpm_enforcement(local_tpm: int | None) -> None:
+    breaker: Final = RedisCircuitBreaker(failure_threshold=1, recovery_timeout=60, enabled=True)
+    breaker.record_failure()
+    redis: Final = MagicMock(spec=RedisCache)
+    redis._circuit_breaker = breaker
+    redis.async_get_cache = partial(RedisCache.async_get_cache, redis)
+    redis.async_increment = partial(RedisCache.async_increment, redis)
+    cache: Final = DualCache(redis_cache=redis)
+    if local_tpm is not None:
+        cache.in_memory_cache.set_cache("test-id:gpt-4:tpm:12-00", local_tpm)
+    check: Final = ModelRateLimitingCheck(cache)
+    deployment: Final = {
+        "model_name": "test-model",
+        "tpm": 1000,
+        "rpm": 1,
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {"id": "test-id"},
+    }
+    with patch(  # test-quality-ok: Freeze only the clock to keep both requests in the same rate-limit window
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime",
+        return_value=datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc),
+    ):
+        with pytest.raises(Exception, match="Redis circuit breaker is open"):
+            await redis.async_get_cache(key="test-id:gpt-4:tpm:12-00")
+        assert await check.async_pre_call_check(deployment) == deployment
+        with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+            await check.async_pre_call_check(deployment)
+    assert cache.in_memory_cache.get_cache("test-id:gpt-4:rpm:12-00") == 2
 
 
 class TestModelRateLimitingCheck:

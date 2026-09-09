@@ -155,14 +155,12 @@ class ModelRateLimitingCheck(CustomLogger):
         local_tpm: Final = cached if isinstance(cached, (int, float)) else None
         if self.dual_cache.redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
             return local_tpm
-        from redis.exceptions import RedisError
-
         try:
             shared_tpm: Final[object] = await self.dual_cache.redis_cache.async_get_cache(
                 key=key, parent_otel_span=parent_otel_span
             )
             return shared_tpm if isinstance(shared_tpm, (int, float)) else local_tpm
-        except (RedisError, OSError):
+        except Exception:  # noqa: BLE001  # The async Redis circuit breaker raises a plain Exception
             verbose_router_logger.exception("Redis TPM read failed, using local usage")
             return local_tpm
 
