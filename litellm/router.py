@@ -1317,6 +1317,43 @@ class Router:
         if isinstance(litellm.input_callback, list):
             litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
 
+    def _apply_updated_routing_strategy_args(self) -> None:
+        """
+        Re-link the default group's selector to the current `routing_strategy_args`.
+
+        Selectors freeze their `RoutingArgs` at construction, so a runtime args
+        update would otherwise keep serving the boot-time values until restart.
+        Latency/usage state survives the rebuild: it lives in the shared router
+        cache, not on the selector.
+        """
+        strategy: Final = self._normalize_strategy(self.routing_strategy)
+        if strategy == "lar1":
+            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
+
+            apply_lar1_routing_strategy(self, self.routing_strategy_args)
+            return
+
+        attr: Final = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy or "")
+        current: Final = getattr(self, attr, None) if attr is not None else None
+        if attr is None or current is None:
+            return
+
+        try:
+            rebuilt: Final = self._build_strategy_selector(
+                strategy=strategy or "",
+                routing_strategy_args=self.routing_strategy_args,
+            )
+        except (TypeError, ValidationError):
+            verbose_router_logger.exception(
+                "Invalid routing_strategy_args %s for '%s'; keeping the previous ones",
+                self.routing_strategy_args,
+                strategy,
+            )
+            return
+
+        self._unregister_router_selectors((current,))
+        setattr(self, attr, rebuilt)
+
     def routing_strategy_init(self, routing_strategy: RoutingStrategy | str, routing_strategy_args: dict):
         verbose_router_logger.info("Routing strategy: %s", routing_strategy)
         self._validate_routing_strategy(routing_strategy)
@@ -11847,7 +11884,7 @@ class Router:
 
         _existing_router_settings: Final = self.get_settings()
         rebuild_routing_groups = False
-        relink_lar1_from_args = False
+        routing_args_updated = False
         for var in kwargs:
             if var in RUNTIME_UPDATABLE_ROUTER_SETTINGS:
                 if var in _int_settings:
@@ -11886,15 +11923,13 @@ class Router:
                                 )
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
-                        relink_lar1_from_args = True
+                        routing_args_updated = True
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting %s is not allowed", var)
 
-        if relink_lar1_from_args and self._normalize_strategy(self.routing_strategy) == "lar1":
-            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
-
-            apply_lar1_routing_strategy(self, self.routing_strategy_args)
+        if routing_args_updated:
+            self._apply_updated_routing_strategy_args()
 
         if rebuild_routing_groups:
             self._init_routing_groups(self._routing_groups_input)
