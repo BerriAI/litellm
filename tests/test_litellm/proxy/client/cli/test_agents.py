@@ -9,9 +9,8 @@ import pytest
 import requests
 from click.testing import CliRunner
 
-
-
 from litellm.proxy.client.cli.commands.agents import (
+    CLAUDE_SYNC_MODELS_ENV,
     AgentRunError,
     ModelSyncSkipped,
     _hand_off,
@@ -22,7 +21,9 @@ from litellm.proxy.client.cli.commands.agents import (
     agent_model_sync_env,
     agent_profile,
     build_agent_env,
+    claude_sync_models_enabled,
     opencode_model_sync_env,
+    prepare_claude,
     run_agent,
     verify_proxy_key,
 )
@@ -89,9 +90,7 @@ class TestAgentProfile:
 
 class TestBuildAgentEnv:
     def test_anthropic_profile_uses_bare_root_and_bearer(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"anthropic"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"anthropic"}))
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
         assert env["ENABLE_TOOL_SEARCH"] == "true"
@@ -107,6 +106,15 @@ class TestBuildAgentEnv:
             frozenset({"anthropic"}),
         )
         assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "0"
+
+    def test_anthropic_profile_skips_gateway_model_discovery_when_syncing_models(self):
+        env = build_agent_env(
+            {CLAUDE_SYNC_MODELS_ENV: "1"},
+            "http://localhost:4000",
+            "sk-key",
+            frozenset({"anthropic"}),
+        )
+        assert "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" not in env
 
     def test_anthropic_profile_preserves_existing_tool_search(self):
         env = build_agent_env(
@@ -127,9 +135,7 @@ class TestBuildAgentEnv:
         assert "ANTHROPIC_API_KEY" not in env
 
     def test_openai_profile_appends_v1(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"openai"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}))
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["OPENAI_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in env
@@ -137,9 +143,7 @@ class TestBuildAgentEnv:
         assert "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" not in env
 
     def test_both_profiles_set_everything(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000", "sk-key", frozenset({"anthropic", "openai"})
-        )
+        env = build_agent_env({}, "http://localhost:4000", "sk-key", frozenset({"anthropic", "openai"}))
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
@@ -147,9 +151,7 @@ class TestBuildAgentEnv:
         assert env["ENABLE_TOOL_SEARCH"] == "true"
 
     def test_litellm_profile_exports_only_the_proxy_key(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"litellm"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"litellm"}))
         assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in env
         assert "OPENAI_BASE_URL" not in env
@@ -157,9 +159,7 @@ class TestBuildAgentEnv:
 
     def test_preserves_unrelated_env_and_does_not_mutate_input(self):
         base = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
-        env = build_agent_env(
-            base, "http://localhost:4000", "sk-key", frozenset({"anthropic"})
-        )
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"anthropic"}))
         assert env["PATH"] == "/usr/bin"
         assert base == {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
 
@@ -319,9 +319,7 @@ class TestOpencodeModelSync:
         assert "refused" in result.reason
 
     def test_non_200_is_reported(self):
-        result = opencode_model_sync_env(
-            {}, "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500)
-        )
+        result = opencode_model_sync_env({}, "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500))
         assert isinstance(result, ModelSyncSkipped)
         assert "HTTP 500" in result.reason
 
@@ -362,6 +360,115 @@ class TestOpencodeModelSync:
     def test_default_http_client_is_requests_get(self):
         assert _default_of(agent_model_sync_env, "get") is requests.get
         assert _default_of(opencode_model_sync_env, "get") is requests.get
+
+
+class TestPrepareClaude:
+    def test_sync_is_disabled_without_opt_in(self):
+        calls = []
+
+        assert (
+            prepare_claude(
+                "http://localhost:4000",
+                "sk-key",
+                {},
+                get=lambda *args, **kwargs: calls.append((args, kwargs)),
+            )
+            == ()
+        )
+        assert calls == []
+
+    @pytest.mark.parametrize("value", ["0", " false "])
+    def test_sync_is_disabled_for_false_values(self, value):
+        calls = []
+
+        assert (
+            prepare_claude(
+                "http://localhost:4000",
+                "sk-key",
+                {CLAUDE_SYNC_MODELS_ENV: value},
+                get=lambda *args, **kwargs: calls.append((args, kwargs)),
+            )
+            == ()
+        )
+        assert calls == []
+
+    def test_sync_builds_model_picker_settings_in_proxy_order(self):
+        captured = {}
+        warnings = []
+        result = prepare_claude(
+            "http://localhost:4000/",
+            "sk-key",
+            {CLAUDE_SYNC_MODELS_ENV: " true "},
+            get=lambda url, headers, timeout: (
+                captured.update(url=url, headers=headers, timeout=timeout)
+                or _FakeResponse(
+                    200,
+                    {
+                        "data": [
+                            {"id": "first", "display_name": "First model"},
+                            {"id": "second"},
+                        ]
+                    },
+                )
+            ),
+            warn=warnings.append,
+        )
+
+        assert result[0] == "--settings"
+        settings = json.loads(result[1])
+        assert settings == {
+            "modelPicker": {
+                "options": [
+                    {"model": "first", "label": "First model"},
+                    {"model": "second", "label": "second"},
+                ]
+            }
+        }
+        assert "replaceBuiltInOptions" not in settings["modelPicker"]
+        assert captured == {
+            "url": "http://localhost:4000/v1/models",
+            "headers": {
+                "Authorization": "Bearer sk-key",
+                "anthropic-version": "2023-06-01",
+            },
+            "timeout": 10,
+        }
+        assert warnings == []
+
+    @pytest.mark.parametrize(
+        ("response", "message"),
+        [
+            (requests.RequestException("offline"), "could not reach"),
+            (_FakeResponse(500), "HTTP 500"),
+            (_FakeResponse(200, {"data": "invalid"}), "unexpected body"),
+            (_FakeResponse(200, {"data": []}), "no models"),
+        ],
+    )
+    def test_sync_warns_and_continues_on_fetch_failures(self, response, message):
+        warnings = []
+
+        def fake_get(*args, **kwargs):
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+        assert (
+            prepare_claude(
+                "http://localhost:4000",
+                "sk-key",
+                {CLAUDE_SYNC_MODELS_ENV: "1"},
+                get=fake_get,
+                warn=warnings.append,
+            )
+            == ()
+        )
+        assert len(warnings) == 1
+        assert warnings[0].startswith("litellm: not syncing Claude Code model picker from the proxy: ")
+        assert message in warnings[0]
+
+    def test_sync_enabled_helper_accepts_only_truthy_values(self):
+        assert claude_sync_models_enabled({CLAUDE_SYNC_MODELS_ENV: " TRUE "})
+        assert not claude_sync_models_enabled({CLAUDE_SYNC_MODELS_ENV: "yes"})
 
 
 class TestRunAgent:
@@ -676,6 +783,34 @@ class TestRunAgent:
             launcher=lambda p, a, e: calls.update(args=tuple(a)),
         )
         assert calls["args"] == ("claude", "--resume")
+
+    def test_claude_preparer_adds_settings_before_user_args(self):
+        calls = {}
+
+        def fake_prepare(base_url, api_key, base_env):
+            return prepare_claude(
+                base_url,
+                api_key,
+                base_env,
+                get=lambda *args, **kwargs: _FakeResponse(200, {"data": [{"id": "m-1"}]}),
+            )
+
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", "--resume"],
+            base_env={CLAUDE_SYNC_MODELS_ENV: "1"},
+            which=lambda name: "/usr/local/bin/claude",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(args=tuple(a)),
+            preparers={"claude": fake_prepare},
+        )
+        assert calls["args"] == (
+            "claude",
+            "--settings",
+            '{"modelPicker":{"options":[{"model":"m-1","label":"m-1"}]}}',
+            "--resume",
+        )
 
     def test_missing_binary_raises_with_install_hint(self):
         with pytest.raises(AgentRunError, match=r"claude.*Install it first"):
@@ -1047,10 +1182,25 @@ class TestAgentCommands:
         assert captured["api_key"] == "sk-key"
         assert captured["command"] == ["claude", "--resume", "-p", "hi"]
         assert captured["skip_verify"] is False
-        assert (
-            "routing Claude Code through proxy at http://localhost:4000"
-            in result.output
-        )
+        assert "routing Claude Code through proxy at http://localhost:4000" in result.output
+
+    def test_claude_sync_models_flag_sets_base_environment(self):
+        captured = {}
+
+        def fake_run_agent(base_url, api_key, command, **kwargs):
+            captured["base_env"] = kwargs.get("base_env")
+            captured["command"] = list(command)
+
+        with patch(f"{AGENTS_MODULE}.run_agent", side_effect=fake_run_agent):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                ["--sync-models", "--resume"],
+                obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured["base_env"][CLAUDE_SYNC_MODELS_ENV] == "1"
+        assert captured["command"] == ["claude", "--resume"]
 
     def test_codex_shows_friendly_name(self):
         captured = {}
@@ -1123,14 +1273,10 @@ class TestAgentCommands:
         with (
             patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
             patch(f"{AGENTS_MODULE}.login", fake_login),
-            patch(
-                f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login"
-            ) as mock_get,
+            patch(f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login") as mock_get,
             patch(
                 f"{AGENTS_MODULE}.run_agent",
-                side_effect=lambda base_url, api_key, command, **k: captured.update(
-                    api_key=api_key
-                ),
+                side_effect=lambda base_url, api_key, command, **k: captured.update(api_key=api_key),
             ),
         ):
             result = self.runner.invoke(

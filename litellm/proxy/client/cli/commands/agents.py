@@ -30,6 +30,7 @@ ENABLE_TOOL_SEARCH_ENV: Final = "ENABLE_TOOL_SEARCH"
 ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 ENABLE_GATEWAY_MODEL_DISCOVERY_ENV: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
 ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
+CLAUDE_SYNC_MODELS_ENV: Final = "LITELLM_CLAUDE_SYNC_MODELS"
 OPENAI_BASE_URL_ENV: Final = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV: Final = "OPENAI_API_KEY"
 OPENCODE_CONFIG_CONTENT_ENV: Final = "OPENCODE_CONFIG_CONTENT"
@@ -60,10 +61,19 @@ _INSTALL_DOCS: Final[dict[str, str]] = {
 _HIDDEN_AGENTS: Final = frozenset({"pi"})
 
 CODEX_PROXY_PROVIDER: Final = "litellm"
+_TRUTHY: Final[frozenset[str]] = frozenset({"1", "true"})
 
 
 class AgentRunError(Exception):
     """Raised for any user-actionable failure while preparing to run an agent."""
+
+
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
+def claude_sync_models_enabled(env: Mapping[str, str]) -> bool:
+    return env.get(CLAUDE_SYNC_MODELS_ENV, "").strip().lower() in _TRUTHY
 
 
 def agent_profile(command: str) -> tuple[str, frozenset[str]]:
@@ -94,7 +104,8 @@ def build_agent_env(
     ANTHROPIC_BASE_URL is not a first-party Anthropic host; a value already in
     the environment is left alone. CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY
     defaults to 1 so Claude Code (v2.1.129+) fills its /model picker from the
-    proxy's /v1/models; likewise left alone when already set.
+    proxy's /v1/models, unless Claude model picker sync is enabled; likewise
+    left alone when already set.
     pi ignores both base URL variables and instead resolves $LITELLM_PROXY_API_KEY
     from its synced models.json provider entry.
     """
@@ -106,7 +117,7 @@ def build_agent_env(
         env.pop(ANTHROPIC_API_KEY_ENV, None)
         if ENABLE_TOOL_SEARCH_ENV not in env:
             env[ENABLE_TOOL_SEARCH_ENV] = ENABLE_TOOL_SEARCH_VALUE
-        if ENABLE_GATEWAY_MODEL_DISCOVERY_ENV not in env:
+        if ENABLE_GATEWAY_MODEL_DISCOVERY_ENV not in env and not claude_sync_models_enabled(base_env):
             env[ENABLE_GATEWAY_MODEL_DISCOVERY_ENV] = ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE
     if PROFILE_OPENAI in profiles:
         env[OPENAI_BASE_URL_ENV] = root + "/v1"
@@ -177,8 +188,84 @@ def prepare_pi(
 
 _Preparer: TypeAlias = Callable[[str, str, Mapping[str, str]], Sequence[str]]
 
+
+class _ClaudeListedModel(BaseModel):
+    id: str
+    display_name: str | None = None
+
+
+class _ClaudeListing(BaseModel):
+    data: tuple[_ClaudeListedModel, ...]
+
+
+class _ClaudeModelPickerOption(BaseModel):
+    model: str
+    label: str
+
+
+class _ClaudeModelPicker(BaseModel):
+    options: tuple[_ClaudeModelPickerOption, ...]
+
+
+class _ClaudeModelPickerSettings(BaseModel):
+    modelPicker: _ClaudeModelPicker
+
+
+_CLAUDE_LISTING: Final = TypeAdapter(_ClaudeListing)
+
+
+def claude_model_picker_settings(models: Sequence[_ClaudeListedModel]) -> str:
+    settings: Final = _ClaudeModelPickerSettings(
+        modelPicker=_ClaudeModelPicker(
+            options=tuple(
+                _ClaudeModelPickerOption(model=model.id, label=model.display_name or model.id) for model in models
+            )
+        )
+    )
+    return settings.model_dump_json(exclude_none=True)
+
+
+def prepare_claude(
+    base_url: str,
+    api_key: str,
+    base_env: Mapping[str, str],
+    *,
+    get: Callable[..., requests.Response] = requests.get,
+    warn: Callable[[str], None] = _warn,
+) -> tuple[str, ...]:
+    if not claude_sync_models_enabled(base_env):
+        return ()
+
+    url: Final = base_url.rstrip("/") + "/v1/models"
+    try:
+        resp: Final = get(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "anthropic-version": "2023-06-01",
+            },
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        warn(f"litellm: not syncing Claude Code model picker from the proxy: could not reach {url}: {e}")
+        return ()
+    if resp.status_code != 200:
+        warn(f"litellm: not syncing Claude Code model picker from the proxy: {url} returned HTTP {resp.status_code}")
+        return ()
+    try:
+        listing: Final = _CLAUDE_LISTING.validate_json(resp.content)
+    except ValidationError:
+        warn(f"litellm: not syncing Claude Code model picker from the proxy: {url} returned an unexpected body")
+        return ()
+    if not listing.data:
+        warn(f"litellm: not syncing Claude Code model picker from the proxy: {url} returned no models")
+        return ()
+    click.echo(f"litellm: synced {len(listing.data)} proxy models into the Claude Code model picker")
+    return ("--settings", claude_model_picker_settings(listing.data))
+
+
 _PREPARERS: Final[Mapping[str, _Preparer]] = MappingProxyType(
-    {"pi": prepare_pi}  # mutable-ok: MappingProxyType freezes the provider registry
+    {"claude": prepare_claude, "pi": prepare_pi}  # mutable-ok: MappingProxyType freezes the provider registry
 )
 
 
@@ -313,8 +400,8 @@ def agent_model_sync_env(
 ) -> Mapping[str, str] | ModelSyncSkipped:
     """Extra env an agent needs to see the proxy's model list.
 
-    Only OpenCode needs one: Claude Code discovers models through
-    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY and Codex takes the model by name.
+    Only OpenCode needs one: Claude Code gets models through gateway discovery or
+    the model picker setting, and Codex takes the model by name.
     skip_verify means the caller wants no pre-launch proxy call at all, so the
     listing is skipped too rather than hanging on an offline proxy.
     """
@@ -440,10 +527,6 @@ def _restore_controlling_terminal() -> None:
         os.close(fd)
 
 
-def _warn(message: str) -> None:
-    click.echo(message, err=True)
-
-
 def run_agent(
     base_url: str,
     api_key: str,
@@ -529,7 +612,14 @@ def resolve_api_key(ctx: click.Context) -> str:
 _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
-def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
+def _launch(
+    ctx: click.Context,
+    binary: str,
+    args: Sequence[str],
+    *,
+    skip_verify: bool,
+    base_env: Mapping[str, str] | None = None,
+) -> None:
     ctx_obj: Final[CliContextObj] = ctx.obj
     base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
@@ -544,6 +634,7 @@ def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify
             api_key,
             [binary, *args],
             skip_verify=skip_verify,
+            base_env=base_env,
             reattach_terminal=(_restore_controlling_terminal if started_interactive else None),
         )
     except AgentRunError as e:
@@ -551,18 +642,26 @@ def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify
 
 
 def _make_agent_command(binary: str, display_name: str) -> click.Command:
-    @click.command(
+    @click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
+    @click.argument("args", nargs=-1, type=click.UNPROCESSED)
+    @click.pass_context
+    def _command(ctx: click.Context, skip_verify: bool, args: Sequence[str], sync_models: bool = False) -> None:
+        base_env: Final = {**os.environ, CLAUDE_SYNC_MODELS_ENV: "1"} if sync_models else None
+        _launch(ctx, binary, list(args), skip_verify=skip_verify, base_env=base_env)
+
+    if binary == "claude":
+        _command = click.option(
+            "--sync-models",
+            is_flag=True,
+            default=False,
+            help="Fill Claude Code's /model picker from the proxy's model list (same as LITELLM_CLAUDE_SYNC_MODELS=1).",
+        )(_command)
+    _command = click.command(
         name=binary,
         context_settings={"ignore_unknown_options": True},
         short_help=f"Run {display_name} through your LiteLLM proxy",
         hidden=binary in _HIDDEN_AGENTS,
-    )
-    @click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
-    @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-    @click.pass_context
-    def _command(ctx: click.Context, skip_verify: bool, args: Sequence[str]) -> None:
-        _launch(ctx, binary, list(args), skip_verify=skip_verify)
-
+    )(_command)
     _command.help = (
         f"Run {display_name} routed through your LiteLLM proxy.\n\n"
         f"Logs in with LiteLLM if needed, verifies your key against the proxy, "
@@ -578,6 +677,7 @@ def agent_commands() -> tuple[click.Command, ...]:
 
 
 __all__ = [
+    "CLAUDE_SYNC_MODELS_ENV",
     "AgentRunError",
     "ListedModel",
     "ModelSyncSkipped",
@@ -586,8 +686,11 @@ __all__ = [
     "agent_model_sync_env",
     "agent_profile",
     "build_agent_env",
+    "claude_model_picker_settings",
+    "claude_sync_models_enabled",
     "opencode_model_sync_env",
     "opencode_provider_config",
+    "prepare_claude",
     "prepare_pi",
     "resolve_api_key",
     "run_agent",
