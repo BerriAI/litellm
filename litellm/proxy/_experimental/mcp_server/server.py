@@ -1017,18 +1017,45 @@ if MCP_AVAILABLE:
                 if name == MCP_PROXY_CALL_TOOL_NAME
                 else None
             )
-            proxy_result: Final = await handle_mcp_proxy_tool(
-                name=name,
-                arguments=arguments or {},  # mutable-ok: proxy handler payload
-                user_api_key_dict=user_api_key_auth,
-                client_ip=client_ip,
-                mcp_servers=mcp_servers,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                litellm_logging_obj=proxy_logging_obj,
-            )
+            try:
+                proxy_result: Final = await handle_mcp_proxy_tool(
+                    name=name,
+                    arguments=arguments or {},  # mutable-ok: proxy handler payload
+                    user_api_key_dict=user_api_key_auth,
+                    client_ip=client_ip,
+                    mcp_servers=mcp_servers,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    litellm_logging_obj=proxy_logging_obj,
+                )
+            except Exception as exc:
+                if proxy_logging_obj is not None:
+                    from litellm.proxy.proxy_server import proxy_logging_obj as request_logging_obj
+
+                    failure_end: Final = datetime.now()  # noqa: DTZ005  # matches the logging pipeline start time
+                    failure_traceback: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+                    try:
+                        proxy_logging_obj.failure_handler(exc, failure_traceback, proxy_call_start, failure_end)
+                        await proxy_logging_obj.async_failure_handler(
+                            exc, failure_traceback, proxy_call_start, failure_end
+                        )
+                        if not isinstance(exc, MCPUpstreamAuthError):
+                            await request_logging_obj.post_call_failure_hook(
+                                request_data={  # mutable-ok: failure hook mutates its request payload
+                                    "name": name,
+                                    "arguments": arguments,
+                                    "litellm_logging_obj": proxy_logging_obj,
+                                },
+                                original_exception=exc,
+                                user_api_key_dict=user_api_key_auth,
+                                route="/mcp/call_tool",
+                                traceback_str=failure_traceback,
+                            )
+                    except Exception:
+                        verbose_logger.exception("Error logging failed MCP proxy tool call")
+                raise
             if proxy_logging_obj is not None:
                 return await _fire_mcp_tool_call_logging(
                     logging_obj=proxy_logging_obj,
