@@ -2,10 +2,12 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 from jsonschema import validate
@@ -2380,6 +2382,27 @@ def test_register_model_with_scientific_notation():
     if test_model_name in litellm.model_cost:
         del litellm.model_cost[test_model_name]
     _invalidate_model_cost_lowercase_map()
+
+
+@respx.mock
+def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    before = dict(litellm.model_cost)
+    threads_before = {thread.name for thread in threading.enumerate()}
+    route = respx.get("https://example.invalid/custom_pricing.json").mock(
+        return_value=httpx.Response(503)
+    )
+
+    litellm.register_model(model_cost="https://example.invalid/custom_pricing.json")
+
+    threads_after = {thread.name for thread in threading.enumerate()}
+    assert route.call_count == 1
+    assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
+    assert not any(
+        thread.name == "litellm-model-cost-map-retry" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+    assert litellm.model_cost.keys() >= before.keys()
 
 
 def test_register_model_openrouter_without_slash():
