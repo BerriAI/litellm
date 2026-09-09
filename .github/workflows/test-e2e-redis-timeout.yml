@@ -1,4 +1,4 @@
-name: "Weekly Load Anomaly Check"
+name: "Weekly Redis Timeout E2E"
 
 on:
   schedule:
@@ -9,10 +9,10 @@ permissions:
   contents: read
 
 jobs:
-  weekly-load-anomaly:
+  redis-timeout-e2e:
     if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16.6
@@ -27,11 +27,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      valkey:
+        image: valkey/valkey:8.1.4@sha256:81db6d39e1bba3b3ff32bd3a1b19a6d69690f94a3954ec131277b9a26b95b3aa
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
-      LITELLM_MASTER_KEY: sk-weekly-anomaly-check
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+      LITELLM_MASTER_KEY: sk-redis-timeout-e2e
+      LITELLM_LOG: WARNING
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -61,9 +69,9 @@ jobs:
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
-      - name: Start the proxy
+      - name: Start the proxy with a Redis that times out on every command
         run: |
-          nohup uv run --no-sync litellm --config tests/e2e/load/weekly_anomaly_config.yml --port 4000 > proxy.log 2>&1 &
+          nohup uv run --no-sync litellm --config tests/e2e/gateway/redis_timeout_ci_config.yml --port 4000 > proxy.log 2>&1 &
           for _ in $(seq 1 90); do
             if curl -fs http://localhost:4000/health/liveliness > /dev/null; then
               exit 0
@@ -74,11 +82,12 @@ jobs:
           tail -n 100 proxy.log
           exit 1
 
-      - name: Run the weekly session anomaly test
+      - name: Run the Redis timeout e2e test
         env:
-          E2E_WEEKLY_ANOMALY: "1"
+          E2E_REDIS_TIMEOUT: "1"
+          LITELLM_PROXY_URL: http://localhost:4000
         run: |
-          uv run --no-sync pytest tests/e2e/load/test_weekly_session_anomaly_e2e.py -v --tb=short -rA
+          uv run --no-sync pytest tests/e2e/router/test_redis_timeout_e2e.py -v --tb=short -rA
 
       - name: Show proxy log on failure
         if: failure()
