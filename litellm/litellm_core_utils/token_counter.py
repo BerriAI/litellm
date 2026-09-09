@@ -3,6 +3,7 @@
 import base64
 import io
 import struct
+import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
 
@@ -22,6 +23,7 @@ from litellm.constants import (
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
+    TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
@@ -320,6 +322,7 @@ Type for a function that counts tokens in a string.
 """
 
 EXTRAPOLATION_SAMPLES: Final = 16
+_HF_ENCODE_SLOTS: Final = threading.BoundedSemaphore(TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES)
 
 
 def _get_tiktoken_count_function(
@@ -587,7 +590,8 @@ def _get_exact_count_function(
             tokenizer: Final[Tokenizer] = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
-                return len(tokenizer.encode_batch_fast([text])[0])
+                with _HF_ENCODE_SLOTS:
+                    return len(tokenizer.encode_batch_fast([text])[0])
 
             return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":
