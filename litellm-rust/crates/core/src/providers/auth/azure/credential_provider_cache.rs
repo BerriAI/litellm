@@ -7,7 +7,7 @@ use moka::future::Cache;
 use crate::error::AuthError;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct AzureCredentialCacheKey {
+pub(crate) struct AzureCredentialProviderCacheKey {
     pub(crate) mechanism: &'static str,
     pub(crate) authority: String,
     pub(crate) tenant_id: String,
@@ -16,11 +16,11 @@ pub(crate) struct AzureCredentialCacheKey {
     pub(crate) secret_identity: String,
 }
 
-pub(crate) struct AzureCredentialCache {
-    entries: Cache<AzureCredentialCacheKey, Arc<dyn TokenCredential>>,
+pub(crate) struct AzureCredentialProviderCache {
+    entries: Cache<AzureCredentialProviderCacheKey, Arc<dyn TokenCredential>>,
 }
 
-impl AzureCredentialCache {
+impl AzureCredentialProviderCache {
     pub(crate) fn new(capacity: u64) -> Self {
         Self {
             entries: Cache::builder().max_capacity(capacity).build(),
@@ -29,7 +29,7 @@ impl AzureCredentialCache {
 
     pub(crate) async fn get_or_create<F>(
         &self,
-        key: AzureCredentialCacheKey,
+        key: AzureCredentialProviderCacheKey,
         create: F,
     ) -> Result<Arc<dyn TokenCredential>, AuthError>
     where

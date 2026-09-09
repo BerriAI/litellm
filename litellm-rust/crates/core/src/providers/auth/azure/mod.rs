@@ -1,4 +1,4 @@
-mod cache;
+mod credential_provider_cache;
 mod native;
 mod resolve;
 mod types;

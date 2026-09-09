@@ -21,13 +21,13 @@ use super::constants::{
     BEDROCK_SERVICE, DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX,
     SIGV4_COMPUTED_HEADER_NAMES,
 };
-use super::credential_cache::CredentialCache;
+use super::resolved_credentials_cache::AwsCredentialsCache;
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
 const IAM_CREDENTIALS_CACHE_MAX_CAPACITY: u64 = 200;
 
-static IAM_CREDENTIALS_CACHE: OnceLock<CredentialCache<String, Credentials>> = OnceLock::new();
+static IAM_CREDENTIALS_CACHE: OnceLock<AwsCredentialsCache> = OnceLock::new();
 
 fn credential_cache_ttl(flow: &AwsAuthFlow) -> Option<Duration> {
     match flow {
@@ -110,13 +110,13 @@ fn cache_key(config: &AwsAuthConfig, flow: &AwsAuthFlow) -> String {
 
 async fn get_cached_credentials(key: &String) -> Option<Credentials> {
     let cache = IAM_CREDENTIALS_CACHE
-        .get_or_init(|| CredentialCache::new(IAM_CREDENTIALS_CACHE_MAX_CAPACITY));
+        .get_or_init(|| AwsCredentialsCache::new(IAM_CREDENTIALS_CACHE_MAX_CAPACITY));
     cache.get(key).await
 }
 
 async fn set_cached_credentials(key: String, credentials: Credentials, ttl: Duration) {
     let cache = IAM_CREDENTIALS_CACHE
-        .get_or_init(|| CredentialCache::new(IAM_CREDENTIALS_CACHE_MAX_CAPACITY));
+        .get_or_init(|| AwsCredentialsCache::new(IAM_CREDENTIALS_CACHE_MAX_CAPACITY));
     cache.insert(key, credentials, ttl).await;
 }
 

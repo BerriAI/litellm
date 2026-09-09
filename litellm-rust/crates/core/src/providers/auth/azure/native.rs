@@ -16,7 +16,9 @@ use crate::error::AuthError;
 use crate::providers::auth::secret::SecretValue;
 use crate::providers::auth::token::ResolvedCredential;
 
-use super::cache::{AzureCredentialCache, AzureCredentialCacheKey};
+use super::credential_provider_cache::{
+    AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) enum NativeAzureRequest {
@@ -52,7 +54,7 @@ pub(crate) enum NativeAzureRequest {
 }
 
 pub(crate) struct NativeAzureTokenAcquirer {
-    cache: AzureCredentialCache,
+    cache: AzureCredentialProviderCache,
     transport: Option<azure_core::http::Transport>,
 }
 
@@ -65,7 +67,7 @@ impl Default for NativeAzureTokenAcquirer {
 impl NativeAzureTokenAcquirer {
     pub(crate) fn new(cache_capacity: u64) -> Self {
         Self {
-            cache: AzureCredentialCache::new(cache_capacity),
+            cache: AzureCredentialProviderCache::new(cache_capacity),
             transport: None,
         }
     }
@@ -73,7 +75,7 @@ impl NativeAzureTokenAcquirer {
     #[cfg(test)]
     fn with_transport(cache_capacity: u64, transport: azure_core::http::Transport) -> Self {
         Self {
-            cache: AzureCredentialCache::new(cache_capacity),
+            cache: AzureCredentialProviderCache::new(cache_capacity),
             transport: Some(transport),
         }
     }
@@ -115,7 +117,7 @@ impl NativeAzureRequest {
         }
     }
 
-    fn cache_key(&self) -> AzureCredentialCacheKey {
+    fn cache_key(&self) -> AzureCredentialProviderCacheKey {
         match self {
             Self::ClientSecret {
                 tenant_id,
@@ -123,7 +125,7 @@ impl NativeAzureRequest {
                 client_secret,
                 scope,
                 authority,
-            } => AzureCredentialCacheKey {
+            } => AzureCredentialProviderCacheKey {
                 mechanism: "client-secret",
                 authority: authority.clone().unwrap_or_default(),
                 tenant_id: tenant_id.clone(),
@@ -138,7 +140,7 @@ impl NativeAzureRequest {
                 assertion_identity,
                 scope,
                 authority,
-            } => AzureCredentialCacheKey {
+            } => AzureCredentialProviderCacheKey {
                 mechanism: "client-assertion",
                 authority: authority.clone().unwrap_or_default(),
                 tenant_id: tenant_id.clone(),
@@ -155,7 +157,7 @@ impl NativeAzureRequest {
                 token_file_path,
                 scope,
                 authority,
-            } => AzureCredentialCacheKey {
+            } => AzureCredentialProviderCacheKey {
                 mechanism: "workload-identity",
                 authority: authority.clone().unwrap_or_default(),
                 tenant_id: tenant_id.clone(),
@@ -163,7 +165,7 @@ impl NativeAzureRequest {
                 scope: scope.clone(),
                 secret_identity: token_file_path.clone(),
             },
-            Self::ManagedIdentity { client_id, scope } => AzureCredentialCacheKey {
+            Self::ManagedIdentity { client_id, scope } => AzureCredentialProviderCacheKey {
                 mechanism: "managed-identity",
                 authority: String::new(),
                 tenant_id: String::new(),
@@ -171,7 +173,7 @@ impl NativeAzureRequest {
                 scope: scope.clone(),
                 secret_identity: String::new(),
             },
-            Self::DeveloperTools { scope } => AzureCredentialCacheKey {
+            Self::DeveloperTools { scope } => AzureCredentialProviderCacheKey {
                 mechanism: "developer-tools",
                 authority: String::new(),
                 tenant_id: String::new(),

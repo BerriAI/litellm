@@ -1,45 +1,50 @@
-use litellm_core::Error;
 use std::future::Future;
 
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
+use litellm_core::Error;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use serde_json::Value;
+use serde::Deserialize;
+use serde_json::{Map, Value};
 
 use crate::errors::ocr_error_to_pyerr;
-use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
+use crate::marshal::optional_timeout;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BridgeOcrRequest {
+    model: String,
+    document: Value,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    api_base: Option<String>,
+    #[serde(default)]
+    custom_llm_provider: Option<String>,
+    #[serde(default)]
+    extra_headers: Option<Map<String, Value>>,
+    #[serde(default)]
+    optional_params: Map<String, Value>,
+    #[serde(default)]
+    timeout_seconds: Option<f64>,
+}
 
 fn prepare_ocr(
     inputs: OcrInputs,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
-    let document = inputs.document;
-    let options = RouteOptions::from_python(RouteOptionsInputs {
-        model: inputs.model,
-        api_key: inputs.api_key,
-        api_base: inputs.api_base,
-        custom_llm_provider: inputs.custom_llm_provider,
-        extra_headers: inputs.extra_headers,
-        timeout_seconds: inputs.timeout_seconds,
-    })?;
-    let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
+    let request: BridgeOcrRequest = serde_json::from_value(inputs.request)
+        .map_err(|error| PyValueError::new_err(format!("invalid OCR request: {error}")))?;
 
     Ok(async move {
-        let RouteOptions {
-            model,
-            api_key,
-            api_base,
-            custom_llm_provider,
-            extra_headers,
-            timeout,
-        } = options;
         run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
+            model: &request.model,
+            document: request.document,
+            api_key: request.api_key.as_deref(),
+            api_base: request.api_base.as_deref(),
+            custom_llm_provider: request.custom_llm_provider.as_deref(),
+            extra_headers: request.extra_headers,
+            optional_params: request.optional_params,
+            timeout: optional_timeout(request.timeout_seconds),
             callbacks: Vec::new(),
             guardrails: Vec::new(),
             request_metadata: Default::default(),
@@ -54,20 +59,10 @@ bridge_route! {
     asynchronous = aocr,
     inputs = OcrInputs,
     required = {
-        model: String,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        document: serde_json::Value,
+        request: serde_json::Value,
     },
-    optional = {
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        extra_headers: Option<serde_json::Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        optional_params: Option<serde_json::Value>,
-        timeout_seconds: Option<f64>,
-    },
+    optional = {},
     prepare = prepare_ocr,
     errors = ocr_error_to_pyerr,
 }
