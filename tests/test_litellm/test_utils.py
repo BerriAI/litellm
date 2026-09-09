@@ -2386,6 +2386,7 @@ def test_register_model_with_scientific_notation():
 
 @respx.mock
 def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     before = dict(litellm.model_cost)
     threads_before = {thread.name for thread in threading.enumerate()}
