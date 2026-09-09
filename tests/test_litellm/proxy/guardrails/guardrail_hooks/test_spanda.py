@@ -204,3 +204,178 @@ def test_zero_threshold_preservation():
 
 def test_use_native_lifecycle_hooks_flag():
     assert SpandaGuardrail.use_native_lifecycle_hooks is True
+
+
+def test_is_spanda_available_utility():
+    from litellm.proxy.guardrails.guardrail_hooks.spanda.spanda import _is_spanda_available
+
+    res = _is_spanda_available()
+    assert isinstance(res, bool)
+
+
+def test_compute_fallback_rsc_insufficient_samples():
+    from litellm.proxy.guardrails.guardrail_hooks.spanda.spanda import _compute_fallback_rsc
+
+    assert _compute_fallback_rsc([]) == 0.0
+    assert _compute_fallback_rsc(["Single sample"]) == 0.0
+
+
+def test_compute_fallback_grounding_edge_cases():
+    from litellm.proxy.guardrails.guardrail_hooks.spanda.spanda import _compute_fallback_grounding
+
+    assert _compute_fallback_grounding("", "valid reference context") == 0.0
+    assert _compute_fallback_grounding("valid response text", "") == 0.0
+    assert _compute_fallback_grounding("a b c", "valid reference context") == 0.0
+
+
+def test_init_guardrail_instance_without_installed_pkg(monkeypatch):
+    import sys
+
+    from litellm.proxy.guardrails.guardrail_hooks.spanda import spanda
+
+    inst = spanda._init_guardrail_instance(0.35, 0.15)
+    assert inst is None
+
+    monkeypatch.setattr(spanda, "_HAS_SPANDA_PKG", True)
+    inst_simulated_missing = spanda._init_guardrail_instance(0.35, 0.15)
+    assert inst_simulated_missing is None
+
+    class FakeCascadedGuardrail:
+        def __init__(self, uncertainty_threshold, grounding_threshold):
+            self.uncertainty_threshold = uncertainty_threshold
+            self.grounding_threshold = grounding_threshold
+
+    fake_module = SimpleNamespace(CascadedGuardrail=FakeCascadedGuardrail)
+    monkeypatch.setitem(sys.modules, "spanda.guardrails", fake_module)
+    inst_mocked = spanda._init_guardrail_instance(0.35, 0.15)
+    assert inst_mocked is not None
+
+
+def test_get_config_model():
+    model_cls = SpandaGuardrail.get_config_model()
+    assert model_cls is SpandaGuardrailConfigModel
+
+
+def test_evaluate_texts_with_injected_guardrail():
+    class MockReceipt:
+        def to_dict(self):
+            return {
+                "rsc": 0.05,
+                "grounding_residual": 0.01,
+                "is_safe": True,
+                "decision": "PASS",
+                "tier_used": 1,
+                "samples_analyzed": 2,
+            }
+
+    class MockGuardrail:
+        def evaluate(self, sampled_responses, context=None):
+            return MockReceipt()
+
+    g = SpandaGuardrail(guardrail_instance=MockGuardrail())
+    result = g.evaluate_texts(["Sample A", "Sample B"])
+    assert result["is_safe"] is True
+    assert result["rsc"] == 0.05
+    assert result["decision"] == "PASS"
+
+
+def test_extract_context_spanda_and_metadata():
+    g = SpandaGuardrail()
+    data_spanda = {"spanda_context": "direct spanda reference"}
+    assert g._extract_context(data_spanda) == "direct spanda reference"
+
+    data_meta_ctx = {"metadata": {"context": "metadata reference context"}}
+    assert g._extract_context(data_meta_ctx) == "metadata reference context"
+
+    data_meta_spanda = {"metadata": {"spanda_context": "metadata spanda context"}}
+    assert g._extract_context(data_meta_spanda) == "metadata spanda context"
+
+
+def test_extract_context_from_messages():
+    g = SpandaGuardrail()
+    tool_data = {"messages": [{"role": "tool", "content": "tool execution result"}]}
+    assert g._extract_context(tool_data) == "tool execution result"
+
+    prefix_data = {"messages": [{"role": "user", "content": "context: Reference data here"}]}
+    assert g._extract_context(prefix_data) == "context: Reference data here"
+
+    ref_data = {"messages": [{"role": "user", "content": "reference: Alternate reference"}]}
+    assert g._extract_context(ref_data) == "reference: Alternate reference"
+
+    tool_obj = SimpleNamespace(role="tool", content="object tool output")
+    assert g._extract_context({"messages": [tool_obj]}) == "object tool output"
+
+    prefix_obj = SimpleNamespace(role="user", content="context: object context")
+    assert g._extract_context({"messages": [prefix_obj]}) == "context: object context"
+
+    normal_obj = SimpleNamespace(role="user", content="General conversational text")
+    assert g._extract_context({"messages": [normal_obj]}) is None
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_empty_and_no_samples():
+    g = SpandaGuardrail()
+    await g.async_post_call_success_hook({}, None, {})
+    await g.async_post_call_success_hook({}, None, {"choices": None})
+    await g.async_post_call_success_hook({}, None, {"choices": []})
+
+    empty_content_resp = {"choices": [{"message": {"content": ""}}]}
+    await g.async_post_call_success_hook({}, None, empty_content_resp)
+    assert "_spanda_receipt" not in empty_content_resp
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_text_choices():
+    g = SpandaGuardrail()
+    text_dict_resp = {"choices": [{"text": "Sample text choice"}]}
+    await g.async_post_call_success_hook({}, None, text_dict_resp)
+    assert "_spanda_receipt" in text_dict_resp
+
+    text_obj_choice = SimpleNamespace(text="Sample text attribute")
+    text_obj_resp = SimpleNamespace(choices=[text_obj_choice])
+    await g.async_post_call_success_hook({}, None, text_obj_resp)
+    assert hasattr(text_obj_resp, "_spanda_receipt")
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_slotted_response():
+    class SlottedResponse:
+        __slots__ = ("choices",)
+
+        def __init__(self, choices):
+            self.choices = choices
+
+    c1 = SimpleNamespace(message=SimpleNamespace(content="Answer 1"))
+    c2 = SimpleNamespace(message=SimpleNamespace(content="Answer 2"))
+    resp = SlottedResponse(choices=[c1, c2])
+
+    g = SpandaGuardrail()
+    await g.async_post_call_success_hook({}, None, resp)
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_read_only_setattr():
+    class ReadOnlyObject:
+        def __init__(self, choices):
+            self.__dict__["choices"] = choices
+
+        def __setattr__(self, name, value):
+            if name == "_spanda_receipt":
+                raise AttributeError("Read only attribute")
+            self.__dict__[name] = value
+
+    ro_resp = ReadOnlyObject(choices=[SimpleNamespace(text="Choice A")])
+    g = SpandaGuardrail()
+    await g.async_post_call_success_hook({}, None, ro_resp)
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_hook_safe_exception_handling():
+    class BrokenChoice:
+        @property
+        def message(self):
+            raise RuntimeError("Corrupted choice message")
+
+    resp = SimpleNamespace(choices=[BrokenChoice()])
+    g = SpandaGuardrail()
+    await g.async_post_call_success_hook({}, None, resp)
