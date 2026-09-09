@@ -22,7 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     get_tool_call_names,
     hoist_images_from_tool_messages,
-    tool_with_flattened_parameters,
+    tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -432,7 +432,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
-    def _flattened_tools_update_for_openai(
+    def _sanitized_tools_update_for_openai(
         self,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
@@ -440,7 +440,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         OpenAI's chat completions validator rejects tool `parameters` carrying
         'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level for every
-        model family, unlike the Responses API, where GPT-5+ accepts them.
+        model family, unlike the Responses API, where GPT-5+ accepts them, and
+        a `pattern` Python's `re` cannot compile for every model family on both.
         """
         tools: Final = optional_params.get("tools")
         if not isinstance(tools, list):
@@ -452,10 +453,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             raw_api_base if isinstance(raw_api_base, str) else None,
         ):
             return _NO_TOOLS_UPDATE
-        flattened: Final = [  # mutable-ok: request tools are a JSON list
-            tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
+        sanitized: Final = [  # mutable-ok: request tools are a JSON list
+            tool_with_sanitized_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
         ]
-        return MappingProxyType({"tools": flattened})
+        return MappingProxyType({"tools": sanitized})
 
     def transform_request(
         self,
@@ -489,7 +490,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "model": model,
             "messages": messages,
             **optional_params,
-            **self._flattened_tools_update_for_openai(optional_params, litellm_params),
+            **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
         }
 
     async def async_transform_request(
@@ -521,7 +522,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "model": model,
                 "messages": transformed_messages,
                 **optional_params,
-                **self._flattened_tools_update_for_openai(optional_params, litellm_params),
+                **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
             }
         else:
             ## allow for any object specific behaviour to be handled

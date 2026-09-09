@@ -1320,17 +1320,63 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
 
 
-def tool_with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
+def drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Drop every ``pattern`` keyword whose regex Python's ``re`` cannot compile.
+
+    OpenAI validates tool ``parameters`` with ``jsonschema``'s format checker,
+    which hands each ``pattern`` to ``re.compile``, so a regex written for an
+    ECMA-262 engine (Unicode property escapes such as ``\\p{Cc}``, as in Claude
+    Code's ``Artifact`` tool) is refused with "'...' is not a 'regex'" by every
+    model family on both the chat and Responses wires. Outside strict mode the
+    keyword is only a hint, so dropping it costs the model a constraint and the
+    caller nothing. Compilable patterns and everything else pass through, the
+    input is never mutated, and the same object comes back when nothing was
+    dropped.
+    """
+    return _schema_without_non_python_regex_patterns(schema, 0)
+
+
+def _schema_without_non_python_regex_patterns(schema: Mapping[str, object], depth: int) -> Mapping[str, object]:
+    kept: Final = {  # mutable-ok: tool parameters are JSON dicts
+        key: _value_without_non_python_regex_patterns(value, depth + 1)
+        for key, value in schema.items()
+        if key != "pattern" or not isinstance(value, str) or _is_python_regex(value)
+    }
+    return schema if len(kept) == len(schema) and all(kept[key] is schema[key] for key in kept) else kept
+
+
+def _value_without_non_python_regex_patterns(value: object, depth: int) -> object:
+    if depth > _MAX_SCHEMA_FLATTEN_DEPTH:
+        return value
+    if isinstance(value, dict):
+        return _schema_without_non_python_regex_patterns(value, depth)
+    if not isinstance(value, list):
+        return value
+    kept: Final = [  # mutable-ok: tool parameters are JSON lists
+        _value_without_non_python_regex_patterns(item, depth + 1) for item in value
+    ]
+    return value if all(new is old for new, old in zip(kept, value, strict=True)) else kept
+
+
+def _is_python_regex(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+    except (re.error, RecursionError):
+        return False
+    return True
+
+
+def tool_with_sanitized_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
     function: Final = tool.get("function")
     if not isinstance(function, dict):
         return tool
     parameters: Final = function.get("parameters")
     if not isinstance(parameters, dict):
         return tool
-    flattened: Final = flatten_top_level_schema_combinators(parameters)
-    if flattened is parameters:
+    sanitized: Final = flatten_top_level_schema_combinators(drop_non_python_regex_patterns(parameters))
+    if sanitized is parameters:
         return tool
-    return {**tool, "function": {**function, "parameters": flattened}}  # mutable-ok: request tools are JSON dicts
+    return {**tool, "function": {**function, "parameters": sanitized}}  # mutable-ok: request tools are JSON dicts
 
 
 def _get_image_mime_type_from_url(url: str) -> str | None:
