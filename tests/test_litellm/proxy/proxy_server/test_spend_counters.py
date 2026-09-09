@@ -737,8 +737,9 @@ async def test_increment_spend_counters_failing_scope_propagates_after_siblings_
     """A failure in one scope must propagate to the caller (so it can invalidate
     reserved counters) while every other scope still settles rather than being
     left as an orphaned background task, and the reservation is not finalized.
-    Because increments are applied in a single pipeline after all scopes
-    settle, a failing scope means none of the prepared increments are applied."""
+    The surviving scopes' increments are still applied in the single pipeline:
+    dropping them would under-count spend, the unsafe direction for budget
+    enforcement."""
     warmed_keys: list[str] = []
 
     async def _warm_check(*, key, **kwargs):
@@ -752,8 +753,18 @@ async def test_increment_spend_counters_failing_scope_propagates_after_siblings_
             raise RuntimeError("reseed failed")
         return None
 
+    applied: dict[str, float] = {}
+
+    async def _record_pipeline(increment_list, **_):
+        results = []
+        for op in increment_list:
+            applied[op["key"]] = op["increment_value"]
+            results.append(op["increment_value"])
+        return results
+
     fake_cache = _make_spend_counter_cache()
     fake_cache.redis_cache.async_get_cache = AsyncMock(side_effect=_warm_check)
+    fake_cache.redis_cache.async_increment_pipeline = AsyncMock(side_effect=_record_pipeline)
     fake_user_cache = _make_user_api_key_cache(get_value=None)
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
@@ -788,8 +799,16 @@ async def test_increment_spend_counters_failing_scope_propagates_after_siblings_
         "spend:tag:a",
         "spend:org:org1",
     }
-    # the error aborted the batch before any increment was applied
-    fake_cache.redis_cache.async_increment_pipeline.assert_not_awaited()
+    # the surviving scopes' increments were still applied, in one pipeline call
+    fake_cache.redis_cache.async_increment_pipeline.assert_awaited_once()
+    assert applied == {
+        "spend:key:hashed-tok": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+        "spend:org:org1": 5.0,
+    }
     fake_cache.redis_cache.async_increment.assert_not_awaited()
 
 

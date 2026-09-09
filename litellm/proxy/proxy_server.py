@@ -2773,14 +2773,8 @@ async def increment_spend_counters(
         )
 
         async def _key_window_increment(window: object) -> _PendingSpendIncrement | None:
-            duration: Final = cast(
-                "str",
-                window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None),
-            )
-            key_window_reset_at: Final = cast(
-                "datetime | str | None",
-                window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None),
-            )
+            duration = window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
+            key_window_reset_at = window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
             key_window_counter: Final = f"spend:key:{hashed_token}:window:{duration}"
             key_window_start = get_budget_window_start(window)
             pending_window: Final = (
@@ -2834,14 +2828,8 @@ async def increment_spend_counters(
         )
 
         async def _team_window_increment(window: object) -> _PendingSpendIncrement | None:
-            duration: Final = cast(
-                "str",
-                window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None),
-            )
-            team_window_reset_at: Final = cast(
-                "datetime | str | None",
-                window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None),
-            )
+            duration = window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
+            team_window_reset_at = window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
             team_window_counter: Final = f"spend:team:{scope_team_id}:window:{duration}"
             team_window_start = get_budget_window_start(window)
             pending_window: Final = (
@@ -2942,13 +2930,12 @@ async def increment_spend_counters(
     # all scopes settle, then the first error propagates as before.
     scope_results: Final = await asyncio.gather(*scope_coros, return_exceptions=True)
     scope_errors: Final = [r for r in scope_results if isinstance(r, BaseException)]
-    if scope_errors:
-        raise scope_errors[0]
-
     pending: Final = tuple(
         item for scope in scope_results if not isinstance(scope, BaseException) for item in scope
     )
     await _apply_spend_counter_increments(pending=pending)
+    if scope_errors:
+        raise scope_errors[0]
 
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
