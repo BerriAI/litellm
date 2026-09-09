@@ -1859,18 +1859,15 @@ class CustomStreamWrapper:
         if self.logging_obj._is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+    _PROVIDERS_WITHOUT_STREAM_FINISH_REASON = frozenset({"baseten", "vllm"})
 
     def _has_provider_finish_reason(self) -> bool:
-        """True when the provider (or an intermittent mid-stream reason) supplied a terminal finish_reason."""
         return self.received_finish_reason is not None or self.intermittent_finish_reason is not None
 
+    def _should_require_provider_finish_reason(self) -> bool:
+        return self.custom_llm_provider not in self._PROVIDERS_WITHOUT_STREAM_FINISH_REASON
+
     def _raise_incomplete_stream_without_finish_reason(self) -> "NoReturn":
-        """
-        OpenAI/Azure-compatible chat streams that end without any provider finish_reason
-        must not be labeled as a successful completion (finish_reason="stop"). Raise a
-        MidStreamFallbackError so callers can retry/fallback, while retaining partial
-        content via generated_content / failure usage recovery.
-        """
         message = (
             "Stream ended without a finish_reason from the provider. "
             "Partial content was received but the response was not successfully completed."
@@ -2092,7 +2089,7 @@ class CustomStreamWrapper:
                 self._restore_consumer_correlation_context()
                 raise  # Re-raise StopIteration
             else:
-                if not self._has_provider_finish_reason():
+                if self._should_require_provider_finish_reason() and not self._has_provider_finish_reason():
                     self._raise_incomplete_stream_without_finish_reason()
                 self.sent_last_chunk = True
                 processed_chunk: Final = self.finish_reason_handler()
@@ -2356,7 +2353,7 @@ class CustomStreamWrapper:
             self._restore_consumer_correlation_context()
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
-            if not self._has_provider_finish_reason():
+            if self._should_require_provider_finish_reason() and not self._has_provider_finish_reason():
                 self._raise_incomplete_stream_without_finish_reason()
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
