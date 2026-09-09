@@ -54,6 +54,7 @@ import sapLogo from "../../public/assets/logos/sap.png";
 import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
+import tiumLogo from "../../public/assets/logos/tium.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
 import topazLogo from "../../public/assets/logos/topaz.svg";
 import v0Logo from "../../public/assets/logos/v0.svg";
@@ -163,6 +164,7 @@ export enum Providers {
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
+  TIUM = "Tium",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
   Triton = "Triton",
@@ -279,6 +281,7 @@ export const provider_map: Record<string, string> = {
   Snowflake: "snowflake",
   Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
+  TIUM: "tium",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
   Triton: "triton",
@@ -376,6 +379,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
+  [Providers.TIUM]: tiumLogo.src,
   [Providers.TogetherAI]: togetheraiLogo.src,
   [Providers.TOPAZ]: topazLogo.src,
   [Providers.Triton]: nvidiaTritonLogo.src,
@@ -441,6 +445,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
   [Providers.Snowflake]: "snowflake/mistral-7b",
+  [Providers.TIUM]: "tium/glm-5.3",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
   [Providers.Voyage]: "voyage/",
