@@ -1270,10 +1270,14 @@ class LiteLLMCompletionResponsesConfig:
                 dumped_tool = tool.model_dump(exclude_none=True)
                 if isinstance(dumped_tool, dict):
                     normalized_tool = cast(dict[str, Any], dumped_tool)
+            elif hasattr(tool, "__dict__"):
+                normalized_tool = {k: v for k, v in vars(tool).items() if v is not None}
             tool_type = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(tool, "type")
             if tool_type == "mcp":
                 if normalized_tool is not None:
                     chat_completion_tools.append(cast(OpenAIMcpServerTool, normalized_tool))
+                else:
+                    verbose_logger.warning("Dropping mcp tool: unable to normalize non-dict tool object")
             elif tool_type == "web_search_preview" or tool_type == "web_search":
                 _search_context_size: Literal["low", "medium", "high"] = cast(
                     Literal["low", "medium", "high"],
@@ -1290,7 +1294,9 @@ class LiteLLMCompletionResponsesConfig:
             elif tool_type == "function":
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
-                raw_parameters = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(typed_tool, "parameters", {})
+                raw_parameters = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                    typed_tool, "parameters", {}
+                )
                 parameters = dict(raw_parameters) if isinstance(raw_parameters, dict) else {}
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
@@ -1323,10 +1329,11 @@ class LiteLLMCompletionResponsesConfig:
                     ] = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
                         typed_tool, "allowed_callers"
                     )
-                if LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(typed_tool, "input_examples"):
-                    chat_completion_tool["input_examples"] = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
-                        typed_tool, "input_examples"
-                    )
+                input_examples = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                    typed_tool, "input_examples"
+                )
+                if input_examples:
+                    chat_completion_tool["input_examples"] = input_examples
                 chat_completion_tools.append(cast(ChatCompletionToolParam, chat_completion_tool))
             elif tool_type == "custom":
                 custom_tool = (
@@ -1362,6 +1369,11 @@ class LiteLLMCompletionResponsesConfig:
                     continue
                 if normalized_tool is not None:
                     chat_completion_tools.append(cast(ChatCompletionToolParam | OpenAIMcpServerTool, normalized_tool))
+                else:
+                    verbose_logger.warning(
+                        "Dropping Responses API tool of type '%s': unable to normalize non-dict tool object",
+                        _tool_type,
+                    )
         return chat_completion_tools, web_search_options
 
     @staticmethod
