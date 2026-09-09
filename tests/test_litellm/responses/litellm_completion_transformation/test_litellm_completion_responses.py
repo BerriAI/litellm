@@ -1,5 +1,6 @@
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -1089,6 +1090,27 @@ class TestToolTransformation:
         assert result_tools[0]["type"] == "mcp"
         assert web_search_options is None
 
+    def test_transform_mcp_tool_object(self):
+        mcp_tool = SimpleNamespace(
+            type="mcp",
+            server_label="zapier",
+            server_url="https://mcp.zapier.com/api/mcp/mcp",
+            headers={"Authorization": "Bearer token123"},
+        )
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[mcp_tool],
+            )
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "mcp"
+        assert result_tools[0]["server_label"] == "zapier"
+        assert result_tools[0]["server_url"] == "https://mcp.zapier.com/api/mcp/mcp"
+        assert result_tools[0]["headers"] == {"Authorization": "Bearer token123"}
+        assert web_search_options is None
+
     def test_transform_computer_use_tools(self):
         """Test that computer_use tools are dropped (no Chat Completions equivalent).
 
@@ -1260,6 +1282,40 @@ class TestToolTransformation:
         assert web_search_options is not None
         assert web_search_options.get("search_context_size") == "medium"
         assert web_search_options.get("user_location") == {"country": "US"}
+
+    def test_transform_web_search_tool_object_to_web_search_options(self):
+        web_search_tool = SimpleNamespace(
+            type="web_search_preview",
+            search_context_size="medium",
+            user_location={"country": "US"},
+        )
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[web_search_tool],
+            )
+        )
+
+        assert len(result_tools) == 0
+        assert web_search_options is not None
+        assert web_search_options.get("search_context_size") == "medium"
+        assert web_search_options.get("user_location") == {"country": "US"}
+
+    def test_drop_web_search_call_tool_object(self):
+        web_search_call_tool = SimpleNamespace(
+            type="web_search_call",
+            id="ws_123",
+            status="completed",
+        )
+
+        result_tools, web_search_options = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[web_search_call_tool],
+            )
+        )
+
+        assert result_tools == []
+        assert web_search_options is None
 
     def test_transform_function_tools_with_anthropic_specific_fields(self):
         """Test that Anthropic-specific fields are preserved in function tools"""
