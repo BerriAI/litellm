@@ -326,6 +326,9 @@ ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
 provider_url_destination_allowed_hosts: List[str] = []
+#: "override" (default) or "additive": whether a key or team destination replaces
+#: the operator's exporter for that backend or exports alongside it.
+otel_tenant_destination_mode: str | None = None
 ssl_ecdh_curve: Optional[str] = None  # Set to 'X25519' to disable PQC and improve performance
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
@@ -543,7 +546,7 @@ _key_management_system: Optional["KeyManagementSystem"] = None
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map, mark_litellm_import_complete
 
 model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = {}  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
@@ -2402,3 +2405,5 @@ def __getattr__(name: str) -> Any:
 
 
 # ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time
+
+mark_litellm_import_complete()
