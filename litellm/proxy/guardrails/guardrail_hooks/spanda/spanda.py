@@ -31,12 +31,17 @@ if TYPE_CHECKING:
         SpandaGuardrailConfigModel,
     )
 
-try:
-    from spanda.guardrails import CascadedGuardrail
 
-    _HAS_SPANDA_PKG: Final = True
-except ImportError:
-    _HAS_SPANDA_PKG: Final = False
+def _is_spanda_available() -> bool:
+    try:
+        from spanda.guardrails import CascadedGuardrail  # noqa: F401  # check spanda library presence
+
+        return True
+    except ImportError:
+        return False
+
+
+_HAS_SPANDA_PKG: Final = _is_spanda_available()
 
 _MAX_SAMPLES_TO_COMPARE: Final = 10
 _MAX_SAMPLE_CHAR_LENGTH: Final = 2000
@@ -51,7 +56,7 @@ def _compute_fallback_rsc(samples: Sequence[str]) -> float:
     pairs = 0  # rebind-ok: counting evaluated pairs
     for i in range(k):
         for j in range(i + 1, k):
-            matcher: Final = difflib.SequenceMatcher(None, clamped[i], clamped[j])
+            matcher = difflib.SequenceMatcher(None, clamped[i], clamped[j])  # rebind-ok: loop variable
             total_dist += 1.0 - matcher.ratio()  # rebind-ok: accumulating distance sum
             pairs += 1  # rebind-ok: counting evaluated pairs
     return total_dist / pairs if pairs > 0 else 0.0
@@ -92,13 +97,18 @@ class SpandaGuardrail(CustomGuardrail):
         self.grounding_threshold: Final = float(grounding_threshold or 0.15)
         self.block_mode: Final = bool(block_mode)
 
+        guardrail_inst = None  # rebind-ok: conditional initialization
         if _HAS_SPANDA_PKG:
-            self._guardrail: Final = CascadedGuardrail(
-                uncertainty_threshold=self.uncertainty_threshold,
-                grounding_threshold=self.grounding_threshold,
-            )
-        else:
-            self._guardrail = None
+            try:
+                from spanda.guardrails import CascadedGuardrail
+
+                guardrail_inst = CascadedGuardrail(  # rebind-ok: conditional initialization
+                    uncertainty_threshold=self.uncertainty_threshold,
+                    grounding_threshold=self.grounding_threshold,
+                )
+            except (ImportError, AttributeError, TypeError, ValueError):
+                guardrail_inst = None  # rebind-ok: conditional initialization
+        self._guardrail: Final = guardrail_inst
 
     @classmethod
     def get_supported_event_hooks(cls) -> Sequence[GuardrailEventHooks]:
@@ -126,21 +136,17 @@ class SpandaGuardrail(CustomGuardrail):
         rsc: Final = _compute_fallback_rsc(texts) if len(texts) >= 2 else 0.0
         gr: Final = _compute_fallback_grounding(texts[0], context) if (texts and context) else 0.0
 
-        is_safe: Final[bool]
-        decision: Final[str]
-
-        if len(texts) >= 2 and rsc > self.uncertainty_threshold:
-            is_safe = False
-            decision = "FLAG_HIGH_UNCERTAINTY"
-        elif gr > self.grounding_threshold:
-            is_safe = False
-            decision = "FLAG_UNGROUNDED"
-        elif len(texts) < 2 and not context:
-            is_safe = True
-            decision = "PASS_SINGLE_SAMPLE_UNCHECKED"
-        else:
-            is_safe = True
-            decision = "PASS"
+        outcome: Final = (
+            (False, "FLAG_HIGH_UNCERTAINTY")
+            if len(texts) >= 2 and rsc > self.uncertainty_threshold
+            else (False, "FLAG_UNGROUNDED")
+            if gr > self.grounding_threshold
+            else (True, "PASS_SINGLE_SAMPLE_UNCHECKED")
+            if len(texts) < 2 and not context
+            else (True, "PASS")
+        )
+        is_safe: Final[bool] = outcome[0]
+        decision: Final[str] = outcome[1]
 
         receipt_dict: Final[dict[str, object]] = {  # mutable-ok: building receipt payload
             "rsc": round(rsc, 4),
@@ -169,17 +175,17 @@ class SpandaGuardrail(CustomGuardrail):
         if isinstance(raw_messages, (list, tuple)):
             for m in raw_messages:
                 if isinstance(m, Mapping):
-                    role: Final = m.get("role")
-                    content: Final = m.get("content")
+                    role = m.get("role")  # rebind-ok: loop variable
+                    content = m.get("content")  # rebind-ok: loop variable
                     if role == "tool" and isinstance(content, str) and content:
                         return content
                     if isinstance(content, str) and (
                         content.lower().startswith("context:") or content.lower().startswith("reference:")
                     ):
                         return content
-                elif hasattr(m, "role") and hasattr(m, "content"):
-                    role_attr: Final = getattr(m, "role", "")
-                    content_attr: Final = getattr(m, "content", "")
+                else:
+                    role_attr = getattr(m, "role", "")  # rebind-ok: loop variable
+                    content_attr = getattr(m, "content", "")  # rebind-ok: loop variable
                     if role_attr == "tool" and isinstance(content_attr, str) and content_attr:
                         return content_attr
                     if isinstance(content_attr, str) and (
@@ -240,14 +246,16 @@ class SpandaGuardrail(CustomGuardrail):
             if not choices_raw or not isinstance(choices_raw, (list, tuple)):
                 return
 
-            samples_acc = []  # mutable-ok: accumulating response samples
+            samples_acc: Final[list[str]] = []  # mutable-ok: accumulating response samples
             for c in choices_raw:
                 if isinstance(c, dict):
-                    msg_obj: Final = c.get("message")
-                    text = (msg_obj.get("content") if isinstance(msg_obj, dict) else None) or c.get("text", "")
+                    msg_obj = c.get("message")  # rebind-ok: loop variable
+                    text = (msg_obj.get("content") if isinstance(msg_obj, dict) else None) or c.get(
+                        "text", ""
+                    )  # rebind-ok: loop variable
                 else:
-                    msg = getattr(c, "message", None)
-                    text = getattr(msg, "content", "") if msg else getattr(c, "text", "")
+                    msg = getattr(c, "message", None)  # rebind-ok: loop variable
+                    text = getattr(msg, "content", "") if msg else getattr(c, "text", "")  # rebind-ok: loop variable
                 if text and isinstance(text, str):
                     samples_acc.append(text)
 
@@ -263,12 +271,13 @@ class SpandaGuardrail(CustomGuardrail):
                 response["_spanda_receipt"] = receipt  # rebind-ok: attaching receipt to response dict
             elif hasattr(response, "__dict__"):
                 try:
-                    response._spanda_receipt = receipt  # pyright: ignore[reportAttributeAccessIssue]  # dynamic attribute attached to response
+                    response._spanda_receipt = receipt  # pyright: ignore[reportAttributeAccessIssue]  # rebind-ok: attaching receipt to response
                 except (AttributeError, TypeError):
                     pass
 
-            if hasattr(response, "model_extra") and isinstance(response.model_extra, dict):  # pyright: ignore[reportAttributeAccessIssue]  # Pydantic v2 dynamic extra dict
-                response.model_extra["_spanda_receipt"] = receipt  # rebind-ok: attaching receipt to Pydantic extra dict
+            model_extra: Final = getattr(response, "model_extra", None)
+            if isinstance(model_extra, dict):
+                model_extra["_spanda_receipt"] = receipt  # rebind-ok: attaching receipt to Pydantic extra dict
 
             if self.block_mode and not receipt.get("is_safe", True):
                 decision: Final = receipt.get("decision", "HIGH_UNCERTAINTY")
