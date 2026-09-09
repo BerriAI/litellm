@@ -88,8 +88,10 @@ from litellm.utils import (
 from ..common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    context_1m_requested,
     process_anthropic_headers,
     strip_advisor_blocks_from_messages,
+    strip_context_1m_suffix,
 )
 
 if TYPE_CHECKING:
@@ -1812,6 +1814,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         headers: dict,
         optional_params: dict,
         litellm_params: Mapping[str, object] | None = None,
+        model: str = "",
     ) -> dict:
         """Update headers with optional anthropic beta."""
 
@@ -1821,10 +1824,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if is_vertex_request:
             return headers
 
-        original_model: Final = (
-            optional_params.get("_original_model") or (litellm_params or {}).get("_original_model", "") or ""
-        )
-        if re.search(r"\[1m\]$", str(original_model), flags=re.IGNORECASE):
+        if context_1m_requested(model=model, optional_params=optional_params, litellm_params=litellm_params):
             self._ensure_beta_header(headers, "context-1m-2025-08-07")
 
         _tools: Final = optional_params.get("tools", [])
@@ -1908,6 +1908,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers=headers,
             optional_params=optional_params,
             litellm_params=litellm_params,
+            model=model,
         )
 
         # === Tool-name sanitization (single chokepoint) ===
@@ -2021,7 +2022,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
         data: Final = {
-            "model": model,
+            "model": strip_context_1m_suffix(model),
             "messages": anthropic_messages,
             **optional_params,
         }

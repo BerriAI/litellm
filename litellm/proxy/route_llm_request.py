@@ -1,5 +1,4 @@
 import asyncio
-import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -27,15 +26,6 @@ GATED_MOCK_PARAM_NAMES: Final[tuple[str, ...]] = (
 )
 
 MOCK_TESTING_CONFIG_KEY: Final = "dangerously_allow_mock_testing_request_params"
-_CONTEXT_1M_SUFFIX: Final = re.compile(r"\[1m\]$", flags=re.IGNORECASE)
-
-
-def stash_and_strip_context_1m_model_suffix(data: dict) -> None:
-    model_name: Final = data.get("model")
-    if not isinstance(model_name, str) or _CONTEXT_1M_SUFFIX.search(model_name) is None:
-        return
-    data["_original_model"] = model_name
-    data["model"] = _CONTEXT_1M_SUFFIX.sub("", model_name)
 
 
 if TYPE_CHECKING:
@@ -483,8 +473,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
     data.pop("enable_tag_filtering", None)
-
-    stash_and_strip_context_1m_model_suffix(data)
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
