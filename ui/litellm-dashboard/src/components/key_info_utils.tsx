@@ -65,7 +65,8 @@ export const stripTagsFromMetadata = (metadata: any) => {
 export const mergeKeyTags = (fieldTags: unknown, metadata: unknown): string[] => {
   const isString = (value: unknown): value is string => typeof value === "string";
   const fromField = Array.isArray(fieldTags) ? fieldTags.filter(isString) : [];
-  const metadataTags = metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).tags : undefined;
+  const metadataTags =
+    metadata && typeof metadata === "object" ? (metadata as Record<string, unknown>).tags : undefined;
   const fromMetadata = Array.isArray(metadataTags) ? metadataTags.filter(isString) : [];
   return Array.from(new Set([...fromField, ...fromMetadata]));
 };
