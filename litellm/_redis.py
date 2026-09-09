@@ -598,6 +598,11 @@ def _get_redis_client_logic(**env_overrides):
                 azure_tenant_id=_azure_tenant_id,
                 azure_client_secret=_azure_client_secret,
             )
+            # Marker for async paths to detect Azure AD auth. The live credential
+            # object is attached separately as `_azure_credential` by
+            # `create_azure_ad_redis_connect_func`; the raw client_id/tenant_id/secret
+            # are intentionally NOT exposed on the function to avoid leaking
+            # credentials via inspection or logging.
             redis_kwargs["redis_connect_func"]._azure_redis_ad_token = True
 
         if _aws_iam_enabled and _gcp_service_account is not None:
