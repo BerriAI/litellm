@@ -41,10 +41,12 @@ from litellm.proxy.management_endpoints.common_daily_activity import get_daily_a
 from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _user_has_admin_view,
+    validate_budget_duration,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
+    reject_ambiguous_mcp_tool_permission_keys,
 )
 from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
@@ -312,7 +314,7 @@ def handle_nested_budget_structure_in_organization_update_request(
             # Extract valid budget fields and merge into top level
             budget_fields: Final = LiteLLM_BudgetTable.model_fields.keys()
             for key, value in budget_data.items():
-                if key in budget_fields and value is not None:
+                if key in budget_fields:
                     transformed_data[key] = value
 
     return transformed_data
@@ -487,12 +489,11 @@ async def new_organization(
         for m in data.models:
             await can_user_call_model(m, llm_router=llm_router, user_object=user_object_correct_type)
 
-    organization_row: Final = LiteLLM_OrganizationTable(
-        **data.json(exclude_none=True),
-        object_permission_id=object_permission_id,
-        created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-        updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-    )
+    organization_payload: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(data.json(exclude_none=True))
+    organization_payload["object_permission_id"] = object_permission_id
+    organization_payload["created_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+    organization_payload["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+    organization_row: Final = LiteLLM_OrganizationTable.model_validate(organization_payload)
 
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if getattr(data, field, None) is not None:
@@ -606,6 +607,11 @@ async def _set_object_permission(
         return None
 
     if data.object_permission is not None:
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions=data.object_permission.mcp_tool_permissions,
+            existing_mcp_tool_permissions=None,
+            prisma_client=prisma_client,
+        )
         created_object_permission: Final = await _table(ObjectPermissionRepository(prisma_client)).create(
             data=data.object_permission.model_dump(exclude_none=True),
         )
@@ -644,7 +650,7 @@ async def update_organization(
         )
 
     # Transform UI payload to expected format
-    raw_data: Final = await request.json()
+    raw_data: Final[dict[str, object]] = await request.json()
     raw_data_with_flat_budget_fields: Final = handle_nested_budget_structure_in_organization_update_request(raw_data)
 
     # Create validated data model
@@ -691,7 +697,7 @@ async def update_organization(
     # Merge metadata from existing organization with updated metadata
     if updated_organization_row_json.get("metadata") is not None:
         existing_metadata: Final = existing_organization_row.metadata or {}
-        updated_metadata: Final = updated_organization_row_json.get("metadata", {})
+        updated_metadata: Final[dict[str, object]] = updated_organization_row_json.get("metadata", {})
         merged_metadata: Final[Mapping[str, object]] = _update_dictionary(
             existing_dict=cast(  # cast-ok: prisma de-serializes a Json column to the plain python dict it stores
                 "dict[str, object]", existing_metadata
@@ -709,9 +715,8 @@ async def update_organization(
             existing_organization_row=existing_organization_row,
         )
 
-    # Handle budget updates if budget fields are provided
     budget_fields: Final = {
-        k: v for k, v in data.model_dump().items() if k in LiteLLM_BudgetTable.model_fields and v is not None
+        k: v for k, v in data.model_dump().items() if k in _BUDGET_SETTABLE_FIELDS and k in data.model_fields_set
     }
 
     if budget_fields and existing_organization_row.budget_id:
@@ -765,7 +770,6 @@ async def handle_update_object_permission(
     tags=["organization management"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_OrganizationTableWithMembers,
-    include_in_schema=False,
 )
 async def update_organization_v2(
     organization_id: str,
@@ -808,6 +812,17 @@ async def update_organization_v2(
             status_code=422,
             detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
         )
+    for limit_name, limit_value in (
+        ("tpm_limit", data.tpm_limit),
+        ("rpm_limit", data.rpm_limit),
+        ("max_parallel_requests", data.max_parallel_requests),
+    ):
+        if limit_value is not None and limit_value < 0:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": f"{limit_name} must be non-negative. Received: {limit_value}"},
+            )
+    validate_budget_duration(data.budget_duration, status_code=422)
     if data.model_max_budget:
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             validate_model_max_budget,

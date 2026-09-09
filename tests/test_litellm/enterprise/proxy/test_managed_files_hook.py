@@ -15,6 +15,7 @@ from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy.openai_files_endpoints.common_utils import BATCH_CREATE_HIDDEN_PARAM
 from litellm.types.llms.openai import FileListPage, OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
 
@@ -527,13 +528,33 @@ async def test_afile_list_orders_newest_first_and_breaks_ties_on_the_cursor_colu
 
 
 @pytest.mark.asyncio
-async def test_afile_list_denies_a_caller_without_a_user_or_team():
+async def test_afile_list_scopes_a_keyless_key_to_its_own_hashed_token():
+    caller = UserAPIKeyAuth(api_key="sk-test", parent_otel_span=None)
+    managed_files, table = _make_managed_files_over_rows(
+        [
+            _make_managed_file_row("unified-mine", created_by=f"key:{caller.token}"),
+            _make_managed_file_row("unified-theirs", created_by="other-user"),
+        ]
+    )
+
+    response = await managed_files.afile_list(
+        purpose=None,
+        litellm_parent_otel_span=None,
+        user_api_key_dict=caller,
+    )
+
+    assert [file.id for file in response.data] == ["unified-mine"]
+    assert table.find_many_calls[0]["where"] == {"created_by": f"key:{caller.token}"}
+
+
+@pytest.mark.asyncio
+async def test_afile_list_denies_a_caller_with_no_identity_at_all():
     managed_files, table = _make_managed_files_over_rows([_make_managed_file_row("unified-mine")])
 
     response = await managed_files.afile_list(
         purpose=None,
         litellm_parent_otel_span=None,
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", parent_otel_span=None),
+        user_api_key_dict=UserAPIKeyAuth(parent_otel_span=None),
     )
 
     assert response.data == []
@@ -1520,6 +1541,11 @@ async def test_batch_create_hook_persists_creating_key_and_tags():
     managed_files = _make_managed_files_instance()
     creator = UserAPIKeyAuth(api_key="sk-the-creator", user_id="alice", parent_otel_span=None)
     create_response = _make_batch_response(status="validating", output_file_id=None)
+    create_response._hidden_params = {
+        BATCH_CREATE_HIDDEN_PARAM: True,
+        "model_id": "model-deploy-xyz",
+        "model_name": "azure/gpt-4",
+    }
 
     await managed_files.async_post_call_success_hook(
         data={"litellm_metadata": {"tags": ["env:prod", "team:ml"], "user_api_key": creator.api_key}},
@@ -1532,6 +1558,52 @@ async def test_batch_create_hook_persists_creating_key_and_tags():
     assert stored["persist_attribution"] is True
     assert stored["request_tags"] == ("env:prod", "team:ml")
     assert stored["user_api_key_dict"] is creator
+
+
+@pytest.mark.asyncio
+async def test_batch_create_hook_records_created_metric_once():
+    managed_files = _make_managed_files_instance()
+    prometheus_logger = MagicMock()
+    managed_files._get_prometheus_logger = MagicMock(return_value=prometheus_logger)
+    create_response = _make_batch_response(status="validating", output_file_id=None)
+    create_response._hidden_params = {
+        BATCH_CREATE_HIDDEN_PARAM: True,
+        "model_id": "model-deploy-xyz",
+        "model_name": "azure/gpt-4",
+    }
+
+    await managed_files.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-the-creator", user_id="alice", parent_otel_span=None),
+        response=create_response,
+    )
+
+    prometheus_logger.record_managed_batch_created.assert_called_once()
+    recorded = prometheus_logger.record_managed_batch_created.call_args.kwargs
+    assert recorded["model"] == "azure/gpt-4"
+    assert recorded["api_provider"] == "azure"
+    assert recorded["user"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_batch_retrieve_hook_does_not_record_created_metric():
+    managed_files = _make_managed_files_instance()
+    prometheus_logger = MagicMock()
+    managed_files._get_prometheus_logger = MagicMock(return_value=prometheus_logger)
+    retrieve_response = _make_batch_response(status="in_progress", output_file_id=None)
+    retrieve_response._hidden_params = {
+        "unified_batch_id": "some-unified-batch-id",
+        "model_id": "model-deploy-xyz",
+        "model_name": "azure/gpt-4",
+    }
+
+    await managed_files.async_post_call_success_hook(
+        data={},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-the-poller", user_id="bob", parent_otel_span=None),
+        response=retrieve_response,
+    )
+
+    prometheus_logger.record_managed_batch_created.assert_not_called()
 
 
 @pytest.mark.asyncio

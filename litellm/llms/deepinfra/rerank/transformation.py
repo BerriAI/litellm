@@ -2,10 +2,11 @@
 Translate between Cohere's `/rerank` format and Deepinfra's `/rerank` format.
 """
 
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -22,6 +23,36 @@ from litellm.types.rerank import (
     RerankResponseResult,
     RerankTokens,
 )
+
+
+class _DeepinfraInferenceStatus(TypedDict, total=False):
+    """The ``inference_status`` block of a DeepInfra rerank response."""
+
+    status: ReadOnly[str]
+    runtime_ms: ReadOnly[float]
+    cost: ReadOnly[float]
+    tokens_generated: ReadOnly[int]
+    tokens_input: ReadOnly[int]
+
+
+class _DeepinfraRerankResponse(TypedDict, total=False):
+    """Body of a DeepInfra ``/rerank`` response."""
+
+    scores: ReadOnly[Sequence[float]]
+    input_tokens: ReadOnly[int]
+    request_id: ReadOnly[str | None]
+    inference_status: ReadOnly[_DeepinfraInferenceStatus]
+
+
+class _DeepinfraRerankResponseSource(Protocol):
+    """The DeepInfra ``/rerank`` HTTP response, read for the body it decodes to."""
+
+    def json(self) -> _DeepinfraRerankResponse: ...
+
+
+def _deepinfra_rerank_body(response: _DeepinfraRerankResponseSource) -> _DeepinfraRerankResponse:
+    """Decode the body of a DeepInfra ``/rerank`` response."""
+    return response.json()
 
 
 class DeepinfraRerankConfig(BaseRerankConfig):
@@ -95,7 +126,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -150,7 +181,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         litellm_params: dict = {},
     ) -> RerankResponse:
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _deepinfra_rerank_body(raw_response)
             logging_obj.post_call(original_response=raw_response.text)
 
             # Extract the scores from the response

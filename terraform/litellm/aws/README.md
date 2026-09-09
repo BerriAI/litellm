@@ -242,6 +242,22 @@ this with `litellm_license`. To tune the export cadence, set
 `LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS` through `gateway_extra_env` /
 `backend_extra_env`
 
+### Prometheus metrics sidecar
+
+`gateway_metrics_port` adds a `metrics` sidecar
+(`python -m litellm.proxy.prometheus_metrics_server`) to the gateway task that
+aggregates the workers' samples over a shared task volume, so a scrape never
+runs on an inference worker. The ALB never routes to that port and the tasks
+security group only opens it to `gateway_metrics_scrape_cidrs`. Needs
+`gateway_image` v1.101.0 or newer. See
+[Prometheus metrics](https://docs.litellm.ai/docs/proxy/prometheus) for the
+metrics themselves.
+
+```hcl
+gateway_metrics_port         = 4001
+gateway_metrics_scrape_cidrs = ["10.0.0.0/16"]
+```
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or

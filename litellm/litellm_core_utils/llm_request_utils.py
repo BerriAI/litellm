@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import litellm
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
 def _form_field_value(value: object) -> str:
@@ -13,18 +14,31 @@ def _form_field_value(value: object) -> str:
 
 
 def _flatten_form_field(key: str, value: object) -> tuple[tuple[str, str], ...]:
-    if isinstance(value, Mapping):
-        return tuple(
-            item for subkey, subvalue in value.items() for item in _flatten_form_field(f"{key}[{subkey}]", subvalue)
-        )
-    if isinstance(value, (list, tuple)):
-        return tuple(item for entry in value for item in _flatten_form_field(f"{key}[]", entry))
-    if value is None:
-        return ()
-    serialized: Final = _form_field_value(value)
-    if not serialized:
-        return ()
-    return ((key, serialized),)
+    pending_fields: Final[  # mutable-ok: depth-capped stack walks nested JSON into multipart names
+        list[tuple[str, object, int]]
+    ] = [  # mutable-ok: depth-capped stack walks nested JSON into multipart names
+        (key, value, 0)
+    ]
+    flat_fields: Final[list[tuple[str, str]]] = []  # mutable-ok: local accumulator
+    while pending_fields:
+        current_key, current_value, depth = pending_fields.pop()
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise ValueError("form field nesting exceeds max depth")
+        if isinstance(current_value, Mapping):
+            pending_fields.extend(
+                (f"{current_key}[{subkey}]", subvalue, depth + 1)
+                for subkey, subvalue in reversed(tuple(current_value.items()))
+            )
+            continue
+        if isinstance(current_value, (list, tuple)):
+            pending_fields.extend((f"{current_key}[]", entry, depth + 1) for entry in reversed(tuple(current_value)))
+            continue
+        if current_value is None:
+            continue
+        serialized = _form_field_value(current_value)
+        if serialized:
+            flat_fields.append((current_key, serialized))
+    return tuple(flat_fields)
 
 
 def _is_form_scalar(value: object) -> bool:
@@ -32,23 +46,36 @@ def _is_form_scalar(value: object) -> bool:
 
 
 def _flatten_form_data_field(key: str, value: object) -> tuple[tuple[str, str | tuple[str, ...]], ...]:
-    if isinstance(value, Mapping):
-        return tuple(
-            item
-            for subkey, subvalue in value.items()
-            for item in _flatten_form_data_field(f"{key}[{subkey}]", subvalue)
-        )
-    if isinstance(value, (list, tuple)):
-        if all(_is_form_scalar(entry) for entry in value):
-            serialized_fields: Final = tuple(field for entry in value if (field := _form_field_value(entry)))
-            return ((key, serialized_fields),) if serialized_fields else ()
-        return tuple(item for entry in value for item in _flatten_form_data_field(f"{key}[]", entry))
-    if value is None:
-        return ()
-    serialized: Final = _form_field_value(value)
-    if not serialized:
-        return ()
-    return ((key, serialized),)
+    pending_fields: Final[  # mutable-ok: depth-capped stack walks nested JSON into multipart names
+        list[tuple[str, object, int]]
+    ] = [  # mutable-ok: depth-capped stack walks nested JSON into multipart names
+        (key, value, 0)
+    ]
+    flat_fields: Final[list[tuple[str, str | tuple[str, ...]]]] = []  # mutable-ok: local accumulator
+    while pending_fields:
+        current_key, current_value, depth = pending_fields.pop()
+        if depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise ValueError("form field nesting exceeds max depth")
+        if isinstance(current_value, Mapping):
+            pending_fields.extend(
+                (f"{current_key}[{subkey}]", subvalue, depth + 1)
+                for subkey, subvalue in reversed(tuple(current_value.items()))
+            )
+            continue
+        if isinstance(current_value, (list, tuple)):
+            if all(_is_form_scalar(entry) for entry in current_value):
+                serialized_fields = tuple(field for entry in current_value if (field := _form_field_value(entry)))
+                if serialized_fields:
+                    flat_fields.append((current_key, serialized_fields))
+                continue
+            pending_fields.extend((f"{current_key}[]", entry, depth + 1) for entry in reversed(tuple(current_value)))
+            continue
+        if current_value is None:
+            continue
+        serialized = _form_field_value(current_value)
+        if serialized:
+            flat_fields.append((current_key, serialized))
+    return tuple(flat_fields)
 
 
 def flatten_form_field_values(*sources: Mapping[str, object] | None) -> tuple[tuple[str, str | tuple[str, ...]], ...]:

@@ -3647,6 +3647,173 @@ async def test_stash_applies_when_owner_or_callback_call_id_missing():
     assert claimed.reservation_released is True
 
 
+async def _reserve_tpm_for_owner_call(handler, local_cache, api_key: str, call_id: str) -> int:
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key=api_key, tpm_limit=10_000),
+        cache=local_cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 50,
+            "litellm_call_id": call_id,
+        },
+        call_type="completion",
+    )
+    stash = get_request_stash()
+    assert stash is not None and stash.reserved_tokens > 0
+    return stash.reserved_tokens
+
+
+@pytest.mark.asyncio
+async def test_failure_event_settles_tpm_reservation_at_recovered_partial_usage_v3():
+    """
+    A stream that fails mid-way after the model already produced tokens is
+    logged as a failure carrying the recovered partial usage. Those tokens
+    were consumed, so the TPM window must settle at them instead of refunding
+    the whole reservation (which would let repeated timeouts burn output
+    tokens for free).
+    """
+    _api_key = hash_token("sk-partial-stream-failure")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "partial-call")
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "partial-call",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 27
+    stash = get_request_stash()
+    assert stash is not None and stash.reservation_released is True
+
+
+@pytest.mark.asyncio
+async def test_failure_event_refunds_reservation_for_input_only_estimate_v3():
+    """
+    A failure with no recovered output carries only the input-token estimate
+    the proxy lifts onto every failure; that is not consumed usage, so the
+    reservation is still refunded in full.
+    """
+    _api_key = hash_token("sk-estimated-failure")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "estimate-call")
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "estimate-call",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=0, total_tokens=20),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_settles_reservation_at_recovered_partial_usage_v3():
+    """
+    Pass-through streams report a mid-stream failure through the proxy-level
+    failure hook first, with the recovered usage lifted onto request_data.
+    That hook must settle at the partial usage too, and the later failure
+    callback must not double-apply it.
+    """
+    _api_key = hash_token("sk-partial-post-call")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10_000)
+    tokens_key = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "post-call")
+
+    await handler.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": "post-call",
+            "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
+        },
+        original_exception=Exception("upstream dropped the stream"),
+        user_api_key_dict=user_api_key_dict,
+    )
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 27
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "post-call",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 27
+
+
+@pytest.mark.asyncio
+async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usage_v3():
+    """
+    Project ITPM/OTPM reservations settle the same way: input at the billable
+    prompt tokens and output at the completion tokens the failed stream
+    actually produced.
+    """
+    _api_key = hash_token("sk-partial-project-io")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        project_id="proj-partial",
+        project_metadata={
+            "model_itpm_limit": {"gpt-4o-mini": 10_000},
+            "model_otpm_limit": {"gpt-4o-mini": 10_000},
+        },
+    )
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 50,
+            "litellm_call_id": "project-call",
+        },
+        call_type="completion",
+    )
+    stash = get_request_stash()
+    assert stash is not None and stash.itpm_reserved_tokens > 0 and stash.otpm_reserved_tokens > 0
+    itpm_key = handler.create_rate_limit_keys(
+        key="model_per_project_itpm", value="proj-partial:gpt-4o-mini", rate_limit_type="tokens"
+    )
+    otpm_key = handler.create_rate_limit_keys(
+        key="model_per_project_otpm", value="proj-partial:gpt-4o-mini", rate_limit_type="tokens"
+    )
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "project-call",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            "combined_usage_object": Usage(prompt_tokens=20, completion_tokens=7, total_tokens=27),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(await local_cache.async_get_cache(key=itpm_key) or 0) == 20
+    assert int(await local_cache.async_get_cache(key=otpm_key) or 0) == 7
+
+
 # ----------------------- Per-MCP-server rate limiting (v3) -----------------------
 
 

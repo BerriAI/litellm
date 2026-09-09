@@ -203,12 +203,12 @@ describe("ModelHubTable", () => {
   });
 
   describe("hub tabs", () => {
-    const renderHub = async () => {
+    const renderHub = async (agents: object[] = []) => {
       vi.mocked(networking.modelHubCall).mockResolvedValue({
         data: [{ model_group: "claude-opus-4-8", providers: ["anthropic"], mode: "chat" }],
       });
       vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
-      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents });
       vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
       vi.mocked(networking.getUiSettings).mockResolvedValue({ values: {} });
       mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
@@ -228,6 +228,37 @@ describe("ModelHubTable", () => {
       await user.click(screen.getByRole("tab", { name: "Model Hub" }));
 
       expect(await screen.findByPlaceholderText("Search model names...")).toHaveValue("opus");
+    });
+
+    it("filters the Agent Hub table by name or description and shows the no-match state", async () => {
+      const { user } = await renderHub([
+        {
+          agent_id: "a1",
+          agent_card_params: { name: "Billing Router", description: "routes billing questions" },
+          litellm_params: { is_public: false },
+        },
+        {
+          agent_id: "a2",
+          agent_card_params: { name: "Support Bot", description: "handles support tickets" },
+          litellm_params: { is_public: false },
+        },
+      ]);
+      const agentCount = (expected: string) =>
+        screen.getByText((_, el) => el?.tagName === "P" && el.textContent === expected);
+
+      await user.click(screen.getByRole("tab", { name: "Agent Hub" }));
+      expect(await screen.findByText("Billing Router")).toBeInTheDocument();
+
+      const search = screen.getByPlaceholderText("Search agent names or descriptions...");
+      await user.type(search, "support tickets");
+      expect(screen.queryByText("Billing Router")).not.toBeInTheDocument();
+      expect(screen.getByText("Support Bot")).toBeInTheDocument();
+      expect(agentCount("Showing 1 of 2 agents")).toBeInTheDocument();
+
+      await user.clear(search);
+      await user.type(search, "zzzz");
+      expect(screen.getByText("No matching agents")).toBeInTheDocument();
+      expect(agentCount("Showing 0 of 2 agents")).toBeInTheDocument();
     });
 
     it("renders the hub strip as underlined tabs rather than a segmented pill", async () => {
