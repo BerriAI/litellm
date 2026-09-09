@@ -13,5 +13,6 @@ pub mod responses;
 pub mod router;
 pub mod routing_utils;
 pub mod runtime;
+pub(crate) mod sse;
 
 pub use error::Error;

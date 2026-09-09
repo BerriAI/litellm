@@ -1,43 +1,27 @@
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use bytes::BytesMut;
 use serde_json::{Value, json};
 
 use crate::Error;
 use crate::integrations::types::Usage;
-use crate::lifecycle::StreamingObserver;
+use crate::sse::{SseEvent, SseEventObserver};
 
 #[derive(Default)]
 pub(super) struct AnthropicMessagesObserver {
-    pending: BytesMut,
-    scanned: usize,
-    line_start: usize,
-    skip_lf: bool,
     message: Value,
     inputs: BTreeMap<usize, String>,
     stopped: bool,
-    error: Option<String>,
 }
 
-impl AnthropicMessagesObserver {
-    fn event(&mut self, event: &[u8]) -> Result<(), Error> {
-        let mut lines = event
-            .split(|byte| matches!(byte, b'\r' | b'\n'))
-            .filter_map(|line| line.strip_prefix(b"data:"))
-            .map(|line| line.strip_prefix(b" ").unwrap_or(line));
-        let Some(first) = lines.next() else {
+impl SseEventObserver for AnthropicMessagesObserver {
+    fn on_event(&mut self, event: &SseEvent) -> Result<(), Error> {
+        let Some(data) = event.data.as_deref() else {
             return Ok(());
         };
-        let mut data = Cow::Borrowed(first);
-        for line in lines {
-            data.to_mut().push(b'\n');
-            data.to_mut().extend_from_slice(line);
-        }
         if data.is_empty() {
             return Ok(());
         }
-        let value: Value = serde_json::from_slice(&data)
+        let value: Value = serde_json::from_str(data)
             .map_err(|_| Error::InvalidResponse("invalid Messages SSE JSON".into()))?;
         match value["type"].as_str() {
             Some("message_start") => {
@@ -169,52 +153,6 @@ impl AnthropicMessagesObserver {
         Ok(())
     }
 
-    fn index(value: &Value) -> Result<usize, Error> {
-        value["index"]
-            .as_u64()
-            .and_then(|index| index.try_into().ok())
-            .ok_or_else(|| Error::InvalidResponse("missing Messages content block index".into()))
-    }
-}
-
-impl StreamingObserver for AnthropicMessagesObserver {
-    fn observe(&mut self, bytes: &[u8]) {
-        if self.stopped || self.error.is_some() {
-            return;
-        }
-        self.pending.extend_from_slice(bytes);
-        while self.scanned < self.pending.len() {
-            let index = self.scanned;
-            let byte = self.pending[index];
-            self.scanned += 1;
-            if self.skip_lf && byte == b'\n' {
-                self.skip_lf = false;
-                self.line_start = self.scanned;
-                continue;
-            }
-            self.skip_lf = byte == b'\r';
-            if !matches!(byte, b'\r' | b'\n') {
-                continue;
-            }
-            if index != self.line_start {
-                self.line_start = self.scanned;
-                continue;
-            }
-            let event = self.pending.split_to(self.scanned);
-            self.scanned = 0;
-            self.line_start = 0;
-            if let Err(error) = self.event(&event) {
-                self.error = Some(error.to_string());
-                self.pending.clear();
-                return;
-            }
-            if self.stopped {
-                self.pending.clear();
-                return;
-            }
-        }
-    }
-
     fn usage(&self) -> Usage {
         let usage = &self.message["usage"];
         let prompt_tokens = usage["input_tokens"]
@@ -244,14 +182,7 @@ impl StreamingObserver for AnthropicMessagesObserver {
     fn finished(&self) -> bool {
         self.stopped
     }
-    fn check(&self) -> Result<(), Error> {
-        match &self.error {
-            Some(error) => Err(Error::InvalidResponse(error.clone())),
-            None => Ok(()),
-        }
-    }
     fn finish(&self) -> Result<(), Error> {
-        self.check()?;
         if self.stopped {
             Ok(())
         } else {
@@ -262,9 +193,21 @@ impl StreamingObserver for AnthropicMessagesObserver {
     }
 }
 
+impl AnthropicMessagesObserver {
+    fn index(value: &Value) -> Result<usize, Error> {
+        value["index"]
+            .as_u64()
+            .and_then(|index| index.try_into().ok())
+            .ok_or_else(|| Error::InvalidResponse("missing Messages content block index".into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lifecycle::StreamingObserver;
+    use crate::sse::SseObserver;
+    use bytes::Bytes;
 
     #[test]
     fn fragmented_events_reconstruct_content_and_cache_usage() {
@@ -284,15 +227,15 @@ mod tests {
             json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":8}}),
             json!({"type":"message_stop"}),
         ];
-        for separator in ["\n", "\r\n"] {
-            let mut observer = AnthropicMessagesObserver::default();
+        for separator in ["\n", "\r\n", "\r"] {
+            let mut observer = SseObserver::new(AnthropicMessagesObserver::default());
             for event in &events {
                 let encoded = format!(
                     "event: {}{separator}data: {event}{separator}{separator}",
                     event["type"].as_str().unwrap()
                 );
                 for byte in encoded.as_bytes() {
-                    observer.observe(&[*byte]);
+                    observer.observe(&Bytes::copy_from_slice(&[*byte])).unwrap();
                 }
             }
             observer.finish().unwrap();
@@ -319,18 +262,46 @@ mod tests {
     #[test]
     fn truncated_and_provider_error_streams_fail() {
         let mut observer = AnthropicMessagesObserver::default();
-        observer.observe(b"data: {\"type\":\"ping\"}\n\n");
+        observe_events(&mut observer, &[json!({"type":"ping"})]).unwrap();
         assert!(observer.finish().is_err());
-        observer
-            .observe(b"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}\n\n");
-        assert!(observer.check().is_err());
+        assert!(
+            observe_events(
+                &mut observer,
+                &[json!({"type":"error","error":{"type":"overloaded_error"}})]
+            )
+            .is_err()
+        );
         assert!(!observer.finished());
     }
 
-    fn observe_events(observer: &mut AnthropicMessagesObserver, events: &[Value]) {
-        for event in events {
-            observer.observe(format!("data: {event}\n\n").as_bytes());
-        }
+    fn observe_events(
+        observer: &mut AnthropicMessagesObserver,
+        events: &[Value],
+    ) -> Result<(), Error> {
+        events
+            .iter()
+            .try_for_each(|event| observer.on_event(&SseEvent::default().data(event.to_string())))
+    }
+
+    #[test]
+    fn empty_events_are_ignored_and_json_type_controls_dispatch() {
+        let mut observer = AnthropicMessagesObserver::default();
+        observer
+            .on_event(&SseEvent::default().event("message_stop"))
+            .unwrap();
+        observer.on_event(&SseEvent::default().data("")).unwrap();
+        assert!(observer.projection().is_null());
+        assert!(!observer.finished());
+        observer
+            .on_event(
+                &SseEvent::default()
+                    .event("message_stop")
+                    .data(json!({"type":"message_start","message":{"content":[]}}).to_string()),
+            )
+            .unwrap();
+        assert!(!observer.finished());
+        observe_events(&mut observer, &[json!({"type":"message_stop"})]).unwrap();
+        observer.finish().unwrap();
     }
 
     #[test]
@@ -340,9 +311,13 @@ mod tests {
                 ": heartbeat{newline}data: {{\"type\":\"message_start\",{newline}data: \"message\":{{\"content\":[],\"id\":\"hé🦀\"}}}}{newline}{newline}data: {{\"type\":\"message_stop\"}}{newline}{newline}"
             );
             for split in 0..=wire.len() {
-                let mut observer = AnthropicMessagesObserver::default();
-                observer.observe(&wire.as_bytes()[..split]);
-                observer.observe(&wire.as_bytes()[split..]);
+                let mut observer = SseObserver::new(AnthropicMessagesObserver::default());
+                observer
+                    .observe(&Bytes::copy_from_slice(&wire.as_bytes()[..split]))
+                    .unwrap();
+                observer
+                    .observe(&Bytes::copy_from_slice(&wire.as_bytes()[split..]))
+                    .unwrap();
                 observer.finish().unwrap();
                 assert_eq!(observer.projection()["id"], "hé🦀");
             }
@@ -353,7 +328,7 @@ mod tests {
     fn malformed_blocks_are_errors_instead_of_panics() {
         for block in [json!(3), json!([]), json!("bad"), Value::Null] {
             let mut observer = AnthropicMessagesObserver::default();
-            observe_events(
+            let result = observe_events(
                 &mut observer,
                 &[
                     json!({"type":"message_start","message":{"content":[]}}),
@@ -361,7 +336,7 @@ mod tests {
                     json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}),
                 ],
             );
-            assert!(observer.check().is_err());
+            assert!(result.is_err());
             assert!(observer.finish().is_err());
         }
     }
@@ -376,8 +351,7 @@ mod tests {
             ],
         ] {
             let mut observer = AnthropicMessagesObserver::default();
-            observe_events(&mut observer, &events);
-            assert!(observer.check().is_err());
+            assert!(observe_events(&mut observer, &events).is_err());
         }
     }
 
@@ -391,17 +365,23 @@ mod tests {
             let trailing =
                 json!({"type":"message_start","message":{"id":"overwritten","content":[]}});
             for coalesced in [false, true] {
-                let mut observer = AnthropicMessagesObserver::default();
-                observe_events(&mut observer, &[start.clone()]);
-                if coalesced {
-                    observer
-                        .observe(format!("data: {terminal}\n\ndata: {trailing}\n\n").as_bytes());
+                let mut observer = SseObserver::new(AnthropicMessagesObserver::default());
+                observer
+                    .observe(&Bytes::from(format!("data: {start}\n\n")))
+                    .unwrap();
+                let result = if coalesced {
+                    observer.observe(&Bytes::from(format!(
+                        "data: {terminal}\n\ndata: {trailing}\n\n"
+                    )))
                 } else {
-                    observe_events(&mut observer, &[terminal.clone(), trailing.clone()]);
-                }
+                    let result = observer.observe(&Bytes::from(format!("data: {terminal}\n\n")));
+                    let _ = observer.observe(&Bytes::from(format!("data: {trailing}\n\n")));
+                    result
+                };
                 assert_eq!(observer.projection()["id"], "original");
                 assert_eq!(observer.finished(), terminal["type"] == "message_stop");
-                assert_eq!(observer.check().is_err(), terminal["type"] == "error");
+                assert_eq!(result.is_err(), terminal["type"] == "error");
+                assert_eq!(observer.finish().is_err(), terminal["type"] == "error");
             }
         }
     }
@@ -410,7 +390,7 @@ mod tests {
     fn incomplete_and_invalid_tool_json_fail() {
         for partial in ["{", "not json"] {
             let mut observer = AnthropicMessagesObserver::default();
-            observe_events(
+            let result = observe_events(
                 &mut observer,
                 &[
                     json!({"type":"message_start","message":{"content":[]}}),
@@ -420,7 +400,7 @@ mod tests {
                     json!({"type":"message_stop"}),
                 ],
             );
-            assert!(observer.check().is_err());
+            assert!(result.is_err());
             assert!(!observer.finished());
         }
     }
@@ -434,14 +414,14 @@ mod tests {
                 json!({"type":"message_start","message":{"content":[]}}),
                 json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"prefix"}}),
             ],
-        );
+        ).unwrap();
         for _ in 0..4096 {
             observe_events(
                 &mut observer,
                 &[
                     json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hé🦀"}}),
                 ],
-            );
+            ).unwrap();
         }
         observe_events(
             &mut observer,
@@ -449,7 +429,8 @@ mod tests {
                 json!({"type":"content_block_stop","index":0}),
                 json!({"type":"message_stop"}),
             ],
-        );
+        )
+        .unwrap();
         observer.finish().unwrap();
         assert_eq!(
             observer.projection()["content"][0]["text"],
@@ -465,7 +446,7 @@ mod tests {
                 json!({"type":"message_start","message":{"content":[],"usage":{"input_tokens":u64::MAX,"cache_read_input_tokens":1,"cache_creation_input_tokens":1,"output_tokens":1}}}),
                 json!({"type":"message_stop"}),
             ],
-        );
+        ).unwrap();
         observer.finish().unwrap();
         assert_eq!(
             observer.usage(),
@@ -489,7 +470,7 @@ mod tests {
                 json!({"type":"content_block_stop","index":0}),
                 json!({"type":"message_stop"}),
             ],
-        );
+        ).unwrap();
         observer.finish().unwrap();
         assert_eq!(observer.projection()["content"][0]["signature"], "sig");
     }
@@ -517,24 +498,33 @@ mod tests {
             for mode in ["deltas", "coalesced", "fragmented"] {
                 let mut samples = Vec::new();
                 for _ in 0..5 {
-                    let mut observer = AnthropicMessagesObserver::default();
-                    observer.observe(start.as_bytes());
+                    let mut observer = SseObserver::new(AnthropicMessagesObserver::default());
+                    observer
+                        .observe(&Bytes::from_static(start.as_bytes()))
+                        .unwrap();
                     let began = Instant::now();
                     match mode {
                         "deltas" => {
                             for _ in 0..count {
-                                observer.observe(black_box(delta.as_bytes()));
+                                observer
+                                    .observe(&Bytes::copy_from_slice(black_box(delta.as_bytes())))
+                                    .unwrap();
                             }
                         }
-                        "coalesced" => observer.observe(black_box(coalesced.as_bytes())),
+                        "coalesced" => observer
+                            .observe(&Bytes::copy_from_slice(black_box(coalesced.as_bytes())))
+                            .unwrap(),
                         _ => {
                             for byte in large_event.as_bytes() {
-                                observer.observe(black_box(std::slice::from_ref(byte)));
+                                observer
+                                    .observe(&Bytes::copy_from_slice(black_box(
+                                        std::slice::from_ref(byte),
+                                    )))
+                                    .unwrap();
                             }
                         }
                     }
                     samples.push(began.elapsed());
-                    observer.check().unwrap();
                     black_box(observer.projection());
                 }
                 samples.sort();

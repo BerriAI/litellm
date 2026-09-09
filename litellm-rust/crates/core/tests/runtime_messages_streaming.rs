@@ -1,9 +1,11 @@
 use std::future::{Ready, ready};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use futures_util::{StreamExt, stream};
+use futures_util::{Stream, StreamExt, stream};
 use litellm_core::Error;
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
@@ -399,4 +401,127 @@ async fn stream_failure_dispatches_once_and_releases_owners() {
     assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
     assert_eq!(tracking.session_drops.load(Ordering::Relaxed), 1);
     assert_eq!(tracking.service_drops.load(Ordering::Relaxed), 1);
+}
+
+struct TrackedStream {
+    inner: litellm_core::lifecycle::BytesStream,
+    polls: Arc<AtomicUsize>,
+    drops: Arc<AtomicUsize>,
+}
+
+impl Stream for TrackedStream {
+    type Item = Result<Bytes, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.polls.fetch_add(1, Ordering::Relaxed);
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+impl Drop for TrackedStream {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[tokio::test]
+async fn sse_preserves_raw_chunks_without_read_ahead_and_releases_upstream_at_stop() {
+    let tracking = Tracking::new();
+    let polls = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let start = Bytes::from(String::from(
+        "data: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\n",
+    ));
+    let chunks = vec![
+        start.slice(..10),
+        Bytes::new(),
+        start.slice(10..),
+        Bytes::from(String::from("data: {\"type\":\"message_stop\"}\n\n")),
+    ];
+    let source = TrackedStream {
+        inner: Box::pin(stream::iter(
+            chunks
+                .clone()
+                .into_iter()
+                .map(Ok)
+                .chain([Err(Error::Network("must not be polled".into()))]),
+        )),
+        polls: polls.clone(),
+        drops: drops.clone(),
+    };
+    let client = client(Ok(response(Box::pin(source))), tracking.clone());
+    let call = client
+        .messages_stream_with(request(), Options::default(), context(), 7)
+        .await
+        .unwrap();
+    let completion = call.completion.register();
+    let mut stream = call.stream;
+    assert_eq!(polls.load(Ordering::Relaxed), 0);
+    for (index, expected) in chunks.iter().enumerate() {
+        let received = stream.next().await.unwrap().unwrap();
+        assert_eq!(&received, expected);
+        assert_eq!(received.as_ptr(), expected.as_ptr());
+        assert_eq!(polls.load(Ordering::Relaxed), index + 1);
+    }
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+    assert!(stream.next().await.is_none());
+    assert_eq!(polls.load(Ordering::Relaxed), chunks.len());
+    assert_eq!(
+        completion.await.unwrap().classification,
+        TerminalClassification::Success
+    );
+    drop(stream);
+    assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn sse_observation_failures_dispatch_once_and_release_upstream() {
+    for (tail, truncated) in [
+        (b"data: not json\n\n".as_slice(), false),
+        (b"data: \xff\n\n", false),
+        (
+            b"data: {\"type\":\"error\",\"error\":\"overloaded\"}\n\n",
+            false,
+        ),
+        (b"data: {\"type\":\"message_stop\"}\n", true),
+    ] {
+        let tracking = Tracking::new();
+        let polls = Arc::new(AtomicUsize::new(0));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let source = TrackedStream {
+            inner: Box::pin(stream::iter([
+                Ok(Bytes::from_static(
+                    b"data: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\n",
+                )),
+                Ok(Bytes::copy_from_slice(tail)),
+            ])),
+            polls: polls.clone(),
+            drops: drops.clone(),
+        };
+        let client = client(Ok(response(Box::pin(source))), tracking.clone());
+        let call = client
+            .messages_stream_with(request(), Options::default(), context(), 8)
+            .await
+            .unwrap();
+        let completion = call.completion.register();
+        let mut stream = call.stream;
+        stream.next().await.unwrap().unwrap();
+        if truncated {
+            assert_eq!(stream.next().await.unwrap().unwrap().as_ref(), tail);
+        }
+        assert!(matches!(
+            stream.next().await,
+            Some(Err(Error::InvalidResponse(_)))
+        ));
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        let count = polls.load(Ordering::Relaxed);
+        assert!(stream.next().await.is_none());
+        assert_eq!(polls.load(Ordering::Relaxed), count);
+        assert!(matches!(completion.await.unwrap().classification,
+            TerminalClassification::Failure { kind, .. } if kind == "InvalidResponse"));
+        drop(stream);
+        assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
 }

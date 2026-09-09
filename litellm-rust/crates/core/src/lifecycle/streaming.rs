@@ -26,16 +26,13 @@ pub struct StreamingMetadata {
 }
 
 pub trait StreamingObserver: Send {
-    fn observe(&mut self, bytes: &[u8]);
+    fn observe(&mut self, bytes: &Bytes) -> Result<(), Error>;
     fn usage(&self) -> Usage;
     fn projection(&self) -> Value;
-    fn check(&self) -> Result<(), Error> {
-        Ok(())
-    }
     fn finished(&self) -> bool {
         false
     }
-    fn finish(&self) -> Result<(), Error> {
+    fn finish(&mut self) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -179,8 +176,7 @@ impl Stream for ObservedStream {
             .poll_next(cx)
         {
             Poll::Ready(Some(Ok(bytes))) => {
-                self.observer.observe(&bytes);
-                if let Err(error) = self.observer.check() {
+                if let Err(error) = self.observer.observe(&bytes) {
                     self.complete(TerminalClassification::Failure {
                         kind: "InvalidResponse".into(),
                         message: error.to_string(),
@@ -273,9 +269,14 @@ mod tests {
     }
 
     impl StreamingObserver for Observer {
-        fn observe(&mut self, bytes: &[u8]) {
+        fn observe(&mut self, bytes: &Bytes) -> Result<(), Error> {
             self.probe.observations.fetch_add(1, Ordering::Relaxed);
-            self.last = Bytes::copy_from_slice(bytes);
+            self.last = bytes.clone();
+            if self.last == "invalid" {
+                Err(Error::InvalidResponse("bad event".into()))
+            } else {
+                Ok(())
+            }
         }
 
         fn usage(&self) -> Usage {
@@ -290,19 +291,11 @@ mod tests {
             json!({"last": String::from_utf8_lossy(&self.last)})
         }
 
-        fn check(&self) -> Result<(), Error> {
-            if self.last == "invalid" {
-                Err(Error::InvalidResponse("bad event".into()))
-            } else {
-                Ok(())
-            }
-        }
-
         fn finished(&self) -> bool {
             self.last == "stop"
         }
 
-        fn finish(&self) -> Result<(), Error> {
+        fn finish(&mut self) -> Result<(), Error> {
             if self.last == "truncated" {
                 Err(Error::InvalidResponse("missing stop".into()))
             } else {

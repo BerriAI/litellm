@@ -275,7 +275,9 @@ where
             context,
             request,
             services,
-            Box::<super::streaming::AnthropicMessagesObserver>::default(),
+            Box::new(crate::sse::SseObserver::new(
+                super::streaming::AnthropicMessagesObserver::default(),
+            )),
             provider_call,
         )
         .await

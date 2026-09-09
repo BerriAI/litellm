@@ -15,6 +15,7 @@ rustls.workspace = true
 rustls-native-certs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sse-stream.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

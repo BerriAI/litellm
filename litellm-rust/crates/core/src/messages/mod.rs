@@ -50,7 +50,9 @@ where
     .await?;
     Ok(StreamingCall::new(
         source,
-        Box::<streaming::AnthropicMessagesObserver>::default(),
+        Box::new(crate::sse::SseObserver::new(
+            streaming::AnthropicMessagesObserver::default(),
+        )),
         context,
         start_time,
         services,
