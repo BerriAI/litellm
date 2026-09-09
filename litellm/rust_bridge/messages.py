@@ -441,6 +441,26 @@ class _MessagesHost:
         logger: Final = self.logger
         end: Final = datetime.fromtimestamp(end_time, tz=self.start.tzinfo)
         roots: Final = (self.arguments, self.current, self.state)
+        if error is None and callable(getattr(logger, "_on_deferred_stream_complete", None)):
+            deferred_complete: Final = logger._handle_anthropic_messages_response_logging(response)  # pyright: ignore[reportPrivateUsage]  # existing Messages logging transform
+
+            async def dispatch(replacement: object | None = None) -> None:
+                selected: Final = deferred_complete if replacement is None else replacement
+                logger.model_call_details["complete_streaming_response"] = selected
+                try:
+                    invoke_terminal("async_success", roots, logger, None, selected, self.start, end)
+                finally:
+                    invoke_terminal("sync_success_if_needed", roots, logger, None, selected, self.start, end)
+                    restore_correlation_context(logger)
+                    self._release_stream_roots()
+
+            def abort() -> None:
+                restore_correlation_context(logger)
+                self._release_stream_roots()
+
+            logger._deferred_stream_abort = abort
+            logger._deferred_stream_complete_args = (dispatch,)
+            return
         try:
             if error is not None:
                 failure: Final = APIError(

@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -3155,7 +3155,7 @@ class ProxyLogging:
                     raise e
         return response
 
-    async def async_post_call_streaming_iterator_hook(
+    async def async_post_call_streaming_iterator_hook(  # noqa: C901  # guardrail iterator preserves ordered callback and error semantics
         self,
         response,
         user_api_key_dict: UserAPIKeyAuth,
@@ -3169,6 +3169,54 @@ class ProxyLogging:
         1. /chat/completions
         """
         caps: Final = ProxyLogging._callback_capabilities()
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        capture_native_response: Final = getattr(logging_obj, "_deferred_native_stream_logging", False) is True
+        capture_anthropic_response: Final = (
+            capture_native_response or getattr(logging_obj, "_deferred_anthropic_stream_logging", False) is True
+        )
+
+        def capture_response(chunks: Sequence[object]) -> None:
+            if not capture_anthropic_response or logging_obj is None:
+                return
+            from litellm.proxy.guardrails.anthropic_sse import assemble_anthropic_sse_stream
+
+            logging_obj._guardrailed_stream_chunks = tuple(chunks)
+            deferred_raw_bytes: Final = getattr(logging_obj, "_deferred_stream_raw_bytes", None)
+            if isinstance(deferred_raw_bytes, list):
+                deferred_raw_bytes[:] = [  # mutable-ok: parked logging coroutine retains this list identity
+                    chunk if isinstance(chunk, bytes) else str(chunk).encode() for chunk in chunks
+                ]
+            assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
+            if assembled is not None:
+                logging_obj._guardrailed_stream_response = assembled
+
+        class UpstreamFailure:
+            error: Exception | None = None
+
+        upstream_failure: Final = UpstreamFailure()
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            parse_anthropic_error_event,
+        )
+
+        async def tracked_response() -> AsyncIterator[object]:
+            try:
+                async for chunk in response:
+                    provider_error: Final = parse_anthropic_error_event(chunk)
+                    if provider_error is not None:
+                        _, message, status_code = provider_error
+                        upstream_failure.error = litellm.APIError(
+                            status_code=status_code,
+                            message=message,
+                            llm_provider=str(request_data.get("custom_llm_provider") or "anthropic"),
+                            model=str(request_data.get("model") or ""),
+                        )
+                    yield chunk
+            except Exception as error:
+                upstream_failure.error = error
+                raise
+
+        delivered: Final[list[object]] = []  # mutable-ok: stream chunks arrive incrementally
         # Fast path: no real overrides. Internal proxy CustomLogger callbacks
         # (e.g. _PROXY_MaxBudgetLimiter, ManagedFiles) inherit the default
         # ``async for chunk: yield chunk`` body, so wrapping the iterator
@@ -3176,13 +3224,17 @@ class ProxyLogging:
         # zero behavior change. Skip the chain entirely and stream through.
         if not caps.iterator_overrides:
             try:
-                async for chunk in response:
+                async for chunk in tracked_response():
+                    if capture_anthropic_response:
+                        delivered.append(chunk)
                     yield chunk
             except (GeneratorExit, asyncio.CancelledError):
+                ProxyLogging._discard_deferred_stream_logging(request_data)
                 raise
             except Exception:
-                ProxyLogging._fire_deferred_stream_logging(request_data)
+                ProxyLogging._discard_deferred_stream_logging(request_data)
                 raise
+            capture_response(delivered)
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
 
@@ -3191,7 +3243,7 @@ class ProxyLogging:
         # Merge model-level guardrails before checking which guardrails to run
         request_data = _check_and_merge_model_level_guardrails(data=request_data, llm_router=llm_router)
 
-        current_response = response
+        current_response = tracked_response()
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         for resolved_callback, kind in caps.iterator_overrides:
@@ -3237,18 +3289,46 @@ class ProxyLogging:
 
         try:
             async for chunk in current_response:
+                if capture_anthropic_response:
+                    delivered.append(chunk)
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
+            ProxyLogging._discard_deferred_stream_logging(request_data)
             raise
-        except Exception:
-            ProxyLogging._fire_deferred_stream_logging(request_data)
+        except Exception as error:
+            ProxyLogging._discard_deferred_stream_logging(request_data)
+            if upstream_failure.error is not None and upstream_failure.error is not error:
+                metadata: Final = request_data.setdefault("metadata", {})  # mutable-ok: attach secondary failure context
+                metadata["stream_guardrail_cleanup_error"] = {  # mutable-ok: request metadata is the logging handoff
+                    "type": type(error).__name__,
+                    "message": str(error),
+                }
+                raise upstream_failure.error from error
             raise
 
+        capture_response(delivered)
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
         # completed.  unified_guardrail writes guardrail_information during
         # its end-of-stream block (inside current_response), so by the time
         # we reach this point the metadata is fully populated.
         ProxyLogging._fire_deferred_stream_logging(request_data)
+
+    @staticmethod
+    def _discard_deferred_stream_logging(request_data: Mapping[str, object]) -> None:
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if logging_obj is None:
+            return
+        abort: Final = getattr(logging_obj, "_deferred_stream_abort", None)
+        deferred_args: Final = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj._deferred_stream_complete_args = None
+        logging_obj._deferred_stream_abort = None
+        if isinstance(deferred_args, tuple):
+            for deferred_arg in deferred_args:
+                if asyncio.iscoroutine(deferred_arg):
+                    deferred_arg.close()
+        if callable(abort):
+            abort()
 
     @staticmethod
     def _fire_deferred_stream_logging(request_data: dict) -> None:
@@ -3270,6 +3350,7 @@ class ProxyLogging:
         if _deferred_cb is not None and _args is not None:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
+            logging_obj._deferred_stream_abort = None
             asyncio.create_task(_deferred_cb(*_args))
 
     async def _arelease_max_parallel_requests_on_disconnect(

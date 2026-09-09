@@ -443,13 +443,12 @@ async def test_native_messages_stream_logging_fires_after_guardrail_end_of_strea
 
 
 @pytest.mark.asyncio
-async def test_native_messages_stream_logging_fires_when_guardrail_blocks_after_stream_end(
+async def test_native_messages_stream_success_logging_is_discarded_when_guardrail_blocks(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
     """
-    A guardrail block raised after upstream exhaustion (unified_guardrail
-    re-raises HTTPException for blocked content) must still flush the
-    parked deferred logging, or the blocked stream loses its spend log.
+    A guardrail block raised after upstream exhaustion must discard the
+    parked success log. The request boundary emits the terminal failure log.
     """
     events: List[Any] = []
     request_data: Dict[str, Any] = {"metadata": {}}
@@ -475,7 +474,7 @@ async def test_native_messages_stream_logging_fires_when_guardrail_blocks_after_
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert [event[0] for event in events] == ["logging_dispatched"]
+    assert events == []
     assert logging_obj._deferred_stream_complete_args is None
 
 

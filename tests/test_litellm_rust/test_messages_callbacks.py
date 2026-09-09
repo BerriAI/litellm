@@ -477,6 +477,61 @@ async def test_messages_success_callback_failure_does_not_skip_later_loggers(
 
 
 @pytest.mark.asyncio
+async def test_messages_stream_success_callback_failure_does_not_skip_later_loggers(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.enqueue(ResponseSpec(body=None, events=MESSAGES_EVENTS))
+    recorder: Final = RecordingLogger()
+
+    class UnavailableExporter(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            raise RuntimeError("exporter unavailable")
+
+    stream: Final = await call_messages(messages_server, [UnavailableExporter(), recorder], stream=True)
+    chunks: Final = [chunk async for chunk in stream]
+    events: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert chunks
+    assert len(events) == 1
+    assert events[0].response.choices[0].message.content == "Hello from native Messages"
+    assert "async_log_failure_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+async def test_messages_stream_failure_callback_failure_does_not_skip_later_loggers(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.enqueue(
+        ResponseSpec(
+            body=None,
+            events=(
+                MESSAGES_EVENTS[0],
+                (
+                    "error",
+                    {"type": "error", "error": {"type": "overloaded_error", "message": "upstream overloaded"}},
+                ),
+            ),
+        )
+    )
+    recorder: Final = RecordingLogger()
+
+    class UnavailableExporter(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            raise RuntimeError("exporter unavailable")
+
+    stream: Final = await call_messages(messages_server, [UnavailableExporter(), recorder], stream=True)
+    with pytest.raises(litellm.APIError) as caught:
+        async for _ in stream:
+            pass
+    events: Final = await recorder.wait_for_async("async_log_failure_event")
+
+    assert len(events) == 1
+    assert isinstance(events[0].kwargs["exception"], litellm.APIError)
+    assert type(events[0].kwargs["exception"]) is type(caught.value)
+    assert "async_log_success_event" not in recorder.names
+
+
+@pytest.mark.asyncio
 async def test_messages_concurrent_calls_keep_callback_state_isolated(messages_server: RecordingServer) -> None:
     messages_server.expected_requests = 4
     tokens: Final = {f"messages-{index}": object() for index in range(4)}

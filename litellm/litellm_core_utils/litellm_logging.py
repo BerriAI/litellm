@@ -541,6 +541,14 @@ class Logging(LiteLLMLoggingBaseClass):
         self.function_id = function_id
         self.streaming_chunks: list[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
+        self._on_deferred_stream_complete: object | None = None
+        self._deferred_stream_complete_args: tuple[object, ...] | None = None
+        self._deferred_stream_abort: Callable[[], None] | None = None
+        self._deferred_native_stream_logging: bool = False
+        self._deferred_anthropic_stream_logging: bool = False
+        self._deferred_stream_raw_bytes: list[bytes] | None = None  # mutable-ok: deferred logging replaces guarded bytes
+        self._guardrailed_stream_chunks: tuple[object, ...] | None = None
+        self._guardrailed_stream_response: object | None = None
         self.log_raw_request_response = log_raw_request_response
 
         # Initialize dynamic callbacks

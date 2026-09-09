@@ -3302,14 +3302,29 @@ class ProxyBaseLLMRequestProcessing:
             logging_obj._on_deferred_stream_complete = _on_deferred_bridged_stream_complete
             return
 
+        from litellm.rust_bridge.provenance import has_rust_response_marker
+
+        if has_rust_response_marker(response):
+
+            async def _on_deferred_native_stream_complete(
+                dispatch: Callable[[object | None], Coroutine[object, object, None]],
+            ) -> None:
+                replacement: Final = getattr(logging_obj, "_guardrailed_stream_response", None)
+                await dispatch(replacement)
+
+            logging_obj._deferred_native_stream_logging = True
+            logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
+            return
+
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        async def _on_deferred_native_stream_complete(
+        async def _on_deferred_stream_complete(
             logging_coroutine: Coroutine[object, object, object],
         ) -> None:
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
 
-        logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
+        logging_obj._deferred_anthropic_stream_logging = True
+        logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete
 
     @staticmethod
     async def _run_deferred_stream_guardrails(

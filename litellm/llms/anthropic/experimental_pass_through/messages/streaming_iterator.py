@@ -428,6 +428,7 @@ class BaseAnthropicMessagesStreamingIterator:
             getattr(self.litellm_logging_obj, "_on_deferred_stream_complete", None) is not None
         )
         if deferred_dispatch_armed and not stream_teardown:
+            self.litellm_logging_obj._deferred_stream_raw_bytes = collected_chunks
             self.litellm_logging_obj._deferred_stream_complete_args = (logging_coroutine,)
             return
         # Enqueue on the rooted logging worker rather than asyncio.create_task:

@@ -217,6 +217,7 @@ class PassThroughStreamingHandler:
                 and response.status_code < 400
             ):
                 logging_scheduled = True
+                litellm_logging_obj._deferred_stream_raw_bytes = raw_bytes
                 litellm_logging_obj._deferred_stream_complete_args = (_build_logging_coroutine(),)
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
