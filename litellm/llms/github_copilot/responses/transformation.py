@@ -97,30 +97,33 @@ def _is_valid_regex(pattern: object) -> bool:
         return True
 
 
-def _clean_schema_dict(current: dict[str, object], stack: list[object]) -> None:
+def _clean_schema_dict(
+    current: dict[str, object],  # mutable-ok: schema dict mutated in-place
+    stack: list[object],  # mutable-ok: iterative traversal worklist
+) -> None:
     """Sanitize regexes in a single JSON schema dict and push child schemas to stack."""
     if "pattern" in current:
-        pattern_val = current["pattern"]
+        pattern_val: Final = current["pattern"]
         if not _is_valid_regex(pattern_val):
             verbose_logger.debug(
                 "GitHub Copilot Responses API: Stripping incompatible tool schema regex pattern: %r",
                 pattern_val,
             )
-            del current["pattern"]
+            del current["pattern"]  # rebind-ok: in-place schema mutation
 
     if "patternProperties" in current and isinstance(current["patternProperties"], dict):
-        pp = current["patternProperties"]
-        invalid_keys = [pk for pk in pp if not _is_valid_regex(pk)]
+        pp: Final = current["patternProperties"]
+        invalid_keys: Final = tuple(pk for pk in pp if not _is_valid_regex(pk))
         for ik in invalid_keys:
             verbose_logger.debug(
                 "GitHub Copilot Responses API: Stripping incompatible patternProperties regex key: %r",
                 ik,
             )
-            del pp[ik]
+            del pp[ik]  # rebind-ok: in-place schema mutation
         stack.extend(sub for sub in pp.values() if isinstance(sub, (dict, list)))
 
     for kw in ("properties", "$defs", "definitions", "dependentSchemas"):
-        mapping = current.get(kw)
+        mapping: Final = current.get(kw)
         if isinstance(mapping, dict):
             stack.extend(sub for sub in mapping.values() if isinstance(sub, (dict, list)))
 
@@ -146,13 +149,13 @@ def _sanitize_json_schema_regex_patterns(schema: object) -> object:
     if not isinstance(schema, (dict, list)):
         return schema
 
-    cleaned_schema = copy.deepcopy(schema)
-    stack: list[object] = [cleaned_schema]
-    seen_ids: set[int] = set()
+    cleaned_schema: Final = copy.deepcopy(schema)
+    stack: Final[list[object]] = [cleaned_schema]  # mutable-ok: worklist for iterative schema traversal
+    seen_ids: Final[set[int]] = set()  # mutable-ok: cycle detection set for iterative traversal
 
     while stack:
         current = stack.pop()
-        current_id = id(current)
+        current_id: Final = id(current)
         if current_id in seen_ids:
             continue
         seen_ids.add(current_id)
@@ -410,7 +413,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             tools=tools,
             litellm_params=litellm_params,
         )
-        cleaned_tools = self._sanitize_tool_regex_patterns(sanitized_tools)
+        cleaned_tools: Final = self._sanitize_tool_regex_patterns(sanitized_tools)
         return replay_safe_input, cleaned_tools
 
     @staticmethod
@@ -425,16 +428,16 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if tools is None:
             return None
-        cleaned_tools: list[ALL_RESPONSES_API_TOOL_PARAMS] = []
+        cleaned_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []  # mutable-ok: accumulating response tools
         for tool in tools:
             if isinstance(tool, dict):
-                cleaned_tool = dict(tool)
+                cleaned_tool: Final = dict(tool)  # mutable-ok: shallow copy of tool dict for mutation
                 if "parameters" in cleaned_tool and isinstance(cleaned_tool["parameters"], dict):
                     cleaned_tool["parameters"] = _sanitize_json_schema_regex_patterns(cleaned_tool["parameters"])
                 if "input_schema" in cleaned_tool and isinstance(cleaned_tool["input_schema"], dict):
                     cleaned_tool["input_schema"] = _sanitize_json_schema_regex_patterns(cleaned_tool["input_schema"])
                 if "function" in cleaned_tool and isinstance(cleaned_tool["function"], dict):
-                    cleaned_func = dict(cleaned_tool["function"])
+                    cleaned_func: Final = dict(cleaned_tool["function"])  # mutable-ok: copy function dict
                     if "parameters" in cleaned_func and isinstance(cleaned_func["parameters"], dict):
                         cleaned_func["parameters"] = _sanitize_json_schema_regex_patterns(cleaned_func["parameters"])
                     cleaned_tool["function"] = cleaned_func
