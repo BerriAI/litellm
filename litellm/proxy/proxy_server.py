@@ -3357,7 +3357,7 @@ async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncreme
     ]
     try:
         results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
-    except Exception:
+    except Exception:  # noqa: BLE001  # spend tracking must degrade to per-key increments on any pipeline error
         # Degrade to the pre-pipeline per-key path: each key applies or
         # invalidates itself, so one failure cannot drop increments that
         # already landed on the shared counters.
