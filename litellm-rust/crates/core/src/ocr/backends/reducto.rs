@@ -21,7 +21,7 @@ pub fn normalize_api_base(api_base: Option<&str>) -> &str {
 }
 
 async fn prepare_reducto_document(
-    http_client: &reqwest::Client,
+    client: &crate::ocr::OcrClient,
     document: OcrDocument,
     connection: &OcrConnection,
     headers: &[(String, String)],
@@ -37,7 +37,8 @@ async fn prepare_reducto_document(
         .file_name("document")
         .mime_str(&mime)
         .map_err(|_| OcrRequestError::InvalidDataUri)?;
-    let mut builder = http_client
+    let mut builder = client
+        .provider_http()
         .post(format!(
             "{}/upload",
             normalize_api_base(connection.api_base.as_deref())
@@ -53,7 +54,7 @@ async fn prepare_reducto_document(
     }
     let response = crate::http_utils::http_request(builder)
         .await
-        .map_err(crate::ocr::client::network_error)?;
+        .map_err(crate::error::TransportError::from)?;
     let response = crate::ocr::wire::read_json_response::<ReductoUploadResponse>(response, false)
         .await?
         .data;
@@ -83,12 +84,12 @@ macro_rules! impl_reducto_backend {
 
             async fn prepare_document(
                 &self,
-                http_client: &reqwest::Client,
+                client: &crate::ocr::OcrClient,
                 document: OcrDocument,
                 connection: &OcrConnection,
                 headers: &[(String, String)],
             ) -> Result<ReductoFileId, OcrError> {
-                prepare_reducto_document(http_client, document, connection, headers).await
+                prepare_reducto_document(client, document, connection, headers).await
             }
 
             fn guard_document_before_preparation(&self) -> bool {

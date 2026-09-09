@@ -63,13 +63,17 @@ impl OcrBackend<MistralOcrFormat> for VertexAiOcrBackend {
 
     async fn prepare_document(
         &self,
-        http_client: &reqwest::Client,
+        client: &crate::ocr::OcrClient,
         document: OcrDocument,
         connection: &OcrConnection,
         _headers: &[(String, String)],
     ) -> Result<OcrDocument, OcrError> {
-        crate::ocr::client::convert_document_url_to_data_uri(http_client, document, connection)
-            .await
+        crate::ocr::document::inline_remote_document(
+            client.document_fetcher(),
+            document,
+            connection,
+        )
+        .await
     }
 
     async fn authenticate(
@@ -101,7 +105,7 @@ impl OcrBackend<DeepSeekOcrFormat> for VertexAiOcrBackend {
 
     async fn prepare_document(
         &self,
-        _http_client: &reqwest::Client,
+        _client: &crate::ocr::OcrClient,
         document: OcrDocument,
         _connection: &OcrConnection,
         _headers: &[(String, String)],

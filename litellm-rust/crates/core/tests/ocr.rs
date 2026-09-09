@@ -8,20 +8,21 @@ use super::formats::OcrFormat;
 use super::registry::OcrIntegration;
 use super::types::OcrConnection;
 use super::wire::{OcrWireRequest, decode_request, decode_response};
-use super::{OcrRequest, perform_ocr as run_ocr};
+use super::{OcrClient, OcrRequest};
 use crate::ocr::error::OcrError;
 
-pub(crate) fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+pub(crate) fn ocr_client() -> OcrClient {
+    let document_http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .expect("test HTTP client builds")
+        .expect("test document client builds");
+    OcrClient::for_test(reqwest::Client::new(), document_http)
 }
 
 pub(crate) async fn perform_ocr(
     request: OcrRequest,
 ) -> Result<super::OcrResponseData, crate::Error> {
-    run_ocr(&http_client(), request).await
+    ocr_client().perform(request).await
 }
 
 pub(crate) fn params<F, B>(integration: &OcrIntegration<F, B>, value: Value) -> F::MappedParams
@@ -70,11 +71,11 @@ where
     let params = integration
         .format
         .map_ocr_params(serde_json::from_value(options).unwrap())?;
-    let http_client = http_client();
+    let client = ocr_client();
     let document = integration
         .backend
         .prepare_document(
-            &http_client,
+            &client,
             serde_json::from_value(document).unwrap(),
             &OcrConnection::default(),
             &[],
@@ -224,18 +225,16 @@ async fn uses_the_host_injected_http_client() {
         "x-transport-owner",
         reqwest::header::HeaderValue::from_static("python-sdk"),
     );
-    let http_client = reqwest::Client::builder()
+    let provider_http = reqwest::Client::builder()
         .default_headers(default_headers)
-        .redirect(reqwest::redirect::Policy::none())
         .build()
         .expect("test HTTP client builds");
+    let client = OcrClient::new(provider_http).expect("test OCR client builds");
 
-    run_ocr(
-        &http_client,
-        wire_request("mistral/model", &base, json!({})),
-    )
-    .await
-    .expect("OCR request succeeds");
+    client
+        .perform(wire_request("mistral/model", &base, json!({})))
+        .await
+        .expect("OCR request succeeds");
 
     server.await.expect("mock server completes");
     assert!(seen.lock().unwrap()[0].contains("x-transport-owner: python-sdk"));

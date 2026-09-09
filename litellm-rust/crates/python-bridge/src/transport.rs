@@ -1,36 +1,20 @@
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use litellm_core::error::{Error, TransportError};
+use litellm_core::ocr::OcrClient;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-struct BridgeTransport {
-    /// Automatic redirects must stay disabled: OCR validates each document
-    /// redirect target before following it.
-    ocr: reqwest::Client,
-}
-
-impl BridgeTransport {
-    fn new() -> Result<Self, reqwest::Error> {
-        Ok(Self {
-            ocr: reqwest::Client::builder()
-                .connect_timeout(CONNECT_TIMEOUT)
-                .redirect(reqwest::redirect::Policy::none())
-                .build()?,
+pub(crate) fn ocr_client() -> Result<OcrClient, Error> {
+    static CLIENT: OnceLock<Result<OcrClient, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .build()
+                .map_err(|error| error.to_string())
+                .and_then(|provider_http| {
+                    OcrClient::new(provider_http).map_err(|error| error.to_string())
+                })
         })
-    }
-}
-
-/// Borrow the Python SDK's native OCR transport at the Rust/Python boundary.
-///
-/// `reqwest::Client` is internally reference counted, so this clone lets a
-/// `'static` bridge future share the boundary-owned connection pool.
-pub(crate) fn ocr_http_client() -> Result<reqwest::Client, Error> {
-    static TRANSPORT: OnceLock<Result<BridgeTransport, String>> = OnceLock::new();
-    TRANSPORT
-        .get_or_init(|| BridgeTransport::new().map_err(|error| error.to_string()))
         .as_ref()
-        .map(|transport| transport.ocr.clone())
+        .cloned()
         .map_err(|error| TransportError::Network(error.clone()).into())
 }

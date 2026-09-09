@@ -29,13 +29,17 @@ impl OcrBackend<MistralOcrFormat> for AzureMistralOcrBackend {
 
     async fn prepare_document(
         &self,
-        http_client: &reqwest::Client,
+        client: &crate::ocr::OcrClient,
         document: OcrDocument,
         connection: &OcrConnection,
         _headers: &[(String, String)],
     ) -> Result<OcrDocument, OcrError> {
-        crate::ocr::client::convert_document_url_to_data_uri(http_client, document, connection)
-            .await
+        crate::ocr::document::inline_remote_document(
+            client.document_fetcher(),
+            document,
+            connection,
+        )
+        .await
     }
 
     async fn authenticate(
@@ -84,7 +88,7 @@ impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenc
 
     async fn prepare_document(
         &self,
-        _http_client: &reqwest::Client,
+        _client: &crate::ocr::OcrClient,
         document: OcrDocument,
         _connection: &OcrConnection,
         _headers: &[(String, String)],
@@ -98,7 +102,7 @@ impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenc
 
     async fn read_response(
         &self,
-        http_client: &reqwest::Client,
+        client: &crate::ocr::OcrClient,
         response: reqwest::Response,
         url: &str,
         headers: &[(String, String)],
@@ -106,7 +110,7 @@ impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenc
         params: &DocumentIntelligenceParams,
     ) -> Result<DecodedOcrResponse<AzureDocumentIntelligenceOperation>, OcrError> {
         super::azure_document_intelligence::polling::read_operation_response(
-            http_client,
+            client.provider_http(),
             response,
             url,
             headers,

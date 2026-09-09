@@ -21,11 +21,8 @@ use litellm_core::observability::FunctionTrace;
 use tracing::instrument::WithSubscriber;
 
 async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
-    let http_client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("test HTTP client builds");
-    run_ocr(&http_client, request).await
+    let client = litellm_core::ocr::OcrClient::new(reqwest::Client::new())?;
+    run_ocr(&client, request).await
 }
 
 async fn read_http_headers(socket: &mut TcpStream) -> String {

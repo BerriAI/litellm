@@ -2,6 +2,7 @@ use std::future::Future;
 
 use crate::auth::AuthError;
 
+use super::OcrClient;
 use super::error::OcrError;
 use super::formats::OcrFormat;
 use super::types::{OcrConnection, OcrDocument};
@@ -28,7 +29,7 @@ pub trait OcrBackend<F: OcrFormat>: Send + Sync + Sized + 'static {
 
     fn prepare_document(
         &self,
-        http_client: &reqwest::Client,
+        client: &OcrClient,
         document: OcrDocument,
         connection: &OcrConnection,
         headers: &[(String, String)],
@@ -44,7 +45,7 @@ pub trait OcrBackend<F: OcrFormat>: Send + Sync + Sized + 'static {
 
     fn read_response(
         &self,
-        _http_client: &reqwest::Client,
+        _client: &OcrClient,
         response: reqwest::Response,
         _url: &str,
         _headers: &[(String, String)],

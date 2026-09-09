@@ -4,7 +4,6 @@ use crate::ocr::error::OcrResponseError;
 use std::time::Duration;
 
 use crate::constants::{AZURE_DI_SUBSCRIPTION_HEADER, OCR_POLL_RETRY_SECS};
-use crate::ocr::client::network_error;
 use crate::ocr::formats::document_intelligence::types::{
     AzureDocumentIntelligenceOperation, OperationStatus,
 };
@@ -69,7 +68,7 @@ async fn poll_document_intelligence(
         let response = tokio::time::timeout_at(deadline, crate::http_utils::http_request(builder))
             .await
             .map_err(|_| OcrPollingError::PollTimeout)?
-            .map_err(network_error)?;
+            .map_err(crate::error::TransportError::from)?;
         let retry = response
             .headers()
             .get(reqwest::header::RETRY_AFTER)

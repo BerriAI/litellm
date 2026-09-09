@@ -1,6 +1,12 @@
+use base64::{Engine, engine::general_purpose::STANDARD};
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError, mime::Mime};
+use reqwest::Url;
 
-use super::error::OcrRequestError;
+use super::error::{OcrError, OcrRequestError, OcrResponseError};
+use super::types::{OcrConnection, OcrDocument};
+use crate::constants::OCR_MAX_FETCH_REDIRECTS;
+use crate::error::{MediaError, TransportError};
+use crate::media::{DownloadPolicy, MediaFetcher};
 
 pub(crate) struct InlineDocument<'a>(DataUrl<'a>);
 
@@ -35,11 +41,65 @@ impl<'a> InlineDocument<'a> {
     }
 }
 
+pub(crate) async fn inline_remote_document(
+    fetcher: &MediaFetcher,
+    document: OcrDocument,
+    connection: &OcrConnection,
+) -> Result<OcrDocument, OcrError> {
+    let source = document.source();
+    if !source.starts_with("http://") && !source.starts_with("https://") {
+        return Ok(document);
+    }
+    let url = Url::parse(source).map_err(|_| OcrRequestError::RequestField {
+        path: "document URL".into(),
+    })?;
+    let downloaded = fetcher
+        .fetch(
+            url,
+            DownloadPolicy {
+                timeout: connection.timeout,
+                max_bytes: connection.max_download_bytes,
+                max_redirects: OCR_MAX_FETCH_REDIRECTS,
+            },
+        )
+        .await
+        .map_err(map_media_error)?;
+    Ok(document.with_source(format!(
+        "data:{};base64,{}",
+        downloaded.content_type,
+        STANDARD.encode(downloaded.bytes)
+    )))
+}
+
+fn map_media_error(error: MediaError) -> OcrError {
+    match error {
+        MediaError::BlockedUrl => OcrRequestError::BlockedDocumentUrl.into(),
+        MediaError::DownloadDisabled => OcrRequestError::DownloadDisabled.into(),
+        MediaError::DownloadTooLarge => OcrRequestError::DownloadTooLarge.into(),
+        MediaError::TooManyRedirects => OcrRequestError::TooManyRedirects.into(),
+        MediaError::MissingRedirectLocation => OcrResponseError::MissingRedirectLocation.into(),
+        MediaError::InvalidRedirect => OcrResponseError::InvalidRedirect.into(),
+        MediaError::Http(status) => TransportError::Http {
+            status,
+            body: "OCR document download failed".into(),
+        }
+        .into(),
+        MediaError::Timeout => {
+            TransportError::Network("OCR document download timed out".into()).into()
+        }
+        MediaError::Transport(error) => error.into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::InlineDocument;
+    use super::{InlineDocument, inline_remote_document};
+    use crate::ocr::OcrClient;
     use crate::ocr::error::OcrRequestError;
+    use crate::ocr::types::{OcrConnection, OcrDocument};
     use rstest::rstest;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[rstest]
     #[case("data:application/pdf;base64,YWJj", b"abc")]
@@ -103,5 +163,63 @@ mod tests {
             document.decode(bytes.len() - 1),
             Err(OcrRequestError::InlineDocumentTooLarge)
         );
+    }
+
+    #[tokio::test]
+    async fn provider_credentials_never_reach_remote_document() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener binds");
+        let address = listener.local_addr().expect("listener has address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accepts request");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let bytes_read = socket.read(&mut buffer).await.expect("reads request");
+                assert!(bytes_read > 0);
+                request.extend_from_slice(&buffer[..bytes_read]);
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
+                )
+                .await
+                .expect("writes response");
+            String::from_utf8(request).expect("request is UTF-8")
+        });
+        let mut provider_headers = reqwest::header::HeaderMap::new();
+        provider_headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_static("Bearer provider-secret"),
+        );
+        let provider_http = reqwest::Client::builder()
+            .default_headers(provider_headers)
+            .build()
+            .expect("provider client builds");
+        let document_http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("document client builds");
+        let client = OcrClient::for_test(provider_http, document_http);
+        let document = OcrDocument::DocumentUrl {
+            document_url: format!("http://{address}/document.pdf"),
+        };
+
+        let prepared = inline_remote_document(
+            client.document_fetcher(),
+            document,
+            &OcrConnection::default(),
+        )
+        .await
+        .expect("document is downloaded");
+        let request = server.await.expect("server completes");
+
+        assert_eq!(
+            prepared.source(),
+            "data:application/pdf;base64,YWJj"
+        );
+        assert!(!request.to_ascii_lowercase().contains("authorization"));
+        assert!(!request.contains("provider-secret"));
     }
 }

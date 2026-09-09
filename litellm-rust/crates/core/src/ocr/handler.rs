@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::OcrClient;
 use super::backends::OcrBackend;
 use super::formats::{OcrFormat, request_error};
 use super::hooks::{OcrDuringCallRequest, OcrHooks, OcrLifecycleHooks};
@@ -13,13 +14,16 @@ use crate::Error;
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
 
 struct OcrExecution<'a> {
-    http_client: &'a reqwest::Client,
+    client: &'a OcrClient,
+    model: String,
+    document: OcrDocument,
+    connection: OcrConnection,
     lifecycle_context: CallLifecycleContext,
     hooks: Arc<dyn OcrHooks>,
 }
 
 pub(crate) async fn perform_ocr_request(
-    http_client: &reqwest::Client,
+    client: &OcrClient,
     request: OcrRequest,
 ) -> Result<OcrResponseData, Error> {
     let context = CallLifecycleContext::new(
@@ -30,86 +34,69 @@ pub(crate) async fn perform_ocr_request(
             .litellm_call_id
             .unwrap_or_else(|| format!("ocr-{:032x}", rand::random::<u128>())),
     );
-    macro_rules! dispatch {
-        ($integration:expr, $params:expr) => {
-            perform_provider_ocr(
-                $integration,
-                request.model,
-                request.document,
-                $params,
-                request.connection,
-                OcrExecution {
-                    http_client,
-                    lifecycle_context: context,
-                    hooks: request.hooks,
-                },
-            )
-            .await
-        };
-    }
+    let execution = OcrExecution {
+        client,
+        model: request.model,
+        document: request.document,
+        connection: request.connection,
+        lifecycle_context: context,
+        hooks: request.hooks,
+    };
     match request.integration {
-        OcrIntegrationRequest::Mistral(params) => {
-            dispatch!(MISTRAL, params)
-        }
-        OcrIntegrationRequest::AzureMistral(params) => {
-            dispatch!(AZURE_MISTRAL, params)
-        }
+        OcrIntegrationRequest::Mistral(params) => execution.run(MISTRAL, params).await,
+        OcrIntegrationRequest::AzureMistral(params) => execution.run(AZURE_MISTRAL, params).await,
         OcrIntegrationRequest::AzureDocumentIntelligence(params) => {
-            dispatch!(AZURE_DOCUMENT_INTELLIGENCE, params)
+            execution.run(AZURE_DOCUMENT_INTELLIGENCE, params).await
         }
-        OcrIntegrationRequest::VertexMistral(params) => {
-            dispatch!(VERTEX_MISTRAL, params)
-        }
+        OcrIntegrationRequest::VertexMistral(params) => execution.run(VERTEX_MISTRAL, params).await,
         OcrIntegrationRequest::VertexDeepSeek(params) => {
-            dispatch!(VERTEX_DEEPSEEK, params)
+            execution.run(VERTEX_DEEPSEEK, params).await
         }
-        OcrIntegrationRequest::ReductoV3(params) => {
-            dispatch!(REDUCTO_V3, params)
-        }
-        OcrIntegrationRequest::ReductoLegacy(params) => {
-            dispatch!(REDUCTO_LEGACY, params)
-        }
+        OcrIntegrationRequest::ReductoV3(params) => execution.run(REDUCTO_V3, params).await,
+        OcrIntegrationRequest::ReductoLegacy(params) => execution.run(REDUCTO_LEGACY, params).await,
     }
 }
 
-async fn perform_provider_ocr<F, B>(
-    integration: super::registry::OcrIntegration<F, B>,
-    model: String,
-    document: OcrDocument,
-    params: F::InputParams,
-    connection: OcrConnection,
-    execution: OcrExecution<'_>,
-) -> Result<OcrResponseData, Error>
-where
-    F: OcrFormat,
-    B: OcrBackend<F>,
-{
-    let OcrExecution {
-        http_client,
-        lifecycle_context,
-        hooks,
-    } = execution;
-    let request = prepare_ocr_call(integration, model, document, params, connection);
-    let lifecycle_hooks = OcrLifecycleHooks {
-        hooks: hooks.clone(),
-        provider_name: lifecycle_context.custom_llm_provider.clone(),
-        marker: std::marker::PhantomData,
-    };
-    CallLifecycle::default()
-        .run(lifecycle_context, request, &lifecycle_hooks, |request| {
-            execute_ocr_provider_call(
-                http_client,
-                request,
-                hooks.as_ref(),
-                &lifecycle_hooks.provider_name,
-            )
-        })
-        .await
+impl OcrExecution<'_> {
+    async fn run<F, B>(
+        self,
+        integration: super::registry::OcrIntegration<F, B>,
+        params: F::InputParams,
+    ) -> Result<OcrResponseData, Error>
+    where
+        F: OcrFormat,
+        B: OcrBackend<F>,
+    {
+        let Self {
+            client,
+            model,
+            document,
+            connection,
+            lifecycle_context,
+            hooks,
+        } = self;
+        let request = prepare_ocr_call(integration, model, document, params, connection);
+        let lifecycle_hooks = OcrLifecycleHooks {
+            hooks: hooks.clone(),
+            provider_name: lifecycle_context.custom_llm_provider.clone(),
+            marker: std::marker::PhantomData,
+        };
+        CallLifecycle::default()
+            .run(lifecycle_context, request, &lifecycle_hooks, |request| {
+                execute_ocr_provider_call(
+                    client,
+                    request,
+                    hooks.as_ref(),
+                    &lifecycle_hooks.provider_name,
+                )
+            })
+            .await
+    }
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 async fn execute_ocr_provider_call<F, B>(
-    http_client: &reqwest::Client,
+    client: &OcrClient,
     request: PreparedOcrRequest<F, B>,
     hooks: &dyn OcrHooks,
     provider_name: &str,
@@ -137,7 +124,7 @@ where
         request.document
     };
     let document = backend
-        .prepare_document(http_client, document, &request.connection, &headers)
+        .prepare_document(client, document, &request.connection, &headers)
         .await?;
     let body = serde_json::to_value(format.transform_ocr_request(
         &request.model,
@@ -158,7 +145,8 @@ where
     } else {
         body
     };
-    let mut builder = http_client
+    let mut builder = client
+        .provider_http()
         .post(&url)
         .json(&body)
         .timeout(request.connection.timeout);
@@ -167,10 +155,10 @@ where
     }
     let response = crate::http_utils::http_request(builder)
         .await
-        .map_err(super::client::network_error)?;
+        .map_err(crate::error::TransportError::from)?;
     let decoded = backend
         .read_response(
-            http_client,
+            client,
             response,
             &url,
             &headers,

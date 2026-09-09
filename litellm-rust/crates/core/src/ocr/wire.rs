@@ -285,11 +285,11 @@ pub async fn read_json_response<T: DeserializeOwned>(
     let bytes = response
         .bytes()
         .await
-        .map_err(super::client::network_error)?;
+        .map_err(crate::error::TransportError::from)?;
     if !status.is_success() {
         return Err(crate::error::TransportError::Http {
             status: status.as_u16(),
-            body: super::client::truncate_error_body(&String::from_utf8_lossy(&bytes)),
+            body: crate::http_utils::truncate_error_body(&String::from_utf8_lossy(&bytes)),
         }
         .into());
     }

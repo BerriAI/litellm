@@ -33,7 +33,7 @@ impl OcrBackend<MistralOcrFormat> for MistralOcrBackend {
 
     async fn prepare_document(
         &self,
-        _http_client: &reqwest::Client,
+        _client: &crate::ocr::OcrClient,
         document: OcrDocument,
         _connection: &OcrConnection,
         _headers: &[(String, String)],

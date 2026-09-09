@@ -2,23 +2,21 @@ use std::future::Future;
 
 use crate::errors::ocr_error_to_pyerr;
 use litellm_core::Error;
-use litellm_core::ocr::{
-    perform_ocr,
-    wire::{OcrWireRequest, decode_request},
-};
+use litellm_core::ocr::wire::{OcrWireRequest, decode_request};
 use pyo3::prelude::*;
 use serde_json::Value;
 
 fn prepare_ocr(
     inputs: OcrInputs,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
-    let http_client = crate::transport::ocr_http_client().map_err(ocr_error_to_pyerr)?;
+    let client = crate::transport::ocr_client().map_err(ocr_error_to_pyerr)?;
     let wire: OcrWireRequest =
         litellm_core::ocr::wire::decode_request_value(inputs.request, "request")
             .map_err(|error| ocr_error_to_pyerr(error.into()))?;
     let request = decode_request(wire).map_err(ocr_error_to_pyerr)?;
     Ok(async move {
-        perform_ocr(&http_client, request)
+        client
+            .perform(request)
             .await
             .map(|response| response.into_json())
     })
