@@ -56,8 +56,12 @@ async def test_change_password_success_writes_new_scrypt_hash():
     prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
     ):
         response = await change_password(
             data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
@@ -79,8 +83,12 @@ async def test_change_password_rejects_wrong_current_password():
     prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await change_password(
@@ -100,8 +108,12 @@ async def test_change_password_rejects_session_without_user():
     prisma = _make_prisma(user=None)
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await change_password(
@@ -122,8 +134,12 @@ async def test_change_password_rejects_account_without_password():
     prisma = _make_prisma(_make_user_row(password=None))
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await change_password(
@@ -143,8 +159,12 @@ async def test_change_password_enforces_min_length():
     prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
     ):
         with pytest.raises(ProxyException) as exc_info:
             await change_password(
@@ -172,8 +192,12 @@ async def test_change_password_rejects_breached_password():
     prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", {}
+        ),
     ):
         with pytest.raises(ProxyException) as exc_info:
             await change_password(
@@ -201,8 +225,12 @@ async def test_change_password_verifies_current_password_before_hibp_lookup():
     prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", {}
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await change_password(
@@ -226,9 +254,15 @@ async def test_change_password_success_emits_redacted_audit_log():
     audit_mock = AsyncMock()
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.management_endpoints.password_endpoints.create_object_audit_log", audit_mock),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+        patch(  # test-quality-ok: audit sink is a module-level import; no injection seam
+            "litellm.proxy.management_endpoints.password_endpoints.create_object_audit_log", audit_mock
+        ),
     ):
         await change_password(
             data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
@@ -253,9 +287,15 @@ async def test_change_password_failure_emits_no_audit_log():
     audit_mock = AsyncMock()
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.management_endpoints.password_endpoints.create_object_audit_log", audit_mock),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+        patch(  # test-quality-ok: audit sink is a module-level import; no injection seam
+            "litellm.proxy.management_endpoints.password_endpoints.create_object_audit_log", audit_mock
+        ),
     ):
         with pytest.raises(HTTPException):
             await change_password(
@@ -271,8 +311,12 @@ async def test_change_password_requires_db():
     from litellm.proxy._types import ChangePasswordRequest
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
-        patch("litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK),  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
             await change_password(
