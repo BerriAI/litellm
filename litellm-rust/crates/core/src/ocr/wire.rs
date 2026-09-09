@@ -5,8 +5,8 @@ use crate::ocr::error::PagesError;
 use std::time::Duration;
 
 use super::hooks::{OcrDuringCallRequest, OcrPreCallRequest};
-use super::prepare::{
-    OcrModel, OcrProvider, OcrProviderKind, OcrProviderRequest, ocr_provider_config,
+use super::registry::{
+    OcrIntegrationKind, OcrIntegrationRequest, OcrModel, OcrProvider, resolve_ocr_integration,
 };
 use super::types::{OcrConnection, OcrDocument, OcrRequest, OcrRequestFormat, VertexOcrSettings};
 use crate::Error;
@@ -58,24 +58,28 @@ pub fn decode_request_with_env(
         .parse::<OcrProvider>()
         .map_err(|_| Error::InvalidProvider(provider.custom_llm_provider.to_string()))?;
     let model = OcrModel::from(provider.model);
-    let kind = ocr_provider_config(typed_provider, &model);
-    let params = decode_params(kind, wire.optional_params.clone())?;
+    let integration_kind = resolve_ocr_integration(typed_provider, &model);
+    let params = decode_params(integration_kind, wire.optional_params.clone())?;
     let document = decode_request_value(wire.document, "document")?;
-    let key_env = match kind {
-        OcrProviderKind::Mistral => "MISTRAL_API_KEY",
-        OcrProviderKind::AzureAi => "AZURE_AI_API_KEY",
-        OcrProviderKind::AzureDocumentIntelligence => "AZURE_DOCUMENT_INTELLIGENCE_API_KEY",
-        OcrProviderKind::VertexAi | OcrProviderKind::VertexAiDeepSeek => "VERTEX_AI_API_KEY",
-        OcrProviderKind::ReductoV3 | OcrProviderKind::ReductoLegacy => "REDUCTO_API_KEY",
+    let key_env = match integration_kind {
+        OcrIntegrationKind::Mistral => "MISTRAL_API_KEY",
+        OcrIntegrationKind::AzureMistral => "AZURE_AI_API_KEY",
+        OcrIntegrationKind::AzureDocumentIntelligence => "AZURE_DOCUMENT_INTELLIGENCE_API_KEY",
+        OcrIntegrationKind::VertexMistral | OcrIntegrationKind::VertexDeepSeek => {
+            "VERTEX_AI_API_KEY"
+        }
+        OcrIntegrationKind::ReductoV3 | OcrIntegrationKind::ReductoLegacy => "REDUCTO_API_KEY",
     };
-    let base_env = match kind {
-        OcrProviderKind::AzureAi => Some("AZURE_AI_API_BASE"),
-        OcrProviderKind::AzureDocumentIntelligence => Some("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"),
+    let base_env = match integration_kind {
+        OcrIntegrationKind::AzureMistral => Some("AZURE_AI_API_BASE"),
+        OcrIntegrationKind::AzureDocumentIntelligence => {
+            Some("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
+        }
         _ => None,
     };
     let azure_auth = if matches!(
-        kind,
-        OcrProviderKind::AzureAi | OcrProviderKind::AzureDocumentIntelligence
+        integration_kind,
+        OcrIntegrationKind::AzureMistral | OcrIntegrationKind::AzureDocumentIntelligence
     ) {
         Some(AzureAuthInputs::from_optional_params(
             &wire.optional_params,
@@ -84,8 +88,8 @@ pub fn decode_request_with_env(
         None
     };
     let vertex_auth = if matches!(
-        kind,
-        OcrProviderKind::VertexAi | OcrProviderKind::VertexAiDeepSeek
+        integration_kind,
+        OcrIntegrationKind::VertexMistral | OcrIntegrationKind::VertexDeepSeek
     ) {
         VertexAuthInputs::from_optional_params(&wire.optional_params)?
     } else {
@@ -136,8 +140,8 @@ pub fn decode_request_with_env(
             .or_else(|| nonblank(env(key_env)))
             .or_else(|| {
                 matches!(
-                    kind,
-                    OcrProviderKind::VertexAi | OcrProviderKind::VertexAiDeepSeek
+                    integration_kind,
+                    OcrIntegrationKind::VertexMistral | OcrIntegrationKind::VertexDeepSeek
                 )
                 .then(|| nonblank(env("VERTEXAI_API_KEY")))
                 .flatten()
@@ -179,18 +183,21 @@ fn string_setting(
 }
 
 pub fn decode_params(
-    kind: OcrProviderKind,
+    integration_kind: OcrIntegrationKind,
     params: Map<String, Value>,
-) -> Result<OcrProviderRequest, OcrRequestError> {
+) -> Result<OcrIntegrationRequest, OcrRequestError> {
     if let Some(format) = params.get("req_format") {
         let format: OcrRequestFormat =
             serde_json::from_value(format.clone()).map_err(|_| OcrRequestError::RequestFormat)?;
-        if format == OcrRequestFormat::Native && kind != OcrProviderKind::AzureDocumentIntelligence
+        if format == OcrRequestFormat::Native
+            && integration_kind != OcrIntegrationKind::AzureDocumentIntelligence
         {
-            return Err(OcrRequestError::NativeUnsupported(kind.provider_name()));
+            return Err(OcrRequestError::NativeUnsupported(
+                integration_kind.provider().as_str(),
+            ));
         }
     }
-    if kind == OcrProviderKind::AzureDocumentIntelligence
+    if integration_kind == OcrIntegrationKind::AzureDocumentIntelligence
         && let Some(Value::Array(pages)) = params.get("pages")
     {
         if pages.iter().any(Value::is_boolean) {
@@ -204,30 +211,30 @@ pub fn decode_params(
         }
     }
     let value = Value::Object(params);
-    Ok(match kind {
-        OcrProviderKind::Mistral => {
-            OcrProviderRequest::Mistral(decode_request_value(value, "optional_params")?)
+    Ok(match integration_kind {
+        OcrIntegrationKind::Mistral => {
+            OcrIntegrationRequest::Mistral(decode_request_value(value, "optional_params")?)
         }
-        OcrProviderKind::AzureAi => {
-            OcrProviderRequest::AzureAi(decode_request_value(value, "optional_params")?)
+        OcrIntegrationKind::AzureMistral => {
+            OcrIntegrationRequest::AzureMistral(decode_request_value(value, "optional_params")?)
         }
-        OcrProviderKind::AzureDocumentIntelligence => {
-            OcrProviderRequest::AzureDocumentIntelligence(decode_request_value(
+        OcrIntegrationKind::AzureDocumentIntelligence => {
+            OcrIntegrationRequest::AzureDocumentIntelligence(decode_request_value(
                 value,
                 "optional_params",
             )?)
         }
-        OcrProviderKind::VertexAi => {
-            OcrProviderRequest::VertexAi(decode_request_value(value, "optional_params")?)
+        OcrIntegrationKind::VertexMistral => {
+            OcrIntegrationRequest::VertexMistral(decode_request_value(value, "optional_params")?)
         }
-        OcrProviderKind::VertexAiDeepSeek => {
-            OcrProviderRequest::VertexAiDeepSeek(decode_request_value(value, "optional_params")?)
+        OcrIntegrationKind::VertexDeepSeek => {
+            OcrIntegrationRequest::VertexDeepSeek(decode_request_value(value, "optional_params")?)
         }
-        OcrProviderKind::ReductoV3 => {
-            OcrProviderRequest::ReductoV3(decode_request_value(value, "optional_params")?)
+        OcrIntegrationKind::ReductoV3 => {
+            OcrIntegrationRequest::ReductoV3(decode_request_value(value, "optional_params")?)
         }
-        OcrProviderKind::ReductoLegacy => {
-            OcrProviderRequest::ReductoLegacy(decode_request_value(value, "optional_params")?)
+        OcrIntegrationKind::ReductoLegacy => {
+            OcrIntegrationRequest::ReductoLegacy(decode_request_value(value, "optional_params")?)
         }
     })
 }
@@ -409,10 +416,7 @@ pub fn reducto_page<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option
 
 pub(crate) fn decode_deepseek_content(
     text: &str,
-) -> Result<
-    Option<crate::providers::vertex_ai::deepseek::ocr::types::DeepSeekOcrResult>,
-    OcrResponseError,
-> {
+) -> Result<Option<crate::ocr::formats::deepseek::types::DeepSeekOcrResult>, OcrResponseError> {
     match serde_json::from_str::<Value>(text) {
         Err(_) => Ok(None),
         Ok(value) => serde_path_to_error::deserialize(value.into_deserializer())

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::hooks::{NoopOcrHooks, OcrHooks};
-use super::prepare::OcrProviderRequest;
+use super::registry::OcrIntegrationRequest;
 use crate::auth::azure::AzureAuthInputs;
 use crate::constants::{OCR_DOWNLOAD_MAX_BYTES, OCR_HTTP_TIMEOUT_SECS};
 use crate::providers::vertex_ai::auth::VertexAuthInputs;
@@ -182,18 +182,18 @@ impl Default for OcrConnection {
 pub struct OcrRequest {
     pub model: String,
     pub document: OcrDocument,
-    pub provider: OcrProviderRequest,
+    pub integration: OcrIntegrationRequest,
     pub connection: OcrConnection,
     pub hooks: Arc<dyn OcrHooks>,
     pub litellm_call_id: Option<String>,
 }
 
 impl OcrRequest {
-    pub fn new(model: String, document: OcrDocument, provider: OcrProviderRequest) -> Self {
+    pub fn new(model: String, document: OcrDocument, integration: OcrIntegrationRequest) -> Self {
         Self {
             model,
             document,
-            provider,
+            integration,
             connection: OcrConnection::default(),
             hooks: Arc::new(NoopOcrHooks),
             litellm_call_id: None,

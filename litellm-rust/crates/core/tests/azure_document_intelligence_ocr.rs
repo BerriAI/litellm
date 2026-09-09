@@ -1,8 +1,8 @@
-use super::transformation::AZURE_DOCUMENT_INTELLIGENCE_OCR_BACKEND as CONFIG;
-use crate::ocr::prepare::OcrProviderKind;
+use crate::ocr::formats::OcrFormat;
+use crate::ocr::prepare::OcrIntegrationKind;
+use crate::ocr::registry::AZURE_DOCUMENT_INTELLIGENCE;
 use crate::ocr::tests::perform_ocr;
 use crate::ocr::tests::{MockResponse, body, mock_server, params, transform, wire_request};
-use crate::ocr::transformation::{OcrBackend, OcrFormat};
 use crate::ocr::types::OcrConnection;
 use crate::ocr::wire::decode_params;
 use rstest::rstest;
@@ -30,8 +30,8 @@ fn document_intelligence_url_normalizes_zero_based_pages(
     #[case] pages: Value,
     #[case] expected: &str,
 ) {
-    let mapped = params(&CONFIG, json!({"pages":pages}));
-    let url = CONFIG
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({"pages":pages}));
+    let url = AZURE_DOCUMENT_INTELLIGENCE
         .complete_url(&connection(), "prebuilt-read", &mapped)
         .unwrap();
     assert!(url.ends_with(&format!("&pages={expected}")));
@@ -43,7 +43,7 @@ fn document_intelligence_url_normalizes_zero_based_pages(
 fn invalid_page_types_return_typed_errors(#[case] pages: Value) {
     assert!(
         decode_params(
-            OcrProviderKind::AzureDocumentIntelligence,
+            OcrIntegrationKind::AzureDocumentIntelligence,
             json!({"pages":pages}).as_object().unwrap().clone()
         )
         .is_err()
@@ -57,13 +57,21 @@ fn invalid_page_types_return_typed_errors(#[case] pages: Value) {
 #[case(json!(["1-2-3"]))]
 fn invalid_page_values_never_panic(#[case] pages: Value) {
     let input = serde_json::from_value(json!({"pages":pages})).unwrap();
-    assert!(CONFIG.format().map_ocr_params(input).is_err());
+    assert!(
+        AZURE_DOCUMENT_INTELLIGENCE
+            .format
+            .map_ocr_params(input)
+            .is_err()
+    );
 }
 #[test]
 fn document_intelligence_page_mapping_omits_empty_list() {
-    let mapped = params(&CONFIG, json!({"pages":[],"features":[]}));
+    let mapped = params(
+        &AZURE_DOCUMENT_INTELLIGENCE,
+        json!({"pages":[],"features":[]}),
+    );
     assert!(
-        !CONFIG
+        !AZURE_DOCUMENT_INTELLIGENCE
             .complete_url(&connection(), "prebuilt-read", &mapped)
             .unwrap()
             .contains("&pages")
@@ -73,9 +81,9 @@ fn document_intelligence_page_mapping_omits_empty_list() {
 #[case(json!(["keyValuePairs","languages"]), "keyValuePairs,languages")]
 #[case(json!("keyValuePairs, languages"), "keyValuePairs,languages")]
 fn document_intelligence_maps_features(#[case] features: Value, #[case] expected: &str) {
-    let mapped = params(&CONFIG, json!({"features":features}));
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({"features":features}));
     assert!(
-        CONFIG
+        AZURE_DOCUMENT_INTELLIGENCE
             .complete_url(&connection(), "prebuilt-read", &mapped)
             .unwrap()
             .ends_with(&format!("&features={expected}"))
@@ -87,8 +95,8 @@ fn document_intelligence_maps_features(#[case] features: Value, #[case] expected
 #[case(json!(""))]
 fn document_intelligence_rejects_invalid_features(#[case] features: Value) {
     assert!(
-        CONFIG
-            .format()
+        AZURE_DOCUMENT_INTELLIGENCE
+            .format
             .map_ocr_params(serde_json::from_value(json!({"features":features})).unwrap())
             .is_err()
     );
@@ -96,7 +104,7 @@ fn document_intelligence_rejects_invalid_features(#[case] features: Value) {
 #[tokio::test]
 async fn document_intelligence_mistral_pages_flow_to_query_only() {
     let result = body(
-        &CONFIG,
+        &AZURE_DOCUMENT_INTELLIGENCE,
         "model",
         json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
         json!({"pages":[0,1],"features":"languages"}),
@@ -118,7 +126,7 @@ async fn document_intelligence_request_uses_base64_source_for_data_uri(
 ) {
     assert_eq!(
         body(
-            &CONFIG,
+            &AZURE_DOCUMENT_INTELLIGENCE,
             "model",
             json!({"type":"image_url","image_url":source}),
             json!({})
@@ -130,9 +138,9 @@ async fn document_intelligence_request_uses_base64_source_for_data_uri(
 }
 #[test]
 fn azure_document_intelligence_model_id_is_encoded() {
-    let mapped = params(&CONFIG, json!({}));
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({}));
     assert!(
-        CONFIG
+        AZURE_DOCUMENT_INTELLIGENCE
             .complete_url(&connection(), "azure_ai/doc-intelligence/a ?#é", &mapped)
             .unwrap()
             .contains("a%20%3F%23%C3%A9:analyze")
@@ -140,14 +148,24 @@ fn azure_document_intelligence_model_id_is_encoded() {
 }
 #[test]
 fn azure_document_intelligence_dot_segment_model_id_is_rejected() {
-    let mapped = params(&CONFIG, json!({}));
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({}));
     for model in [".", "..", "azure_ai/doc-intelligence/.."] {
-        assert!(CONFIG.complete_url(&connection(), model, &mapped).is_err());
+        assert!(
+            AZURE_DOCUMENT_INTELLIGENCE
+                .complete_url(&connection(), model, &mapped)
+                .is_err()
+        );
     }
 }
 #[test]
 fn document_intelligence_response_normalizes_pages() {
-    let result = transform(&CONFIG, "model", operation(), json!({})).unwrap();
+    let result = transform(
+        &AZURE_DOCUMENT_INTELLIGENCE,
+        "model",
+        operation(),
+        json!({}),
+    )
+    .unwrap();
     assert_eq!(result["pages"][0]["markdown"], "A\n\nB");
     assert_eq!(
         result["pages"][0]["dimensions"],
@@ -162,12 +180,12 @@ fn document_intelligence_response_tolerates_missing_native_fields() {
         json!({"status":"succeeded"}),
         json!({"status":"succeeded","analyzeResult":null}),
     ] {
-        let result = transform(&CONFIG, "model", value, json!({})).unwrap();
+        let result = transform(&AZURE_DOCUMENT_INTELLIGENCE, "model", value, json!({})).unwrap();
         assert_eq!(result["pages"], json!([]));
         assert_eq!(result["tables"], Value::Null);
     }
     let result = transform(
-        &CONFIG,
+        &AZURE_DOCUMENT_INTELLIGENCE,
         "model",
         json!({"status":"succeeded","analyzeResult":{"pages":[{}]}}),
         json!({}),
@@ -183,7 +201,7 @@ fn document_intelligence_response_tolerates_missing_native_fields() {
 #[case(json!({"pages":[{"width":"bad"}]}), "width")]
 fn malformed_pages_are_rejected_with_paths(#[case] analysis: Value, #[case] path: &str) {
     let error = transform(
-        &CONFIG,
+        &AZURE_DOCUMENT_INTELLIGENCE,
         "model",
         json!({"status":"succeeded","analyzeResult":analysis}),
         json!({}),
@@ -193,11 +211,11 @@ fn malformed_pages_are_rejected_with_paths(#[case] analysis: Value, #[case] path
 }
 #[test]
 fn page_coercions_and_overflow_are_explicit() {
-    let result = transform(&CONFIG,"model",json!({"status":"succeeded","analyzeResult":{"pages":[{"pageNumber":"2","width":"8.5","height":11.0}]}}),json!({})).unwrap();
+    let result = transform(&AZURE_DOCUMENT_INTELLIGENCE,"model",json!({"status":"succeeded","analyzeResult":{"pages":[{"pageNumber":"2","width":"8.5","height":11.0}]}}),json!({})).unwrap();
     assert_eq!(result["pages"][0]["index"], 1);
     for page in [json!({"pageNumber":i64::MIN}), json!({"width":1e100})] {
         let error = transform(
-            &CONFIG,
+            &AZURE_DOCUMENT_INTELLIGENCE,
             "model",
             json!({"status":"succeeded","analyzeResult":{"pages":[page]}}),
             json!({}),
@@ -219,13 +237,21 @@ fn document_intelligence_non_succeeded_status_is_rejected() {
         json!("unknown"),
         Value::Null,
     ] {
-        assert!(transform(&CONFIG, "model", json!({"status":status}), json!({})).is_err());
+        assert!(
+            transform(
+                &AZURE_DOCUMENT_INTELLIGENCE,
+                "model",
+                json!({"status":status}),
+                json!({})
+            )
+            .is_err()
+        );
     }
 }
 #[test]
 fn document_intelligence_native_format_carries_raw_operation() {
     let response = transform(
-        &CONFIG,
+        &AZURE_DOCUMENT_INTELLIGENCE,
         "model",
         operation(),
         json!({"req_format":"native"}),
@@ -234,7 +260,7 @@ fn document_intelligence_native_format_carries_raw_operation() {
     assert_eq!(response["provider_native_response"], operation());
     assert!(
         transform(
-            &CONFIG,
+            &AZURE_DOCUMENT_INTELLIGENCE,
             "model",
             operation(),
             json!({"req_format":"litellm"})
@@ -246,9 +272,9 @@ fn document_intelligence_native_format_carries_raw_operation() {
 }
 #[test]
 fn document_intelligence_url_omits_req_format() {
-    let mapped = params(&CONFIG, json!({"req_format":"native"}));
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({"req_format":"native"}));
     assert!(
-        !CONFIG
+        !AZURE_DOCUMENT_INTELLIGENCE
             .complete_url(&connection(), "model", &mapped)
             .unwrap()
             .contains("req_format")
@@ -258,7 +284,7 @@ fn document_intelligence_url_omits_req_format() {
 fn document_intelligence_rejects_unknown_req_format() {
     assert!(
         decode_params(
-            OcrProviderKind::AzureDocumentIntelligence,
+            OcrIntegrationKind::AzureDocumentIntelligence,
             json!({"req_format":"azure"}).as_object().unwrap().clone()
         )
         .is_err()
@@ -358,7 +384,7 @@ async fn polling_deadline_bounds_retry_after() {
 #[tokio::test]
 async fn document_intelligence_rejects_invalid_data_uri(#[case] source: &str) {
     let error = body(
-        &CONFIG,
+        &AZURE_DOCUMENT_INTELLIGENCE,
         "model",
         json!({"type":"document_url","document_url":source}),
         json!({}),

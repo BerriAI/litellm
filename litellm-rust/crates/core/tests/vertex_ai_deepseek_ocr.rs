@@ -1,4 +1,4 @@
-use super::transformation::VERTEX_DEEPSEEK_OCR_BACKEND as CONFIG;
+use crate::ocr::registry::VERTEX_DEEPSEEK;
 use crate::ocr::tests::{body, transform};
 use rstest::rstest;
 use serde_json::json;
@@ -6,11 +6,10 @@ use serde_json::json;
 #[rstest]
 #[case("deepseek-ocr-maas")]
 #[case("deepseek-ai/deepseek-ocr-maas")]
-#[case("vertex_ai/deepseek-ai/deepseek-ocr-maas")]
 #[tokio::test]
 async fn vertex_deepseek_request_uses_single_provider_namespace(#[case] model: &str) {
     let result = body(
-        &CONFIG,
+        &VERTEX_DEEPSEEK,
         model,
         json!({"type":"image_url","image_url":"gs://bucket/a.png"}),
         json!({"temperature":0.1,"max_tokens":1024,"ignored":true}),
@@ -35,7 +34,7 @@ fn vertex_deepseek_response_wraps_markdown_content(
     #[case] expected: &str,
 ) {
     let result = transform(
-        &CONFIG,
+        &VERTEX_DEEPSEEK,
         "model",
         json!({"choices":[{"message":{"content":content}}],"usage":{"prompt_tokens":1}}),
         json!({}),
@@ -52,6 +51,6 @@ fn deepseek_rejects_missing_content_and_invalid_structured_pages() {
         json!({"choices":[{"message":{"content":""}}]}),
         json!({"choices":[{"message":{"content":{"pages":[{"markdown":42}]}}}]}),
     ] {
-        assert!(transform(&CONFIG, "model", response, json!({})).is_err());
+        assert!(transform(&VERTEX_DEEPSEEK, "model", response, json!({})).is_err());
     }
 }

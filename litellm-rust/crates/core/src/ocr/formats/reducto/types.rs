@@ -27,7 +27,7 @@ pub struct ReductoLegacyRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<ReductoLegacyParams>,
 }
-pub struct ReductoFileId(pub(super) String);
+pub struct ReductoFileId(pub(crate) String);
 #[derive(Deserialize)]
 pub struct ReductoUploadResponse {
     pub file_id: String,

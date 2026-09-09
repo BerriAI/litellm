@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use super::transformation::{OcrBackend, OcrFormat};
+use super::backends::OcrBackend;
+use super::formats::OcrFormat;
+use super::registry::OcrIntegration;
 use super::types::OcrConnection;
 use super::wire::{OcrWireRequest, decode_request, decode_response};
 use super::{OcrRequest, perform_ocr as run_ocr};
@@ -22,45 +24,55 @@ pub(crate) async fn perform_ocr(
     run_ocr(&http_client(), request).await
 }
 
-pub(crate) fn params<C: OcrBackend>(
-    config: &C,
-    value: Value,
-) -> <C::Format as OcrFormat>::MappedParams {
-    config
-        .format()
+pub(crate) fn params<F, B>(integration: &OcrIntegration<F, B>, value: Value) -> F::MappedParams
+where
+    F: OcrFormat,
+    B: OcrBackend<F>,
+{
+    integration
+        .format
         .map_ocr_params(serde_json::from_value(value).unwrap())
         .unwrap()
 }
-pub(crate) fn transform<C: OcrBackend>(
-    config: &C,
+pub(crate) fn transform<F, B>(
+    integration: &OcrIntegration<F, B>,
     model: &str,
     value: Value,
     options: Value,
-) -> Result<Value, OcrError> {
-    let params = config
-        .format()
+) -> Result<Value, OcrError>
+where
+    F: OcrFormat,
+    B: OcrBackend<F>,
+{
+    let params = integration
+        .format
         .map_ocr_params(serde_json::from_value(options).unwrap())?;
     let decoded = decode_response(
         &serde_json::to_vec(&value).unwrap(),
-        config.preserve_native_response(&params),
+        integration.backend.preserve_native_response(&params),
     )?;
-    let mut response = config
-        .format()
+    let mut response = integration
+        .format
         .transform_ocr_response(model, decoded.data, &params)?;
     response.provider_native_response = decoded.native;
     Ok(response.into_json())
 }
-pub(crate) async fn body<C: OcrBackend>(
-    config: &C,
+pub(crate) async fn body<F, B>(
+    integration: &OcrIntegration<F, B>,
     model: &str,
     document: Value,
     options: Value,
-) -> Result<Value, OcrError> {
-    let params = config
-        .format()
+) -> Result<Value, OcrError>
+where
+    F: OcrFormat,
+    B: OcrBackend<F>,
+{
+    let params = integration
+        .format
         .map_ocr_params(serde_json::from_value(options).unwrap())?;
     let http_client = http_client();
-    let document = config
+    let document = integration
+        .backend
         .prepare_document(
             &http_client,
             serde_json::from_value(document).unwrap(),
@@ -69,8 +81,8 @@ pub(crate) async fn body<C: OcrBackend>(
         )
         .await?;
     Ok(serde_json::to_value(
-        config
-            .format()
+        integration
+            .format
             .transform_ocr_request(model, document, &params)?,
     )
     .unwrap())
@@ -262,7 +274,7 @@ async fn invalid_pages_fail_before_network_and_invoke_failure_hook() {
 
 #[test]
 fn typed_response_rejects_malformed_pages_with_field_path() {
-    let error = decode_response::<crate::providers::mistral::ocr::types::MistralOcrResponse>(
+    let error = decode_response::<crate::ocr::formats::mistral::types::MistralOcrResponse>(
         br#"{"pages":[{"index":0,"markdown":42}]}"#,
         false,
     )

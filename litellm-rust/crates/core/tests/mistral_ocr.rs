@@ -1,4 +1,5 @@
-use super::transformation::{MISTRAL_OCR_BACKEND, complete_url};
+use crate::ocr::backends::mistral::complete_url;
+use crate::ocr::registry::MISTRAL;
 use crate::ocr::tests::{body, transform};
 use rstest::rstest;
 use serde_json::json;
@@ -12,14 +13,9 @@ use serde_json::json;
 #[tokio::test]
 async fn transform_ocr_request_includes_each_optional_param(#[case] options: serde_json::Value) {
     let document = json!({"type":"document_url","document_url":"https://example.com/a.pdf"});
-    let result = body(
-        &MISTRAL_OCR_BACKEND,
-        "model",
-        document.clone(),
-        options.clone(),
-    )
-    .await
-    .unwrap();
+    let result = body(&MISTRAL, "model", document.clone(), options.clone())
+        .await
+        .unwrap();
     assert_eq!(result["model"], "model");
     assert_eq!(result["document"], document);
     for (name, value) in options.as_object().unwrap() {
@@ -30,7 +26,7 @@ async fn transform_ocr_request_includes_each_optional_param(#[case] options: ser
 #[tokio::test]
 async fn map_ocr_params_drops_unknown_params() {
     let result = body(
-        &MISTRAL_OCR_BACKEND,
+        &MISTRAL,
         "model",
         json!({"type":"image_url","image_url":"data:image/png;base64,YWJj"}),
         json!({"unknown":{},"extract_header":true}),
@@ -44,7 +40,7 @@ async fn map_ocr_params_drops_unknown_params() {
 #[test]
 fn transform_ocr_response_preserves_ocr4_page_fields() {
     let page = json!({"index":0,"markdown":"hello","header":"head","footer":"foot","confidence_scores":{"mean":0.99},"blocks":[{"type":"text","content":"hello"}],"images":[{"id":"img-1","image_base64":"YWJj","top_left_x":12}],"dimensions":{"width":100,"height":200,"dpi":96}});
-    let response = transform(&MISTRAL_OCR_BACKEND, "model", json!({"pages":[page.clone()],"model":"returned-model","usage_info":{"pages_processed":1,"future_counter":5}}), json!({})).unwrap();
+    let response = transform(&MISTRAL, "model", json!({"pages":[page.clone()],"model":"returned-model","usage_info":{"pages_processed":1,"future_counter":5}}), json!({})).unwrap();
     for (name, value) in page.as_object().unwrap() {
         if name != "images" {
             assert_eq!(&response["pages"][0][name], value);
@@ -58,7 +54,7 @@ fn transform_ocr_response_preserves_ocr4_page_fields() {
 #[test]
 fn transform_ocr_response_normalizes_mistral_json() {
     let result = transform(
-        &MISTRAL_OCR_BACKEND,
+        &MISTRAL,
         "model",
         json!({"pages":[{"index":"0","markdown":"hello"}],"usage_info":{"pages_processed":"1"}}),
         json!({}),
@@ -68,15 +64,7 @@ fn transform_ocr_response_normalizes_mistral_json() {
     assert_eq!(result["usage_info"]["pages_processed"], 1);
     assert_eq!(result["pages"][0]["images"], serde_json::Value::Null);
     assert!(result.get("provider_native_response").is_none());
-    assert!(
-        transform(
-            &MISTRAL_OCR_BACKEND,
-            "model",
-            json!({"pages":null}),
-            json!({})
-        )
-        .is_err()
-    );
+    assert!(transform(&MISTRAL, "model", json!({"pages":null}), json!({})).is_err());
 }
 
 #[test]

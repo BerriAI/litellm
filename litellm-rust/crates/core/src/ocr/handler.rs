@@ -1,19 +1,16 @@
 use std::sync::Arc;
 
+use super::backends::OcrBackend;
+use super::formats::{OcrFormat, request_error};
 use super::hooks::{OcrDuringCallRequest, OcrHooks, OcrLifecycleHooks};
-use super::prepare::{OcrProviderRequest, PreparedOcrRequest, prepare_ocr_call};
-use super::transformation::{OcrBackend, OcrFormat, request_error};
+use super::prepare::{PreparedOcrRequest, prepare_ocr_call};
+use super::registry::{
+    AZURE_DOCUMENT_INTELLIGENCE, AZURE_MISTRAL, MISTRAL, OcrIntegrationRequest, REDUCTO_LEGACY,
+    REDUCTO_V3, VERTEX_DEEPSEEK, VERTEX_MISTRAL,
+};
 use super::types::{OcrConnection, OcrDocument, OcrRequest, OcrResponseData};
 use crate::Error;
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
-use crate::providers::azure_ai::mistral::ocr::transformation::AzureMistralOcrBackend;
-use crate::providers::azure_ai::ocr::document_intelligence::transformation::AzureDocumentIntelligenceOcrBackend;
-use crate::providers::mistral::ocr::transformation::MistralOcrBackend;
-use crate::providers::reducto::ocr::transformation::{
-    ReductoParseLegacyBackend, ReductoParseV3Backend,
-};
-use crate::providers::vertex_ai::deepseek::ocr::transformation::VertexDeepSeekOcrBackend;
-use crate::providers::vertex_ai::mistral::ocr::transformation::VertexMistralOcrBackend;
 
 struct OcrExecution<'a> {
     http_client: &'a reqwest::Client,
@@ -28,15 +25,15 @@ pub(crate) async fn perform_ocr_request(
     let context = CallLifecycleContext::new(
         "ocr",
         request.model.clone(),
-        request.provider.kind().provider_name(),
+        request.integration.kind().provider().as_str(),
         request
             .litellm_call_id
             .unwrap_or_else(|| format!("ocr-{:032x}", rand::random::<u128>())),
     );
     macro_rules! dispatch {
-        ($backend:expr, $params:expr) => {
+        ($integration:expr, $params:expr) => {
             perform_provider_ocr(
-                $backend,
+                $integration,
                 request.model,
                 request.document,
                 $params,
@@ -50,45 +47,49 @@ pub(crate) async fn perform_ocr_request(
             .await
         };
     }
-    match request.provider {
-        OcrProviderRequest::Mistral(params) => {
-            dispatch!(MistralOcrBackend, params)
+    match request.integration {
+        OcrIntegrationRequest::Mistral(params) => {
+            dispatch!(MISTRAL, params)
         }
-        OcrProviderRequest::AzureAi(params) => {
-            dispatch!(AzureMistralOcrBackend, params)
+        OcrIntegrationRequest::AzureMistral(params) => {
+            dispatch!(AZURE_MISTRAL, params)
         }
-        OcrProviderRequest::AzureDocumentIntelligence(params) => {
-            dispatch!(AzureDocumentIntelligenceOcrBackend, params)
+        OcrIntegrationRequest::AzureDocumentIntelligence(params) => {
+            dispatch!(AZURE_DOCUMENT_INTELLIGENCE, params)
         }
-        OcrProviderRequest::VertexAi(params) => {
-            dispatch!(VertexMistralOcrBackend, params)
+        OcrIntegrationRequest::VertexMistral(params) => {
+            dispatch!(VERTEX_MISTRAL, params)
         }
-        OcrProviderRequest::VertexAiDeepSeek(params) => {
-            dispatch!(VertexDeepSeekOcrBackend, params)
+        OcrIntegrationRequest::VertexDeepSeek(params) => {
+            dispatch!(VERTEX_DEEPSEEK, params)
         }
-        OcrProviderRequest::ReductoV3(params) => {
-            dispatch!(ReductoParseV3Backend, params)
+        OcrIntegrationRequest::ReductoV3(params) => {
+            dispatch!(REDUCTO_V3, params)
         }
-        OcrProviderRequest::ReductoLegacy(params) => {
-            dispatch!(ReductoParseLegacyBackend, params)
+        OcrIntegrationRequest::ReductoLegacy(params) => {
+            dispatch!(REDUCTO_LEGACY, params)
         }
     }
 }
 
-async fn perform_provider_ocr<C: OcrBackend>(
-    backend: C,
+async fn perform_provider_ocr<F, B>(
+    integration: super::registry::OcrIntegration<F, B>,
     model: String,
     document: OcrDocument,
-    params: <C::Format as OcrFormat>::InputParams,
+    params: F::InputParams,
     connection: OcrConnection,
     execution: OcrExecution<'_>,
-) -> Result<OcrResponseData, Error> {
+) -> Result<OcrResponseData, Error>
+where
+    F: OcrFormat,
+    B: OcrBackend<F>,
+{
     let OcrExecution {
         http_client,
         lifecycle_context,
         hooks,
     } = execution;
-    let request = prepare_ocr_call(backend, model, document, params, connection);
+    let request = prepare_ocr_call(integration, model, document, params, connection);
     let lifecycle_hooks = OcrLifecycleHooks {
         hooks: hooks.clone(),
         provider_name: lifecycle_context.custom_llm_provider.clone(),
@@ -107,13 +108,18 @@ async fn perform_provider_ocr<C: OcrBackend>(
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-async fn execute_ocr_provider_call<C: OcrBackend>(
+async fn execute_ocr_provider_call<F, B>(
     http_client: &reqwest::Client,
-    request: PreparedOcrRequest<C>,
+    request: PreparedOcrRequest<F, B>,
     hooks: &dyn OcrHooks,
     provider_name: &str,
-) -> Result<OcrResponseData, Error> {
-    let backend = &request.backend;
+) -> Result<OcrResponseData, Error>
+where
+    F: OcrFormat,
+    B: OcrBackend<F>,
+{
+    let backend = &request.integration.backend;
+    let format = &request.integration.format;
     let url = backend.complete_url(&request.connection, &request.model, &request.params)?;
     let headers = backend.authenticate(&request.connection).await?;
     let document = if backend.guard_document_before_preparation() && hooks.has_guardrails() {
@@ -133,7 +139,7 @@ async fn execute_ocr_provider_call<C: OcrBackend>(
     let document = backend
         .prepare_document(http_client, document, &request.connection, &headers)
         .await?;
-    let body = serde_json::to_value(backend.format().transform_ocr_request(
+    let body = serde_json::to_value(format.transform_ocr_request(
         &request.model,
         document,
         &request.params,
@@ -172,10 +178,7 @@ async fn execute_ocr_provider_call<C: OcrBackend>(
             &request.params,
         )
         .await?;
-    let response =
-        backend
-            .format()
-            .transform_ocr_response(&request.model, decoded.data, &request.params)?;
+    let response = format.transform_ocr_response(&request.model, decoded.data, &request.params)?;
     Ok(OcrResponseData {
         provider_native_response: decoded.native,
         ..response

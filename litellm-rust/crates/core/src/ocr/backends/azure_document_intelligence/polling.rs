@@ -3,9 +3,11 @@ use crate::ocr::error::OcrPollingError;
 use crate::ocr::error::OcrResponseError;
 use std::time::Duration;
 
-use super::types::{AzureDocumentIntelligenceOperation, OperationStatus};
 use crate::constants::{AZURE_DI_SUBSCRIPTION_HEADER, OCR_POLL_RETRY_SECS};
 use crate::ocr::client::network_error;
+use crate::ocr::formats::document_intelligence::types::{
+    AzureDocumentIntelligenceOperation, OperationStatus,
+};
 use crate::ocr::types::OcrConnection;
 use crate::ocr::wire::{DecodedOcrResponse, read_json_response};
 use reqwest::Url;

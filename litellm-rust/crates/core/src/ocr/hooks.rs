@@ -2,8 +2,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use super::backends::OcrBackend;
+use super::formats::OcrFormat;
 use super::prepare::PreparedOcrRequest;
-use super::transformation::{OcrBackend, OcrFormat};
 use super::types::{OcrDocument, OcrResponseData};
 use crate::Error;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
@@ -63,25 +64,35 @@ pub trait OcrHooks: Send + Sync {
 pub struct NoopOcrHooks;
 impl OcrHooks for NoopOcrHooks {}
 
-pub(crate) struct OcrLifecycleHooks<C: OcrBackend> {
+pub(crate) struct OcrLifecycleHooks<F, B>
+where
+    F: OcrFormat,
+    B: OcrBackend<F>,
+{
     pub hooks: Arc<dyn OcrHooks>,
     pub provider_name: String,
-    pub marker: std::marker::PhantomData<C>,
+    pub marker: std::marker::PhantomData<(F, B)>,
 }
 
-impl<C: OcrBackend>
-    CallLifecycleHooks<Result<PreparedOcrRequest<C>, Error>, PreparedOcrRequest<C>, OcrResponseData>
-    for OcrLifecycleHooks<C>
+impl<F, B>
+    CallLifecycleHooks<
+        Result<PreparedOcrRequest<F, B>, Error>,
+        PreparedOcrRequest<F, B>,
+        OcrResponseData,
+    > for OcrLifecycleHooks<F, B>
+where
+    F: OcrFormat,
+    B: OcrBackend<F>,
 {
-    type PreCallFuture<'a> = OcrHookFuture<'a, Result<PreparedOcrRequest<C>, Error>>;
-    type DuringCallFuture<'a> = OcrHookFuture<'a, PreparedOcrRequest<C>>;
+    type PreCallFuture<'a> = OcrHookFuture<'a, Result<PreparedOcrRequest<F, B>, Error>>;
+    type DuringCallFuture<'a> = OcrHookFuture<'a, PreparedOcrRequest<F, B>>;
     type SuccessFuture<'a> = OcrLogFuture<'a>;
     type FailureFuture<'a> = OcrLogFuture<'a>;
 
     fn async_pre_call_hook<'a>(
         &'a self,
         _context: &'a CallLifecycleContext,
-        request: Result<PreparedOcrRequest<C>, Error>,
+        request: Result<PreparedOcrRequest<F, B>, Error>,
     ) -> Self::PreCallFuture<'a> {
         Box::pin(async move {
             let request = request?;
@@ -103,8 +114,8 @@ impl<C: OcrBackend>
                 .await?;
             let params =
                 request
-                    .backend
-                    .format()
+                    .integration
+                    .format
                     .map_ocr_params(super::wire::decode_request_value(
                         changed.optional_params,
                         "guardrail.optional_params",
@@ -120,7 +131,7 @@ impl<C: OcrBackend>
     fn async_during_call_hook<'a>(
         &'a self,
         _context: &'a CallLifecycleContext,
-        request: Result<PreparedOcrRequest<C>, Error>,
+        request: Result<PreparedOcrRequest<F, B>, Error>,
     ) -> Self::DuringCallFuture<'a> {
         Box::pin(async move { request })
     }

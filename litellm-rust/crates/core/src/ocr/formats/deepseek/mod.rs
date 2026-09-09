@@ -1,15 +1,10 @@
-use super::types::*;
-use crate::auth::AuthError;
-use crate::constants::VERTEX_DEEPSEEK_API_BASE;
-use crate::ocr::error::OcrError;
+pub mod types;
+
+use self::types::*;
 use crate::ocr::error::OcrRequestError;
 use crate::ocr::error::OcrResponseError;
-use crate::ocr::transformation::{OcrBackend, OcrFormat};
-use crate::ocr::types::{OcrConnection, OcrDocument, OcrPage, OcrResponseData};
-use crate::providers::vertex_ai::ocr::{authenticate_vertex, location, project};
-
-pub struct VertexDeepSeekOcrBackend;
-pub const VERTEX_DEEPSEEK_OCR_BACKEND: VertexDeepSeekOcrBackend = VertexDeepSeekOcrBackend;
+use crate::ocr::formats::OcrFormat;
+use crate::ocr::types::{OcrDocument, OcrPage, OcrResponseData};
 
 pub struct DeepSeekOcrFormat;
 
@@ -37,7 +32,6 @@ impl OcrFormat for DeepSeekOcrFormat {
         if document.source().is_empty() {
             return Err(OcrRequestError::MissingField("document URL"));
         }
-        let model = model.strip_prefix("vertex_ai/").unwrap_or(model);
         let model = if model.contains('/') {
             model.to_string()
         } else {
@@ -104,46 +98,5 @@ impl OcrFormat for DeepSeekOcrFormat {
             usage_info: result.usage_info.or(response.usage),
             ..OcrResponseData::new(result.model.unwrap_or_else(|| model.to_string()), pages)
         })
-    }
-}
-
-impl OcrBackend for VertexDeepSeekOcrBackend {
-    type Format = DeepSeekOcrFormat;
-    const FORMAT: Self::Format = DeepSeekOcrFormat;
-
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn complete_url(
-        &self,
-        connection: &OcrConnection,
-        _model: &str,
-        _params: &<Self::Format as OcrFormat>::MappedParams,
-    ) -> Result<String, OcrError> {
-        let base = connection
-            .api_base
-            .as_deref()
-            .unwrap_or(VERTEX_DEEPSEEK_API_BASE)
-            .trim_end_matches('/');
-        Ok(format!(
-            "{base}/v1/projects/{}/locations/{}/endpoints/openapi/chat/completions",
-            project(connection)?,
-            location(connection)
-        ))
-    }
-
-    async fn prepare_document(
-        &self,
-        _http_client: &reqwest::Client,
-        document: OcrDocument,
-        _connection: &OcrConnection,
-        _headers: &[(String, String)],
-    ) -> Result<OcrDocument, OcrError> {
-        Ok(document)
-    }
-
-    async fn authenticate(
-        &self,
-        connection: &OcrConnection,
-    ) -> Result<Vec<(String, String)>, AuthError> {
-        authenticate_vertex(connection).await
     }
 }

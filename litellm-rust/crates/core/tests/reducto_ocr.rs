@@ -1,13 +1,11 @@
-use super::transformation::{
-    REDUCTO_PARSE_LEGACY_BACKEND as LEGACY, REDUCTO_PARSE_V3_BACKEND as V3,
-};
+use crate::ocr::registry::{REDUCTO_LEGACY, REDUCTO_V3};
 use crate::ocr::tests::{MockResponse, body, mock_server, perform_ocr, transform, wire_request};
 use rstest::rstest;
 use serde_json::json;
 
 #[tokio::test]
 async fn test_parse_v3_reducto_id_passthrough_skips_upload() {
-    let result=body(&V3,"parse-v3",json!({"type":"document_url","document_url":"reducto://already.pdf"}),json!({"formatting":{"table_output_format":"html"},"retrieval":{"chunk_mode":"section"},"settings":{"ocr_system":"standard"}})).await.unwrap();
+    let result=body(&REDUCTO_V3,"parse-v3",json!({"type":"document_url","document_url":"reducto://already.pdf"}),json!({"formatting":{"table_output_format":"html"},"retrieval":{"chunk_mode":"section"},"settings":{"ocr_system":"standard"}})).await.unwrap();
     assert_eq!(result["input"], "reducto://already.pdf");
     assert_eq!(result["formatting"]["table_output_format"], "html");
 }
@@ -15,7 +13,7 @@ async fn test_parse_v3_reducto_id_passthrough_skips_upload() {
 async fn test_parse_legacy_wraps_enhance_under_options() {
     let doc = json!({"type":"document_url","document_url":"reducto://legacy.pdf"});
     let result = body(
-        &LEGACY,
+        &REDUCTO_LEGACY,
         "parse-legacy",
         doc.clone(),
         json!({"enhance":{"agentic":[{"type":"table"}]}}),
@@ -27,7 +25,7 @@ async fn test_parse_legacy_wraps_enhance_under_options() {
         json!({"document_url":"reducto://legacy.pdf","options":{"enhance":{"agentic":[{"type":"table"}]}}})
     );
     assert!(
-        body(&LEGACY, "parse-legacy", doc, json!({}))
+        body(&REDUCTO_LEGACY, "parse-legacy", doc, json!({}))
             .await
             .unwrap()
             .get("options")
@@ -43,7 +41,7 @@ async fn test_parse_legacy_wraps_enhance_under_options() {
 async fn test_parse_v3_rejects_plain_http_urls(#[case] source: &str) {
     assert!(
         body(
-            &V3,
+            &REDUCTO_V3,
             "parse-v3",
             json!({"type":"document_url","document_url":source}),
             json!({})
@@ -57,7 +55,7 @@ fn reducto_groups_blocks_and_preserves_native_response() {
     let raw = json!({"job_id":"job-1","usage":{"num_pages":2,"credits":3},"result":{"chunks":[
         {"blocks":[{"content":"B","bbox":{"page":2},"kind":"table"}]},
         {"blocks":[{"content":"A","bbox":{"page":1},"kind":"text"},{"content":"C","bbox":{"page":1},"kind":"text"}]}]}});
-    let response = transform(&V3, "parse-v3", raw.clone(), json!({})).unwrap();
+    let response = transform(&REDUCTO_V3, "parse-v3", raw.clone(), json!({})).unwrap();
     assert_eq!(response["pages"][0]["markdown"], "A\n\nC");
     assert_eq!(response["pages"][1]["markdown"], "B");
     assert_eq!(response["pages"][1]["blocks"][0]["kind"], "table");
@@ -67,7 +65,7 @@ fn reducto_groups_blocks_and_preserves_native_response() {
 #[test]
 fn reducto_missing_result_and_null_result_are_distinct() {
     let flat = transform(
-        &V3,
+        &REDUCTO_V3,
         "parse-v3",
         json!({"chunks":[{"content":"text"}]}),
         json!({}),
@@ -75,7 +73,7 @@ fn reducto_missing_result_and_null_result_are_distinct() {
     .unwrap();
     assert_eq!(flat["pages"][0]["markdown"], "text");
     let null = transform(
-        &V3,
+        &REDUCTO_V3,
         "parse-v3",
         json!({"result":null,"chunks":[{"content":"ignored"}]}),
         json!({}),

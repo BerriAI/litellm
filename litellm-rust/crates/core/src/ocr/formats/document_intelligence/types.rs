@@ -28,18 +28,18 @@ pub struct DocumentIntelligenceInputParams {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct NormalizedPages(pub(super) String);
+pub struct NormalizedPages(pub(crate) String);
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct NormalizedFeatures(pub(super) String);
+pub struct NormalizedFeatures(pub(crate) String);
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DocumentIntelligenceParams {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) pages: Option<NormalizedPages>,
+    pub(crate) pages: Option<NormalizedPages>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) features: Option<NormalizedFeatures>,
+    pub(crate) features: Option<NormalizedFeatures>,
     #[serde(rename = "req_format")]
-    pub(super) request_format: OcrRequestFormat,
+    pub(crate) request_format: OcrRequestFormat,
 }
 
 impl From<DocumentIntelligenceParams> for DocumentIntelligenceInputParams {

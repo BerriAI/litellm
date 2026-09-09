@@ -7,17 +7,17 @@ Rules for adding or changing an LLM provider/route in `litellm-rust`. `messages`
 1. Always resolve the provider/model first with `get_custom_llm_provider` (`core/src/routing_utils/provider.rs`). Nothing downstream may branch on a raw model string.
 2. Model/provider is resolved once, in `prepare.rs`, and passed down as typed fields. Don't re-resolve or re-parse it in transforms or handlers.
 
-## Transforms and the base config
+## Transforms and provider integrations
 
-3. Every route defines a base config trait with `transform_request` + `transform_response` (+ `complete_url`, `supported_params`), living in `core/src/<route>/transformation.rs` (e.g. `AnthropicMessagesProviderConfig`).
-4. Each provider implements that trait as a `const <PROVIDER>_<ROUTE>_CONFIG` in `core/src/providers/<provider>/<route>/transformation.rs`, mirroring the Python provider tree.
-5. Individual configs implement only the request/response transforms. Shared behavior (param filtering, defaults) stays as trait default methods so future providers inherit existing logic instead of reimplementing it.
-6. Prefer composition: a provider that extends another reuses the base trait's defaults or wraps another config; don't copy transform bodies between providers.
+3. Every route defines typed contracts for request and response transforms. Keep endpoint, authentication, and transport behavior outside those transforms.
+4. OCR API formats live in `core/src/ocr/formats/`, OCR hosting integrations live in `core/src/ocr/backends/`, and `core/src/ocr/registry.rs` lists every supported pairing. Provider-wide authentication stays in `core/src/providers/<provider>/auth.rs`.
+5. A format owns parameter mapping, request construction, and response normalization. A backend owns auth, URLs, document preparation, and response retrieval.
+6. Prefer composition: integrations that speak the same API format share one format implementation. Don't copy transform bodies between backends.
 
 ## Boundaries
 
 7. Layers never cross: `core` = the call itself (entrypoint, types, transforms, provider resolution, auth headers, provider HTTP, lifecycle hooks); `ai-gateway` = serving HTTP/WS (routing, extractors, auth of *our* callers, streaming to the client); `python-bridge` = thin PyO3 adapter. Hosts call the core entrypoint; they never build a provider request.
-8. Generic/route files contain zero provider-specific branches. A provider is one module under `core/src/providers/<provider>/<route>/`; a route is a module, never a new crate.
+8. Provider-specific dispatch stays in the route registry. Generic execution code does not branch on providers. A route is a module, never a new crate.
 9. Route entry point stays thin: `core::<route>::<route>()` -> `prepare_*` -> handler (or `CallLifecycle::run_request`, which owns the pre_call -> during_call -> provider call -> success/failure order and phase timing). Axum handlers validate and delegate to a service that calls the entrypoint; no business logic in them.
 10. Constants (URLs, env-var names, API versions, error messages) live in a crate `constants.rs`, never inline. Config-shaped env reads happen at the host/config layer with the `DEFAULT_*` fallback defined in `constants.rs`; the only env read in `core` is the credential fallback in a route's `prepare.rs`.
 
@@ -52,4 +52,4 @@ Rules for adding or changing an LLM provider/route in `litellm-rust`. `messages`
 25. Run, and keep green, the commands under "Checks" in `litellm-rust/CLAUDE.md`.
     That list is the single source of truth and matches what GitHub Actions runs.
 
-OCR separates API formats from hosting integrations in `core/src/ocr/transformation.rs`: `OcrFormat` owns typed parameters and request/response transforms, and `OcrBackend` selects a format and owns auth, URLs, document preparation, and response retrieval. Direct Mistral, Vertex Mistral, and Azure Mistral share `MistralOcrFormat`. Hosted integrations live under `providers/<host>/<publisher>/ocr/`; shared host helpers stay under the host. Uploads, polling, and lifecycle hooks stay outside format transforms
+OCR separates API formats from hosting integrations. `core/src/ocr/formats/` owns typed parameters and request/response transforms. `core/src/ocr/backends/` owns auth, URLs, document preparation, and response retrieval. `core/src/ocr/registry.rs` lists the supported pairings. Direct Mistral, Vertex Mistral, and Azure Mistral share `MistralOcrFormat`. Uploads, polling, and lifecycle hooks stay outside format transforms

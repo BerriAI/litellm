@@ -1,27 +1,16 @@
-use crate::auth::AuthError;
 use crate::ocr::document::InlineDocument;
-use crate::ocr::error::OcrError;
 use crate::ocr::error::OcrRequestError;
 use crate::ocr::error::OcrResponseError;
 use crate::ocr::error::PagesError;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::collections::BTreeSet;
 
-use super::types::*;
-use crate::constants::{
-    AZURE_DI_API_VERSION, AZURE_DI_DEFAULT_DPI, AZURE_DI_DEFAULT_HEIGHT, AZURE_DI_DEFAULT_WIDTH,
-};
-use crate::ocr::transformation::{OcrBackend, OcrFormat};
-use crate::ocr::types::{
-    OcrConnection, OcrDocument, OcrPage, OcrPageDimensions, OcrRequestFormat, OcrResponseData,
-    OcrUsageInfo,
-};
-use crate::ocr::wire::{DecodedOcrResponse, encode_model_id};
-use crate::providers::azure_ai::auth;
+pub mod types;
 
-pub struct AzureDocumentIntelligenceOcrBackend;
-pub const AZURE_DOCUMENT_INTELLIGENCE_OCR_BACKEND: AzureDocumentIntelligenceOcrBackend =
-    AzureDocumentIntelligenceOcrBackend;
+use self::types::*;
+use crate::constants::{AZURE_DI_DEFAULT_DPI, AZURE_DI_DEFAULT_HEIGHT, AZURE_DI_DEFAULT_WIDTH};
+use crate::ocr::formats::OcrFormat;
+use crate::ocr::types::{OcrDocument, OcrPage, OcrPageDimensions, OcrResponseData, OcrUsageInfo};
 
 fn pages_token_is_valid(token: &str) -> bool {
     let mut parts = token.split('-');
@@ -230,85 +219,5 @@ impl OcrFormat for AzureDocumentIntelligenceOcrFormat {
             key_value_pairs: result.key_value_pairs,
             ..OcrResponseData::new(model.to_string(), pages)
         })
-    }
-}
-
-impl OcrBackend for AzureDocumentIntelligenceOcrBackend {
-    type Format = AzureDocumentIntelligenceOcrFormat;
-    const FORMAT: Self::Format = AzureDocumentIntelligenceOcrFormat;
-
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn complete_url(
-        &self,
-        connection: &OcrConnection,
-        model: &str,
-        params: &<Self::Format as OcrFormat>::MappedParams,
-    ) -> Result<String, OcrError> {
-        let endpoint = auth::resolve_document_intelligence_endpoint(
-            connection.api_base.as_deref(),
-            &|name| std::env::var(name).ok(),
-        )?;
-        let mut url = format!(
-            "{}/documentintelligence/documentModels/{}:analyze?api-version={}",
-            endpoint.trim_end_matches('/'),
-            encode_model_id(model)?,
-            AZURE_DI_API_VERSION
-        );
-        if let Some(pages) = &params.pages {
-            url.push_str("&pages=");
-            url.push_str(&pages.0);
-        }
-        if let Some(features) = &params.features {
-            url.push_str("&features=");
-            url.push_str(&features.0);
-        }
-        Ok(url)
-    }
-
-    async fn prepare_document(
-        &self,
-        _http_client: &reqwest::Client,
-        document: OcrDocument,
-        _connection: &OcrConnection,
-        _headers: &[(String, String)],
-    ) -> Result<OcrDocument, OcrError> {
-        Ok(document)
-    }
-
-    fn preserve_native_response(&self, params: &<Self::Format as OcrFormat>::MappedParams) -> bool {
-        params.request_format == OcrRequestFormat::Native
-    }
-
-    async fn read_response(
-        &self,
-        http_client: &reqwest::Client,
-        response: reqwest::Response,
-        url: &str,
-        headers: &[(String, String)],
-        connection: &OcrConnection,
-        params: &<Self::Format as OcrFormat>::MappedParams,
-    ) -> Result<DecodedOcrResponse<<Self::Format as OcrFormat>::ResponseBody>, OcrError> {
-        super::polling::read_operation_response(
-            http_client,
-            response,
-            url,
-            headers,
-            connection,
-            self.preserve_native_response(params),
-        )
-        .await
-    }
-
-    async fn authenticate(
-        &self,
-        connection: &OcrConnection,
-    ) -> Result<Vec<(String, String)>, AuthError> {
-        auth::authenticate_document_intelligence(
-            connection.extra_headers.clone(),
-            connection.api_key.as_deref(),
-            connection.azure_auth.as_ref(),
-            &|name| std::env::var(name).ok(),
-        )
-        .await
     }
 }
