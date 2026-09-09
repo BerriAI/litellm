@@ -5824,14 +5824,14 @@ async def test_apply_guardrail_debug_log_masks_signed_request_headers():
 
 @pytest.mark.asyncio
 async def test_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
-    """The guardrail's AWS profile does not exist, so resolving SigV4 credentials
-    raises; with a bearer token configured the guardrail must still run, since
-    the bearer token alone signs the request."""
+    """The process's default AWS profile does not exist, so resolving SigV4
+    credentials raises; with a bearer token configured the guardrail must still
+    run, since the bearer token alone signs the request."""
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    monkeypatch.setenv("AWS_PROFILE", "litellm-no-such-aws-profile")
     guardrail = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
-        aws_profile_name="litellm-no-such-aws-profile",
     )
     mock_response = MagicMock()
     mock_response.status_code = 200

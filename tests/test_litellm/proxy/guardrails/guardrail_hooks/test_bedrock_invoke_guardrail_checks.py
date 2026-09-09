@@ -837,14 +837,14 @@ async def test_many_blocks_scanned_at_request_level_and_can_block():
 
 @pytest.mark.asyncio
 async def test_checks_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
-    """Same bearer-token rule as ApplyGuardrail: the guardrail's AWS profile does
-    not exist, yet the InvokeGuardrailChecks call still goes out on the bearer
-    token and its verdict is enforced."""
+    """Same bearer-token rule as ApplyGuardrail: the process's default AWS
+    profile does not exist, yet the InvokeGuardrailChecks call still goes out on
+    the bearer token and its verdict is enforced."""
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    monkeypatch.setenv("AWS_PROFILE", "litellm-no-such-aws-profile")
     g = BedrockGuardrail(
         checks=CONTENT_FILTER_CHECKS,
         content_filter_threshold=0.5,
-        aws_profile_name="litellm-no-such-aws-profile",
     )
     payload = {"results": {"contentFilter": {"results": [{"category": "VIOLENCE", "severityScore": 0.8}]}}}
     post = AsyncMock(return_value=_mock_http_response(200, payload))

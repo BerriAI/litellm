@@ -342,6 +342,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ## CREDENTIALS ##
+        aws_bearer_token: Final = bedrock_bearer_token(api_key, optional_params)
         # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
@@ -361,7 +362,7 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         credentials: Final[Credentials | None] = (
             None
-            if bedrock_bearer_token(api_key) is not None
+            if aws_bearer_token is not None
             else self.get_credentials(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,

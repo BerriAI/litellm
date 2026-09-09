@@ -1037,10 +1037,11 @@ def test_load_credentials_assumes_role_with_external_id(monkeypatch):
 
 
 def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
-    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
-    raises; a bearer-token deployment must still serve the request, since the
-    bearer token alone signs it."""
+    """The process's default AWS profile does not exist, so resolving SigV4
+    credentials raises; a bearer-token deployment must still serve the request,
+    since the bearer token alone signs it."""
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    monkeypatch.setenv("AWS_PROFILE", "litellm-no-such-aws-profile")
     client = HTTPHandler()
 
     with patch.object(client, "post") as mock_post:
@@ -1055,7 +1056,6 @@ def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(mo
             input=test_input,
             client=client,
             aws_region_name="us-west-2",
-            aws_profile_name="litellm-no-such-aws-profile",
         )
 
     assert response.data[0]["embedding"] == titan_embedding_response["embedding"]

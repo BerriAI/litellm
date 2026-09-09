@@ -743,7 +743,7 @@ def test_sign_request_with_api_key_bearer_token():
 def test_get_request_headers_with_env_var_bearer_token():
     # Setup
     llm = BaseAWSLLM()
-    credentials = Credentials("test_key", "test_secret", "test_token")
+    credentials = None
     headers = {"Content-Type": "application/json"}
     headers_dict = headers.copy()
 
@@ -774,6 +774,51 @@ def test_get_request_headers_with_env_var_bearer_token():
         # Assert
         assert mock_request.headers["Authorization"] == "Bearer test_token"
         assert result == mock_prepared_request
+
+
+@pytest.mark.parametrize(
+    ("api_key", "optional_params", "expected"),
+    [
+        (None, {}, "env-bearer-token-12345"),
+        (None, {"aws_region_name": "us-west-2", "aws_access_key_id": None}, "env-bearer-token-12345"),
+        (None, {"aws_access_key_id": "AKIAEXPLICIT", "aws_secret_access_key": "secret"}, None),
+        (None, {"aws_session_token": "session"}, None),
+        (None, {"aws_profile_name": "deployment-profile"}, None),
+        (None, {"aws_role_name": "arn:aws:iam::123456789012:role/deployment"}, None),
+        (None, {"aws_web_identity_token": "oidc-token"}, None),
+        ("explicit-bearer", {"aws_access_key_id": "AKIAEXPLICIT"}, "explicit-bearer"),
+        ("", {}, None),
+        ("", {"aws_access_key_id": "AKIAEXPLICIT"}, None),
+    ],
+)
+def test_bedrock_bearer_token_env_token_yields_to_explicit_sigv4_params(monkeypatch, api_key, optional_params, expected):
+    """The env bearer token is the ambient fallback: explicit SigV4 params on the
+    deployment turn it off, an explicit api_key still wins over both, and an
+    explicit empty api_key keeps meaning "no bearer, sign with SigV4"."""
+    from litellm.llms.bedrock.base_aws_llm import bedrock_bearer_token
+
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+
+    assert bedrock_bearer_token(api_key, optional_params) == expected
+
+
+def test_get_request_headers_signs_with_resolved_credentials_despite_env_bearer_token(monkeypatch):
+    """Credentials resolved from the deployment's explicit SigV4 params must sign
+    the request even when the process carries AWS_BEARER_TOKEN_BEDROCK, which a
+    Bedrock API key cannot do on the caller's behalf for S3-backed calls."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+
+    prepared = BaseAWSLLM().get_request_headers(
+        credentials=Credentials("test_key", "test_secret", "test_token"),
+        aws_region_name="us-west-2",
+        extra_headers=None,
+        endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com/async-invoke",
+        data='{"prompt": "test"}',
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert prepared.headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=test_key/")
+    assert "Bearer" not in prepared.headers["Authorization"]
 
 
 def test_get_request_headers_with_sigv4():

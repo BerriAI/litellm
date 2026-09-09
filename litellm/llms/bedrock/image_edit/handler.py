@@ -209,7 +209,7 @@ class BedrockImageEdit(BaseAWSLLM):
             BedrockImageEditPreparedRequest: The prepared request object
         """
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
-            optional_params, model, bearer_token=bedrock_bearer_token(api_key)
+            optional_params, model, bearer_token=bedrock_bearer_token(api_key, optional_params)
         )
 
         # Use the existing ARN-aware provider detection method

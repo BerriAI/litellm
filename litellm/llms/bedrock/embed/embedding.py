@@ -409,7 +409,7 @@ class BedrockEmbedding(BaseAWSLLM):
         api_key: str | None = None,
     ) -> EmbeddingResponse:
         credentials, aws_region_name = self._load_credentials(
-            optional_params, bearer_token=bedrock_bearer_token(api_key)
+            optional_params, bearer_token=bedrock_bearer_token(api_key, optional_params)
         )
 
         ### TRANSFORMATION ###

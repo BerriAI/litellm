@@ -520,10 +520,11 @@ def test_the_rust_opt_in_needs_no_sigv4_principal():
 
 @pytest.mark.parametrize("configured_through", ["env_var", "api_key"])
 def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, configured_through):
-    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
-    raises; a bearer-token deployment must still serve the request, since the
-    bearer token alone signs it."""
+    """The process's default AWS profile does not exist, so resolving SigV4
+    credentials raises; a bearer-token deployment must still serve the request,
+    since the bearer token alone signs it."""
     monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.setenv("AWS_PROFILE", "litellm-no-such-aws-profile")
     if configured_through == "env_var":
         monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
     else:
@@ -532,7 +533,7 @@ def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, co
 
     response = BedrockConverseLLM().completion(
         **_completion_kwargs(
-            optional_params={"maxTokens": 16, "aws_profile_name": "litellm-no-such-aws-profile"},
+            optional_params={"maxTokens": 16},
             litellm_params={},
             client=client,
             api_key="bedrock-bearer-token" if configured_through == "api_key" else None,

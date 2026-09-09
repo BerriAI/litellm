@@ -61,9 +61,28 @@ class BearerRequestTarget(BedrockRequestTarget):
     credentials: None = None
 
 
-def bedrock_bearer_token(api_key: str | None) -> str | None:
-    token: Final = api_key if api_key is not None else get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
-    return token or None
+_EXPLICIT_SIGV4_PARAMS: Final = frozenset(
+    (
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_role_name",
+        "aws_profile_name",
+        "aws_web_identity_token",
+    )
+)
+
+
+def _has_explicit_sigv4_params(optional_params: Mapping[str, object] | None) -> bool:
+    return optional_params is not None and any(optional_params.get(name) for name in _EXPLICIT_SIGV4_PARAMS)
+
+
+def bedrock_bearer_token(api_key: str | None, optional_params: Mapping[str, object] | None = None) -> str | None:
+    if api_key is not None:
+        return api_key or None
+    if _has_explicit_sigv4_params(optional_params):
+        return None
+    return get_secret_str("AWS_BEARER_TOKEN_BEDROCK") or None
 
 
 class _WebIdentityTokenClaims(BaseModel):
@@ -1497,7 +1516,9 @@ class BaseAWSLLM:
         api_key: str | None = None,
         supports_bearer_token: bool = True,
     ) -> AWSPreparedRequest:
-        aws_bearer_token: Final = bedrock_bearer_token(api_key) if supports_bearer_token else None
+        aws_bearer_token: Final = (
+            bedrock_bearer_token(api_key) if supports_bearer_token and (api_key or credentials is None) else None
+        )
 
         if aws_bearer_token is not None:
             try:
@@ -1596,7 +1617,7 @@ class BaseAWSLLM:
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
-        aws_bearer_token: Final = bedrock_bearer_token(api_key)
+        aws_bearer_token: Final = bedrock_bearer_token(api_key, optional_params)
 
         if aws_bearer_token is not None:
             headers = headers or {}
