@@ -6,7 +6,7 @@ same route are non-inference and free.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, Optional, cast
+from typing import TYPE_CHECKING, Dict, Final, Optional, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -14,6 +14,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
+    PROXY_BATCH_POLLING_INTERVAL,
     STALE_OBJECT_CLEANUP_BATCH_SIZE,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -21,10 +22,13 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import LiteLLM_ManagedObjectTable
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
 
 TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
+
+CLAIM_ABANDONED_AFTER_POLL_CYCLES: Final = 3
 
 
 class CheckResponsesCost:
@@ -112,6 +116,92 @@ class CheckResponsesCost:
                 f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
             )
 
+    @staticmethod
+    def _is_missing_batch_processed_column_error(err: Exception) -> bool:
+        message: Final = str(err).lower()
+        return "batch_processed" in message or "unknown column" in message or "does not exist" in message
+
+    async def _claim_job_for_costing(self, job: "LiteLLM_ManagedObjectTable") -> bool:
+        """Atomically flip batch_processed from false to true, returning whether this pod won the row.
+
+        Every pod and uvicorn worker schedules its own CheckResponsesCost against the shared table,
+        so without this compare-and-swap two of them select the same queued response in one window
+        and both bill it. The claim is taken before the read because the read is what prices the
+        job: ``aget_responses`` stamped with the poll origin writes the spend log itself, so there
+        is no later point at which to serialize. Schemas without the column can't be claimed, so
+        they keep the pre-existing behavior rather than silently billing nothing.
+
+        A pod that dies between winning the claim and billing would otherwise strand the row:
+        it holds a claim nobody will release, and its status never reaches terminal, so every
+        later cycle re-selects it and loses. The ``updated_at`` arm takes such a claim back once
+        it has gone unbilled for longer than any live cycle could hold it. ``updated_at`` is
+        ``@updatedAt``, so a healthy in-flight claim refreshed moments ago is never stolen.
+        """
+        abandoned_before: Final = datetime.now(timezone.utc) - timedelta(
+            seconds=CLAIM_ABANDONED_AFTER_POLL_CYCLES * PROXY_BATCH_POLLING_INTERVAL
+        )
+        try:
+            claimed: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                where={
+                    "id": job.id,
+                    "OR": [
+                        {"batch_processed": False},
+                        {"updated_at": {"lt": abandoned_before}},
+                    ],
+                },
+                data={"batch_processed": True},
+            )
+        except Exception as db_err:
+            if self._is_missing_batch_processed_column_error(db_err):
+                verbose_proxy_logger.warning(
+                    "CheckResponsesCost: batch_processed column not found, billing without a claim"
+                )
+                return True
+            verbose_proxy_logger.error(f"CheckResponsesCost: failed to claim job {job.id} for cost tracking: {db_err}")
+            return False
+        return claimed > 0
+
+    async def _release_job_claim(self, job: "LiteLLM_ManagedObjectTable") -> None:
+        """Give a claimed row back when the read did not bill it, so a later poll cycle retries it.
+
+        A response still queued at the provider, or whose read raised, has no spend to record yet.
+        Holding the claim would retire it permanently, which is the failure #37050 hit on batches.
+        """
+        try:
+            await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                where={"id": job.id, "batch_processed": True},
+                data={"batch_processed": False},
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(
+                f"CheckResponsesCost: failed to release the claim on job {job.id}, "
+                f"so its cost will not be retried: {db_err}"
+            )
+
+    async def _persist_terminal_response(
+        self, job: "LiteLLM_ManagedObjectTable", response: ResponsesAPIResponse
+    ) -> None:
+        """Store the finished response on its managed row and retire the row from polling.
+
+        The row is the only copy of a background generation's usage that outlives the poll, so
+        ``GET /v1/responses/{id}`` can serve a terminal job from here instead of re-reading it
+        from the provider. Every provider re-read replays the same usage and hands back a
+        freshly encoded id, which is what made this route bill per read and defeated id-based
+        dedup in the first place.
+
+        ``status`` stays the literal "completed" for every terminal provider status, matching
+        what this poller has always written, so stale-row expiry keeps skipping these rows.
+        """
+        try:
+            await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                where={"id": job.id},
+                data={"status": "completed", "file_object": response.model_dump_json()},
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(
+                f"CheckResponsesCost: failed to persist terminal response for job {job.id}: {db_err}"
+            )
+
     async def check_responses_cost(self):
         """
         Check if background responses are complete and track their cost.
@@ -168,33 +258,47 @@ class CheckResponsesCost:
                     litellm_metadata["model"] = model_name
                     litellm_metadata["model_group"] = model_name  # Use same value for model_group
                 
-                response = await self._get_response(
-                    response_id=responses_id_security,
-                    litellm_metadata=litellm_metadata,
-                )
-                
-                verbose_proxy_logger.debug(
-                    f"Response {unified_object_id} status: {response.status}, model: {model_name}"
-                )
-                
             except Exception as e:
                 verbose_proxy_logger.warning(
                     f"Skipping job {unified_object_id} due to error: {e}"
                 )
                 continue
 
-            if response.status in TERMINAL_RESPONSE_STATUSES:
-                verbose_proxy_logger.info(
-                    f"Response {unified_object_id} has terminal status {response.status}, marking as complete"
+            if not await self._claim_job_for_costing(job):
+                verbose_proxy_logger.debug(
+                    f"Response {unified_object_id} is already claimed for costing, leaving it to the claim holder"
                 )
-                completed_jobs.append(job)
+                continue
 
-        # Mark completed jobs in the database
-        if len(completed_jobs) > 0:
-            await self.prisma_client.db.litellm_managedobjecttable.update_many(
-                where={"id": {"in": [job.id for job in completed_jobs]}},
-                data={"status": "completed"},
+            try:
+                response = await self._get_response(
+                    response_id=responses_id_security,
+                    litellm_metadata=litellm_metadata,
+                )
+            except Exception as e:
+                await self._release_job_claim(job)
+                verbose_proxy_logger.warning(
+                    f"Skipping job {unified_object_id} due to error: {e}"
+                )
+                continue
+
+            verbose_proxy_logger.debug(
+                f"Response {unified_object_id} status: {response.status}, model: {model_name}"
             )
+
+            if response.status not in TERMINAL_RESPONSE_STATUSES:
+                await self._release_job_claim(job)
+                continue
+
+            verbose_proxy_logger.info(
+                f"Response {unified_object_id} has terminal status {response.status}, marking as complete"
+            )
+            completed_jobs.append((job, response))
+
+        for job, response in completed_jobs:
+            await self._persist_terminal_response(job, response)
+
+        if len(completed_jobs) > 0:
             verbose_proxy_logger.info(
                 f"Marked {len(completed_jobs)} response jobs as completed"
             )
