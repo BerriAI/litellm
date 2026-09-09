@@ -167,9 +167,16 @@ fn main() {
         litellm_ok: litellm_available(),
         extension_ok: native_extension_available(),
     };
-    let cases = load_cases();
+    let cases = match load_cases() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("parity case loading failed: {e}");
+            exit(1);
+        }
+    };
     if cases.is_empty() {
         eprintln!("no tests found in {}", inputs_dir().display());
+        exit(1);
     }
     let trials: Vec<Trial> = cases
         .into_iter()
@@ -819,25 +826,26 @@ fn repo_root() -> PathBuf {
     candidate.canonicalize().unwrap_or(candidate)
 }
 
-fn load_cases() -> Vec<(String, PathBuf, TestCase)> {
+fn load_cases() -> Result<Vec<(String, PathBuf, TestCase)>, String> {
     let root = inputs_dir();
     let mut paths: Vec<PathBuf> = Vec::new();
     collect_tomls(&root, &mut paths);
     paths.sort();
-    paths
-        .into_iter()
-        .filter_map(|p| {
-            let name = p
-                .strip_prefix(&root)
-                .ok()?
-                .with_extension("")
-                .to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/");
-            let text = fs::read_to_string(&p).ok()?;
-            let case: TestCase = toml::from_str(&text).ok()?;
-            Some((name, p, case))
-        })
-        .collect()
+    let mut cases = Vec::with_capacity(paths.len());
+    for p in paths {
+        let name = p
+            .strip_prefix(&root)
+            .map_err(|e| format!("{}: {e}", p.display()))?
+            .with_extension("")
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        let text =
+            fs::read_to_string(&p).map_err(|e| format!("{}: read failed: {e}", p.display()))?;
+        let case: TestCase =
+            toml::from_str(&text).map_err(|e| format!("{}: parse failed: {e}", p.display()))?;
+        cases.push((name, p, case));
+    }
+    Ok(cases)
 }
 
 fn collect_tomls(dir: &Path, out: &mut Vec<PathBuf>) {

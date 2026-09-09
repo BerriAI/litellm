@@ -101,6 +101,12 @@ pub struct ChatCompletionsChoiceMessage {
     // while Converse assigns the joined string unconditionally. Each config
     // mirrors its own, so keep this optional and serialize it even when None.
     pub content: Option<String>,
+    // Ollama returns a model's chain of thought as a sibling `thinking` field,
+    // which Python remaps to `reasoning_content`; Anthropic and Bedrock decline
+    // thinking requests at the gate, so they leave this `None`. Serialized only
+    // when present so it is omitted, the way Python omits an absent value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

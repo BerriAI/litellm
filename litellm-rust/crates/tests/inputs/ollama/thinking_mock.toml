@@ -1,0 +1,46 @@
+model = "ollama-chat"
+temperature = 0.0
+seed = 42
+
+[[messages]]
+role = "user"
+content = "What is the capital of France? Think step by step."
+
+[[mock.responses]]
+status = 200
+body = '''
+{
+  "model": "qwen3:8b",
+  "created_at": "2026-09-04T12:00:00Z",
+  "message": {"role": "assistant", "content": "Paris", "thinking": "the user asked for the capital of France"},
+  "done": true,
+  "done_reason": "stop",
+  "prompt_eval_count": 10,
+  "eval_count": 1
+}
+'''
+
+[[mock.responses]]
+status = 200
+body = '''
+{
+  "model": "qwen3:8b",
+  "created_at": "2026-09-04T12:00:00Z",
+  "message": {"role": "assistant", "content": "Paris", "thinking": "the user asked for the capital of France"},
+  "done": true,
+  "done_reason": "stop",
+  "prompt_eval_count": 10,
+  "eval_count": 1
+}
+'''
+
+[proxy]
+config = '''
+model_list:
+  - model_name: ollama-chat
+    litellm_params:
+      model: ollama_chat/qwen3:8b
+      api_base: http://127.0.0.1:$PORT
+general_settings:
+  master_key: sk-1234
+'''
