@@ -998,7 +998,10 @@ def run_server(
 ):
     if cli_args:
         if len(cli_args) >= 2 and cli_args[0] == "xai-oauth" and cli_args[1] == "login":
-            from litellm.llms.xai.oauth import XAIOAuthAuthenticator
+            from litellm.llms.xai.oauth import (
+                XAIOAuthAuthenticator,
+                oauth_auth_file_for_account,
+            )
             from litellm.secret_managers.main import get_secret_str
 
             account: Final = cli_args[2] if len(cli_args) >= 3 else None
@@ -1006,7 +1009,7 @@ def run_server(
                 "~/.config/litellm/xai_oauth"
             )
             authenticator: Final = (
-                XAIOAuthAuthenticator(auth_file=os.path.join(token_dir, f"auth-{account}.json"))
+                XAIOAuthAuthenticator(auth_file=oauth_auth_file_for_account(account, token_dir), token_dir=token_dir)
                 if account
                 else XAIOAuthAuthenticator()
             )
