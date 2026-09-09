@@ -240,10 +240,12 @@ def prepare_claude(
     try:
         resp: Final = get(
             url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "anthropic-version": "2023-06-01",
-            },
+            headers=MappingProxyType(
+                {
+                    "Authorization": f"Bearer {api_key}",
+                    "anthropic-version": "2023-06-01",
+                }
+            ),
             timeout=10,
         )
     except requests.RequestException as e:
@@ -646,8 +648,8 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
     @click.argument("args", nargs=-1, type=click.UNPROCESSED)
     @click.pass_context
     def _command(ctx: click.Context, skip_verify: bool, args: Sequence[str], sync_models: bool = False) -> None:
-        base_env: Final = {**os.environ, CLAUDE_SYNC_MODELS_ENV: "1"} if sync_models else None
-        _launch(ctx, binary, list(args), skip_verify=skip_verify, base_env=base_env)
+        base_env: Final = MappingProxyType({**os.environ, CLAUDE_SYNC_MODELS_ENV: "1"}) if sync_models else None
+        _launch(ctx, binary, args, skip_verify=skip_verify, base_env=base_env)
 
     if binary == "claude":
         _command = click.option(
