@@ -2,10 +2,11 @@
 
 Reproduces the v1.100.0 OOM (LIT-6780). Every request fails its primary deployment, retries,
 falls back to a healthy deployment and succeeds, so each one leaves retry breadcrumbs in its
-metadata. Its cost tracking then increments spend counters in a Redis that never answers, the
-circuit breaker opens, the increment raises, and the cost callback's except block turns the
-whole request metadata into the body of a failed-tracking alert. On v1.100.0 that body
-roughly doubled with every request in the process. This test asserts it stays flat.
+metadata. Its cost tracking then increments spend counters in a Redis where every command
+times out, the circuit breaker opens, the increment raises, and the cost callback's
+except block turns the whole request metadata into the body of a failed-tracking alert. On
+v1.100.0 that body roughly doubled with every request in the process. This test asserts it
+stays flat.
 
 Run individually; it measures process RSS. Per-request numbers are logged at INFO:
 
@@ -23,14 +24,14 @@ from typing import Final
 
 import psutil
 import pytest
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 import litellm
 from litellm import Router
-from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+from tests._fault_injecting_redis import FaultInjectingRedis, FaultInjectingRedisCache, always
 
 REQUESTS: Final = 12
-REDIS_SOCKET_TIMEOUT_SECONDS: Final = 0.1
 MAX_SECONDS_PER_REQUEST: Final = 8.0
 MAX_RSS_GROWTH_BYTES: Final = 256 * 1024 * 1024
 MAX_ALERT_BODY_BYTES: Final = 200 * 1024
@@ -40,17 +41,6 @@ ALERT_POLL_SECONDS: Final = 0.02
 MODEL: Final = "openai/gpt-5-mini"
 NOISY_LOGGERS: Final = ("LiteLLM", "LiteLLM Proxy", "LiteLLM Router")
 _log: Final = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class UnresponsiveRedis:
-    """A TCP listener that accepts every connection and never writes a byte back.
-
-    redis-py connects, sends the command, and hits ``socket_timeout``; that is the latency
-    spike the Redis circuit breaker counts as a failure."""
-
-    host: str
-    port: int
 
 
 @dataclass(slots=True)
@@ -72,31 +62,10 @@ class RequestSample:
     alert_body_bytes: int
 
 
-async def _swallow_forever(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    try:
-        while await reader.read(65536):
-            pass
-    finally:
-        writer.close()
-
-
 @pytest.fixture
-async def unresponsive_redis() -> AsyncIterator[UnresponsiveRedis]:
-    server: Final = await asyncio.start_server(_swallow_forever, host="127.0.0.1", port=0)
-    port: Final = server.sockets[0].getsockname()[1]
-    try:
-        yield UnresponsiveRedis(host="127.0.0.1", port=port)
-    finally:
-        server.close()
-        await server.wait_closed()
-
-
-@pytest.fixture
-def failing_redis_cache(unresponsive_redis: UnresponsiveRedis) -> RedisCache:
-    return RedisCache(
-        host=unresponsive_redis.host,
-        port=unresponsive_redis.port,
-        socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+def failing_redis_cache() -> FaultInjectingRedisCache:
+    return FaultInjectingRedisCache(
+        FaultInjectingRedis({}, default=always(RedisTimeoutError("injected: Redis stalled")))
     )
 
 
@@ -108,7 +77,7 @@ def quiet_loggers(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def alert_recorder(
-    monkeypatch: pytest.MonkeyPatch, failing_redis_cache: RedisCache, quiet_loggers: None
+    monkeypatch: pytest.MonkeyPatch, failing_redis_cache: FaultInjectingRedisCache, quiet_loggers: None
 ) -> AlertRecorder:
     from litellm.proxy import proxy_server
 
@@ -221,13 +190,13 @@ async def _drive(router: Router, recorder: AlertRecorder) -> AsyncIterator[Reque
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
 async def test_failing_upstream_with_failing_redis_stays_flat(
-    alert_recorder: AlertRecorder, failing_redis_cache: RedisCache
+    alert_recorder: AlertRecorder, failing_redis_cache: FaultInjectingRedisCache
 ) -> None:
     router: Final = _retrying_router_with_fallback()
 
     samples: Final = [sample async for sample in _drive(router, alert_recorder)]
 
-    assert failing_redis_cache._circuit_breaker.is_open(), "the unresponsive Redis never tripped the circuit breaker"
+    assert failing_redis_cache._circuit_breaker.is_open(), "the injected timeouts never tripped the circuit breaker"
     breadcrumb_counts: Final = frozenset(sample.breadcrumbs for sample in samples)
     assert len(breadcrumb_counts) == 1 and min(breadcrumb_counts) >= 2, (
         f"every request should carry the same handful of its own failed attempts, got {sorted(breadcrumb_counts)}"
