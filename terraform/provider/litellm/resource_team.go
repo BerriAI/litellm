@@ -409,7 +409,6 @@ func buildTeamMetadata(d *schema.ResourceData) map[string]interface{} {
 	return metadata
 }
 
-// The proxy stores per-model limits under team metadata, so /team/info returns them there rather than top-level.
 func teamModelLimit(topLevel, metadata map[string]interface{}, key string) map[string]interface{} {
 	if topLevel != nil {
 		return topLevel

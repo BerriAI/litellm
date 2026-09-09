@@ -250,7 +250,6 @@ func TestTeamReadMapsNewFields(t *testing.T) {
 	}
 }
 
-// /team/info returns per-model limits under metadata (where /team/new stores them), not top-level.
 func TestTeamReadMapsPerModelLimitsFromMetadata(t *testing.T) {
 	var captured map[string]interface{}
 	srv := newTeamTestServer(t, &captured, `{
@@ -289,8 +288,6 @@ func TestTeamReadMapsPerModelLimitsFromMetadata(t *testing.T) {
 	}
 }
 
-// Dropping the per-model limits from config must clear them on the proxy, which only happens when
-// /team/update receives an explicit empty map.
 func TestTeamUpdateClearsRemovedPerModelLimits(t *testing.T) {
 	var captured map[string]interface{}
 	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
