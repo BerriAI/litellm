@@ -9064,8 +9064,9 @@ export interface paths {
          * Patch Model
          * @description PATCH Endpoint for partial model updates.
          *
-         *     Only updates the fields specified in the request while preserving other existing values.
-         *     Follows proper PATCH semantics by only modifying provided fields.
+         *     JSON Merge Patch semantics over `litellm_params` and `model_info`: a key absent from the
+         *     body is unchanged, a key sent as null is removed from the stored row, and a key sent with a
+         *     value is set (identity and ownership keys such as `id` and `team_id` ignore a null).
          *
          *     Args:
          *         model_id: The ID of the model to update

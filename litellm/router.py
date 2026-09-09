@@ -628,6 +628,15 @@ RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
 RETRY_BREADCRUMB_LIMIT: Final = 4
 
 
+# Cost-map keys created by _register_deployment_in_model_cost, which shares one flat
+# namespace with the built-in model catalog. Only a key it created may be evicted, or a
+# deployment whose id names a real model would strip that model's pricing and
+# capabilities for every other deployment of it. delete_deployment gives a key back once no
+# live router still serves that id, so a later catalog refresh that starts serving the name
+# is not treated as a deployment's own.
+_DEPLOYMENT_COST_MAP_KEYS: Final[set[str]] = set()  # mutable-ok: ownership of shared cost-map keys
+
+
 class FallbackAwareStreamWrapper(CustomStreamWrapper):
     """Base for the Router's chat-completion stream wrappers, which are built around the
     attempt the Router picked first and have to repoint themselves when a fallback takes over."""
@@ -9761,6 +9770,7 @@ class Router:
         """
         idx: Final = len(self.model_list)
         self.model_list.append(model)
+        _live_routers.add(self)  # mutable-ok: track dynamic routers without extending their lifetimes
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
 
@@ -9929,7 +9939,12 @@ class Router:
         """Write a deployment's metadata into ``litellm.model_cost``.
 
         Runs when a deployment is added and again after a price data reload, so
-        the entries a refresh rebuilds are the ones a fresh boot would produce.
+        the entries a refresh rebuilds are the ones a fresh boot would produce. An
+        entry this function created is replaced rather than merged, so a price cleared
+        from the deployment does not linger from an earlier registration and keep
+        billing at the old rate. An entry it did not create is left to merge, because
+        a deployment id that collides with a catalog model name shares that model's
+        entry with every other deployment of it.
         Nothing is recorded for replay: a refresh walks the live routers instead,
         so a deleted, repointed or never-added deployment, and a discarded router,
         drop out of the rebuild on their own.
@@ -9946,6 +9961,10 @@ class Router:
             }
 
         if model_id is not None:
+            if model_id in _DEPLOYMENT_COST_MAP_KEYS:
+                litellm.model_cost.pop(model_id, None)  # mutable-ok: remove cleared prices from the shared entry
+            elif model_id not in litellm.model_cost:
+                _DEPLOYMENT_COST_MAP_KEYS.add(model_id)  # mutable-ok: retain shared ownership across reloads
             litellm.register_model(
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
@@ -10042,6 +10061,11 @@ class Router:
                 _budget_limiter: Final = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
+                if not any(
+                    router is not self and id in router.model_id_to_deployment_index_map
+                    for router in tuple(_live_routers)
+                ):
+                    _DEPLOYMENT_COST_MAP_KEYS.discard(id)  # mutable-ok: the last owning router released this key
                 try:
                     self._unregister_pre_routing_strategy_for_deployment(
                         deployment=item if isinstance(item, Deployment) else Deployment(**item)

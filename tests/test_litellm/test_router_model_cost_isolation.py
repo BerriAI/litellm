@@ -220,6 +220,198 @@ def test_should_store_full_pricing_under_deployment_model_id():
     assert entry["output_cost_per_token"] == 0.0
 
 
+def test_should_drop_a_price_the_deployment_no_longer_carries():
+    """Re-registering a deployment must replace its model_id entry, not merge onto it.
+
+    A merge left the old rate in the cost map after an operator cleared the override, so
+    the deployment kept billing at a price its config no longer had.
+    """
+    backend_model = "vertex_ai/gemini-2.5-flash"
+    model_id = "deployment-cleared-price"
+    original = {model_id: litellm.model_cost.get(model_id)}
+
+    try:
+        Router._register_deployment_in_model_cost(
+            model_id=model_id,
+            model_info={"input_cost_per_token": 0.005, "output_cost_per_token": 0.01},
+            model=backend_model,
+            custom_llm_provider="vertex_ai",
+        )
+        assert litellm.model_cost[model_id]["input_cost_per_token"] == 0.005
+
+        Router._register_deployment_in_model_cost(
+            model_id=model_id,
+            model_info={"mode": "chat"},
+            model=backend_model,
+            custom_llm_provider="vertex_ai",
+        )
+
+        entry = litellm.model_cost[model_id]
+        assert entry.get("input_cost_per_token") != 0.005, (
+            "the cleared override survived re-registration, so the deployment still bills at it"
+        )
+        assert entry.get("output_cost_per_token") != 0.01
+    finally:
+        _restore_model_cost_entries(original)
+
+
+def test_should_not_strip_a_builtin_entry_when_a_deployment_id_collides_with_it():
+    """Deployments are keyed into the same cost map as the built-in catalog, so a deployment
+    whose id happens to name a real model must not evict that model's entry.
+
+    Stripping it would take the pricing and capability flags every other deployment of that
+    model reads, process-wide, until the next price-map reload. Registering twice, because
+    the first registration is what would mark the entry as this deployment's own.
+    """
+    colliding_id = "gpt-4o"
+    original = {colliding_id: litellm.model_cost.get(colliding_id)}
+    builtin_max_tokens = litellm.model_cost[colliding_id]["max_tokens"]
+
+    try:
+        for _ in range(2):
+            Router._register_deployment_in_model_cost(
+                model_id=colliding_id,
+                model_info={"id": colliding_id, "db_model": True, "mode": "chat"},
+                model="gpt-4o-mini",
+                custom_llm_provider="openai",
+            )
+
+        entry = litellm.model_cost[colliding_id]
+        assert entry["max_tokens"] == builtin_max_tokens, (
+            "registering a deployment under a catalog model's name wiped that model's context window"
+        )
+        assert entry["litellm_provider"] == "openai"
+        assert entry["supports_vision"] is True
+    finally:
+        _restore_model_cost_entries(original)
+
+
+def test_should_drop_a_stale_price_even_when_the_deployment_declares_a_provider():
+    """A deployment may carry `litellm_provider` in its own model_info, which must not be
+    read as "this is a catalog entry" and stop the stale price from being dropped."""
+    model_id = "deployment-provider-tagged"
+    original = {model_id: litellm.model_cost.get(model_id)}
+
+    try:
+        Router._register_deployment_in_model_cost(
+            model_id=model_id,
+            model_info={"id": model_id, "litellm_provider": "openai", "input_cost_per_token": 0.005},
+            model="gpt-4o-mini",
+            custom_llm_provider="openai",
+        )
+        assert litellm.model_cost[model_id]["input_cost_per_token"] == 0.005
+
+        Router._register_deployment_in_model_cost(
+            model_id=model_id,
+            model_info={"id": model_id, "litellm_provider": "openai", "mode": "chat"},
+            model="gpt-4o-mini",
+            custom_llm_provider="openai",
+        )
+
+        assert litellm.model_cost[model_id].get("input_cost_per_token") != 0.005, (
+            "a deployment that declares its provider kept billing at the price it no longer carries"
+        )
+    finally:
+        _restore_model_cost_entries(original)
+
+
+def test_should_give_a_cost_map_key_back_when_the_deployment_is_deleted():
+    """Deleting a deployment releases its claim on the shared cost-map key.
+
+    Held forever, a later catalog refresh that starts publishing a model under that same
+    name would be treated as the deleted deployment's own entry and evicted.
+    """
+    from litellm.router import _DEPLOYMENT_COST_MAP_KEYS
+
+    model_id = "deployment-to-delete"
+    original = {model_id: litellm.model_cost.get(model_id)}
+    router = Router(
+        model_list=[
+            {
+                "model_name": "to-delete",
+                "litellm_params": {"model": "gpt-4o-mini", "mock_response": "ok"},
+                "model_info": {"id": model_id, "input_cost_per_token": 0.005},
+            }
+        ]
+    )
+
+    try:
+        assert model_id in _DEPLOYMENT_COST_MAP_KEYS
+
+        assert router.delete_deployment(id=model_id) is not None
+
+        assert model_id not in _DEPLOYMENT_COST_MAP_KEYS, (
+            "a deleted deployment kept its claim on the shared cost-map key"
+        )
+    finally:
+        _DEPLOYMENT_COST_MAP_KEYS.discard(model_id)
+        _restore_model_cost_entries(original)
+
+
+def test_should_keep_the_cost_map_key_while_another_router_still_serves_it():
+    """Two live routers can serve the same deployment id, and the claim is process-wide.
+
+    Releasing it when only one of them drops the deployment would put the survivor back on
+    merging, so the price it just cleared would keep billing.
+    """
+    from litellm.router import _DEPLOYMENT_COST_MAP_KEYS
+
+    model_id = "deployment-served-twice"
+    original = {model_id: litellm.model_cost.get(model_id)}
+    entry = {
+        "model_name": "served-twice",
+        "litellm_params": {"model": "gpt-4o-mini", "mock_response": "ok"},
+        "model_info": {"id": model_id, "input_cost_per_token": 0.005},
+    }
+    first = Router(model_list=[entry])
+    second = Router(model_list=[entry])
+
+    try:
+        assert model_id in _DEPLOYMENT_COST_MAP_KEYS
+
+        assert first.delete_deployment(id=model_id) is not None
+
+        assert model_id in _DEPLOYMENT_COST_MAP_KEYS, (
+            "the claim was released while another router still served the deployment"
+        )
+
+        assert second.delete_deployment(id=model_id) is not None
+        assert model_id not in _DEPLOYMENT_COST_MAP_KEYS
+    finally:
+        _DEPLOYMENT_COST_MAP_KEYS.discard(model_id)
+        _restore_model_cost_entries(original)
+
+
+def test_should_keep_the_cost_map_key_while_a_dynamically_built_router_serves_it():
+    """A router built with no model_list still serves whatever add_deployment gives it, so it
+    counts when deciding whether the shared cost-map claim can be released."""
+    from litellm.router import _DEPLOYMENT_COST_MAP_KEYS
+
+    model_id = "deployment-added-dynamically"
+    original = {model_id: litellm.model_cost.get(model_id)}
+    entry = {
+        "model_name": "added-dynamically",
+        "litellm_params": {"model": "gpt-4o-mini", "mock_response": "ok"},
+        "model_info": {"id": model_id, "input_cost_per_token": 0.005},
+    }
+    configured = Router(model_list=[entry])
+    dynamic = Router()
+    dynamic.add_deployment(deployment=Deployment(**entry))
+
+    try:
+        assert configured.delete_deployment(id=model_id) is not None
+
+        assert model_id in _DEPLOYMENT_COST_MAP_KEYS, (
+            "the claim was released while a dynamically built router still served the deployment"
+        )
+
+        assert dynamic.delete_deployment(id=model_id) is not None
+        assert model_id not in _DEPLOYMENT_COST_MAP_KEYS
+    finally:
+        _DEPLOYMENT_COST_MAP_KEYS.discard(model_id)
+        _restore_model_cost_entries(original)
+
+
 def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
     """
     The built-in pricing should be preserved no matter which deployment
