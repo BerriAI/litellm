@@ -8,3 +8,4 @@ repository.workspace = true
 [dependencies]
 litellm-auth.workspace = true
 pyo3.workspace = true
+thiserror.workspace = true
