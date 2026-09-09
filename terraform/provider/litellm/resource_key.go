@@ -214,6 +214,15 @@ func resourceKeyStateUpgradeV0(_ context.Context, rawState map[string]interface{
 	return rawState, nil
 }
 
+var keyModelBudgetFields = map[string]bool{
+	"budget_limit":    true,
+	"max_budget":      true,
+	"time_period":     true,
+	"budget_duration": true,
+	"tpm_limit":       true,
+	"rpm_limit":       true,
+}
+
 func validateKeyModelMaxBudget(v interface{}, k string) ([]string, []error) {
 	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(v.(string)), &parsed); err != nil || parsed == nil {
@@ -221,8 +230,13 @@ func validateKeyModelMaxBudget(v interface{}, k string) ([]string, []error) {
 	}
 	for model, cfg := range parsed {
 		var budget map[string]json.RawMessage
-		if err := json.Unmarshal(cfg, &budget); err != nil || budget == nil {
+		if err := json.Unmarshal(cfg, &budget); err != nil || len(budget) == 0 {
 			return nil, []error{fmt.Errorf("%q[%q] must be a budget object such as {\"budget_limit\": 50, \"time_period\": \"30d\"}, got %s", k, model, cfg)}
+		}
+		for field := range budget {
+			if !keyModelBudgetFields[field] {
+				return nil, []error{fmt.Errorf("%q[%q] has unknown budget field %q; supported fields are budget_limit, max_budget, time_period, budget_duration, tpm_limit, rpm_limit", k, model, field)}
+			}
 		}
 	}
 	return nil, nil

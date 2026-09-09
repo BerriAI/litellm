@@ -264,7 +264,7 @@ func TestKeyModelMaxBudgetValidationRequiresBudgetObjects(t *testing.T) {
 	for _, valid := range []string{
 		`{}`,
 		`{"gpt-4o-mini": {"budget_limit": 50, "time_period": "30d"}}`,
-		`{"gpt-4o-mini": {"max_budget": 50, "rpm_limit": 60}, "gpt-4o": {}}`,
+		`{"gpt-4o-mini": {"max_budget": 50, "rpm_limit": 60}, "gpt-4o": {"budget_duration": "1d", "tpm_limit": 1000}}`,
 	} {
 		if _, errs := validate(valid, "model_max_budget"); len(errs) != 0 {
 			t.Errorf("validate(%s) = %v, want accepted", valid, errs)
@@ -278,6 +278,9 @@ func TestKeyModelMaxBudgetValidationRequiresBudgetObjects(t *testing.T) {
 		`{"gpt-4o-mini": 50}`,
 		`{"gpt-4o-mini": null}`,
 		`{"gpt-4o-mini": [50]}`,
+		`{"gpt-4o-mini": {}}`,
+		`{"gpt-4o-mini": {"budget_limt": 50}}`,
+		`{"gpt-4o-mini": {"budget_limit": 50, "max_tokens": 100}}`,
 		`not json`,
 	} {
 		if _, errs := validate(invalid, "model_max_budget"); len(errs) == 0 {
