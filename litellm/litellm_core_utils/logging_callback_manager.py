@@ -441,6 +441,14 @@ class LoggingCallbackManager:
 
         return result
 
+    def get_callback_objects(self) -> tuple[tuple[str, CustomLogger | Callable], ...]:
+        """Every non-string active callback paired with the name `get_callbacks_by_type` reports it under."""
+        return tuple(
+            (self._get_callback_string(callback), callback)
+            for callback in self._get_all_callbacks()
+            if not isinstance(callback, str)
+        )
+
     def _get_callback_string(self, callback: CustomLogger | Callable | str) -> str:
         from litellm.litellm_core_utils.custom_logger_registry import (
             CustomLoggerRegistry,

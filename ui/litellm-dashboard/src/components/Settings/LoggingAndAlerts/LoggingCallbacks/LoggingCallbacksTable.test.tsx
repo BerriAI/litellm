@@ -97,7 +97,7 @@ describe("LoggingCallbacksTable", () => {
     expect(onDelete).toHaveBeenCalledWith(callback);
   });
 
-  it("hides the actions menu for read-only runtime callback rows", () => {
+  it("shows a read-only label instead of the actions menu for runtime-only callback rows", () => {
     render(
       <LoggingCallbacksTable
         callbacks={[
@@ -112,6 +112,7 @@ describe("LoggingCallbacksTable", () => {
     );
     expect(screen.getByTestId("callback-actions-langfuse-success")).toBeInTheDocument();
     expect(screen.queryByTestId("callback-actions-datadog-success")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Read only")).toHaveLength(1);
   });
 
   // Regression: `/get_callbacks` returns the same `name` twice when a

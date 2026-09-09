@@ -1095,7 +1095,8 @@ def test_get_config_callbacks_redacts_email_alerting_vars_for_view_only_admin(
 
 
 def test_get_config_callbacks_appends_runtime_only_callbacks(client, auth_as, mock_prisma, monkeypatch):
-    """Runtime-registered callbacks (not in config) are appended as read_only rows."""
+    """LIT-5281: a YAML callback that the DB callback list replaced in the merged config still runs, so it must
+    show up as a read_only row next to the editable DB-configured one."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -1113,47 +1114,30 @@ def test_get_config_callbacks_appends_runtime_only_callbacks(client, auth_as, mo
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
-    # Mock runtime callbacks: register otel in addition to langfuse in config.
     import litellm
+    from litellm.integrations.langsmith import LangsmithLogger
+    from litellm.integrations.opentelemetry import OpenTelemetry
 
-    monkeypatch.setattr(litellm, "callbacks", ["otel"])
-    monkeypatch.setattr(
-        litellm.logging_callback_manager,
-        "get_callbacks_by_type",
-        MagicMock(
-            return_value={
-                "success": [],
-                "failure": [],
-                "success_and_failure": ["otel"],
-            }
-        ),
-    )
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse", LangsmithLogger()])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [OpenTelemetry()])
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/get/config/callbacks")
     assert response.status_code == 200
-    body = response.json()
 
-    callbacks = body["callbacks"]
-    callback_names = [cb["name"] for cb in callbacks]
-
-    # Both should be present
-    assert "langfuse" in callback_names
-    assert "otel" in callback_names
-
-    # Configured callback should NOT be marked read_only
-    langfuse_cb = next(cb for cb in callbacks if cb["name"] == "langfuse")
-    assert not langfuse_cb.get("read_only")
-
-    # Runtime-only callback should be marked read_only
-    otel_cb = next(cb for cb in callbacks if cb["name"] == "otel")
-    assert otel_cb["read_only"] is True
-    assert otel_cb["type"] == "success_and_failure"
-    assert {callback["name"] for callback in callbacks} == {"langfuse", "otel"}
+    assert [(cb["name"], cb["type"], cb.get("read_only", False)) for cb in response.json()["callbacks"]] == [
+        ("langfuse", "success", False),
+        ("langsmith", "success", True),
+        ("otel", "success_and_failure", True),
+    ]
 
 
 def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_as, mock_prisma, monkeypatch):
-    """When same callback is in both config and runtime, show only once as configured."""
+    """A configured callback shows once as editable, whether the runtime holds its string or an initialized instance
+    registered under a different alias (arize initializes an OpenTelemetry instance)."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -1164,48 +1148,37 @@ def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_a
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
         return_value={
-            "litellm_settings": {"success_callback": ["langfuse"]},
+            "litellm_settings": {"success_callback": ["langfuse", "arize"]},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
         }
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
-    # Mock runtime: same callback registered that is also in config
     import litellm
+    from litellm.integrations.opentelemetry import OpenTelemetry
 
-    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse", OpenTelemetry()])
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
-    monkeypatch.setattr(
-        litellm.logging_callback_manager,
-        "get_callbacks_by_type",
-        MagicMock(
-            return_value={
-                "success": ["langfuse"],
-                "failure": [],
-                "success_and_failure": [],
-            }
-        ),
-    )
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/get/config/callbacks")
     assert response.status_code == 200
-    body = response.json()
 
-    callbacks = body["callbacks"]
-    langfuse_rows = [cb for cb in callbacks if cb["name"] == "langfuse"]
-
-    # Should appear exactly once, not duplicated
-    assert len(langfuse_rows) == 1
-    # And it should NOT be marked read_only (it's in config)
-    assert not langfuse_rows[0].get("read_only")
-    assert {callback["name"] for callback in callbacks} == {"langfuse"}
+    assert [(cb["name"], cb["type"], cb.get("read_only", False)) for cb in response.json()["callbacks"]] == [
+        ("langfuse", "success", False),
+        ("arize", "success", False),
+    ]
 
 
+def _dotted_path_test_function(*args, **kwargs):
+    pass
+
+
+@pytest.mark.parametrize("handler_kind", ["instance", "function"])
 @pytest.mark.parametrize(
     "config_key,expected_type",
     [
@@ -1215,9 +1188,9 @@ def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_a
     ],
 )
 def test_get_config_callbacks_deduplicates_dotted_path_callback(
-    client, auth_as, mock_prisma, monkeypatch, config_key, expected_type
+    client, auth_as, mock_prisma, monkeypatch, config_key, expected_type, handler_kind
 ):
-    """A dotted-path callback stays a single editable row instead of duplicating under its class name."""
+    """A dotted-path callback stays a single editable row instead of duplicating under its class or function name."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -1231,7 +1204,7 @@ def test_get_config_callbacks_deduplicates_dotted_path_callback(
     class _DottedPathTestHandler(CustomLogger):
         pass
 
-    dotted_handler = _DottedPathTestHandler()
+    dotted_handler = _DottedPathTestHandler() if handler_kind == "instance" else _dotted_path_test_function
     dotted_path = f"{__name__}.dotted_handler"
 
     fake_proxy_config = MagicMock()
@@ -1249,17 +1222,6 @@ def test_get_config_callbacks_deduplicates_dotted_path_callback(
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
-    monkeypatch.setattr(
-        litellm.logging_callback_manager,
-        "get_callbacks_by_type",
-        MagicMock(
-            return_value={
-                "success": [],
-                "failure": [],
-                "success_and_failure": ["_DottedPathTestHandler"],
-            }
-        ),
-    )
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/get/config/callbacks")
@@ -1326,43 +1288,50 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
     import litellm
+    from litellm._service_logger import ServiceLogging
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.integrations.langsmith import LangsmithLogger
+    from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
+    from litellm.router import Router
+    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
     class _InventoryTestGuardrail(CustomGuardrail):
         pass
 
+    class _UserCodeLogger(CustomLogger):
+        pass
+
+    def user_code_function(*args, **kwargs):
+        pass
+
+    router = Router(model_list=[])
+    monkeypatch.setattr(litellm, "success_callback", [LangsmithLogger(), router.sync_deployment_callback_on_success])
+    monkeypatch.setattr(litellm, "_async_success_callback", [router.deployment_callback_on_success])
+    monkeypatch.setattr(litellm, "failure_callback", [user_code_function])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [router.async_deployment_callback_on_failure])
     monkeypatch.setattr(
-        litellm.logging_callback_manager,
-        "get_callbacks_by_type",
-        MagicMock(
-            return_value={
-                "success": ["langsmith", "deployment_callback_on_success", "cache"],
-                "failure": ["deployment_callback_on_failure"],
-                "success_and_failure": ["_ProxyDBLogger", "SkillsInjectionHook", "_InventoryTestGuardrail"],
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        litellm.logging_callback_manager,
-        "get_custom_loggers_for_type",
-        MagicMock(return_value=[_InventoryTestGuardrail(guardrail_name="inventory-test-guardrail")]),
+        litellm,
+        "callbacks",
+        [
+            _PROXY_MaxBudgetLimiter(),
+            _PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock()),
+            ServiceLogging(),
+            _InventoryTestGuardrail(guardrail_name="inventory-test-guardrail"),
+            _UserCodeLogger(),
+        ],
     )
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/get/config/callbacks")
 
     assert response.status_code == 200
-    assert response.json()["callbacks"] == [
-        {
-            "name": "langsmith",
-            "variables": {
-                "LANGSMITH_API_KEY": None,
-                "LANGSMITH_PROJECT": None,
-                "LANGSMITH_DEFAULT_RUN_NAME": None,
-            },
-            "type": "success",
-            "read_only": True,
-        },
+    assert [
+        (callback["name"], callback["type"], callback["read_only"]) for callback in response.json()["callbacks"]
+    ] == [
+        ("_UserCodeLogger", "success_and_failure", True),
+        ("langsmith", "success", True),
+        ("user_code_function", "failure", True),
     ]
 
 
@@ -1387,23 +1356,14 @@ def test_get_config_callbacks_redacts_runtime_only_row_secrets_for_view_only_adm
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
-    # Mock runtime: register otel
     import litellm
 
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", ["otel"])
-    monkeypatch.setattr(
-        litellm.logging_callback_manager,
-        "get_callbacks_by_type",
-        MagicMock(
-            return_value={
-                "success": [],
-                "failure": [],
-                "success_and_failure": ["otel"],
-            }
-        ),
-    )
 
-    # View-only admin
     with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
         response = client.get("/get/config/callbacks")
     assert response.status_code == 200
@@ -1412,13 +1372,11 @@ def test_get_config_callbacks_redacts_runtime_only_row_secrets_for_view_only_adm
     callbacks = body["callbacks"]
     otel_cb = next((cb for cb in callbacks if cb["name"] == "otel"), None)
     assert otel_cb is not None
-
-    # Secret env vars must be redacted
+    assert otel_cb["type"] == "success_and_failure"
+    assert otel_cb["read_only"] is True
     assert otel_cb["variables"]["OTEL_HEADERS"] == "REDACTED"
-    # Non-secret vars should pass through
     assert otel_cb["variables"]["OTEL_ENDPOINT"] == _CALLBACK_ENV_FIXTURE["OTEL_ENDPOINT"]
 
-    # Full admin sees secrets
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         admin_response = client.get("/get/config/callbacks")
     assert admin_response.status_code == 200
