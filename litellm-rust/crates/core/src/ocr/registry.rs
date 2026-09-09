@@ -2,7 +2,7 @@ use serde::Serialize;
 use strum::EnumString;
 
 use super::backends::OcrBackend;
-use super::backends::azure_ai::AzureAiOcrBackend;
+use super::backends::azure_ai::{AzureDocumentIntelligenceOcrBackend, AzureMistralOcrBackend};
 use super::backends::mistral::MistralOcrBackend;
 use super::backends::reducto::ReductoOcrBackend;
 use super::backends::vertex_ai::VertexAiOcrBackend;
@@ -48,12 +48,15 @@ where
 
 pub(crate) const MISTRAL: OcrIntegration<MistralOcrFormat, MistralOcrBackend> =
     OcrIntegration::new(MistralOcrFormat, MistralOcrBackend);
-pub(crate) const AZURE_MISTRAL: OcrIntegration<MistralOcrFormat, AzureAiOcrBackend> =
-    OcrIntegration::new(MistralOcrFormat, AzureAiOcrBackend);
+pub(crate) const AZURE_MISTRAL: OcrIntegration<MistralOcrFormat, AzureMistralOcrBackend> =
+    OcrIntegration::new(MistralOcrFormat, AzureMistralOcrBackend);
 pub(crate) const AZURE_DOCUMENT_INTELLIGENCE: OcrIntegration<
     AzureDocumentIntelligenceOcrFormat,
-    AzureAiOcrBackend,
-> = OcrIntegration::new(AzureDocumentIntelligenceOcrFormat, AzureAiOcrBackend);
+    AzureDocumentIntelligenceOcrBackend,
+> = OcrIntegration::new(
+    AzureDocumentIntelligenceOcrFormat,
+    AzureDocumentIntelligenceOcrBackend,
+);
 pub(crate) const VERTEX_MISTRAL: OcrIntegration<MistralOcrFormat, VertexAiOcrBackend> =
     OcrIntegration::new(MistralOcrFormat, VertexAiOcrBackend);
 pub(crate) const VERTEX_DEEPSEEK: OcrIntegration<DeepSeekOcrFormat, VertexAiOcrBackend> =

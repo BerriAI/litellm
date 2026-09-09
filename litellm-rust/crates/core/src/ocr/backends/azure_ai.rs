@@ -11,9 +11,9 @@ use crate::ocr::types::{OcrConnection, OcrDocument, OcrRequestFormat};
 use crate::ocr::wire::{DecodedOcrResponse, encode_model_id};
 use crate::providers::azure_ai::auth;
 
-pub struct AzureAiOcrBackend;
+pub struct AzureMistralOcrBackend;
 
-impl OcrBackend<MistralOcrFormat> for AzureAiOcrBackend {
+impl OcrBackend<MistralOcrFormat> for AzureMistralOcrBackend {
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,
@@ -52,7 +52,9 @@ impl OcrBackend<MistralOcrFormat> for AzureAiOcrBackend {
     }
 }
 
-impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureAiOcrBackend {
+pub struct AzureDocumentIntelligenceOcrBackend;
+
+impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenceOcrBackend {
     fn complete_url(
         &self,
         connection: &OcrConnection,
