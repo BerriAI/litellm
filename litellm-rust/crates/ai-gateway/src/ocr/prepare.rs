@@ -1,8 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use litellm_core::ocr::types::OcrAuthInputs;
-use litellm_core::providers::auth::azure::AzureAuthInputs;
 use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 use serde_json::{Map, Value};
 
@@ -30,18 +28,18 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
         });
     let model = provider_info.model.to_string();
     let custom_llm_provider = provider_info.custom_llm_provider.to_string();
-    let config = ocr_provider_config(&custom_llm_provider, &model)
+    let parsed_config = ocr_provider_config(&custom_llm_provider, &model)
         .ok_or_else(|| litellm_core::Error::InvalidProvider(custom_llm_provider.clone()))
         .and_then(|config| {
             validate_request_format(config, &request.optional_params, &custom_llm_provider)?;
             Ok(config)
         });
-    let auth_inputs = if custom_llm_provider == "azure_ai" {
-        AzureAuthInputs::from_optional_params(&request.optional_params)
-            .map(OcrAuthInputs::AzureAi)
-            .unwrap_or_else(OcrAuthInputs::Invalid)
-    } else {
-        OcrAuthInputs::None
+    let (config, auth_inputs) = match parsed_config {
+        Ok(config) => match config.parse_auth_inputs(&request.optional_params) {
+            Ok(auth_inputs) => (Ok(config), auth_inputs),
+            Err(error) => (Err(error.into()), Default::default()),
+        },
+        Err(error) => (Err(error), Default::default()),
     };
     let optional_params = match &config {
         Ok(config) => {
@@ -123,7 +121,7 @@ fn new_ocr_call_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::error::Error;
+    use litellm_core::error::{AuthError, Error};
     use serde_json::{Map, json};
 
     use super::{OcrRequest, prepare_ocr_call};
@@ -168,6 +166,19 @@ mod tests {
         let prepared = prepare_ocr_call(request_with_format("raw"));
         assert!(
             matches!(prepared.request.config, Err(Error::InvalidRequest(message)) if message.contains("Invalid `req_format`"))
+        );
+    }
+
+    #[test]
+    fn provider_auth_input_errors_are_rejected_during_preparation() {
+        let mut request = base_ocr_request("azure_ai/pixtral-12b-2409");
+        request.optional_params =
+            Map::from_iter([("tenant_id".to_string(), json!({"invalid": true}))]);
+
+        let prepared = prepare_ocr_call(request);
+
+        assert!(
+            matches!(prepared.request.config, Err(Error::Auth(AuthError::InvalidConfiguration(message))) if message.contains("tenant_id"))
         );
     }
 }

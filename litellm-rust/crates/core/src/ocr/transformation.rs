@@ -1,6 +1,6 @@
-use crate::Error;
 use crate::providers::auth::CredentialPlacement;
 use crate::providers::auth::http::apply_credential;
+use crate::{AuthError, Error};
 use serde_json::{Map, Value};
 
 use std::future::Future;
@@ -66,6 +66,13 @@ pub trait OcrProviderConfig: Sync {
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
+
+    fn parse_auth_inputs(
+        &self,
+        _provider_params: &Map<String, Value>,
+    ) -> Result<OcrAuthInputs, AuthError> {
+        Ok(OcrAuthInputs::None)
+    }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn validate_environment(

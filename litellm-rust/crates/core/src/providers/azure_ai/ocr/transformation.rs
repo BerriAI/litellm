@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
-use crate::error::{Error, json_type_name};
+use crate::error::{AuthError, Error, json_type_name};
 use crate::ocr::transformation::{OcrAuthFuture, OcrProviderConfig, OcrResponseHandling};
 use crate::ocr::types::{OcrAuthInputs, OcrRequestData, OcrResponseData};
 use crate::providers::auth::CredentialPlacement;
@@ -44,7 +44,6 @@ pub fn complete_azure_ai_url(
 fn azure_auth_inputs(auth_inputs: &OcrAuthInputs) -> Result<Option<&AzureAuthInputs>, Error> {
     match auth_inputs {
         OcrAuthInputs::AzureAi(inputs) => Ok(Some(inputs)),
-        OcrAuthInputs::Invalid(error) => Err(error.clone().into()),
         OcrAuthInputs::None => Ok(None),
     }
 }
@@ -432,6 +431,13 @@ impl OcrProviderConfig for AzureAiOcrConfig {
         auth::resolve_api_key(api_key, env_lookup)
     }
 
+    fn parse_auth_inputs(
+        &self,
+        provider_params: &Map<String, Value>,
+    ) -> Result<OcrAuthInputs, AuthError> {
+        AzureAuthInputs::from_optional_params(provider_params).map(OcrAuthInputs::AzureAi)
+    }
+
     fn authenticate<'a>(
         &'a self,
         headers: Vec<(String, String)>,
@@ -539,6 +545,13 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         auth::resolve_document_intelligence_api_key(api_key, env_lookup)
+    }
+
+    fn parse_auth_inputs(
+        &self,
+        provider_params: &Map<String, Value>,
+    ) -> Result<OcrAuthInputs, AuthError> {
+        AzureAuthInputs::from_optional_params(provider_params).map(OcrAuthInputs::AzureAi)
     }
 
     fn authenticate<'a>(

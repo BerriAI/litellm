@@ -58,7 +58,6 @@ class _PreparedOCRRequest:
 _RUST_OCR_PROVIDERS: Final = {
     "mistral",
     "azure_ai",
-    "vertex_ai",
 }
 
 _AZURE_RUST_AUTH_PARAMS: Final = (
@@ -211,10 +210,10 @@ def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
 def _rust_bridge_optional_params(
     prepared_request: _PreparedOCRRequest,
     raw_optional_params: Mapping[str, object],
-    resolve_secret: Callable[[str], str | None],
 ) -> dict[str, object]:
-    supported_params: Final = prepared_request.provider_config.get_supported_ocr_params(
-        model=prepared_request.model
+    supported_params: Final = cast(
+        list[str],
+        prepared_request.provider_config.get_supported_ocr_params(model=prepared_request.model),
     )
     provider_params: Final = {
         name: raw_optional_params[name] for name in supported_params if name in raw_optional_params
@@ -235,30 +234,9 @@ def _rust_bridge_optional_params(
         if prepared_request.custom_llm_provider == "azure_ai"
         else {}
     )
-    if prepared_request.custom_llm_provider == "vertex_ai":
-        vertex_project: Final = (
-            raw_optional_params.get("vertex_project")
-            or raw_optional_params.get("vertex_ai_project")
-            or litellm.vertex_project
-            or resolve_secret("VERTEXAI_PROJECT")
-        )
-        vertex_location: Final = (
-            raw_optional_params.get("vertex_location")
-            or raw_optional_params.get("vertex_ai_location")
-            or litellm.vertex_location
-            or resolve_secret("VERTEXAI_LOCATION")
-            or resolve_secret("VERTEX_LOCATION")
-        )
-        vertex_params: Final = {
-            **({"vertex_project": vertex_project} if vertex_project is not None else {}),
-            **({"vertex_location": vertex_location} if vertex_location is not None else {}),
-        }
-    else:
-        vertex_params = {}
     return {
         **provider_params,
         **azure_auth_params,
-        **vertex_params,
     }
 
 
@@ -293,7 +271,6 @@ def _prepare_rust_ocr_call(
     rust_optional_params: Final = _rust_bridge_optional_params(
         prepared_request,
         raw_optional_params,
-        resolve_api_key,
     )
     prepared_request.litellm_logging_obj.pre_call(
         input="OCR document processing",

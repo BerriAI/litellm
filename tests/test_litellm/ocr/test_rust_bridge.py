@@ -494,67 +494,6 @@ def test_run_rust_ocr_does_not_resolve_provider_api_key_in_python():
     assert bridge.calls[0]["api_key"] is None
 
 
-def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
-    bridge = RecordingBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-
-    ocr_main._run_rust_ocr(
-        prepared_request=build_prepared_request(
-            custom_llm_provider="vertex_ai",
-            model="mistral-ocr-maas",
-            litellm_params={
-                "vertex_project": "project-1",
-                "vertex_location": "us-central1",
-                "vertex_credentials": "redacted",
-            },
-            optional_params={"include_image_base64": True},
-            timeout=None,
-        ),
-        raw_optional_params={
-            "include_image_base64": True,
-            "vertex_project": "project-1",
-            "vertex_location": "us-central1",
-        },
-        caller_api_key="sk-test",
-        caller_api_base=None,
-        resolve_api_key=lambda _name: None,
-    )
-
-    assert bridge.calls[0]["optional_params"] == {
-        "include_image_base64": True,
-        "vertex_project": "project-1",
-        "vertex_location": "us-central1",
-    }
-
-
-def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_manager():
-    bridge = RecordingBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-
-    def _resolver(name: str) -> str | None:
-        return {
-            "VERTEXAI_PROJECT": "project-from-secret",
-            "VERTEXAI_LOCATION": "us-east5",
-        }.get(name)
-
-    ocr_main._run_rust_ocr(
-        prepared_request=build_prepared_request(
-            custom_llm_provider="vertex_ai",
-            model="mistral-ocr-maas",
-            timeout=None,
-        ),
-        raw_optional_params={},
-        caller_api_key="sk-test",
-        caller_api_base=None,
-        resolve_api_key=_resolver,
-    )
-
-    assert bridge.calls[0]["optional_params"]["vertex_project"] == "project-from-secret"
-    assert bridge.calls[0]["optional_params"]["vertex_location"] == "us-east5"
-
-
 def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
     bridge = RecordingBridge()
     litellm.rust(True)
@@ -746,6 +685,28 @@ def test_ocr_routes_azure_entra_inputs_to_rust_without_python_auth(fake_bridge):
         "tenant_id": "tenant",
         "client_id": "client",
     }
+
+
+def test_ocr_keeps_vertex_on_python_path(fake_bridge, monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_handler_ocr(**kwargs: object) -> OCRResponse:
+        captured.update(kwargs)
+        return OCRResponse(pages=[], model="mistral-ocr-maas", object="ocr")
+
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", fake_handler_ocr)
+
+    response = litellm.ocr(
+        model="vertex_ai/mistral-ocr-maas",
+        document=DOCUMENT,
+        api_key="access-token",
+        vertex_project="project-1",
+        vertex_location="us-central1",
+    )
+
+    assert isinstance(response, OCRResponse)
+    assert fake_bridge.calls == []
+    assert captured["custom_llm_provider"] == "vertex_ai"
 
 
 def test_ocr_rust_path_converts_file_document_before_bridge(fake_bridge):

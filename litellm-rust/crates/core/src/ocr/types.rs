@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::AuthError;
 use crate::providers::auth::azure::AzureAuthInputs;
 
 #[derive(Clone, Debug, Default)]
@@ -9,7 +8,6 @@ pub enum OcrAuthInputs {
     #[default]
     None,
     AzureAi(AzureAuthInputs),
-    Invalid(AuthError),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
