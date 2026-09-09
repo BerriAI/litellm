@@ -244,14 +244,6 @@ jobs:
             reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 60
-
-          - shard: failure-path-load
-            artifact-name: failure-path-load
-            test-path: "tests/load_tests/test_failing_dependencies_load.py"
-            workers: 1
-            reruns: 1
-            timeout-minutes: 10
-            job-timeout-minutes: 20
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: ${{ matrix.test-path }}

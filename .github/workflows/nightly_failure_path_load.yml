@@ -1,0 +1,50 @@
+name: "Nightly Failure-Path Load Test"
+
+on:
+  schedule:
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  failure-path-load:
+    if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run the failure-path load test
+        env:
+          LITELLM_LOG: WARNING
+        run: |
+          uv run --no-sync pytest tests/load_tests/test_failing_dependencies_load.py -v --tb=short -rA \
+            -o log_cli=true -o log_cli_level=INFO
