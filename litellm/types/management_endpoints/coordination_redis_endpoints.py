@@ -131,4 +131,12 @@ COORDINATION_REDIS_SETTINGS_FIELDS: Final[list[CoordinationRedisSettingsField]] 
         ui_field_name="AWS IAM Region",
         section="connection",
     ),
+    CoordinationRedisSettingsField(
+        field_name="aws_iam_serverless",
+        field_type="Boolean",
+        field_description="The ElastiCache cache is serverless rather than a self-designed cluster",
+        field_default=False,
+        ui_field_name="AWS IAM Serverless Cache",
+        section="connection",
+    ),
 ]

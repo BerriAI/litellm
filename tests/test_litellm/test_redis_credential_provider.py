@@ -175,3 +175,57 @@ def test_elasticache_provider_recovers_after_a_failed_resolution():
     assert user_name == "iam-user"
     assert token
     assert resolver.calls == 2
+
+
+@pytest.mark.parametrize(
+    "provider_kwargs, expected_resource_type",
+    [
+        pytest.param({}, None, id="default_is_self_designed"),
+        pytest.param({"is_serverless": False}, None, id="self_designed"),
+        pytest.param({"is_serverless": True}, ["ServerlessCache"], id="serverless"),
+    ],
+)
+def test_elasticache_provider_signs_resource_type_only_for_serverless(provider_kwargs, expected_resource_type):
+    provider = ElastiCacheIAMCredentialProvider(
+        user_name="iam-user",
+        cache_name="cache-name",
+        region="us-east-1",
+        credentials_resolver=_FakeResolver(_FakeCredentials("AKIA-SYNTHETIC")),
+        **provider_kwargs,
+    )
+
+    _, token = provider.get_credentials()
+    query = parse_qs(urlsplit("https://" + token).query)
+
+    assert query.get("ResourceType") == expected_resource_type
+    assert query["X-Amz-Signature"]
+
+
+def test_elasticache_provider_lowercases_the_cache_name():
+    provider = ElastiCacheIAMCredentialProvider(
+        user_name="iam-user",
+        cache_name="Mixed-Case-Cache",
+        region="us-east-1",
+        credentials_resolver=_FakeResolver(_FakeCredentials("AKIA-SYNTHETIC")),
+    )
+
+    _, token = provider.get_credentials()
+
+    assert urlsplit("https://" + token).netloc == "mixed-case-cache"
+
+
+def test_elasticache_provider_encodes_reserved_characters_in_the_user_name():
+    user_name = "iam user/with+reserved&chars"
+    provider = ElastiCacheIAMCredentialProvider(
+        user_name=user_name,
+        cache_name="cache-name",
+        region="us-east-1",
+        credentials_resolver=_FakeResolver(_FakeCredentials("AKIA-SYNTHETIC")),
+    )
+
+    returned_user_name, token = provider.get_credentials()
+    query = parse_qs(urlsplit("https://" + token).query)
+
+    assert returned_user_name == user_name
+    assert query["User"] == [user_name]
+    assert query["Action"] == ["connect"]
