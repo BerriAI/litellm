@@ -13119,9 +13119,10 @@ class Router:
 
         if not isinstance(strategy, ComplexityRouter):
             return frozenset()
+        tiers: Final[Mapping[str, str | Sequence[str]]] = strategy.config.tiers
         tier_models: Final = frozenset(
             model_name
-            for tier_value in strategy.config.tiers.values()
+            for tier_value in tiers.values()
             for model_name in ((tier_value,) if isinstance(tier_value, str) else tuple(tier_value))
         )
         default_model: Final = strategy.config.default_model
@@ -13137,7 +13138,7 @@ class Router:
         selected_strategy: "TaggedPreRoutingStrategy[PreRoutingStrategy]",
         request_kwargs: Mapping[str, object],
         messages: list[dict[str, Any]] | None = None,
-        input: str | list | None = None,
+        input: str | Sequence[object] | None = None,
     ) -> Optional["PreRoutingHookResponse"]:
         """Keep a follow-up carrying encrypted reasoning on the deployment that produced it.
 
@@ -13164,8 +13165,8 @@ class Router:
         if not affinity_registered:
             return None
 
-        request_input: Final = input if input is not None else request_kwargs.get("input")
-        originating_model_id: Final = EncryptedContentAffinityCheck._extract_model_id_from_input(request_input)
+        request_input: Final[object] = input if input is not None else request_kwargs.get("input")
+        originating_model_id: Final = EncryptedContentAffinityCheck.extract_model_id_from_input(request_input)
         if not originating_model_id:
             return None
 

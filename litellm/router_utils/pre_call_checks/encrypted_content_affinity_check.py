@@ -108,10 +108,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
 
     @staticmethod
-    def _extract_model_id_from_input(request_input: object) -> str | None:
+    def extract_model_id_from_input(request_input: object) -> str | None:
         """
         Scan ``input`` items for litellm-encoded encrypted-content markers and
         return the ``model_id`` embedded in the first one found.
+
+        Public because the Router's pre-routing hook needs the same answer before a
+        model group has been chosen: a complexity router would otherwise reclassify the
+        follow-up into a tier on the far side of the encryption boundary, and this
+        callback's deployment filtering only ever runs within one group.
 
         Checks both:
         1. Encoded item IDs (encitem_...) - for clients that send IDs
@@ -249,7 +254,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
 
         request_input: Final = request_kwargs.get("input")
-        model_id: Final = self._extract_model_id_from_input(request_input)
+        model_id: Final = self.extract_model_id_from_input(request_input)
         if not model_id:
             return typed_healthy_deployments
 
