@@ -37,6 +37,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.mcp_debug import describe_upstream_http_failure
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InMemoryTokenCacheBackend,
     OAuthToken,
@@ -110,6 +112,10 @@ async def post_client_credentials_grant(
         )
     except httpx.HTTPStatusError as status_err:
         status_code: Final = status_err.response.status_code
+        verbose_logger.warning(
+            "OAuth2 client_credentials token request denied:\n  upstream exchange: %s",
+            describe_upstream_http_failure(status_err),
+        )
         return TokenEndpointDenied(status_code=status_code, detail=f"token endpoint returned HTTP {status_code}")
     except Exception as exc:  # noqa: BLE001  # any transport failure is the same outcome: unreachable
         return TokenEndpointUnreachable(detail=str(exc))

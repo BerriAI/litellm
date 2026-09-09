@@ -85,11 +85,14 @@ Usage with curl::
          http://localhost:4000/mcp/atlassian_mcp
 """
 
+import re
 from typing import TYPE_CHECKING, Final
 
+import httpx
 from starlette.types import Message, Send
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -127,6 +130,10 @@ class MCPDebug:
     @staticmethod
     def _mask(value: str | None) -> str:
         """Mask a single value for safe display in headers."""
+        return MCPDebug.mask_secret(value)
+
+    @staticmethod
+    def mask_secret(value: str | None) -> str:
         if not value:
             return "(none)"
         return MCPDebug._masker._mask_value(value)
@@ -311,3 +318,61 @@ class MCPDebug:
             server_url=server_url,
             server_auth_type=server_auth_type,
         )
+
+
+_BODY_PREVIEW_CHARS: Final = 512
+_SENSITIVE_HEADER_NAMES: Final = frozenset({"authorization", "proxy-authorization", "cookie", "x-api-key"})
+_SENSITIVE_BODY_FIELD: Final = re.compile(
+    r'(?P<key>"?(?:client_secret|client_assertion|refresh_token|access_token|id_token|password|code)"?\s*[=:]\s*"?)'
+    r'(?P<value>[^&"\s,}]+)'
+)
+
+
+def _mask_body_match(match: re.Match[str]) -> str:
+    return f"{match.group('key')}{MCPDebug.mask_secret(match.group('value'))}"
+
+
+def _preview(raw: bytes) -> str:
+    text: Final = _SENSITIVE_BODY_FIELD.sub(_mask_body_match, raw.decode("utf-8", errors="replace"))
+    return (
+        text
+        if len(text) <= _BODY_PREVIEW_CHARS
+        else f"{text[:_BODY_PREVIEW_CHARS]}...(+{len(text) - _BODY_PREVIEW_CHARS} chars)"
+    )
+
+
+def _masked_headers(headers: httpx.Headers) -> str:
+    return ", ".join(
+        f"{name}={MCPDebug.mask_secret(value) if name.lower() in _SENSITIVE_HEADER_NAMES else value}"
+        for name, value in headers.items()
+    )
+
+
+def _request_body_preview(request: httpx.Request) -> str:
+    try:
+        return _preview(request.content) or "(empty)"
+    except httpx.RequestNotRead:
+        return "(streamed, not captured)"
+
+
+def _response_body_preview(response: httpx.Response) -> str:
+    try:
+        return _preview(response.content) or "(empty)"
+    except httpx.ResponseNotRead:
+        return "(not read)"
+
+
+def describe_upstream_http_failure(exc: BaseException) -> str | None:
+    """One line per upstream ``httpx.Response`` in the exception tree: the request method, URL,
+    masked request headers and JSON-RPC body that were sent, plus the status and body that came back.
+    ``None`` when the failure never reached an HTTP response (DNS, refused connection, timeout)."""
+    lines: Final = tuple(
+        f"{response.request.method} {response.request.url} -> HTTP {response.status_code} {response.reason_phrase}"
+        f" | request headers: {_masked_headers(response.request.headers)}"
+        f" | request body: {_request_body_preview(response.request)}"
+        f" | response body: {_response_body_preview(response)}"
+        for current in iter_exception_tree(exc)
+        for response in (getattr(current, "response", None),)
+        if isinstance(response, httpx.Response)
+    )
+    return "\n".join(lines) or None

@@ -5,9 +5,12 @@ Tests for MCPDebug — MCP OAuth2 debug response headers.
 import asyncio
 from unittest.mock import MagicMock
 
+import httpx
+
 from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCP_DEBUG_REQUEST_HEADER,
     MCPDebug,
+    describe_upstream_http_failure,
 )
 
 
@@ -269,3 +272,58 @@ class TestWrapSendWithDebugHeaders:
         asyncio.run(wrapped(body_msg))
 
         assert captured[0] == body_msg
+
+
+class TestDescribeUpstreamHttpFailure:
+    @staticmethod
+    def _status_error(*, body: bytes, response_body: bytes | None = None) -> httpx.HTTPStatusError:
+        request = httpx.Request(
+            "POST",
+            "https://upstream.example/apis/mcp",
+            headers={"Authorization": "Bearer secret-token-abcdef0123456789", "Content-Type": "application/json"},
+            content=body,
+        )
+        response = (
+            httpx.Response(500, request=request, content=response_body)
+            if response_body is not None
+            else httpx.Response(500, request=request, stream=httpx.ByteStream(b'{"error":"boom"}'))
+        )
+        return httpx.HTTPStatusError("500", request=request, response=response)
+
+    def test_includes_method_url_status_and_request_body(self):
+        exc = self._status_error(
+            body=b'{"method":"initialize","jsonrpc":"2.0","id":0}',
+            response_body=b'{"error":"boom"}',
+        )
+        described = describe_upstream_http_failure(exc)
+        assert described is not None
+        assert "POST https://upstream.example/apis/mcp -> HTTP 500" in described
+        assert '{"method":"initialize"' in described
+        assert 'response body: {"error":"boom"}' in described
+
+    def test_masks_authorization_header_and_secret_body_fields(self):
+        exc = self._status_error(
+            body=b"grant_type=client_credentials&client_id=abc&client_secret=super-secret-value-1234",
+            response_body=b"{}",
+        )
+        described = describe_upstream_http_failure(exc)
+        assert described is not None
+        assert "secret-token-abcdef0123456789" not in described
+        assert "super-secret-value-1234" not in described
+        assert "client_id=abc" in described
+        assert "client_secret=" in described
+
+    def test_reports_unread_streamed_response_body(self):
+        described = describe_upstream_http_failure(self._status_error(body=b"{}"))
+        assert described is not None
+        assert "response body: (not read)" in described
+
+    def test_finds_response_behind_cause_chain(self):
+        wrapper = RuntimeError("token minting failed")
+        wrapper.__cause__ = self._status_error(body=b"{}", response_body=b'{"error":"invalid_client"}')
+        described = describe_upstream_http_failure(wrapper)
+        assert described is not None
+        assert "invalid_client" in described
+
+    def test_returns_none_without_http_response(self):
+        assert describe_upstream_http_failure(ConnectionError("refused")) is None
