@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import ExitStack
@@ -6,6 +7,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal
 
+import httpx
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -175,6 +177,10 @@ def _logger_obligations() -> Mapping[str, CoverageObligation]:
             behavioral_cases=(
                 ("generic-api-success",)
                 if "generic_api" in names
+                else ("gcs-literalai-scheduling",)
+                if "gcs_bucket" in names
+                else ("gcs-literalai-scheduling",)
+                if "literalai" in names
                 else ("prometheus-string-registration",)
                 if "prometheus" in names
                 else ("otel-export",)
@@ -202,6 +208,10 @@ GUARDRAIL_OBLIGATIONS: Final = MappingProxyType(
                 if name == "azure/text_moderations"
                 else ("crowdstrike-redaction-native-chat",)
                 if name == "crowdstrike_aidr"
+                else ("rubrik-block-native-chat",)
+                if name == "rubrik"
+                else ("purview-audit-native-chat",)
+                if name == "microsoft_purview"
                 else ("content-filter-block",)
                 if name == "litellm_content_filter"
                 else ()
@@ -260,6 +270,62 @@ class RunObservation:
     response_text: str
     provider_body: Mapping[str, object]
     native_dispatch: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedPost:
+    url: str
+    headers: Mapping[str, str]
+    body: object
+
+
+class RecordingAsyncClient:
+    def __init__(
+        self,
+        responses: tuple[Mapping[str, object], ...] = (),
+        blocked_url_fragment: str | None = None,
+    ) -> None:
+        self.posts: list[RecordedPost] = []
+        self._responses = list(responses)
+        self._blocked_url_fragment = blocked_url_fragment
+        self.accepted = threading.Event()
+        self.release = threading.Event()
+        self.release.set()
+
+    async def post(self, url: str, **kwargs: object) -> httpx.Response:
+        data: Final = kwargs.get("data")
+        json_body: Final = kwargs.get("json")
+        body: Final = json_body if json_body is not None else data
+        headers_value: Final = kwargs.get("headers")
+        headers: Final = headers_value if isinstance(headers_value, Mapping) else {}
+        self.posts.append(RecordedPost(url=url, headers=headers, body=body))
+        should_block: Final = self._blocked_url_fragment is None or self._blocked_url_fragment in url
+        if should_block:
+            self.accepted.set()
+            released: Final = await asyncio.to_thread(self.release.wait, 10)
+            if not released:
+                raise TimeoutError(f"Timed out releasing POST {url}")
+        payload: Final = self._responses.pop(0) if self._responses else {}
+        response_headers: Final = {"etag": '"test-scope"'} if "protectionScopes/compute" in url else {}
+        return httpx.Response(200, json=payload, headers=response_headers, request=httpx.Request("POST", url))
+
+
+class RecordingVertexInstance:
+    async def _ensure_access_token_async(self, **kwargs: object) -> tuple[str, str]:
+        return "test-access-token", "test-project"
+
+    def _get_token_and_url(self, **kwargs: object) -> tuple[str, str]:
+        return "test-access-token", ""
+
+
+class AsyncBoundaryLogger(CustomLogger):
+    def __init__(self, action: Callable[[], Awaitable[None]]) -> None:
+        self._action = action
+
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        await self._action()
 
 
 async def _call_messages(server: RecordingServer, **kwargs: object) -> object:

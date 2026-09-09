@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Final
 
@@ -7,12 +8,18 @@ from opentelemetry.trace import StatusCode
 from prometheus_client import CollectorRegistry, Counter
 
 import litellm
+from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
+from litellm.integrations.gcs_bucket.gcs_bucket_base import IAM_AUTH_KEY
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+from litellm.integrations.literal_ai import LiteralAILogger
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.integrations.rubrik import RubrikLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr import CrowdStrikeAIDRHandler
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.microsoft_purview.purview_dlp import MicrosoftPurviewDLPGuardrail
 from litellm.proxy.guardrails.guardrail_registry import guardrail_initializer_registry
 from litellm.types.guardrails import (
     BlockedWord,
@@ -47,9 +54,12 @@ from tests.test_litellm_rust.integrations import (
     OCR_ASYNC,
     OCR_SYNC,
     OSS_LOGGER_NAMES,
+    AsyncBoundaryLogger,
     CompositionCase,
     MutatingFailingLogger,
     OtelHarness,
+    RecordingAsyncClient,
+    RecordingVertexInstance,
     ReviewGuardrail,
     Route,
     RunObservation,
@@ -62,6 +72,17 @@ from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSp
 pytestmark = pytest.mark.requires_rust_extension
 
 FAILURE_RESPONSE: Final = ResponseSpec(body={"message": "provider unavailable"}, status=500)
+MESSAGES_TOOLS: Final = [
+    {
+        "name": "get_weather",
+        "description": "Get current weather",
+        "input_schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    }
+]
 
 
 def composition_id(case: CompositionCase) -> str:
@@ -213,6 +234,82 @@ async def test_failing_callback_preserves_prior_mutation_and_later_exporters() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ("python", "rust"))
+@pytest.mark.parametrize(
+    ("callback_order", "flush_immediately", "gcs_has_tools"),
+    (
+        (("gcs", "literalai"), True, True),
+        (("gcs", "literalai"), False, False),
+        (("literalai", "gcs"), False, False),
+    ),
+    ids=(
+        "gcs-serializes-before-literalai-mutation",
+        "gcs-serializes-after-literalai-mutation",
+        "literalai-mutates-before-gcs-enqueue",
+    ),
+)
+async def test_gcs_literalai_serialization_schedule(
+    backend: Backend,
+    callback_order: tuple[str, str],
+    flush_immediately: bool,
+    gcs_has_tools: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("GCS_BATCH_SIZE", "1" if flush_immediately else "100")
+    monkeypatch.setenv("GCS_BUCKET_NAME", "composition-bucket")
+    monkeypatch.setenv("GCS_FLUSH_INTERVAL", "3600")
+    monkeypatch.setenv("GCS_USE_BATCHED_LOGGING", "true")
+    monkeypatch.setenv("LITERAL_BATCH_SIZE", "1")
+
+    async with isolated_backend(backend):
+        with recording_service() as provider:
+            provider.default_response = ResponseSpec(body=MESSAGES_ROUTE.provider_response)
+            storage: Final = RecordingAsyncClient()
+            literal_sink: Final = RecordingAsyncClient()
+            gcs: Final = GCSBucketLogger(bucket_name="composition-bucket")
+            gcs.async_httpx_client = storage
+            gcs.vertex_instances[IAM_AUTH_KEY] = RecordingVertexInstance()
+            literal: Final = LiteralAILogger(literalai_api_key="test-key")
+            literal.async_httpx_client = literal_sink
+            callbacks_by_name: Final = {"gcs": gcs, "literalai": literal}
+            recorder: Final = RecordingLogger()
+            ordered_callbacks: Final = [callbacks_by_name[name] for name in callback_order]
+            callbacks: Final = (
+                [gcs, AsyncBoundaryLogger(gcs.flush_queue), literal] if flush_immediately else ordered_callbacks
+            )
+
+            try:
+                response: Final = await MESSAGES_ROUTE.invoke(
+                    provider,
+                    tools=MESSAGES_TOOLS,
+                    callbacks=[*callbacks, recorder],
+                )
+                await recorder.wait_for_async("async_log_success_event")
+                if not flush_immediately:
+                    await gcs.flush_queue()
+
+                gcs_payload_value: Final = storage.posts[0].body
+                if not isinstance(gcs_payload_value, str):
+                    raise TypeError(f"Expected serialized GCS payload, got {type(gcs_payload_value).__name__}")
+                gcs_payload: Final = json.loads(gcs_payload_value)
+                literal_body: Final = literal_sink.posts[0].body
+                if not isinstance(literal_body, dict):
+                    raise TypeError(f"Expected LiteralAI request body, got {type(literal_body).__name__}")
+                generation: Final = literal_body["variables"]["generation_0"]
+
+                assert ("tools" in gcs_payload["model_parameters"]) is gcs_has_tools
+                assert generation["tools"] == MESSAGES_TOOLS
+                assert len(storage.posts) == 1
+                assert len(literal_sink.posts) == 1
+                assert response_used_native_dispatch(response) is (backend == "rust")
+            finally:
+                await gcs.aclose()
+
+
+@pytest.mark.asyncio
 async def test_crowdstrike_redaction_reaches_native_chat_provider_and_exporter() -> None:
     with recording_service() as provider, recording_service() as guard, recording_service() as sink:
         provider.default_response = ResponseSpec(body=CHAT_RESPONSE)
@@ -263,6 +360,196 @@ async def test_crowdstrike_redaction_reaches_native_chat_provider_and_exporter()
         assert provider.requests[0].body["system"] == [{"type": "text", "text": "Keep the answer short"}]
         assert exported_messages == CHAT_MESSAGES
         assert response_used_native_dispatch(response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ("python", "rust"))
+async def test_rubrik_block_preserves_context_for_error_exporters(
+    backend: Backend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RUBRIK_BATCH_SIZE", "1")
+    async with isolated_backend(backend):
+        with recording_service() as provider, recording_service() as rubrik_service, recording_service() as sink:
+            provider.default_response = ResponseSpec(body=CHAT_RESPONSE)
+            rubrik_service.expected_requests = None
+            rubrik_service.default_response = ResponseSpec(
+                body={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "Response blocked by policy",
+                                "tool_calls": [],
+                            }
+                        }
+                    ]
+                }
+            )
+            rubrik: Final = RubrikLogger(
+                api_key="test-rubrik-key",
+                api_base=rubrik_service.base_url,
+                guardrail_name="rubrik-block",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+            )
+            exporter: Final = GenericAPILogger(endpoint=f"{sink.base_url}/logs", batch_size=1, log_format="single")
+            recorder: Final = RecordingLogger()
+            litellm.callbacks.append(rubrik)
+
+            try:
+                with pytest.raises(ModifyResponseException, match="Response blocked by policy"):
+                    await litellm.acompletion(
+                        model=CHAT_MODEL,
+                        messages=CHAT_MESSAGES,
+                        api_key="test-key",
+                        api_base=provider.base_url,
+                        callbacks=[exporter, recorder],
+                        guardrails=[rubrik.guardrail_name],
+                    )
+                await drain_logging()
+                await rubrik.flush_queue()
+
+                moderation_requests: Final = tuple(
+                    request for request in rubrik_service.requests if request.path == "/v1/after_completion/openai/v1"
+                )
+                batch_requests: Final = tuple(
+                    request for request in rubrik_service.requests if request.path == "/v1/litellm/batch"
+                )
+                assert len(provider.requests) == 1
+                assert len(moderation_requests) == 1
+                assert moderation_requests[0].body["request"]["messages"] == CHAT_MESSAGES
+                assert moderation_requests[0].body["response"]["choices"][0]["message"]["content"] == ("Handled safely")
+                assert len(batch_requests) == 1
+                assert "Response blocked by policy" in json.dumps(batch_requests[0].body)
+                assert len(sink.requests) == 1
+                assert sink.requests[0].body["status"] == "failure"
+                assert sink.requests[0].body["error_information"]["error_class"] == "ModifyResponseException"
+                assert "Response blocked by policy" in sink.requests[0].body["error_information"]["error_message"]
+            finally:
+                await rubrik.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ("python", "rust"))
+async def test_purview_audit_retains_payload_after_sdk_response(backend: Backend) -> None:
+    async with isolated_backend(backend):
+        with recording_service() as provider, recording_service() as sink:
+            provider.default_response = ResponseSpec(body=CHAT_RESPONSE)
+            graph: Final = RecordingAsyncClient(
+                responses=(
+                    {"access_token": "test-token", "expires_in": 3600},
+                    {},
+                    {},
+                    {},
+                ),
+                blocked_url_fragment="processContent",
+            )
+            graph.release.clear()
+            purview: Final = MicrosoftPurviewDLPGuardrail(
+                guardrail_name="purview-audit",
+                tenant_id="test-tenant",
+                client_id="test-client",
+                client_secret="test-secret",
+                event_hook=GuardrailEventHooks.logging_only,
+                default_on=True,
+            )
+            purview.async_handler = graph
+            exporter: Final = GenericAPILogger(endpoint=f"{sink.base_url}/logs", batch_size=1, log_format="single")
+            recorder: Final = RecordingLogger()
+            litellm.callbacks.append(purview)
+
+            request_task: Final = asyncio.create_task(
+                litellm.acompletion(
+                    model=CHAT_MODEL,
+                    messages=CHAT_MESSAGES,
+                    api_key="test-key",
+                    api_base=provider.base_url,
+                    metadata={"user_api_key_user_id": "audit-user"},
+                    callbacks=[exporter, recorder],
+                    guardrails=[purview.guardrail_name],
+                )
+            )
+            accepted: Final = await asyncio.to_thread(graph.accepted.wait, 3)
+            assert accepted
+            response: Final = await asyncio.wait_for(asyncio.shield(request_task), 2)
+            assert response.choices[0].message.content == "Handled safely"
+            assert len(tuple(post for post in graph.posts if "processContent" in post.url)) == 1
+
+            graph.release.set()
+            await recorder.wait_for_async("async_log_success_event")
+            async with asyncio.timeout(3):
+                while len(tuple(post for post in graph.posts if "processContent" in post.url)) < 2:
+                    await asyncio.sleep(0.01)
+
+            audits: Final = tuple(post for post in graph.posts if "processContent" in post.url)
+            activities: Final = tuple(post.body["contentToProcess"]["activityMetadata"]["activity"] for post in audits)
+            exported: Final = sink.requests[0].body
+            assert activities == ("uploadText", "downloadText")
+            assert CHAT_MESSAGES[-1]["content"] in json.dumps(audits[0].body)
+            assert "Handled safely" in json.dumps(audits[1].body)
+            assert exported["status"] == "success"
+            assert response_used_native_dispatch(response) is (backend == "rust")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ("python", "rust"))
+async def test_purview_sync_audit_runs_without_caller_event_loop(backend: Backend) -> None:
+    async with isolated_backend(backend):
+        with recording_service() as provider, recording_service() as sink:
+            provider.default_response = ResponseSpec(body=CHAT_RESPONSE)
+            graph: Final = RecordingAsyncClient(
+                responses=(
+                    {"access_token": "test-token", "expires_in": 3600},
+                    {},
+                    {},
+                    {},
+                ),
+                blocked_url_fragment="processContent",
+            )
+            graph.release.clear()
+            purview: Final = MicrosoftPurviewDLPGuardrail(
+                guardrail_name="purview-sync-audit",
+                tenant_id="test-tenant",
+                client_id="test-client",
+                client_secret="test-secret",
+                event_hook=GuardrailEventHooks.logging_only,
+                default_on=True,
+            )
+            purview.async_handler = graph
+            exporter: Final = LiteralAILogger(
+                literalai_api_key="test-key",
+                literalai_api_url=sink.base_url,
+                batch_size=1,
+            )
+            litellm.callbacks.append(purview)
+
+            response: Final = await asyncio.to_thread(
+                litellm.completion,
+                model=CHAT_MODEL,
+                messages=CHAT_MESSAGES,
+                api_key="test-key",
+                api_base=provider.base_url,
+                metadata={"user_api_key_user_id": "audit-user"},
+                callbacks=[exporter],
+                guardrails=[purview.guardrail_name],
+            )
+            accepted: Final = await asyncio.to_thread(graph.accepted.wait, 3)
+            assert accepted
+            assert response.choices[0].message.content == "Handled safely"
+            assert len(tuple(post for post in graph.posts if "processContent" in post.url)) == 1
+
+            graph.release.set()
+            async with asyncio.timeout(3):
+                while len(tuple(post for post in graph.posts if "processContent" in post.url)) < 2:
+                    await asyncio.sleep(0.01)
+
+            audits: Final = tuple(post for post in graph.posts if "processContent" in post.url)
+            assert CHAT_MESSAGES[-1]["content"] in json.dumps(audits[0].body)
+            assert "Handled safely" in json.dumps(audits[1].body)
+            assert sink.requests[0].path == "/api/graphql"
+            assert "Handled safely" in json.dumps(sink.requests[0].body["variables"]["generation_0"])
+            assert response_used_native_dispatch(response) is (backend == "rust")
 
 
 @pytest.mark.asyncio

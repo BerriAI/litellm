@@ -43,7 +43,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             flush_interval=self.flush_interval,
         )
         self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue(maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE)
-        asyncio.create_task(self.periodic_flush())
+        self._periodic_flush_task = asyncio.create_task(self.periodic_flush())
         AdditionalLoggingUtils.__init__(self)
 
         if premium_user is not True:
@@ -370,6 +370,13 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             await asyncio.sleep(self.flush_interval)
             verbose_logger.debug("GCS Bucket periodic flush after %s seconds", self.flush_interval)
             await self.flush_queue()
+
+    async def aclose(self) -> None:
+        self._periodic_flush_task.cancel()
+        try:
+            await self._periodic_flush_task
+        except asyncio.CancelledError:
+            pass
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
         raise NotImplementedError("GCS Bucket does not support health check")
