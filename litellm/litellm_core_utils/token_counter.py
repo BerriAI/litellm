@@ -3,13 +3,14 @@
 import base64
 import io
 import struct
-import threading
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
 
+import anyio
 import httpx
 import tiktoken
 from tokenizers import Tokenizer
+from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
@@ -23,9 +24,10 @@ from litellm.constants import (
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
-    TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES,
+    TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -322,7 +324,15 @@ Type for a function that counts tokens in a string.
 """
 
 EXTRAPOLATION_SAMPLES: Final = 16
-_HF_ENCODE_SLOTS: Final = threading.BoundedSemaphore(TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES)
+T_ParamSpec: Final = ParamSpec("T_ParamSpec")
+T_Retval = TypeVar("T_Retval")
+_COUNT_OFFLOAD_LIMITER: Final = anyio.CapacityLimiter(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+
+
+def offload_token_count(
+    function: Callable[T_ParamSpec, T_Retval],
+) -> Callable[T_ParamSpec, Awaitable[T_Retval]]:
+    return asyncify(function, limiter=_COUNT_OFFLOAD_LIMITER)
 
 
 def _get_tiktoken_count_function(
@@ -590,8 +600,7 @@ def _get_exact_count_function(
             tokenizer: Final[Tokenizer] = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
-                with _HF_ENCODE_SLOTS:
-                    return len(tokenizer.encode_batch_fast([text])[0])
+                return len(tokenizer.encode_batch_fast([text])[0])
 
             return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":
