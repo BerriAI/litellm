@@ -11,6 +11,7 @@ pub mod common_utils;
 mod handler;
 pub mod lifecycle;
 pub mod request;
+mod streaming;
 pub mod transformation;
 pub mod types;
 
@@ -29,4 +30,29 @@ pub async fn messages_stream(request: MessagesRequest) -> Result<StreamingCall, 
     crate::runtime::LiteLlm::new()
         .messages_stream(request)
         .await
+}
+
+pub async fn messages_stream_prepared<S>(
+    request: types::ProviderMessagesRequest,
+    context: crate::lifecycle::CallLifecycleContext,
+    start_time: f64,
+    services: std::sync::Arc<S>,
+) -> Result<StreamingCall, Error>
+where
+    S: crate::lifecycle::Clock + crate::lifecycle::TerminalDispatcher + 'static,
+{
+    static TRANSPORT: std::sync::OnceLock<crate::runtime::NativeHttpTransport> =
+        std::sync::OnceLock::new();
+    let source = handler::execute_provider_messages_stream_with_transport(
+        TRANSPORT.get_or_init(crate::runtime::NativeHttpTransport::new),
+        request,
+    )
+    .await?;
+    Ok(StreamingCall::new(
+        source,
+        Box::<streaming::AnthropicMessagesObserver>::default(),
+        context,
+        start_time,
+        services,
+    ))
 }

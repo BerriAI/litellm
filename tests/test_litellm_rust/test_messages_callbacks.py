@@ -12,6 +12,7 @@ from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.contracts import (
     MESSAGES,
+    MESSAGES_EVENTS,
     MESSAGES_MODEL,
     MESSAGES_RESPONSE,
     request_body,
@@ -65,10 +66,11 @@ async def test_messages_pre_call_receives_expected_provider_request(messages_ser
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("raise_after_edit", [False, True])
 @pytest.mark.parametrize("native", [False, True])
 async def test_messages_pre_call_edits_reach_later_callbacks_and_provider(
-    messages_server: RecordingServer, raise_after_edit: bool, native: bool
+    messages_server: RecordingServer, raise_after_edit: bool, native: bool, stream: bool
 ) -> None:
     litellm.rust(native)
     observed: Final = []
@@ -84,7 +86,12 @@ async def test_messages_pre_call_edits_reach_later_callbacks_and_provider(
         def log_pre_api_call(self, model, messages, kwargs):
             observed.append((copy.deepcopy(request_body(kwargs)), dict(request_headers(kwargs))))
 
-    await call_messages(messages_server, [Edit(), Observe()])
+    if stream:
+        messages_server.enqueue(ResponseSpec(body=None, events=MESSAGES_EVENTS))
+    response: Final = await call_messages(messages_server, [Edit(), Observe()], stream=stream)
+    if stream:
+        async for _ in response:
+            pass
 
     assert observed[0][0]["temperature"] == 0.25
     assert observed[0][1]["x-audit-tag"] == "reviewed"
@@ -193,25 +200,16 @@ async def test_messages_callbacks_run_once(messages_server: RecordingServer) -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason="Buffered Rust Messages defers success callbacks until the client consumes or closes the fake stream",
-    strict=True,
-)
-async def test_messages_buffered_stream_callbacks_settle_before_client_consumption(
-    messages_server: RecordingServer,
-) -> None:
+async def test_messages_unconsumed_stream_close_logs_failure_once(messages_server: RecordingServer) -> None:
+    messages_server.enqueue(ResponseSpec(body=None, events=MESSAGES_EVENTS))
     recorder: Final = RecordingLogger()
-
     stream: Final = await call_messages(messages_server, [recorder], stream=True)
-    await drain_logging()
-    callbacks_before_close: Final = recorder.names.count("async_log_success_event")
-
+    assert "async_log_success_event" not in recorder.names
     await stream.aclose()
-    await drain_logging()
-    callbacks_after_close: Final = recorder.names.count("async_log_success_event")
-
-    assert callbacks_before_close == 1
-    assert callbacks_after_close == 1
+    await stream.aclose()
+    await recorder.wait_for_async("async_log_failure_event")
+    assert recorder.names.count("async_log_failure_event") == 1
+    assert "async_log_success_event" not in recorder.names
 
 
 @pytest.mark.asyncio
@@ -294,6 +292,7 @@ async def test_messages_pre_call_runs_in_callers_execution_context(messages_serv
 
 @pytest.mark.asyncio
 async def test_messages_stream_logs_success_after_exhaustion(messages_server: RecordingServer) -> None:
+    messages_server.enqueue(ResponseSpec(body=None, events=MESSAGES_EVENTS))
     recorder: Final = RecordingLogger()
     stream: Final = await call_messages(messages_server, [recorder], stream=True)
 
@@ -417,10 +416,17 @@ async def test_messages_concurrent_calls_keep_callback_state_isolated(messages_s
 
 
 @pytest.mark.asyncio
-async def test_messages_cancelled_call_runs_no_terminal_callbacks(messages_server: RecordingServer) -> None:
-    messages_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE, delay=0.5)
+@pytest.mark.parametrize("stream", [False, True])
+async def test_messages_cancelled_call_runs_no_terminal_callbacks(
+    messages_server: RecordingServer, stream: bool
+) -> None:
+    messages_server.default_response = ResponseSpec(
+        body=MESSAGES_RESPONSE,
+        delay=0.5,
+        events=MESSAGES_EVENTS if stream else (),
+    )
     recorder: Final = RecordingLogger()
-    task: Final = asyncio.create_task(call_messages(messages_server, [recorder]))
+    task: Final = asyncio.create_task(call_messages(messages_server, [recorder], stream=stream))
 
     async with asyncio.timeout(10):
         while not messages_server.requests:
@@ -486,3 +492,29 @@ async def test_whole_call_with_supplied_logger_still_owns_terminal_callbacks(
     assert [name for name, value in events] == ["pre", "sync_failure", "async_failure"]
     assert events[1][1] is raised.value
     assert events[2][1] is raised.value
+
+
+@pytest.mark.asyncio
+async def test_direct_bridge_stream_owns_callbacks(messages_server: RecordingServer) -> None:
+    from litellm.rust_bridge import messages as bridge
+
+    recorder: Final = RecordingLogger()
+    messages_server.enqueue(ResponseSpec(body=None, events=MESSAGES_EVENTS))
+    stream: Final = await bridge.amessages(
+        model=MESSAGES_MODEL.split("/", 1)[-1],
+        body={"model": MESSAGES_MODEL.split("/", 1)[-1], "messages": MESSAGES, "max_tokens": 64, "stream": True},
+        api_key="test-key",
+        api_base=messages_server.base_url,
+        custom_llm_provider="anthropic",
+        extra_headers=None,
+        timeout=5.0,
+        request_arguments={"callbacks": [recorder]},
+    )
+    assert "async_log_success_event" not in recorder.names
+    assert b"message_stop" in b"".join([chunk async for chunk in stream])
+    events: Final = await recorder.wait_for_async("async_log_success_event")
+    assert len(events) == 1
+    assert events[0].stream is True
+    assert events[0].response.choices[0].message.content == "Hello from native Messages"
+    assert recorder.names.count("log_pre_api_call") == 1
+    await stream.aclose()

@@ -1,4 +1,3 @@
-use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::Error;
 use crate::http_utils::{HttpClientProfile, http_client, http_request};
 use crate::lifecycle::{StreamingMetadata, StreamingSource};
@@ -109,12 +108,19 @@ pub(crate) async fn execute_messages_provider_stream_with_transport(
 ) -> Result<StreamingSource, Error> {
     let request =
         build_provider_request_with_environment(request, &|key| environment.environment(key))?;
-    if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
-        return Err(Error::InvalidRequest(
-            "streaming messages is not supported for this provider".to_string(),
-        ));
-    }
+    execute_provider_messages_stream_with_transport(transport, request).await
+}
 
+pub(crate) async fn execute_provider_messages_stream_with_transport(
+    transport: &dyn crate::runtime::HttpTransport,
+    request: super::types::ProviderMessagesRequest,
+) -> Result<StreamingSource, Error> {
+    if !request.config.supports_streaming() {
+        return Err(Error::InvalidRequest(format!(
+            "streaming messages is not supported for provider {}",
+            request.provider
+        )));
+    }
     let super::types::ProviderMessagesRequest {
         url, http, timeout, ..
     } = request;

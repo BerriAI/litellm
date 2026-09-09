@@ -258,7 +258,7 @@ async fn unregistered_completion_still_delivers_terminal_before_cleanup() {
     let tracking = Tracking::new();
     let client = client(
         Ok(response(Box::pin(stream::iter([Ok(Bytes::from_static(
-            b"data: {\"type\":\"message_stop\"}\n\n",
+            b"data: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\ndata: {\"type\":\"message_stop\"}\n\n",
         ))])))),
         tracking.clone(),
     );
@@ -269,7 +269,7 @@ async fn unregistered_completion_still_delivers_terminal_before_cleanup() {
     drop(client);
     let stream = call.stream;
     drop(call.completion);
-    stream.collect::<Vec<_>>().await;
+    assert!(stream.collect::<Vec<_>>().await.iter().all(Result::is_ok));
 
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         while tracking.terminals.lock().unwrap().is_empty() {
@@ -289,7 +289,7 @@ async fn partial_consumption_and_early_drop_cancel_once_and_release_owners() {
     let tracking = Tracking::new();
     let client = client(
         Ok(response(Box::pin(stream::iter([
-            Ok(Bytes::from_static(b"data: first\n\n")),
+            Ok(Bytes::from_static(b"data: {\"type\":\"ping\"}\n\n")),
             Ok(Bytes::from_static(b"data: second\n\n")),
         ])))),
         tracking.clone(),
@@ -302,7 +302,10 @@ async fn partial_consumption_and_early_drop_cancel_once_and_release_owners() {
     let completion = call.completion.register();
     let mut stream = call.stream;
 
-    assert_eq!(stream.next().await.unwrap().unwrap(), "data: first\n\n");
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        "data: {\"type\":\"ping\"}\n\n"
+    );
     drop(stream);
     let terminal = completion.await.unwrap();
 

@@ -17,6 +17,10 @@ impl MessagesAuthStrategy {
 }
 
 pub trait AnthropicMessagesProviderConfig: Sync {
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
     fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy;
 
     fn complete_url(

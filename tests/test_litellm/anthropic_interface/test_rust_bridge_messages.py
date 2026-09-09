@@ -1,10 +1,6 @@
 """Tests for the optional Rust-backed Anthropic Messages path."""
 
-import asyncio
 import importlib
-import weakref
-from datetime import datetime
-from typing import cast
 
 import httpx
 import pytest
@@ -12,9 +8,6 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import configuration
-from litellm.types.llms.anthropic_messages.anthropic_response import (
-    AnthropicMessagesResponse,
-)
 from litellm.types.router import GenericLiteLLMParams
 
 rust_messages = importlib.import_module("litellm.rust_bridge.messages")
@@ -377,145 +370,14 @@ async def test_gate_skips_rust_for_agentic_hook():
 
 
 @pytest.mark.asyncio
-async def test_gate_streams_through_rust_when_eligible_and_strips_stream_flag():
+async def test_gate_preserves_stream_flag():
     bridge = RecordingAsyncMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
-
     streaming_body = {**REQUEST_BODY, "stream": True}
-    response = await _gate(
-        has_agentic_hook=False,
-        request_body=streaming_body,
-    )
-
-    assert response is not None
-    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
-    assert "stream" not in bridge.calls[0]["body"]
-    assert bridge.calls[0]["body"] == REQUEST_BODY
-
-
-@pytest.mark.asyncio
-async def test_fake_stream_wraps_rust_response_as_anthropic_sse():
-    response = cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE))
-    stream = BaseLLMHTTPHandler._rust_anthropic_messages_fake_stream(response)
-
-    assert stream._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
-
-    chunks = [chunk async for chunk in stream]
-    joined = b"".join(chunks)
-
-    assert b"event: message_start" in joined
-    assert b"event: content_block_delta" in joined
-    assert b"hello world" in joined
-    assert b"event: message_stop" in joined
-
-
-def test_fake_stream_completes_retained_response_after_sync_exhaustion():
-    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-        FakeAnthropicMessagesStreamIterator,
-    )
-
-    completed: list[bool] = []
-    stream = FakeAnthropicMessagesStreamIterator(
-        response=cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE)),
-        on_complete=lambda: completed.append(True),
-    )
-
-    assert list(stream)
-    assert completed == [True]
-    assert list(stream) == []
-    assert completed == [True]
-
-
-@pytest.mark.asyncio
-async def test_fake_stream_async_exhaustion_and_close_settle_exactly_once():
-    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-        FakeAnthropicMessagesStreamIterator,
-    )
-
-    completed: list[bool] = []
-    stream = FakeAnthropicMessagesStreamIterator(
-        response=cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE)),
-        on_complete=lambda: completed.append(True),
-    )
-
-    assert [chunk async for chunk in stream]
-    await stream.aclose()
-    stream.close()
-    assert completed == [True]
-
-
-@pytest.mark.asyncio
-async def test_fake_stream_context_closes_after_early_cancellation():
-    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-        FakeAnthropicMessagesStreamIterator,
-    )
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
-        AnthropicMessagesStreamHiddenParams,
-        AnthropicMessagesStreamingResponse,
-    )
-
-    completed: list[bool] = []
-    completion_stream = FakeAnthropicMessagesStreamIterator(
-        cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE)),
-        on_complete=lambda: completed.append(True),
-    )
-    stream = AnthropicMessagesStreamingResponse(
-        completion_stream,
-        AnthropicMessagesStreamHiddenParams(additional_headers={}),
-    )
-
-    async def cancel_inside_context() -> None:
-        async with stream:
-            await anext(stream)
-            raise asyncio.CancelledError
-
-    with pytest.raises(asyncio.CancelledError):
-        await cancel_inside_context()
-
-    await stream.aclose()
-    assert completed == [True]
-
-
-def test_retained_response_releases_roots_and_restores_when_terminal_fails(monkeypatch):
-    class Root:
-        pass
-
-    class Logger:
-        def __init__(self) -> None:
-            self.model_call_details: dict[str, object] = {}
-
-        def _handle_anthropic_messages_response_logging(self, result: object) -> object:
-            return result
-
-    root = Root()
-    root_ref = weakref.ref(root)
-    restored: list[object] = []
-
-    terminal_calls: list[bool] = []
-
-    def terminal(*args: object) -> None:
-        terminal_calls.append(True)
-        if len(terminal_calls) == 1:
-            raise RuntimeError("terminal callback failed")
-
-    monkeypatch.setattr(rust_messages, "invoke_terminal", terminal)
-    monkeypatch.setattr(
-        litellm.utils,
-        "_restore_correlation_context_if_supported",
-        lambda logger: restored.append(logger),
-    )
-    logger = Logger()
-    response = rust_messages.retain_stream_response(dict(FAKE_MESSAGES_RESPONSE), root, logger, datetime.now())
-    del root
-
-    with pytest.raises(RuntimeError, match="terminal callback failed"):
-        response.complete()
-    response.complete()
-
-    assert root_ref() is None
-    assert terminal_calls == [True, True]
-    assert restored == [logger]
+    await _gate(request_body=streaming_body)
+    assert bridge.calls[0]["body"] == streaming_body
+    assert streaming_body["stream"] is True
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,8 @@ class ResponseSpec:
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
     events: tuple[tuple[str, object], ...] = ()
+    chunks: tuple[bytes, ...] = ()
+    release: threading.Event | None = None
 
 
 @dataclass
@@ -75,19 +77,34 @@ def recording_service() -> Iterator[RecordingServer]:
             if response.delay:
                 time.sleep(response.delay)
             payload: Final = (
-                b"".join(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in response.events)
-                if response.events
-                else json.dumps(response.body).encode()
+                b"".join(response.chunks)
+                if response.chunks
+                else (
+                    b"".join(
+                        f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in response.events
+                    )
+                    if response.events
+                    else json.dumps(response.body).encode()
+                )
             )
             self.send_response(response.status)
-            self.send_header("Content-Type", "text/event-stream" if response.events else "application/json")
+            self.send_header(
+                "Content-Type", "text/event-stream" if response.events or response.chunks else "application/json"
+            )
             self.send_header("Content-Length", str(len(payload)))
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.end_headers()
             try:
-                self.wfile.write(payload)
-            except BrokenPipeError:
+                if response.chunks:
+                    for index, chunk in enumerate(response.chunks):
+                        if index == 1 and response.release is not None:
+                            response.release.wait(timeout=10)
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                else:
+                    self.wfile.write(payload)
+            except (BrokenPipeError, ConnectionResetError):
                 pass
 
         do_GET = _handle

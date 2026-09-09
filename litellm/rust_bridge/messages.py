@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Final, Protocol, cast
+from datetime import datetime
+from types import MappingProxyType
+from typing import Final, Protocol, cast, runtime_checkable
 
 import httpx
 
@@ -49,11 +50,14 @@ class RustAmessages(Protocol):
     def __call__(
         self, arguments: dict[str, object]
     ) -> Awaitable[
-        AnthropicMessagesResponse
+        AnthropicMessagesResponse | AsyncIterator[bytes]
     ]: ...  # mutable-ok: native bridge retains and updates Python argument objects
 
 
+@runtime_checkable
 class _MessagesLogging(Protocol):
+    stream: bool
+    completion_start_time: datetime | None
     model_call_details: dict[str, object]  # mutable-ok: native bridge retains and updates Python argument objects
 
     def _handle_anthropic_messages_response_logging(self, result: object) -> object: ...
@@ -113,64 +117,59 @@ def load_rust_amessages() -> RustAmessages | None:
 def initialize_logging(
     arguments: dict[str, object], asynchronous: bool
 ) -> object:  # mutable-ok: native bridge retains and updates Python argument objects
-    return initialize_lifecycle_logging(arguments, asynchronous, "messages")
+    body: Final = arguments.get("body")
+    streaming: Final = isinstance(body, Mapping) and body.get("stream") is True
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
-
-class _RetainedMessagesResponse(
-    dict[str, object]
-):  # mutable-ok: native bridge retains and updates Python argument objects
-    def __init__(
-        self, response: AnthropicMessagesResponse, roots: object, logger: _MessagesLogging, start_time: datetime
-    ) -> None:
-        super().__init__(response)
-        self._roots = roots
-        self._logger = logger
-        self._start_time = start_time
-        self._completed = False
-
-    def complete(self) -> None:
-        if self._completed:
-            return
-        self._completed = True
-        roots, self._roots = self._roots, None
-        try:
-            complete_response = self._logger._handle_anthropic_messages_response_logging(  # pyright: ignore[reportPrivateUsage]  # existing Messages logging transform
-                self
-            )
-            self._logger.model_call_details["complete_streaming_response"] = complete_response
-            end_time = datetime.now(tz=self._start_time.tzinfo or timezone.utc)
-            try:
-                invoke_terminal(
-                    "async_success",
-                    roots,
-                    self._logger,
-                    None,
-                    complete_response,
-                    self._start_time,
-                    end_time,
-                )
-            finally:
-                invoke_terminal(
-                    "sync_success_if_needed",
-                    roots,
-                    self._logger,
-                    None,
-                    complete_response,
-                    self._start_time,
-                    end_time,
-                )
-        finally:
-            from litellm import utils
-
-            utils._restore_correlation_context_if_supported(self._logger)  # pyright: ignore[reportPrivateUsage]  # lifecycle cleanup has no public wrapper
-
-
-def retain_stream_response(
-    response: AnthropicMessagesResponse, roots: object, logger: _MessagesLogging, start_time: datetime
-) -> AnthropicMessagesResponse:
-    return cast(  # cast-ok: dict subclass preserves the Anthropic response mapping contract
-        AnthropicMessagesResponse, _RetainedMessagesResponse(response, roots, logger, start_time)
+    logger: Final = initialize_lifecycle_logging(
+        arguments, asynchronous, "anthropic_messages" if streaming else "messages"
     )
+    if (
+        streaming
+        and isinstance(logger, Logging)
+        and isinstance(body, Mapping)
+        and not hasattr(logger, "optional_params")
+    ):
+        logger.optional_params = dict(body)  # mutable-ok: Logging requires mutable provider options
+    return logger
+
+
+class MessagesStream(AsyncIterator[bytes]):
+    def __init__(self, source: AsyncIterator[bytes], arguments: Mapping[str, object], logger: object) -> None:
+        self.source: Final = source
+        self.arguments: Mapping[str, object] = arguments
+        self.logger: _MessagesLogging | None = logger if isinstance(logger, _MessagesLogging) else None
+        self.started: bool = False
+
+    async def __anext__(self) -> bytes:
+        try:
+            chunk: Final = await anext(self.source)
+        except StopAsyncIteration:
+            self._release()
+            raise
+        except Exception as error:
+            mapped: Final = map_native_error(error, self.arguments, "messages")
+            self._release()
+            raise mapped
+        if not self.started:
+            self.started = True
+            if self.logger is not None:
+                started: Final = datetime.now()  # noqa: DTZ005  # Logging uses naive local timestamps
+                self.logger.completion_start_time = started
+                self.logger.model_call_details["completion_start_time"] = started
+        return chunk
+
+    async def aclose(self) -> None:
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import aclose_if_supported
+
+        try:
+            await aclose_if_supported(self.source)
+        finally:
+            self._release()
+
+    def _release(self) -> None:
+        self.arguments = MappingProxyType({})
+        self.logger = None
 
 
 def _arguments(
@@ -266,7 +265,7 @@ async def amessages(
     litellm_params: GenericLiteLLMParams | None = None,
     messages: object = None,
     lifecycle_owner: LifecycleOwner = LifecycleOwner.BRIDGE,
-) -> AnthropicMessagesResponse | None:
+) -> AnthropicMessagesResponse | AsyncIterator[bytes] | None:
     implementation: Final = load_rust_amessages()
     if implementation is None:
         return None
@@ -285,7 +284,10 @@ async def amessages(
         lifecycle_owner,
     )
     try:
-        return await implementation(arguments=call_arguments)
+        response: Final = await implementation(arguments=call_arguments)
+        if isinstance(response, AsyncIterator):
+            return MessagesStream(response, call_arguments, call_arguments.get(LOGGING_OBJECT_KEY))
+        return response
     except Exception as error:  # noqa: BLE001  # only explicit declines before lifecycle setup may fall back
         exceptions: Final = native_exception_types()
         if (
@@ -307,7 +309,7 @@ class _MessagesBindings(NativeLifecycleBindings, Protocol):
         [dict[str, object], object], object
     ]  # mutable-ok: native bridge retains and updates Python argument objects
     pre_call: Callable[[object], None]
-    send: Callable[[object], Awaitable[AnthropicMessagesResponse]]
+    send: Callable[[object, object], Awaitable[AnthropicMessagesResponse | AsyncIterator[bytes]]]
     send_sync: Callable[[object], AnthropicMessagesResponse]
 
 
@@ -334,7 +336,7 @@ class _MessagesHost:
         self.error: BaseException | None = None
         self.start: datetime = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
         self.end: datetime | None = None
-        self.streaming: bool = False
+        self.stream_transferred: bool = False
 
     def invoke(self) -> tuple[bool, object]:
         return self.bindings.invoke(self.machine, self)
@@ -342,7 +344,10 @@ class _MessagesHost:
     def setup(self) -> None:
         self.logger = initialize_logging(self.arguments, self.asynchronous)
         self.arguments[LOGGING_OBJECT_KEY] = self.logger
-        self.streaming = getattr(self.logger, "stream", False) is True
+        body: Final = self.arguments.get("body")
+        if isinstance(body, Mapping) and body.get("stream") is True and isinstance(self.logger, _MessagesLogging):
+            self.logger.stream = True
+            self.logger.model_call_details["stream"] = True
 
     async def deployment_pre(self) -> None:
         if not self.lifecycle_owned:
@@ -363,24 +368,51 @@ class _MessagesHost:
         self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def send(self) -> None:
-        self.response = await self.bindings.send(self.state)
+        self.response = await self.bindings.send(self.state, self)
+        self.stream_transferred = isinstance(self.response, AsyncIterator)
         self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def deployment_success(self) -> None:
         from litellm.types.utils import CallTypes
 
+        if self.stream_transferred:
+            return
         if self.lifecycle_owned:
             self.response = await deployment_success(self.current, self.response, CallTypes.aanthropic_messages)
-        if not self.streaming:
-            return
-        if self.logger is None:
-            raise RuntimeError("messages logging was not initialized")
-        self.response = retain_stream_response(
-            cast(AnthropicMessagesResponse, self.response),
-            (self.arguments, self.current, self.state),
-            cast(_MessagesLogging, self.logger),
-            self.start,
-        )
+
+    async def complete_stream(self, response: object, error: str | None, end_time: float) -> None:
+        from litellm.exceptions import APIError
+
+        if not isinstance(self.logger, _MessagesLogging):
+            raise TypeError("messages stream logger was released before completion")
+        logger: Final = self.logger
+        end: Final = datetime.fromtimestamp(end_time, tz=self.start.tzinfo)
+        roots: Final = (self.arguments, self.current, self.state)
+        try:
+            if error is not None:
+                failure: Final = APIError(
+                    status_code=500,
+                    message=error,
+                    llm_provider=str(self.current.get("custom_llm_provider") or "anthropic"),
+                    model=str(self.current.get("model") or ""),
+                )
+                invoke_terminal("sync_failure", roots, logger, None, failure, self.start, end)
+                pending: Final = invoke_terminal("async_failure", roots, logger, None, failure, self.start, end)
+                if isinstance(pending, Awaitable):
+                    await pending
+                return
+            complete: Final = logger._handle_anthropic_messages_response_logging(response)  # pyright: ignore[reportPrivateUsage]  # existing Messages logging transform
+            logger.model_call_details["complete_streaming_response"] = complete
+            try:
+                invoke_terminal("async_success", roots, logger, None, complete, self.start, end)
+            finally:
+                invoke_terminal("sync_success_if_needed", roots, logger, None, complete, self.start, end)
+        finally:
+            restore_correlation_context(logger)
+            self.state = None
+            self.logger = None
+            self.arguments = {}  # mutable-ok: native driver requires dict fields after releasing request roots
+            self.current = {}  # mutable-ok: native driver requires dict fields after releasing request roots
 
     async def deployment_failure(self) -> None:
         if not self.lifecycle_owned:
@@ -388,7 +420,7 @@ class _MessagesHost:
         await deployment_failure(self.current, self.error, "anthropic_messages")
 
     def terminal(self, action: TerminalAction, value: object) -> object:
-        if self.streaming or not self.lifecycle_owned:
+        if self.stream_transferred or not self.lifecycle_owned:
             return None
         if self.logger is None or self.end is None:
             raise RuntimeError("messages terminal state was not initialized")
@@ -419,7 +451,7 @@ class _MessagesHost:
         return await result if isinstance(result, Awaitable) else result
 
     def restore(self) -> None:
-        if not self.streaming and self.lifecycle_owned:
+        if not self.stream_transferred and self.lifecycle_owned:
             restore_correlation_context(self.logger)
 
     def advance(self, outcome: NativeOutcome, error: BaseException | None = None) -> None:
@@ -427,7 +459,10 @@ class _MessagesHost:
 
     def result(self) -> object:
         if self.machine.complete():
-            return self.response
+            response: Final = self.response
+            if self.stream_transferred:
+                self.response = None
+            return response
         return host_result(self)
 
 
@@ -441,8 +476,10 @@ def _drive_sync(  # pyright: ignore[reportUnusedFunction]  # called by the nativ
 async def _drive_async(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
     arguments: dict[str, object],
     bindings: _MessagesBindings,  # mutable-ok: native bridge retains and updates Python argument objects
-) -> AnthropicMessagesResponse:
-    return cast(AnthropicMessagesResponse, await drive_async(_MessagesHost(arguments, True, bindings)))
+) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
+    return cast(
+        AnthropicMessagesResponse | AsyncIterator[bytes], await drive_async(_MessagesHost(arguments, True, bindings))
+    )
 
 
 __all__ = (
@@ -452,6 +489,5 @@ __all__ = (
     "load_rust_amessages",
     "load_rust_messages",
     "messages",
-    "retain_stream_response",
     "set_rust_messages",
 )

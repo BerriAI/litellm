@@ -24,6 +24,8 @@ trace-parity = [
 ]
 
 [dependencies]
+futures-util.workspace = true
+tokio.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 tower = { version = "0.5.3", features = ["util"], optional = true }

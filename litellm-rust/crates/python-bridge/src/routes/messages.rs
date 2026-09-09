@@ -1,3 +1,5 @@
+mod streaming;
+
 use litellm_core::lifecycle::FailureStage;
 use litellm_core::lifecycle::{ErrorDisposition, Lifecycle, Outcome};
 use litellm_core::messages::execute_provider_messages_request;
@@ -13,12 +15,15 @@ use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
 use crate::driver::{ADDITIONAL_ARGS, API_BASE, API_KEY, COMPLETE_INPUT_DICT, HEADERS, INPUT};
-use crate::errors::{RustUpstreamError, core_error_to_pyerr, messages_provider_error_to_pyerr};
+use crate::errors::{
+    RustBridgeDeclined, RustUpstreamError, core_error_to_pyerr, messages_provider_error_to_pyerr,
+};
 use crate::marshal::optional_timeout;
 use crate::retained::RequestRoots;
 
 #[pyclass]
 struct MessagesState {
+    streaming: bool,
     roots: Option<RequestRoots>,
     logging: Option<Py<PyAny>>,
     pre_call: Option<Py<PyDict>>,
@@ -168,9 +173,19 @@ fn build_request(
         .ok_or_else(|| PyValueError::new_err("messages requires body"))?
         .cast_into::<PyDict>()?;
     let callback_body: Value = from_py(body.as_any())?;
-    let snapshot = endpoint
-        .capture_buffered_body(callback_body)
-        .map_err(core_error_to_pyerr)?;
+    let streaming = callback_body.get("stream").and_then(Value::as_bool) == Some(true);
+    let snapshot = if streaming {
+        litellm_core::lifecycle::PreCallBody::StructuredAtBuild {
+            authorized: endpoint
+                .capture_body(callback_body.clone())
+                .map_err(core_error_to_pyerr)?,
+            callback: callback_body,
+        }
+    } else {
+        endpoint
+            .capture_buffered_body(callback_body)
+            .map_err(core_error_to_pyerr)?
+    };
     let headers = PyDict::new(py);
     for (name, value) in endpoint.headers() {
         headers.set_item(name, value)?;
@@ -190,6 +205,7 @@ fn build_request(
     Py::new(
         py,
         MessagesState {
+            streaming,
             roots: Some(RequestRoots::new(
                 arguments,
                 body.unbind().into_any(),
@@ -268,8 +284,12 @@ fn validate_arguments(arguments: &Bound<'_, PyDict>) -> PyResult<()> {
 }
 
 #[pyfunction]
-fn send(py: Python<'_>, state: Py<MessagesState>) -> PyResult<Bound<'_, PyAny>> {
+fn send(py: Python<'_>, state: Py<MessagesState>, host: Py<PyAny>) -> PyResult<Bound<'_, PyAny>> {
+    let streaming = state.borrow(py).streaming;
     let request = take_request(py, &state)?;
+    if streaming {
+        return streaming::send(py, request, host);
+    }
     litellm_python_interop::run_async_py(py, async move {
         let _state = state;
         let response = run_async_value(
@@ -303,6 +323,19 @@ fn committed_failure() -> PyResult<()> {
 #[pyfunction]
 fn messages(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
     validate_arguments(arguments.bind(py))?;
+    let body = arguments
+        .bind(py)
+        .get_item("body")?
+        .ok_or_else(|| PyValueError::new_err("messages requires body"))?;
+    if body
+        .cast::<PyDict>()?
+        .get_item("stream")?
+        .is_some_and(|value| value.extract::<bool>().unwrap_or(false))
+    {
+        return Err(RustBridgeDeclined::new_err(
+            "synchronous Messages streaming is not supported",
+        ));
+    }
     runner(py)?
         .getattr("_drive_sync")?
         .call1((arguments, bindings(py)?))

@@ -8,8 +8,8 @@ use crate::lifecycle::program::{ProgramOptions, actions_for};
 use crate::lifecycle::{
     ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock,
     DeploymentFailureHooks, DeploymentPreHooks, DeploymentSuccessHooks, ExecutedCall, Lifecycle,
-    LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, StreamingCall, StreamingObserver,
-    TerminalDispatcher, TerminalRecord,
+    LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, StreamingCall, TerminalDispatcher,
+    TerminalRecord,
 };
 
 use super::handler::execute_messages_provider_call;
@@ -275,74 +275,10 @@ where
             context,
             request,
             services,
-            Box::<AnthropicUsageObserver>::default(),
+            Box::<super::streaming::AnthropicMessagesObserver>::default(),
             provider_call,
         )
         .await
-}
-
-#[derive(Default)]
-struct AnthropicUsageObserver {
-    pending: Vec<u8>,
-    usage: Usage,
-}
-
-impl AnthropicUsageObserver {
-    fn observe_event(&mut self, event: &[u8]) {
-        let Some(data) = event
-            .split(|byte| *byte == b'\n')
-            .find_map(|line| line.strip_prefix(b"data:"))
-        else {
-            return;
-        };
-        let Ok(value) = serde_json::from_slice::<serde_json::Value>(data.trim_ascii_start()) else {
-            return;
-        };
-        if !matches!(
-            value.get("type").and_then(serde_json::Value::as_str),
-            Some("message_start" | "message_delta")
-        ) {
-            return;
-        }
-        let Some(usage) = value.get("usage").or_else(|| {
-            value
-                .get("message")
-                .and_then(|message| message.get("usage"))
-        }) else {
-            return;
-        };
-        if let Some(input_tokens) = usage
-            .get("input_tokens")
-            .and_then(serde_json::Value::as_u64)
-        {
-            self.usage.prompt_tokens = input_tokens;
-        }
-        if let Some(output_tokens) = usage
-            .get("output_tokens")
-            .and_then(serde_json::Value::as_u64)
-        {
-            self.usage.completion_tokens = output_tokens;
-        }
-        self.usage.total_tokens = self.usage.prompt_tokens + self.usage.completion_tokens;
-    }
-}
-
-impl StreamingObserver for AnthropicUsageObserver {
-    fn observe(&mut self, bytes: &[u8]) {
-        self.pending.extend_from_slice(bytes);
-        while let Some(end) = self.pending.windows(2).position(|window| window == b"\n\n") {
-            let event = self.pending.drain(..end + 2).collect::<Vec<_>>();
-            self.observe_event(&event);
-        }
-    }
-
-    fn usage(&self) -> Usage {
-        self.usage
-    }
-
-    fn projection(&self) -> serde_json::Value {
-        serde_json::json!({"stream": true})
-    }
 }
 
 pub fn machine(options: Options) -> Result<Lifecycle<MessagesRoute>, Error> {
