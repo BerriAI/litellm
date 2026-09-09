@@ -120,7 +120,10 @@ def test_edit_accepts_filesystem_path(tmp_path, as_tuple):
 
 @pytest.mark.parametrize("env_name", ["CHATGPT_API_BASE", "OPENAI_CHATGPT_API_BASE"])
 @pytest.mark.parametrize("api_base", [None, "https://deployment.example/codex"])
-def test_image_routes_use_configured_gateway(monkeypatch, env_name, api_base):
+def test_image_routes_use_configured_gateway(monkeypatch, env_name, api_base, tmp_path):
+    token_path = tmp_path / "unavailable-token-directory"
+    token_path.write_text("not a directory")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(token_path))
     monkeypatch.delenv("CHATGPT_API_BASE", raising=False)
     monkeypatch.delenv("OPENAI_CHATGPT_API_BASE", raising=False)
     monkeypatch.setenv(env_name, "https://gateway.example/codex/")
