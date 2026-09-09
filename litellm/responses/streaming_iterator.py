@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runti
 
 import httpx
 from openai._streaming import SSEDecoder
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeIs
 
 import litellm
@@ -439,18 +439,7 @@ class BaseResponsesAPIStreamingIterator:
         if self._persist_completed_response_before_logging:
             self._persist_completed_response_to_cache(is_async=is_async)
 
-        # Create a copy for logging to avoid modifying the response object that will be returned to the user
-        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
-        # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
-        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
-        logging_response = self.completed_response
-        if self.completed_response is not None and hasattr(self.completed_response, "model_dump"):
-            try:
-                logging_response = type(self.completed_response).model_validate(self.completed_response.model_dump())
-            except Exception:
-                # Fallback to original if serialization fails
-                pass
+        logging_response: Final[object] = _logging_copy(self.completed_response)
         self._restore_provider_response_headers(logging_response)
 
         end_time: Final = datetime.now()
@@ -489,10 +478,10 @@ class BaseResponsesAPIStreamingIterator:
     def _restore_provider_response_headers(self, logging_response: object) -> None:
         """Re-apply the provider's response headers to the copy handed to logging callbacks.
 
-        ``model_validate(model_dump())`` above drops pydantic private attributes, so the
+        ``model_validate(model_dump())`` in ``_logging_copy`` drops pydantic private attributes, so the
         ``_hidden_params`` the provider transform set on the nested response are lost. Returns early
-        when that copy fell back to the original event, so logging-only state never lands on the
-        object the caller is iterating.
+        when the event was not a pydantic model and logging got the original, so logging-only state
+        never lands on the object the caller is iterating.
         """
         if logging_response is self.completed_response:
             return
@@ -1292,6 +1281,26 @@ def _add_text_like_part_events(
                 refusal=refusal,
             )
         )
+
+
+def _logging_copy(event: object) -> object:
+    """Hand logging callbacks a copy, so their usage rewrite (Responses shape to chat shape) never
+    reaches the event the caller is iterating. The round trip through ``model_dump`` sidesteps the
+    deepcopy pickle errors of #17192; when a provider payload fails validation (LIT-7391), shallow
+    copies of the event and its nested response still keep the caller's ``usage`` attribute separate."""
+    if not isinstance(event, BaseModel):
+        return event
+    try:
+        return type(event).model_validate(event.model_dump())
+    except Exception:
+        return _detached_shallow_copy(event)
+
+
+def _detached_shallow_copy(event: BaseModel) -> BaseModel:
+    nested: Final[object] = getattr(event, "response", None)
+    if isinstance(nested, BaseModel):
+        return event.model_copy(update={"response": nested.model_copy()})
+    return event.model_copy()
 
 
 def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
