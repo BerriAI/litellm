@@ -49,7 +49,11 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_gateway_server_name,
     _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # server-owned request mode
 )
-from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
+from litellm.proxy._experimental.mcp_server.mcp_debug import (
+    MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
+    MCPAuthDiagnostics,
+    MCPDebug,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     get_passthrough_www_authenticate,
@@ -4472,13 +4476,13 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 scope=dict(scope),
                 mcp_servers=mcp_servers,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 client_ip=_client_ip,
             )
-            if _debug_headers:
-                send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers)
+            diagnostics: Final = MCPAuthDiagnostics() if _debug_headers else None
+            if diagnostics is not None:
+                scope[MCP_AUTH_DIAGNOSTICS_SCOPE_KEY] = diagnostics
+                send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers, diagnostics.headers)
 
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
