@@ -69,10 +69,10 @@ async def test_messages_pre_call_receives_expected_provider_request(messages_ser
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("raise_after_edit", [False, True])
-@pytest.mark.parametrize("native", [False, True])
-async def test_messages_pre_call_edits_reach_later_callbacks_and_provider(
+@pytest.mark.parametrize("stream", [False, True], ids=["response", "stream"])
+@pytest.mark.parametrize("raise_after_edit", [False, True], ids=["edit-returns", "edit-raises"])
+@pytest.mark.parametrize("native", [False, True], ids=["python", "rust"])
+async def test_messages_pre_call_edits_reach_later_callbacks_but_only_headers_reach_provider(
     messages_server: RecordingServer, raise_after_edit: bool, native: bool, stream: bool
 ) -> None:
     litellm.rust(native)
@@ -100,6 +100,7 @@ async def test_messages_pre_call_edits_reach_later_callbacks_and_provider(
     assert observed[0][1]["x-audit-tag"] == "reviewed"
     assert "temperature" not in messages_server.requests[0].body
     assert messages_server.requests[0].headers["x-audit-tag"] == "reviewed"
+    assert has_rust_response_marker(response) is native
 
 
 @pytest.mark.asyncio
@@ -143,23 +144,28 @@ async def test_messages_pre_call_state_reaches_terminal_callbacks(messages_serve
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("native", [False, True], ids=["python", "rust"])
 @pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
-@pytest.mark.parametrize("raise_after_edit", [False, True])
+@pytest.mark.parametrize("raise_after_edit", [False, True], ids=["edit-returns", "edit-raises"])
 async def test_messages_retained_aliases_preserve_identity_and_snapshot_timing(
     messages_server: RecordingServer, native: bool, provider: str, raise_after_edit: bool
 ) -> None:
     litellm.rust(native)
     retained: Final = []
     observed: Final = []
+    aliases: Final = []
 
     class Retain(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             body = request_body(kwargs)
             message = kwargs["messages"][0]
-            assert body["messages"][0] is message
-            assert body["messages"][0]["content"] is message["content"]
-            assert body["messages"][0]["content"][0] is message["content"][0]
+            aliases.append(
+                (
+                    body["messages"][0] is message,
+                    body["messages"][0]["content"] is message["content"],
+                    body["messages"][0]["content"][0] is message["content"][0],
+                )
+            )
             retained.append(message["content"][0])
 
     class Edit(CustomLogger):
@@ -181,11 +187,11 @@ async def test_messages_retained_aliases_preserve_identity_and_snapshot_timing(
         api_base=messages_server.base_url,
         callbacks=[Retain(), Edit(), Observe()],
     )
+    assert aliases == [(True, True, True)]
     assert observed == [(True, "changed through retained reference")]
     assert retained[0]["text"] == "changed through retained reference"
     assert messages_server.requests[0].body["messages"][0]["content"][0]["text"] == "original"
-    if native:
-        assert response["_hidden_params"]["additional_headers"]["x-litellm-rust"] == "true"
+    assert has_rust_response_marker(response) is native
 
 
 @pytest.mark.asyncio

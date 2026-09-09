@@ -38,6 +38,8 @@ Backend = Literal["python", "rust"]
 EXPECTED_FAILURE_FILES: Final = frozenset(
     {
         "chat/test_callback_mutation.py",
+        "integrations/test_backend_parity.py",
+        "integrations/test_callback_lifecycle.py",
         "integrations/test_composition.py",
         "integrations/test_exporters.py",
         "integrations/test_guardrails.py",

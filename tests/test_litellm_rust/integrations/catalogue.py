@@ -124,7 +124,7 @@ class CoverageObligation:
     stable_name: str
     registration_names: tuple[str, ...]
     dependency_profile: DependencyProfile
-    behavioral_cases: tuple[str, ...]
+    behavioral_case_labels: tuple[str, ...]
 
 
 REQUIRED_LOGGER_BEHAVIOR: Final = frozenset({"generic_api", "gcs_bucket", "literalai", "prometheus", "opentelemetry"})
@@ -172,7 +172,7 @@ def _logger_obligations() -> Mapping[str, CoverageObligation]:
             stable_name=names[0],
             registration_names=names,
             dependency_profile="enterprise" if set(names) & ENTERPRISE_LOGGER_NAMES else "required",
-            behavioral_cases=next(
+            behavioral_case_labels=next(
                 (LOGGER_BEHAVIORAL_CASES[name] for name in names if name in LOGGER_BEHAVIORAL_CASES), ()
             ),
         )
