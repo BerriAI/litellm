@@ -9239,7 +9239,7 @@ class ProviderConfigManager:
             from litellm.llms.openai.image_edit import get_openai_image_edit_config
 
             return get_openai_image_edit_config(model=model)
-        if LlmProviders.HOSTED_VLLM == provider:
+        elif LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
 
             return get_hosted_vllm_image_edit_config(model=model)

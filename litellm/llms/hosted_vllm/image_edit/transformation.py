@@ -3,8 +3,17 @@ from typing import Final
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 
+PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT: Final = frozenset({"mask", "quality", "input_fidelity"})
+
 
 class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseImageEditConfig contract
+        return [  # mutable-ok: BaseImageEditConfig returns list
+            param
+            for param in super().get_supported_openai_params(model)
+            if param not in PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT
+        ]
+
     def validate_environment(
         self,
         headers: dict,  # mutable-ok: BaseImageEditConfig contract
