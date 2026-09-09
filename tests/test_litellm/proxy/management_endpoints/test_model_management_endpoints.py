@@ -3115,6 +3115,9 @@ class TestUpdateDBModelClearPricing:
     """Sending an explicit `null` for a pricing field must remove it from both
     `litellm_params` and `model_info` (SPECIAL_MODEL_INFO_PARAMS are mirrored
     between the two by Deployment.__init__).
+
+    Restricted to SPECIAL_MODEL_INFO_PARAMS so non-pricing fields (e.g. team_id)
+    cannot be cleared via this path.
     """
 
     def test_clear_input_cost_removes_from_both_blobs(self):
@@ -3190,10 +3193,10 @@ class TestUpdateDBModelClearPricing:
         assert params["input_cost_per_token"] == 0.000001
         assert params["output_cost_per_token"] == 0.000007
 
-    def test_null_on_one_field_leaves_other_fields_alone(self):
-        """A null clears only the key it names: pricing the patch never mentions and
-        the ownership key team_id stay put, so a team admin can't ungate a
-        team-scoped model through the clear path.
+    def test_null_on_non_pricing_field_does_not_clear(self):
+        """Security guard: only SPECIAL_MODEL_INFO_PARAMS can be cleared via null.
+        Privileged or unrelated model_info fields (e.g. team_id) must be unaffected
+        by the null-clearing path so a team admin can't ungate a team-scoped model.
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             update_db_model,
@@ -3214,6 +3217,8 @@ class TestUpdateDBModelClearPricing:
             model_info=ModelInfo(id="dep-pricing-1", team_id="team-keep-me"),
         )
 
+        # Patch sends a null for api_base (non-SPECIAL field). Must NOT clear team_id
+        # or any other non-pricing field from the merged dict.
         result = update_db_model(
             db_model=db_model,
             updated_patch=updateDeployment(
@@ -3387,171 +3392,6 @@ class TestUpdateDBModelClearPricing:
         assert info["input_cost_per_token"] == 0.000001
         assert info["output_cost_per_token"] == 0.000002
         assert info["cache_creation_input_token_cost"] == 0.000003
-
-
-_PROTECTED_MODEL_INFO_VALUES = {
-    "team_id": "team-keep-me",
-    "team_public_model_name": "team-facing-name",
-    "access_groups": ["group-a"],
-    "created_at": "2026-01-01T00:00:00+00:00",
-    "created_by": "creator",
-    "updated_at": "2026-01-02T00:00:00+00:00",
-    "updated_by": "updater",
-    "blocked": True,
-}
-
-
-def _build_db_model_with_pinned_model_info():
-    """Deployment whose stored blobs pin non-pricing keys an earlier save wrote, next to a
-    pricing override, so a clear can be checked key by key."""
-    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
-
-    return Deployment(
-        model_name="pinned-gpt-4o-mini",
-        litellm_params=LiteLLM_Params(
-            model="gpt-4o-mini", input_cost_per_token=0.000001, max_input_tokens=4096
-        ),
-        model_info=ModelInfo(
-            id="dep-pinned-0",
-            max_input_tokens=4096,
-            mode="chat",
-            supports_vision=True,
-            **_PROTECTED_MODEL_INFO_VALUES,
-        ),
-    )
-
-
-class TestUpdateDBModelNullClearsAnyKey:
-    """JSON Merge Patch on PATCH /model/{id}/update: a key sent as null is removed from the
-    stored blob it was sent in, whatever the key, except the identity and ownership keys,
-    whose nulls are ignored."""
-
-    def test_model_info_nulls_remove_pinned_non_pricing_keys(self):
-        from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_db_model,
-        )
-
-        result = update_db_model(
-            db_model=_build_db_model_with_pinned_model_info(),
-            updated_patch=updateDeployment.model_validate(
-                {"model_info": {"max_input_tokens": None, "mode": None}}
-            ),
-        )
-
-        info = json.loads(result["model_info"])
-        assert "max_input_tokens" not in info
-        assert "mode" not in info
-        assert info["supports_vision"] is True
-        assert info["input_cost_per_token"] == 0.000001
-
-    def test_litellm_params_null_removes_pinned_non_pricing_key(self):
-        from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_db_model,
-        )
-
-        result = update_db_model(
-            db_model=_build_db_model_with_pinned_model_info(),
-            updated_patch=updateDeployment.model_validate(
-                {"litellm_params": {"max_input_tokens": None}}
-            ),
-        )
-
-        params = json.loads(result["litellm_params"])
-        info = json.loads(result["model_info"])
-        assert "max_input_tokens" not in params
-        assert params["model"] == "gpt-4o-mini"
-        assert params["input_cost_per_token"] == 0.000001
-        assert info["max_input_tokens"] == 4096
-
-    def test_omitted_key_is_untouched_by_a_null_elsewhere(self):
-        from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_db_model,
-        )
-
-        result = update_db_model(
-            db_model=_build_db_model_with_pinned_model_info(),
-            updated_patch=updateDeployment.model_validate(
-                {"model_info": {"mode": None, "supports_vision": False}}
-            ),
-        )
-
-        info = json.loads(result["model_info"])
-        assert "mode" not in info
-        assert info["supports_vision"] is False
-        assert info["max_input_tokens"] == 4096
-
-    @pytest.mark.parametrize("field", sorted(_PROTECTED_MODEL_INFO_VALUES))
-    def test_null_on_protected_key_is_ignored(self, field):
-        from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_db_model,
-        )
-
-        result = update_db_model(
-            db_model=_build_db_model_with_pinned_model_info(),
-            updated_patch=updateDeployment.model_validate({"model_info": {field: None}}),
-        )
-
-        info = json.loads(result["model_info"])
-        assert info[field] == _PROTECTED_MODEL_INFO_VALUES[field]
-        assert info["max_input_tokens"] == 4096
-
-    def test_echoing_the_read_back_blob_preserves_every_stored_key(self):
-        """The Admin UI edit form submits the whole /model/info row back, and that read reports
-        every key the deployment never stored as an explicit null. Those nulls have to stay
-        no-ops: a write drops None before storing, so a null in the echoed blob always names a
-        key the stored row does not carry.
-        """
-        from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_db_model,
-        )
-
-        db_model = _build_db_model_with_pinned_model_info()
-        echoed = {
-            "id": "dep-pinned-0",
-            "max_input_tokens": 4096,
-            "mode": "chat",
-            "supports_vision": True,
-            "input_cost_per_token": 0.000001,
-            "team_id": "team-keep-me",
-            "base_model": None,
-            "tier": None,
-            "max_output_tokens": None,
-            "supports_function_calling": None,
-            "cache_read_input_token_cost": None,
-        }
-
-        result = update_db_model(
-            db_model=db_model,
-            updated_patch=updateDeployment.model_validate({"model_info": echoed}),
-        )
-
-        info = json.loads(result["model_info"])
-        assert info["max_input_tokens"] == 4096
-        assert info["mode"] == "chat"
-        assert info["supports_vision"] is True
-        assert info["input_cost_per_token"] == 0.000001
-        assert info["team_id"] == "team-keep-me"
-        for never_stored in ("base_model", "tier", "max_output_tokens", "supports_function_calling"):
-            assert never_stored not in info
-
-    def test_null_on_pricing_key_still_clears_both_blobs(self):
-        from litellm.proxy.management_endpoints.model_management_endpoints import (
-            update_db_model,
-        )
-
-        result = update_db_model(
-            db_model=_build_db_model_with_pinned_model_info(),
-            updated_patch=updateDeployment.model_validate(
-                {"model_info": {"input_cost_per_token": None}}
-            ),
-        )
-
-        params = json.loads(result["litellm_params"])
-        info = json.loads(result["model_info"])
-        assert "input_cost_per_token" not in params
-        assert "input_cost_per_token" not in info
-        assert params["max_input_tokens"] == 4096
-        assert info["max_input_tokens"] == 4096
 
 
 class TestGetModelInfoWithIdBlocked:

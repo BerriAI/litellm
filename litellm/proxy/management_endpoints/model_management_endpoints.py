@@ -119,7 +119,6 @@ from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     GenericLiteLLMParams,
-    LiteLLM_Params,
     ModelInfo,
     updateDeployment,
 )
@@ -729,44 +728,6 @@ def _ptu_priced_deployment(model_params: Deployment) -> Deployment:
     )
 
 
-_OWNERSHIP_FIELDS: Final = frozenset(
-    {
-        "db_model",
-        "team_id",
-        "team_public_model_name",
-        "access_groups",
-        "created_at",
-        "created_by",
-        "updated_at",
-        "updated_by",
-        "blocked",
-    }
-)
-
-_STORED_REQUIRED_FIELDS: Final = frozenset(
-    name for model in (LiteLLM_Params, ModelInfo) for name, field in model.model_fields.items() if field.is_required()
-)
-
-_NULL_CLEAR_IGNORED_FIELDS: Final = _OWNERSHIP_FIELDS | _STORED_REQUIRED_FIELDS | frozenset(PTU_MODEL_INFO_FIELDS)
-
-
-def _explicitly_cleared_fields(patch: BaseModel | None) -> frozenset[str]:
-    """The keys a patch sends as an explicit null, which update_db_model removes from the
-    stored blob (JSON Merge Patch). Ownership keys are left alone, as are the keys the stored
-    models require, since clearing one writes a row no reload can rebuild through
-    LiteLLM_Params / ModelInfo. The PTU keys are handled by _explicitly_cleared_ptu_fields,
-    whose clear is gated on the feature flag. Applied after both blobs merge, so a model_info blob
-    the UI echoes back cannot resurrect a pricing key the litellm_params patch clears.
-    """
-    if patch is None:
-        return frozenset()
-    return frozenset(
-        field
-        for field in patch.model_fields_set
-        if field not in _NULL_CLEAR_IGNORED_FIELDS and getattr(patch, field) is None
-    )
-
-
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
@@ -787,15 +748,25 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     if updated_patch.model_info:
         merged_model_info.update(updated_patch.model_info.model_dump(exclude_none=True))
 
-    for field in _explicitly_cleared_fields(updated_patch.litellm_params):
-        merged_litellm_params.pop(field, None)
-        if field in SPECIAL_MODEL_INFO_PARAMS:
-            merged_model_info.pop(field, None)
-    for field in _explicitly_cleared_fields(updated_patch.model_info):
-        merged_model_info.pop(field, None)
-        if field in SPECIAL_MODEL_INFO_PARAMS:
-            merged_litellm_params.pop(field, None)
+    # Honor explicit-null clears LAST, after both merges, so a model_info blob the UI
+    # passes through (which today re-sends the OLD pricing on every save) cannot
+    # silently undo a litellm_params clear via .update().
+    #
+    # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
+    # and cache read/write costs) so this path cannot be used to null out privileged
+    # model_info fields like team_id or access groups. SPECIAL_MODEL_INFO_PARAMS are
+    # mirrored between litellm_params and model_info by Deployment.__init__, so the
+    # clear propagates to both blobs.
+    if updated_patch.litellm_params:
+        for field in updated_patch.litellm_params.model_fields_set:
+            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
+                merged_litellm_params.pop(field, None)
+                merged_model_info.pop(field, None)
     if updated_patch.model_info:
+        for field in updated_patch.model_info.model_fields_set:
+            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
+                merged_model_info.pop(field, None)
+                merged_litellm_params.pop(field, None)
         for field in _explicitly_cleared_ptu_fields(updated_patch.model_info):
             merged_model_info.pop(field, None)
 
@@ -845,9 +816,8 @@ async def patch_model(
     """
     PATCH Endpoint for partial model updates.
 
-    JSON Merge Patch semantics over `litellm_params` and `model_info`: a key absent from the
-    body is unchanged, a key sent as null is removed from the stored row, and a key sent with a
-    value is set (identity and ownership keys such as `id` and `team_id` ignore a null).
+    Only updates the fields specified in the request while preserving other existing values.
+    Follows proper PATCH semantics by only modifying provided fields.
 
     Args:
         model_id: The ID of the model to update
