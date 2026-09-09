@@ -1,6 +1,6 @@
 import React, { forwardRef, useImperativeHandle, useMemo } from "react";
 import { CircleHelp } from "lucide-react";
-import { useForm, type Resolver } from "react-hook-form";
+import { useForm, type Resolver, type ResolverResult } from "react-hook-form";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
@@ -59,7 +59,7 @@ const collectErrors = (
 
 const buildResolver =
   (actualSchema: InputSchema, requiredMessages: Readonly<Record<string, string>> = {}): Resolver<ToolFormValues> =>
-  (values) => {
+  (values): ResolverResult<ToolFormValues> => {
     const errors = collectErrors(actualSchema, requiredMessages, argumentValues(actualSchema, values));
     if (Object.keys(errors).length === 0) return { values, errors: {} };
     return {
