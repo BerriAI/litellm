@@ -21,8 +21,8 @@ from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
-from ..base_aws_llm import BaseAWSLLM, Credentials
-from ..common_utils import BedrockError, _get_all_bedrock_regions
+from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
+from ..common_utils import BedrockError, _get_all_bedrock_regions, error_response_text
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
@@ -66,7 +66,12 @@ def make_sync_call(
     )
 
     if response.status_code != 200:
-        raise BedrockError(status_code=response.status_code, message=str(response.read()))
+        raise BedrockError(
+            status_code=response.status_code,
+            message=str(response.read()),
+            headers=response.headers,
+            response=response,
+        )
 
     if fake_stream:
         model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
@@ -247,7 +252,12 @@ class BedrockConverseLLM(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=error_response_text(err.response),
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -349,17 +359,21 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
 
-        credentials: Final[Credentials | None] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
+        credentials: Final[Credentials | None] = (
+            None
+            if bedrock_bearer_token(api_key) is not None
+            else self.get_credentials(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_region_name=aws_region_name,
+                aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
+                aws_role_name=aws_role_name,
+                aws_web_identity_token=aws_web_identity_token,
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_external_id=aws_external_id,
+            )
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -590,7 +604,12 @@ class BedrockConverseLLM(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=error_response_text(err.response),
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 

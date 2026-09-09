@@ -48,7 +48,6 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 
-// entityLinks -> migratedPages imports serverRootPath from the same module, so the mock must export it too.
 vi.mock("@/components/networking", () => {
   return {
     serverRootPath: "/",

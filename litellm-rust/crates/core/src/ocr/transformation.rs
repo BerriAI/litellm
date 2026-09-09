@@ -51,6 +51,15 @@ pub trait OcrProviderConfig: Sync {
         response_json: Value,
     ) -> Result<OcrResponseData, Error>;
 
+    fn transform_ocr_response_with_params(
+        &self,
+        model: &str,
+        response_json: Value,
+        _optional_params: &Map<String, Value>,
+    ) -> Result<OcrResponseData, Error> {
+        self.transform_ocr_response(model, response_json)
+    }
+
     fn complete_url(
         &self,
         api_base: Option<&str>,

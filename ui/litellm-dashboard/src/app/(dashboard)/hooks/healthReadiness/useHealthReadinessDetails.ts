@@ -14,6 +14,7 @@ export interface HealthReadinessDetailsResponse {
   log_level?: string;
   is_detailed_debug?: boolean;
   show_no_redis_warning?: boolean;
+  show_env_credential_login_warning?: boolean;
 }
 
 const fetchHealthReadinessDetails = async (accessToken: string): Promise<HealthReadinessDetailsResponse> => {
