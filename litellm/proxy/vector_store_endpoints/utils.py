@@ -161,6 +161,8 @@ async def can_user_access_vector_store(
        this vector store id.
     5. The caller's team_id matches the vector store's team_id.
 
+    A dashboard session credential is evaluated against the same effective
+    contexts as listing (its own grants plus each real team of the user).
     Otherwise access is denied.
     """
     if _is_proxy_admin(user_api_key_dict):
@@ -169,7 +171,8 @@ async def can_user_access_vector_store(
     if vector_store.get("team_id") is None:
         return True
 
-    return await _is_vector_store_granted(vector_store, user_api_key_dict)
+    auth_contexts: Final = await _vector_store_auth_contexts(user_api_key_dict)
+    return await _is_vector_store_granted_to_any(vector_store, auth_contexts)
 
 
 async def _is_vector_store_granted(
@@ -219,7 +222,7 @@ async def _team_auth_context(team_id: str, user_api_key_dict: UserAPIKeyAuth) ->
     )
 
 
-async def _vector_store_listing_auth_contexts(
+async def _vector_store_auth_contexts(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> tuple[UserAPIKeyAuth, ...]:
     if not is_ui_session_credential(user_api_key_dict):
@@ -250,7 +253,7 @@ async def filter_listable_vector_stores(
     if _is_proxy_admin(user_api_key_dict):
         return tuple(vector_stores)
 
-    auth_contexts: Final = await _vector_store_listing_auth_contexts(user_api_key_dict)
+    auth_contexts: Final = await _vector_store_auth_contexts(user_api_key_dict)
     return tuple([vs for vs in vector_stores if await _is_vector_store_granted_to_any(vs, auth_contexts)])
 
 

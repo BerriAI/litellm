@@ -6,7 +6,8 @@ from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import ProxyErrorTypes
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -1919,3 +1920,83 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
         Logging.failure_handler = orig_sync_failure
 
     assert "test_proxy_utils" in captured["async_traceback"]
+
+
+@pytest.mark.parametrize(
+    "key_metadata, team_metadata, expected_to_run",
+    [
+        ({"guardrails": ["key-scoped-guardrail"]}, None, True),
+        ({}, {"guardrails": ["key-scoped-guardrail"]}, True),
+        ({"guardrails": ["some-other-guardrail"]}, None, False),
+        ({}, None, False),
+    ],
+)
+def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata, team_metadata, expected_to_run):
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    guardrail = CustomGuardrail(guardrail_name="key-scoped-guardrail", event_hook="pre_mcp_call", default_on=False)
+    kwargs = {
+        "name": "ask_question",
+        "arguments": {"question": "hello"},
+        "server_name": "deepwiki",
+        "user_api_key_auth": UserAPIKeyAuth(metadata=key_metadata, team_metadata=team_metadata),
+    }
+    request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
+
+    with patch(  # test-quality-ok: the key-guardrail premium gate reads this proxy_server module global and has no injection seam
+        "litellm.proxy.proxy_server.premium_user", True
+    ):
+        synthetic = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+
+    assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is expected_to_run
+
+
+class _TracebackRecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.received_traceback: str | None = None
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        self.received_traceback = traceback_str
+        return None
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeypatch):
+    """A pass-through upstream failure hands the hook the httpx traceback, whose
+    message quotes the upstream URL with the provider key in its query string.
+    Every callback, custom loggers included, must receive it redacted."""
+    import traceback
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    provider_key = "AIza" + "S" * 35
+    upstream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key={provider_key}"
+    response = httpx.Response(400, request=httpx.Request("POST", upstream_url))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        upstream_traceback = traceback.format_exc()
+    assert provider_key in upstream_traceback
+
+    recorder = _TracebackRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alert_types = []
+    with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+        await proxy_logging_obj.post_call_failure_hook(
+            request_data={"metadata": {}},
+            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=upstream_traceback,
+        )
+
+    assert recorder.received_traceback is not None
+    assert provider_key not in recorder.received_traceback
+    assert "REDACTED" in recorder.received_traceback

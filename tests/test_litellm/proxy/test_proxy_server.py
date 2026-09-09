@@ -822,16 +822,16 @@ def _mock_scheduled_proxy_config() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_initialize_scheduled_jobs_credentials(monkeypatch):
-    """
-    Test that get_credentials is only called when store_model_in_db is True
-    """
+async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    # Mock dependencies
     mock_prisma_client = MagicMock()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
@@ -841,25 +841,6 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
         patch("litellm.proxy.proxy_server.store_model_in_db", False),
-    ):  # set store_model_in_db to False
-        # Test when store_model_in_db is False
-        await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings={},
-            prisma_client=mock_prisma_client,
-            proxy_budget_rescheduler_min_time=1,
-            proxy_budget_rescheduler_max_time=2,
-            proxy_batch_write_at=5,
-            proxy_logging_obj=mock_proxy_logging,
-        )
-
-        # Verify get_credentials was not called
-        mock_proxy_config.get_credentials.assert_not_called()
-
-    # Now test with store_model_in_db = True
-    with (
-        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
-        patch("litellm.proxy.proxy_server.store_model_in_db", True),
-        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
     ):
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
@@ -870,12 +851,31 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             proxy_logging_obj=mock_proxy_logging,
         )
 
-        # Verify get_credentials was called both directly and scheduled
-        assert mock_proxy_config.get_credentials.call_count == 1  # Direct call
+        mock_proxy_config.get_credentials.assert_not_called()
+        mock_proxy_config.add_deployment.assert_not_called()
 
-        # Verify a scheduled job was added for get_credentials
-        mock_scheduler_calls = [call[0] for call in mock_proxy_config.get_credentials.mock_calls]
-        assert len(mock_scheduler_calls) > 0
+    scheduler = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+
+        assert scheduler.get_job("get_credentials_job") is None
+        assert scheduler.get_job("add_deployment_job") is not None
+        mock_proxy_config.get_credentials.assert_not_called()
+        assert mock_proxy_config.add_deployment.call_count == 1
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -924,7 +924,7 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
     """
-    The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
+    The DB config-reload job (add_deployment) that keeps multi-pod
     deployments in sync must be scheduled at the configured
     proxy_config_reload_interval_seconds, not a hardcoded value.
     """
@@ -967,7 +967,7 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
         if "id" in job_call.kwargs
     }
     assert scheduled_seconds["add_deployment_job"] == configured_interval
-    assert scheduled_seconds["get_credentials_job"] == configured_interval
+    assert "get_credentials_job" not in scheduled_seconds
 
 
 @pytest.mark.asyncio
@@ -1011,7 +1011,7 @@ async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_inte
         if "id" in job_call.kwargs
     }
     assert scheduled_seconds["add_deployment_job"] == 30
-    assert scheduled_seconds["get_credentials_job"] == 30
+    assert "get_credentials_job" not in scheduled_seconds
 
 
 @pytest.mark.asyncio
@@ -3164,6 +3164,47 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
         import os
 
         os.unlink(config_file_path)
+
+
+@pytest.mark.asyncio
+async def test_startup_initializes_string_callbacks_after_all_litellm_settings_load(tmp_path, monkeypatch):
+    from litellm.integrations.s3_v2 import S3Logger
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  success_callback:\n"
+        "    - s3_v2\n"
+        "  failure_callback:\n"
+        "    - s3_v2\n"
+        "  s3_callback_params:\n"
+        "    s3_bucket_name: ordering-regression-bucket\n"
+        "    s3_region_name: us-west-2\n"
+    )
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "s3_callback_params", None)
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    ProxyLogging(user_api_key_cache=MagicMock())._init_litellm_callbacks(llm_router=None)
+
+    success_loggers = [cb for cb in litellm._async_success_callback if isinstance(cb, S3Logger)]
+    failure_loggers = [cb for cb in litellm._async_failure_callback if isinstance(cb, S3Logger)]
+    assert len(success_loggers) == 1
+    assert len(failure_loggers) == 1
+    assert success_loggers[0].s3_bucket_name == "ordering-regression-bucket"
+    assert success_loggers[0].s3_region_name == "us-west-2"
+    assert "s3_v2" not in litellm.success_callback
+    assert "s3_v2" not in litellm.failure_callback
 
 
 @pytest.mark.asyncio
@@ -7446,10 +7487,8 @@ async def test_store_model_in_db_db_override_when_config_false():
         # store_model_in_db should now be True (overridden by DB)
         assert ps.store_model_in_db is True
 
-        # add_deployment and get_credentials should have been called
-        # since store_model_in_db is now True
         assert mock_proxy_config.add_deployment.call_count == 1
-        assert mock_proxy_config.get_credentials.call_count == 1
+        mock_proxy_config.get_credentials.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -8317,8 +8356,8 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     """When the reservation reconcile finds the counter in an inconsistent state
     (here: missing), it must NOT delete the counter and fail open (the old
     behavior, which left the counter unenforced after a Redis reload). It reseeds
-    from the authoritative DB so the counter reflects the recorded total and
-    budget gating continues."""
+    from the authoritative DB and adds this request's settled cost, which the
+    async spend flush has not written yet, so budget gating continues."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
@@ -8355,9 +8394,7 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
             )
 
         assert budget_reservation["finalized"] is True
-        # counter reseeded to the authoritative DB value, not deleted/left None
-        # and not double-counted via a direct increment
-        assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-bad-reserved-counter") == pytest.approx(0.6)
+        assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-bad-reserved-counter") == pytest.approx(0.85)
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma
@@ -9225,6 +9262,82 @@ class TestLazyFeatureMiddleware:
             assert loads == [], f"{case}: feature must not load"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "env_root_path,scope_root_path,request_path,should_load,case",
+        [
+            # Per-request root_path (PerRequestRootPathMiddleware under
+            # SERVER_ROOT_PATHS) with no scalar env: strip and match.
+            ("", "/tenant-a", "/tenant-a/dummy/x", True, "per-request root_path strip"),
+            # scope root_path is authoritative over the cached env scalar.
+            ("/api/v1", "/tenant-a", "/tenant-a/dummy/x", True, "scope wins over env scalar"),
+            # Boundary check still applies to the per-request value.
+            ("", "/tenant-a", "/tenant-ab/dummy/x", False, "boundary check on scope root_path"),
+            # Empty scope root_path falls back to the env scalar.
+            ("/api/v1", "", "/api/v1/dummy/x", True, "empty scope falls back to env"),
+        ],
+    )
+    async def test_per_request_root_path_handling(
+        self, monkeypatch, env_root_path, scope_root_path, request_path, should_load, case
+    ):
+        """
+        ``scope["root_path"]`` must be stripped before prefix matching when
+        set — the scalar SERVER_ROOT_PATH lands there via
+        ``FastAPI(root_path=...)``, and PerRequestRootPathMiddleware
+        (SERVER_ROOT_PATHS) resolves a per-request prefix there. Otherwise
+        lazily-registered features — the MCP OAuth discovery router among
+        them — stay unloaded under a client-visible prefix and 404.
+        """
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import (
+            LazyFeature,
+            LazyFeatureMiddleware,
+        )
+
+        monkeypatch.setenv("SERVER_ROOT_PATH", env_root_path)
+
+        loads = []
+
+        def fake_register(app, module):
+            loads.append(getattr(module, "__name__", "?"))
+
+        feat = LazyFeature(
+            name=f"dummy_prr_{case}",
+            module_path="json",
+            path_prefixes=("/dummy",),
+            register_fn=fake_register,
+        )
+
+        async def downstream(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(downstream, fastapi_app=target_app, features=(feat,))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            pass
+
+        await mw(
+            {
+                "type": "http",
+                "path": request_path,
+                "root_path": scope_root_path,
+                "method": "GET",
+                "headers": [],
+            },
+            receive,
+            send,
+        )
+        if should_load:
+            assert loads == ["json"], f"{case}: expected feature to load"
+        else:
+            assert loads == [], f"{case}: feature must not load"
+
+    @pytest.mark.asyncio
     async def test_concurrent_first_requests_only_register_once(self):
         """
         Two requests to the same prefix arriving in parallel must result in
@@ -9519,6 +9632,222 @@ def test_realtime_websocket_route_aliases_registered():
             f"{expected!r} missing from API_ROUTE_TO_CALL_TYPES; call-type "
             f"resolution will return None and break call-type-aware features."
         )
+
+
+def _lit6973_fake_realtime_ws() -> MagicMock:
+    ws = MagicMock()
+    ws.headers = {}
+    ws.scope = {"headers": [], "type": "websocket"}
+    ws.url = "ws://testserver/v1/realtime"
+    ws.accept = AsyncMock()
+    ws.send_text = AsyncMock()
+    ws.close = AsyncMock()
+    return ws
+
+
+async def _lit6973_drive_realtime_session(
+    reservation: dict,
+    *,
+    backend_logged_success: bool,
+    phase_one_exit: str | None = None,
+    websocket: MagicMock | None = None,
+) -> MagicMock:
+    """Drive realtime_websocket_endpoint through one of its reservation-settling exits.
+
+    phase_one_exit picks a rejection before the relay: "model_access" makes the
+    key/model check raise ProxyException, "pre_call" makes pre-call processing
+    (rate limits, guardrails) raise. Neither reaches route_request, so no success
+    log can own the reservation and the endpoint has to release it on that exit.
+
+    route_request resolves normally in both cases: the relay owns the session
+    once route_request returns. A successful session enqueues its success cost
+    callback and stamps REALTIME_SESSION_SUCCESS_LOGGED_KEY on the shared logging
+    object; a refused one does neither. The endpoint keys its reservation cleanup
+    off that stamp, so backend_logged_success reproduces both branches. The fake
+    logging object carries a real model_call_details dict so the stamp is
+    observable, and the reservation has empty entries so the real release touches
+    no counter store."""
+    from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+    from litellm.proxy import proxy_server as ps
+
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-test", token="hashed-token")
+    user_api_key_dict.budget_reservation = reservation
+
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
+
+    async def fake_llm_call() -> None:
+        if backend_logged_success:
+            logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
+
+    from litellm.proxy._types import ProxyException
+
+    model_access_error: Final = (
+        ProxyException(message="key cannot access model", type="auth_error", param="model", code=401)
+        if phase_one_exit == "model_access"
+        else None
+    )
+    pre_call_error: Final = Exception("Rate limit exceeded") if phase_one_exit == "pre_call" else None
+    pre_call: Final = AsyncMock(
+        side_effect=pre_call_error, return_value=({"model": "vertex_ai/gemini-live-2.5-flash"}, logging_obj)
+    )
+    ws: Final = websocket if websocket is not None else _lit6973_fake_realtime_ws()
+    can_call = patch.object(ps, "can_key_call_resolved_model", new=AsyncMock(side_effect=model_access_error))  # test-quality-ok: no HTTP boundary; fakes in-process auth to reach the exit under test
+    pre = patch.object(ps.ProxyBaseLLMRequestProcessing, "common_processing_pre_call_logic", new=pre_call)  # test-quality-ok: fakes phase-1 wiring; assertion checks observable reservation state
+    route = patch.object(ps, "route_request", new=AsyncMock(return_value=fake_llm_call()))  # test-quality-ok: fakes the relay whose success/refusal outcome the endpoint reads off the logging object
+    with can_call, pre, route:
+        await ps.realtime_websocket_endpoint(
+            websocket=ws,
+            model="vertex_ai/gemini-live-2.5-flash",
+            intent=None,
+            guardrails=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+    return ws
+
+
+@pytest.mark.asyncio
+async def test_refused_realtime_session_releases_the_budget_reservation():
+    """LIT-6973: a refused realtime session enqueues no success cost callback, so
+    the pre-call reservation would stay open and pin the key/team/user spend
+    counters, locking the key after a couple of refusals. The endpoint sees no
+    success stamp and reconciles it: the reservation ends up finalized."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    await _lit6973_drive_realtime_session(reservation, backend_logged_success=False)
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_rejected_in_pre_call_releases_the_budget_reservation():
+    """A rate-limit or guardrail rejection happens before route_request, so the
+    relay never runs and no success log can own the reservation. The endpoint
+    must release it on that exit too, or the key stays pinned at the reserved
+    amount and its next requests 429 with budget_exceeded while /key/info shows
+    spend 0 (reproduced live with rpm_limit=1). The client still gets the
+    pre-call error event and the 1011 close it got before."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    ws: Final = await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="pre_call"
+    )
+
+    assert reservation["finalized"] is True
+    assert json.loads(ws.send_text.await_args.args[0])["error"]["message"] == "Rate limit exceeded"
+    ws.close.assert_awaited_once_with(code=1011, reason="Pre-call error")
+
+
+@pytest.mark.asyncio
+async def test_realtime_session_denied_model_access_releases_the_budget_reservation():
+    """The key/model access check rejects before the socket is even accepted;
+    that exit skipped the release as well, pinning the reservation."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    ws: Final = await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="model_access"
+    )
+
+    assert reservation["finalized"] is True
+    ws.close.assert_awaited_once_with(code=1008, reason="key cannot access model")
+
+
+@pytest.mark.asyncio
+async def test_rejected_realtime_session_closes_the_client_before_releasing_the_reservation():
+    """The counter release can block on a slow or unreachable store, and a
+    rejected client must not sit behind it: the relay's own failure path closes
+    the client first and releases in its finally, so the pre-relay rejection
+    has to close first as well. The fake close checks the reservation is still
+    open when the client is closed."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    ws: Final = _lit6973_fake_realtime_ws()
+
+    async def close_while_reservation_is_still_open(**_: object) -> None:
+        assert reservation["finalized"] is False, "client was closed only after the reservation release"
+
+    ws.close = AsyncMock(side_effect=close_while_reservation_is_still_open)
+
+    await _lit6973_drive_realtime_session(
+        reservation, backend_logged_success=False, phase_one_exit="pre_call", websocket=ws
+    )
+
+    ws.close.assert_awaited_once_with(code=1011, reason="Pre-call error")
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_rejected_realtime_session_releases_the_reservation_when_the_client_is_already_gone():
+    """A client that hung up before the rejection makes the close raise; the
+    reservation must still be released, or the key stays pinned."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    ws: Final = _lit6973_fake_realtime_ws()
+    ws.close = AsyncMock(side_effect=RuntimeError("client already disconnected"))
+
+    with pytest.raises(RuntimeError, match="client already disconnected"):
+        await _lit6973_drive_realtime_session(
+            reservation, backend_logged_success=False, phase_one_exit="model_access", websocket=ws
+        )
+
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_successful_realtime_session_leaves_the_reservation_for_the_cost_callback():
+    """A billable realtime session settles its reservation through the enqueued
+    success cost callback, not the endpoint. The endpoint must not finalize it in
+    its finally, or it would reconcile the reservation to zero before the cost
+    callback applies real spend, so billable sessions stop counting against budget.
+    With the success stamp present, the endpoint leaves the reservation untouched."""
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+
+    await _lit6973_drive_realtime_session(reservation, backend_logged_success=True)
+
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_or_invalidate_falls_back_to_invalidating_the_counters():
+    """If releasing the reservation itself fails (e.g. the counter store is down),
+    the reserved counters must be invalidated directly so the estimate does not
+    stay pinned, and the reservation is finalized so nothing reprocesses it."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.spend_tracking import budget_reservation as br
+
+    reservation: Final = {
+        "reserved_cost": 0.55,
+        "input_cost": 0.0,
+        "finalized": False,
+        "entries": [{"counter_key": "spend:key:hashed-token"}],
+    }
+    invalidated: Final[list[str]] = []
+
+    async def _record(counter_key: str) -> None:
+        invalidated.append(counter_key)
+
+    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the failure branch; assertion observes which counter key got invalidated
+    sink = patch.object(ps, "_invalidate_spend_counter", new=_record)  # test-quality-ok: fakes the counter-store sink so the invalidated key is observable
+    with failing_release, sink:
+        await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
+
+    assert invalidated == ["spend:key:hashed-token"]
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_release_or_invalidate_finalizes_even_when_the_invalidate_fallback_fails():
+    """Both counter-store calls failing must not raise out of the realtime
+    endpoint's finally (it would mask the session's own outcome) and must still
+    stamp finalized so nothing retries the same reservation."""
+    from litellm.proxy.spend_tracking import budget_reservation as br
+
+    reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    failing_release = patch.object(br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down")))  # test-quality-ok: forces the fallback branch
+    failing_invalidate = patch.object(br, "invalidate_budget_reservation_counters", new=AsyncMock(side_effect=RuntimeError("still down")))  # test-quality-ok: forces the fallback itself to fail
+
+    with failing_release, failing_invalidate:
+        await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
+
+    assert reservation["finalized"] is True
 
 
 class TestTransformRequestBannedParams:

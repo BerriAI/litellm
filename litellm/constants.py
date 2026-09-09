@@ -40,7 +40,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "router_general_settings",
         "ignore_invalid_deployments",
         "fallback_access_check",
-        "heuristic_v2_router_limit",
+        "auto_router_capability_limit",
     }
 )
 DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
@@ -55,6 +55,7 @@ S3_PREFIX_DIGEST_CHARS: Final = 16
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
+budget_reservation_disabled_info_emitted = False
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
 DEFAULT_SQS_BATCH_SIZE: Final = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION: Final = "SendMessage"
@@ -72,6 +73,9 @@ DEFAULT_MAX_TOKENS: Final = int(os.getenv("DEFAULT_MAX_TOKENS", 4096))
 DEFAULT_ALLOWED_FAILS: Final = int(os.getenv("DEFAULT_ALLOWED_FAILS", 3))
 DEFAULT_REDIS_SYNC_INTERVAL: Final = int(os.getenv("DEFAULT_REDIS_SYNC_INTERVAL", 1))
 DEFAULT_COOLDOWN_TIME_SECONDS: Final = int(os.getenv("DEFAULT_COOLDOWN_TIME_SECONDS", 5))
+DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS: Final = float(
+    os.getenv("DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS", "1")
+)
 DEFAULT_REPLICATE_POLLING_RETRIES: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_RETRIES", 5))
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1))
 DEFAULT_IMAGE_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
@@ -89,6 +93,7 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
+BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
 REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
@@ -214,6 +219,9 @@ MAX_CALLBACKS: Final = get_env_int("LITELLM_MAX_CALLBACKS", 100)
 # Metadata key recording which pre_call guardrails the proxy loop already ran,
 # so the deployment-level hook does not re-run them for the same request
 PRE_CALL_EXECUTED_GUARDRAILS_KEY: Final = "_pre_call_executed_guardrails"
+
+# Attribute stamped on log_guardrail_information wrappers so __init_subclass__ does not wrap them again
+LOGS_GUARDRAIL_INFORMATION_MARKER: Final = "_litellm_logs_guardrail_information"
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
@@ -1366,6 +1374,7 @@ bedrock_embedding_models: Final[set] = set(
         "cohere.embed-multilingual-v3",
         "cohere.embed-v4:0",
         "twelvelabs.marengo-embed-2-7-v1:0",
+        "twelvelabs.marengo-embed-3-0-v1:0",
     ]
 )
 
@@ -1453,7 +1462,10 @@ LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
+OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
+CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
+ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
@@ -1755,6 +1767,10 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
+SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
+SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
+SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = 10000
+SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS: Final = 5000
 # Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
 # callers from forcing a DB query per request for unknown names, while bounding
 # staleness so a transient DB error (which surfaces as an empty list) cannot
@@ -1895,6 +1911,16 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
         "proxy-authenticate",
         "proxy-authorization",
     }
+)
+
+PROVIDER_REQUEST_ID_HEADERS: Final[tuple[str, ...]] = (
+    "x-amzn-requestid",
+    "x-request-id",
+    "request-id",
+    "x-ms-request-id",
+    "apim-request-id",
+    "x-goog-request-id",
+    "cf-ray",
 )
 
 # Browser-facing security headers that a malicious or misconfigured upstream

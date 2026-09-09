@@ -1,15 +1,17 @@
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
@@ -40,6 +42,30 @@ _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
 _PROVIDERS_WITH_COMBINATOR_REJECTING_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
+
+
+class _ReasoningSupportEntry(BaseModel):
+    litellm_provider: str | None = None
+    supports_reasoning: bool | None = None
+
+
+_BUNDLED_COST_MAP: Final = TypeAdapter(dict[str, _ReasoningSupportEntry])
+
+
+@lru_cache(maxsize=1)
+def _bundled_openai_reasoning_models() -> frozenset[str]:
+    """OpenAI models the cost map shipped with this release flags as reasoning models.
+
+    The live map can lag this release (a pinned mirror, or a proxy on newer code than the
+    map it fetches), and a lagging entry must never strip `reasoning` from a model this
+    release knows accepts it.
+    """
+    bundled: Final = _BUNDLED_COST_MAP.validate_json(GetModelCostMap.read_local_model_cost_map_text())
+    return frozenset(
+        name
+        for name, entry in bundled.items()
+        if entry.litellm_provider == LlmProviders.OPENAI.value and entry.supports_reasoning is True
+    )
 
 
 class _DeleteResponseBody(TypedDict):
@@ -95,13 +121,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
         """Return True if the model supports reasoning.effort='none'."""
-        from litellm.utils import _supports_factory
+        from litellm.utils import supports_none_reasoning_effort
 
-        return _supports_factory(
-            model=model,
-            custom_llm_provider=None,
-            key="supports_none_reasoning_effort",
-        )
+        return supports_none_reasoning_effort(model=model, custom_llm_provider=None)
 
     @staticmethod
     def _effort_resolves_to_none(model: str, effort: str | None) -> bool:
@@ -116,6 +138,28 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 
         return OpenAIGPT5Config.effort_resolves_to_none(model, effort)
+
+    @staticmethod
+    def _supports_reasoning_param(model: str) -> bool:
+        from litellm.utils import _get_model_info_helper
+
+        try:
+            info: Final = _get_model_info_helper(
+                model=model.split("/")[-1], custom_llm_provider=LlmProviders.OPENAI.value
+            )
+        except Exception:
+            return True
+        declared: Final = info.get("supports_reasoning")
+        if declared is not None:
+            return declared
+        return info["key"] in _bundled_openai_reasoning_models()
+
+    @staticmethod
+    def _requests_reasoning_effort(reasoning: object) -> bool:
+        effort: Final = (
+            reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
+        )
+        return effort is not None
 
     @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
@@ -165,6 +209,23 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         if "max_output_tokens" in params:
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
+
+        if (
+            self.custom_llm_provider == LlmProviders.OPENAI
+            and self._requests_reasoning_effort(params.get("reasoning"))
+            and not self._supports_reasoning_param(model=model)
+        ):
+            if drop_params or litellm.drop_params:
+                params.pop("reasoning", None)
+            else:
+                raise litellm.UnsupportedParamsError(
+                    message=(
+                        f"{model} doesn't support `reasoning.effort` "
+                        "(its model cost map entry lacks `supports_reasoning`). "
+                        "To drop unsupported params set `litellm.drop_params = True`"
+                    ),
+                    status_code=400,
+                )
 
         if self._is_gpt_5_model(model=model):
             temperature: Final = params.get("temperature")
@@ -478,7 +539,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         processed_headers: Final = process_response_headers(raw_response_headers)
         try:
             response = ResponsesAPIResponse.model_validate(raw_response_json)
-        except Exception:
+        except ValidationError:
             verbose_logger.debug(
                 "Error constructing ResponsesAPIResponse: %s, using model_construct", raw_response_json
             )
@@ -870,7 +931,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         try:
             response = ResponsesAPIResponse.model_validate(raw_response_json)
-        except Exception:
+        except ValidationError:
             verbose_logger.debug(
                 "Error constructing ResponsesAPIResponse: %s, using model_construct", raw_response_json
             )

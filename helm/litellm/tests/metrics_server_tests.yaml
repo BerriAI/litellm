@@ -1,0 +1,148 @@
+suite: test gateway metrics sidecar
+templates:
+  - gateway/configmap.yaml
+  - gateway/deployment.yaml
+  - gateway/service.yaml
+  - gateway/service-metrics.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: adds no sidecar, volume, env or service port when the metrics server is off
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROMETHEUS_MULTIPROC_DIR
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: prometheus-multiproc
+          any: true
+        template: gateway/deployment.yaml
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+        template: gateway/service.yaml
+      - hasDocuments:
+          count: 0
+        template: gateway/service-metrics.yaml
+
+  - it: runs the metrics server as a sidecar over a shared multiproc dir and exposes it on a ClusterIP metrics service
+    set:
+      gateway.metricsServer.enabled: true
+      gateway.metricsServer.port: 4101
+      gateway.service.type: LoadBalancer
+      gateway.image.tag: v1.101.0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROMETHEUS_MULTIPROC_DIR
+            value: /tmp/litellm_prometheus_multiproc
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: prometheus-multiproc
+            mountPath: /tmp/litellm_prometheus_multiproc
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: metrics
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: ghcr.io/berriai/litellm-gateway:v1.101.0
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].command
+          value:
+            - python
+            - -m
+            - litellm.proxy.prometheus_metrics_server
+            - --port
+            - "4101"
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].env
+          value:
+            - name: PROMETHEUS_MULTIPROC_DIR
+              value: /tmp/litellm_prometheus_multiproc
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].ports
+          value:
+            - name: metrics
+              containerPort: 4101
+              protocol: TCP
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].volumeMounts
+          value:
+            - name: prometheus-multiproc
+              mountPath: /tmp/litellm_prometheus_multiproc
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].readinessProbe.tcpSocket.port
+          value: metrics
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].livenessProbe.tcpSocket.port
+          value: metrics
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].resources.requests.cpu
+          value: 50m
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: prometheus-multiproc
+            emptyDir: {}
+        template: gateway/deployment.yaml
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+        template: gateway/service.yaml
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+        template: gateway/service.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway-metrics
+        template: gateway/service-metrics.yaml
+      - equal:
+          path: spec.type
+          value: ClusterIP
+        template: gateway/service-metrics.yaml
+      - equal:
+          path: spec.ports
+          value:
+            - port: 4101
+              targetPort: metrics
+              protocol: TCP
+              name: metrics
+        template: gateway/service-metrics.yaml
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/component: gateway
+        template: gateway/service-metrics.yaml
+
+  - it: rejects a metrics port equal to the gateway port
+    template: gateway/deployment.yaml
+    set:
+      gateway.metricsServer.enabled: true
+      gateway.metricsServer.port: 4000
+    asserts:
+      - failedTemplate:
+          errorMessage: gateway.metricsServer.port must differ from the gateway port 4000
