@@ -759,6 +759,14 @@
         "mode": "chat",
         "supports_video_input": true
     },
+    "global.twelvelabs.pegasus-1-2-v1:0": {
+        "input_cost_per_video_per_second": 0.00049,
+        "output_cost_per_token": 7.5e-06,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_video_input": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "amazon.titan-text-express-v1": {
         "input_cost_per_token": 1.3e-06,
         "litellm_provider": "bedrock",
@@ -14430,6 +14438,28 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 1536,
         "supports_embedding_image_input": true
+    },
+    "us.cohere.embed-v4:0": {
+        "input_cost_per_token": 1.2e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1536,
+        "supports_embedding_image_input": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "global.cohere.embed-v4:0": {
+        "input_cost_per_token": 1.2e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1536,
+        "supports_embedding_image_input": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "cohere/embed-v4.0": {
         "input_cost_per_token": 1.2e-07,
@@ -29747,6 +29777,66 @@
         ],
         "supports_vision": true,
         "supports_pdf_input": true
+    },
+    "gpt-image-2.5-flare": {
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "input_cost_per_image_token": 8e-06,
+        "output_cost_per_image_token": 3e-05,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "source": "https://developers.openai.com/api/docs/pricing"
+    },
+    "gpt-image-2.5-flare-2026-09-08": {
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "input_cost_per_image_token": 8e-06,
+        "output_cost_per_image_token": 3e-05,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "source": "https://developers.openai.com/api/docs/pricing"
+    },
+    "gpt-image-2.5-sunburst": {
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "input_cost_per_image_token": 8e-06,
+        "output_cost_per_image_token": 3e-05,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "source": "https://developers.openai.com/api/docs/pricing"
+    },
+    "gpt-image-2.5-sunburst-2026-09-08": {
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "input_cost_per_image_token": 8e-06,
+        "output_cost_per_image_token": 3e-05,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true,
+        "source": "https://developers.openai.com/api/docs/pricing"
     },
     "low/1024-x-1024/gpt-image-1.5": {
         "deprecation_date": "2026-12-01",
@@ -48040,8 +48130,8 @@
         "input_cost_per_token": 2e-07,
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 128000,
-        "max_output_tokens": 2000000,
-        "max_tokens": 2000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
         "source": "https://docs.x.ai/developers/models",
@@ -48056,8 +48146,8 @@
         "input_cost_per_token": 2e-07,
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 128000,
-        "max_output_tokens": 2000000,
-        "max_tokens": 2000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
         "source": "https://docs.x.ai/developers/models",
@@ -55428,6 +55518,96 @@
         "supports_tool_choice": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "bedrock_mantle/openai.gpt-6-astra": {
+        "input_cost_per_token": 1.1e-05,
+        "input_cost_per_token_above_272k_tokens": 2.2e-05,
+        "cache_creation_input_token_cost": 1.375e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.75e-05,
+        "cache_read_input_token_cost": 1.1e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2.2e-06,
+        "output_cost_per_token": 5.5e-05,
+        "output_cost_per_token_above_272k_tokens": 8.25e-05,
+        "litellm_provider": "bedrock_mantle",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "use_openai_responses_path": true,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
+    },
+    "us.openai.gpt-6-astra": {
+        "input_cost_per_token": 1.1e-05,
+        "input_cost_per_token_above_272k_tokens": 2.2e-05,
+        "cache_creation_input_token_cost": 1.375e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.75e-05,
+        "cache_read_input_token_cost": 1.1e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2.2e-06,
+        "output_cost_per_token": 5.5e-05,
+        "output_cost_per_token_above_272k_tokens": 8.25e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
+    },
+    "global.openai.gpt-6-astra": {
+        "input_cost_per_token": 1e-05,
+        "input_cost_per_token_above_272k_tokens": 2e-05,
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-05,
+        "cache_read_input_token_cost": 1e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-06,
+        "output_cost_per_token": 5e-05,
+        "output_cost_per_token_above_272k_tokens": 7.5e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
     },
     "bedrock_mantle/openai.gpt-5.5": {
         "input_cost_per_token": 5.5e-06,
