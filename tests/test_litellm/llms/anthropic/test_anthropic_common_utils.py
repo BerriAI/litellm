@@ -1541,6 +1541,30 @@ class TestAnthropicThinkingSignatureSelfHeal:
         out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["thinking"]
 
+    def test_strip_drops_encrypted_reasoning_blocks_from_the_responses_bridge(self):
+        """A session resumed on an Anthropic model replays reasoning only OpenAI can verify."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            encrypted_reasoning_signature,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_1")},
+                    {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_2")},
+                    {"type": "redacted_thinking", "data": "EmwKAhgBEgy_anthropic_minted"},
+                    {"type": "text", "text": "The answer."},
+                ],
+            }
+        ]
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == ["redacted_thinking", "text"]
+        assert len(msgs[0]["content"]) == 4
+
     def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
             strip_empty_content_blocks_from_anthropic_messages,
