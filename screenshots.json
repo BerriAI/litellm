@@ -16,17 +16,17 @@
   },
   {
     "file": "after-session.png",
-    "commit": "a1588c260232dd6ed22605fdd4db24983bb1fcee",
-    "sha256": "3b3c34b1913059070aab6a827136a9b9868d62591bbe390195e18ec167836c5a"
+    "commit": "dbf94902294cf5fa4fe5af6681fcd83ffd743231",
+    "sha256": "c7e5614dc3924d62d002ae9aaaa478b6bd6a311659ef3edc8c031326bae89920"
   },
   {
     "file": "after-happy.png",
-    "commit": "a1588c260232dd6ed22605fdd4db24983bb1fcee",
+    "commit": "dbf94902294cf5fa4fe5af6681fcd83ffd743231",
     "sha256": "904c4f3f97771c4d9277a3ecc4cb4b888145244c305bd44588e8d731b3534808"
   },
   {
     "file": "after-sse.png",
-    "commit": "a1588c260232dd6ed22605fdd4db24983bb1fcee",
+    "commit": "dbf94902294cf5fa4fe5af6681fcd83ffd743231",
     "sha256": "bd00dc43387fce6a12be6febc0ca319dfd454337b84afbf04ca52c5191394117"
   }
 ]

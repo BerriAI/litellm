@@ -1,5 +1,5 @@
 {
-  "commit": "a1588c260232dd6ed22605fdd4db24983bb1fcee",
+  "commit": "dbf94902294cf5fa4fe5af6681fcd83ffd743231",
   "cases": [
     {
       "case": "session",
@@ -10,7 +10,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 0.16,
+      "seconds": 0.56,
       "message": "Failed to connect to MCP server: the MCP session was terminated. Check that the URL points to an MCP endpoint and matches the selected transport, then retry to start a new session.",
       "error": true,
       "tools": []
@@ -24,7 +24,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 0.03,
+      "seconds": 0.18,
       "message": "Failed to connect to MCP server: the server is unreachable. Check the URL and that the server is running.",
       "error": true,
       "tools": []
@@ -38,7 +38,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 0.04,
+      "seconds": 0.2,
       "message": "Failed to connect to MCP server: it returned HTTP 401.",
       "error": true,
       "tools": []
@@ -52,7 +52,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 0.04,
+      "seconds": 0.21,
       "message": "Failed to connect to MCP server: it returned HTTP 403.",
       "error": true,
       "tools": []
@@ -66,7 +66,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 0.05,
+      "seconds": 0.21,
       "message": "Failed to connect to MCP server: it returned HTTP 429.",
       "error": true,
       "tools": []
@@ -80,7 +80,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 0.04,
+      "seconds": 0.2,
       "message": "Failed to connect to MCP server: it returned HTTP 503.",
       "error": true,
       "tools": []
@@ -122,7 +122,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 0.02,
+      "seconds": 0.03,
       "message": "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. Check the MCP endpoint URL and the server's protocol implementation.",
       "error": true,
       "tools": []
@@ -150,7 +150,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 0.03,
+      "seconds": 0.02,
       "message": "Failed to connect to MCP server: the MCP request failed (JSON-RPC code -32603). Check that the endpoint supports MCP initialization and tool listing, and check the upstream server logs.",
       "error": true,
       "tools": []
@@ -165,7 +165,7 @@
       },
       "http_status": 200,
       "seconds": 0.02,
-      "message": "An unexpected error occurred while testing the MCP connection. Retry; if it persists, share reference d3196741a4824bfcb3bb68c4942392fe with your gateway administrator.",
+      "message": "An unexpected error occurred while testing the MCP connection. Retry; if it persists, share reference e33a54a05521430da6ff806cd42875b5 with your gateway administrator.",
       "error": true,
       "tools": []
     },
@@ -178,7 +178,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 30.02,
+      "seconds": 30.01,
       "message": "Failed to connect to MCP server: no valid MCP response received from http://mcp-diagnostics:8080 within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests.",
       "error": true,
       "tools": []
@@ -192,7 +192,7 @@
         "auth_type": "none"
       },
       "http_status": 200,
-      "seconds": 0.66,
+      "seconds": 0.67,
       "message": "Successfully retrieved tools",
       "error": null,
       "tools": [

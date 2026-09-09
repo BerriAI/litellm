@@ -1,6 +1,6 @@
 # MCP connection evidence for #31318
 
-Before: `47b15ffb677902fc4550a4471b82e09f77ec77d7`. After: `a1588c260232dd6ed22605fdd4db24983bb1fcee`
+Before: `47b15ffb677902fc4550a4471b82e09f77ec77d7`. After: `dbf94902294cf5fa4fe5af6681fcd83ffd743231`
 
 Images were built from clean source archives using the root Dockerfile. Actual gateway backend hashes were checked against the source commit. Screenshots show the bundled dashboard, with no frontend changes
 
@@ -25,6 +25,6 @@ The existing dashboard requires a URL for preview, so stdio verification uses th
 
 Malformed JSON, empty JSON and interrupted connections now fail promptly where the SDK exposes the cause. Silent servers and empty HTTP event streams remain bounded by the configured timeout. One-second SDK deadlines now report one second, instead of the unrelated 30-second outer deadline
 
-The public after tool-list request initially returned HTTP 502; the rerun passed, and the final successful run is recorded. Public service content and availability can vary
+Public tool-list and tool-call checks passed on both revisions. Public service content and availability can vary
 
 Screenshot revision and SHA-256 hashes are in screenshots.json. SHA256SUMS covers the fixture and compose files. No gateway credentials are included

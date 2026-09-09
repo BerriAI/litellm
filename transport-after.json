@@ -1,5 +1,5 @@
 {
-  "commit": "a1588c260232dd6ed22605fdd4db24983bb1fcee",
+  "commit": "dbf94902294cf5fa4fe5af6681fcd83ffd743231",
   "cases": [
     {
       "case": "sse-ok-tools-list",
@@ -11,7 +11,7 @@
         "url": "http://mcp-diagnostics:8080/sse/ok/tools"
       },
       "http_status": 200,
-      "seconds": 0.07,
+      "seconds": 0.04,
       "result": {
         "tools": [
           {
@@ -42,7 +42,7 @@
         "url": "http://mcp-diagnostics:8080/sse/bad-json/initialize"
       },
       "http_status": 200,
-      "seconds": 0.06,
+      "seconds": 0.04,
       "result": {
         "status": "error",
         "error": true,
@@ -93,7 +93,7 @@
         "url": "http://mcp-diagnostics:8080/sse/silent/tools"
       },
       "http_status": 200,
-      "seconds": 1.02,
+      "seconds": 1.01,
       "result": {
         "status": "error",
         "error": true,
@@ -114,7 +114,7 @@
       "result": {
         "status": "error",
         "error": true,
-        "message": "An unexpected error occurred while testing the MCP connection. Retry; if it persists, share reference c30a890df860443dbec103c27bd6de00 with your gateway administrator."
+        "message": "An unexpected error occurred while testing the MCP connection. Retry; if it persists, share reference a445e95b28784d438c7c106d075806fb with your gateway administrator."
       }
     },
     {
@@ -127,7 +127,7 @@
         "url": "http://mcp-diagnostics:8080/sse/io-error/tools"
       },
       "http_status": 200,
-      "seconds": 0.03,
+      "seconds": 0.04,
       "result": {
         "status": "error",
         "error": true,
@@ -150,7 +150,7 @@
         ]
       },
       "http_status": 200,
-      "seconds": 0.03,
+      "seconds": 0.05,
       "result": {
         "tools": [
           {
@@ -187,7 +187,7 @@
         ]
       },
       "http_status": 200,
-      "seconds": 0.02,
+      "seconds": 0.03,
       "result": {
         "status": "error",
         "error": true,
@@ -279,11 +279,11 @@
         ]
       },
       "http_status": 200,
-      "seconds": 0.02,
+      "seconds": 0.03,
       "result": {
         "status": "error",
         "error": true,
-        "message": "An unexpected error occurred while testing the MCP connection. Retry; if it persists, share reference ccaef5f6898b4d0a8839024b3171be5e with your gateway administrator."
+        "message": "An unexpected error occurred while testing the MCP connection. Retry; if it persists, share reference 5aedcdfe299a43eca7b882492c3e8768 with your gateway administrator."
       }
     },
     {
@@ -330,7 +330,7 @@
         "url": "http://mcp-diagnostics:8080/io-error"
       },
       "http_status": 200,
-      "seconds": 0.02,
+      "seconds": 0.01,
       "result": {
         "status": "error",
         "error": true,

@@ -1,7 +1,7 @@
 name: litellm-local
 services:
   litellm:
-    image: litellm-local:a1588c260232
+    image: litellm-local:dbf94902294c
     pull_policy: never
     ports:
       - "127.0.0.1:4000:4000"
@@ -43,7 +43,7 @@ services:
       retries: 18
       start_period: 120s
   mcp-diagnostics:
-    image: litellm-local:a1588c260232
+    image: litellm-local:dbf94902294c
     pull_policy: never
     entrypoint: ["python", "/diagnostics/server.py"]
     volumes:
