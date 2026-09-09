@@ -139,7 +139,7 @@ jobs:
 
       - name: Set up venv with pinned maturin for parity tests
         run: |
-          uv venv --python 3.12 .venv
+          uv venv --seed --python 3.12 .venv
           uv pip install --python .venv/bin/python maturin==1.15.0
 
       - run: cargo test -p litellm-rust-tests --test provider_parity --locked
