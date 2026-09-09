@@ -25,6 +25,7 @@ from litellm.rust_bridge._lifecycle import (
     restore_correlation_context,
 )
 from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.provenance import mark_native_response
 
 
 class RustOcr(Protocol):
@@ -65,7 +66,7 @@ def ocr(
     implementation: Final = load_rust_ocr()
     if implementation is None:
         raise RuntimeError("Rust OCR is enabled but the native OCR extension is unavailable")
-    return implementation(arguments)
+    return mark_native_response(implementation(arguments))
 
 
 async def aocr(
@@ -74,7 +75,7 @@ async def aocr(
     implementation: Final = load_rust_aocr()
     if implementation is None:
         raise RuntimeError("Rust OCR is enabled but the native OCR extension is unavailable")
-    return await implementation(arguments)
+    return mark_native_response(await implementation(arguments))
 
 
 class _OcrLifecycle(NativeLifecycle, Protocol):

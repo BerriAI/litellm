@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.provenance import has_native_response_marker
 from litellm.types.router import GenericLiteLLMParams
 
 rust_messages = importlib.import_module("litellm.rust_bridge.messages")
@@ -145,7 +146,9 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
         timeout=httpx.Timeout(600.0, read=42.0),
     )
 
-    assert response == FAKE_MESSAGES_RESPONSE
+    assert response is not None
+    assert response["id"] == FAKE_MESSAGES_RESPONSE["id"]
+    assert has_native_response_marker(response)
     assert bridge.calls[0] == {
         "_rust_lifecycle_owner": "bridge",
         "model": "claude-sonnet-4-5",
@@ -174,7 +177,9 @@ async def test_amessages_wrapper_forwards_args():
         timeout=12.5,
     )
 
-    assert response == FAKE_MESSAGES_RESPONSE
+    assert response is not None
+    assert response["id"] == FAKE_MESSAGES_RESPONSE["id"]
+    assert has_native_response_marker(response)
     assert bridge.calls[0]["model"] == "claude-sonnet-4-5"
     assert bridge.calls[0]["timeout_seconds"] == 12.5
 
@@ -213,6 +218,32 @@ async def test_gate_invokes_rust_and_marks_response_header():
     assert call["api_base"] == "https://resource.services.ai.azure.com/anthropic"
     assert call["extra_headers"] == {"x-api-key": "sk-azure", "anthropic-version": "2023-06-01"}
     assert call["timeout_seconds"] == 30.0
+
+
+@pytest.mark.asyncio
+async def test_gate_preserves_existing_hidden_metadata_when_marking_response():
+    async def response_with_metadata(arguments: dict[str, object]) -> dict[str, object]:
+        return {
+            **FAKE_MESSAGES_RESPONSE,
+            "_hidden_params": {
+                "response_cost": 1.25,
+                "additional_headers": {"llm-provider-request-id": "req-1"},
+            },
+        }
+
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=response_with_metadata)
+
+    response = await _gate()
+
+    assert response is not None
+    assert response["_hidden_params"] == {
+        "response_cost": 1.25,
+        "additional_headers": {
+            "llm-provider-request-id": "req-1",
+            "x-litellm-rust": "true",
+        },
+    }
 
 
 @pytest.mark.asyncio

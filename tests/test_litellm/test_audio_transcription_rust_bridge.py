@@ -4,6 +4,7 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
+from litellm.rust_bridge.provenance import has_native_response_marker
 
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 
@@ -132,6 +133,7 @@ def test_bedrock_transcription_uses_rust_only_path() -> None:
         rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
 
     assert response.text == "rust"
+    assert has_native_response_marker(response)
 
 
 @pytest.mark.asyncio
@@ -149,3 +151,4 @@ async def test_bedrock_atranscription_uses_rust_only_path() -> None:
         rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
 
     assert response.text == "rust"
+    assert has_native_response_marker(response)

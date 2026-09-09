@@ -2462,13 +2462,15 @@ class BaseLLMHTTPHandler:
             from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
                 AnthropicMessagesStreamingResponse,
             )
+            from litellm.rust_bridge.provenance import native_stream_hidden_params
 
             return AnthropicMessagesStreamingResponse(
                 rust_response,
-                {"additional_headers": {"x-litellm-rust": "true"}},
+                native_stream_hidden_params(),
             )
-        rust_response["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
-        return rust_response
+        from litellm.rust_bridge.provenance import mark_native_response
+
+        return mark_native_response(rust_response)
 
     def anthropic_messages_handler(
         self,

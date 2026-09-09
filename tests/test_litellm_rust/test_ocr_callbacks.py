@@ -8,6 +8,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.rust_bridge.provenance import has_native_response_marker
 from tests.test_litellm_rust.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.contracts import (
     OCR_DOCUMENT,
@@ -123,16 +124,12 @@ async def test_pre_call_nested_mutation_updates_retained_references(
         "api_base": ocr_server.base_url,
         "callbacks": [Retain(), Edit()],
     }
-    if asynchronous:
-        await litellm.aocr(**arguments)
-    else:
-        litellm.ocr(**arguments)
+    response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
 
     assert retained[0]["document_url"] == replacement_url
     assert original["document_url"] == replacement_url
     assert ocr_server.requests[0].body["document"]["document_url"] == replacement_url
-    if native:
-        assert ocr_server.requests[0].headers["accept-encoding"] == "identity"
+    assert has_native_response_marker(response) is native
 
 
 def test_pre_call_field_replacement_preserves_original_references(ocr_server: RecordingServer) -> None:

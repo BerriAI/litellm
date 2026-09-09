@@ -33,6 +33,7 @@ from litellm.rust_bridge._lifecycle import (
     initialize_logging as initialize_lifecycle_logging,
 )
 from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
+from litellm.rust_bridge.provenance import mark_native_response
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -238,7 +239,7 @@ def messages(
         lifecycle_owner,
     )
     try:
-        return implementation(arguments=call_arguments)
+        return mark_native_response(implementation(arguments=call_arguments))
     except Exception as error:  # noqa: BLE001  # only explicit declines before lifecycle setup may fall back
         exceptions: Final = native_exception_types()
         if (
@@ -287,7 +288,7 @@ async def amessages(
         response: Final = await implementation(arguments=call_arguments)
         if isinstance(response, AsyncIterator):
             return MessagesStream(response, call_arguments, call_arguments.get(LOGGING_OBJECT_KEY))
-        return response
+        return mark_native_response(response)
     except Exception as error:  # noqa: BLE001  # only explicit declines before lifecycle setup may fall back
         exceptions: Final = native_exception_types()
         if (
