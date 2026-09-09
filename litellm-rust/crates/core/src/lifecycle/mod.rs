@@ -12,8 +12,8 @@ pub mod types;
 pub use action::{ActionBinding, Owner, ResultPolicy};
 pub use executed::ExecutedCall;
 pub use execution::{
-    CallLifecycle, CallLifecycleContext, CallLifecycleRequest, Clock, RequestPolicy, SystemClock,
-    TerminalDispatcher,
+    CallLifecycle, CallLifecycleContext, CallLifecycleRequest, Clock, ModerationHooks,
+    PreCallHooks, SystemClock, TerminalDispatcher,
 };
 pub use machine::{Lifecycle, LifecycleRoute};
 pub use program::{Commitment, FailureStage};

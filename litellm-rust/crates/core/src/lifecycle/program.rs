@@ -197,7 +197,7 @@ const PROVIDER_ACTION: [ActionBinding; 1] = [ActionBinding {
 }];
 
 const PRE_CALL_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::RequestPolicy,
+    kind: ActionKind::PreparedCallLogging,
     delivery: Delivery::InlineDirect,
     on_result: ResultPolicy::Continue,
     on_error: FailurePolicy::Propagate,

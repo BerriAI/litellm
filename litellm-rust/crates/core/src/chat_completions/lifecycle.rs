@@ -4,8 +4,8 @@ use crate::integrations::types::Usage;
 use crate::lifecycle::program::{CallProgram, ProgramOptions, actions_for};
 use crate::lifecycle::{
     ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall,
-    Lifecycle, LifecycleRoute, Outcome, RequestPolicy, SystemClock, TerminalDispatcher,
-    TerminalRecord,
+    Lifecycle, LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, SystemClock,
+    TerminalDispatcher, TerminalRecord,
 };
 
 use super::handler::execute_chat_completions_provider_call_with_transport;
@@ -118,19 +118,17 @@ pub fn machine(
 }
 
 pub trait ChatCompletionsSession:
-    for<'request> RequestPolicy<
-        ResolvedChatCompletionsRequest<'request>,
-        ResolvedChatCompletionsRequest<'request>,
-    > + TerminalDispatcher
+    for<'request> PreCallHooks<ResolvedChatCompletionsRequest<'request>>
+    + for<'request> ModerationHooks<ResolvedChatCompletionsRequest<'request>>
+    + TerminalDispatcher
     + Clock
 {
 }
 
 impl<T> ChatCompletionsSession for T where
-    T: for<'request> RequestPolicy<
-            ResolvedChatCompletionsRequest<'request>,
-            ResolvedChatCompletionsRequest<'request>,
-        > + TerminalDispatcher
+    T: for<'request> PreCallHooks<ResolvedChatCompletionsRequest<'request>>
+        + for<'request> ModerationHooks<ResolvedChatCompletionsRequest<'request>>
+        + TerminalDispatcher
         + Clock
 {
 }
@@ -182,10 +180,8 @@ impl Clock for UndispatchedSession {
     }
 }
 
-impl RequestPolicy<SettledChatRequest, SettledChatRequest> for UndispatchedSession {
+impl PreCallHooks<SettledChatRequest> for UndispatchedSession {
     type PreCallFuture<'a> = std::future::Ready<ActionResult<SettledChatRequest, Error>>;
-    type DuringCallFuture<'a> = std::future::Ready<ActionResult<SettledChatRequest, Error>>;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
@@ -193,12 +189,16 @@ impl RequestPolicy<SettledChatRequest, SettledChatRequest> for UndispatchedSessi
     ) -> Self::PreCallFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl ModerationHooks<SettledChatRequest> for UndispatchedSession {
+    type ModerationFuture<'a> = std::future::Ready<ActionResult<SettledChatRequest, Error>>;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: SettledChatRequest,
-    ) -> Self::DuringCallFuture<'a> {
+    ) -> Self::ModerationFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
 }

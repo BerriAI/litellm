@@ -6,10 +6,6 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::integrations::custom_logger::{
-    CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
-};
-
 pub mod types;
 
 pub use types::{
@@ -88,36 +84,6 @@ impl CustomGuardrailRunner {
         provider(request).await
     }
 
-    pub async fn run_pre_call_with_failure_logging(
-        &self,
-        context: &GuardrailContext,
-        request: GuardrailRequest,
-        logger_runner: &CustomLoggerRunner,
-        model_call_details: &ModelCallDetails,
-        timing: CallbackTiming,
-    ) -> Result<(GuardrailRequest, GuardrailDispatchReport), GuardrailError> {
-        match self.run_pre_call(context, request).await {
-            Ok(result) => Ok(result),
-            Err(error) => {
-                let failure_details = model_call_details.clone().with_failure_error(LoggingError {
-                    message: error.message.clone(),
-                    kind: error.kind.clone(),
-                });
-                let response_obj = CallbackValue::new(
-                    "guardrail_error",
-                    serde_json::json!({
-                        "message": error.message,
-                        "kind": error.kind,
-                    }),
-                );
-                logger_runner
-                    .async_log_failure_event(&failure_details, Some(&response_obj), timing)
-                    .await;
-                Err(error)
-            }
-        }
-    }
-
     async fn run_hook(
         &self,
         event_hook: GuardrailEventHook,
@@ -175,8 +141,7 @@ impl CustomGuardrailRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::custom_logger::{CallType, CallbackValue, CustomLogger, LogFuture};
-    use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
+    use crate::integrations::custom_logger::CallType;
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -315,78 +280,6 @@ mod tests {
 
         assert_eq!(report.invoked, 1);
         assert_eq!(result.data["masked"], json!(true));
-    }
-
-    #[tokio::test]
-    async fn block_decision_short_circuits_and_logs_failure() {
-        struct RecordingFailureLogger {
-            errors: Mutex<Vec<String>>,
-        }
-
-        impl CustomLogger for RecordingFailureLogger {
-            fn async_log_failure_event<'a>(
-                &'a self,
-                model_call_details: &'a ModelCallDetails,
-                _response_obj: Option<&'a CallbackValue>,
-                _timing: CallbackTiming,
-            ) -> LogFuture<'a> {
-                Box::pin(async move {
-                    self.errors.lock().unwrap().push(
-                        model_call_details
-                            .failure_error
-                            .as_ref()
-                            .map(|error| error.kind.clone())
-                            .unwrap_or_default(),
-                    );
-                    Ok(())
-                })
-            }
-        }
-
-        let guardrail = Arc::new(RecordingCustomGuardrail::new(
-            "blocker",
-            vec![GuardrailEventHook::PreCall],
-            TestDecision::Block,
-        ));
-        let guardrail_runner = CustomGuardrailRunner::new(vec![guardrail]);
-        let logger = Arc::new(RecordingFailureLogger {
-            errors: Mutex::new(Vec::new()),
-        });
-        let logger_runner = CustomLoggerRunner::new(vec![logger.clone()]);
-        let context = GuardrailContext::new(CallType::Ocr);
-        let details = ModelCallDetails::from_standard_logging_payload(StandardLoggingPayload {
-            id: "req_ocr".to_string(),
-            litellm_call_id: "req_ocr".to_string(),
-            call_type: "ocr".to_string(),
-            model: "mistral-ocr-latest".to_string(),
-            custom_llm_provider: "mistral".to_string(),
-            response_cost: 0.0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            start_time: 1.0,
-            end_time: 1.0,
-            stream: false,
-            metadata: StandardLoggingMetadata::default(),
-            messages: None,
-        });
-
-        let err = guardrail_runner
-            .run_pre_call_with_failure_logging(
-                &context,
-                GuardrailRequest::new(json!({"document": "bad"})),
-                &logger_runner,
-                &details,
-                CallbackTiming::new(1.0, 2.0),
-            )
-            .await
-            .expect_err("guardrail blocks request");
-
-        assert_eq!(err.kind, "GuardrailBlocked");
-        assert_eq!(
-            logger.errors.lock().unwrap().as_slice(),
-            ["GuardrailBlocked"]
-        );
     }
 
     #[tokio::test]

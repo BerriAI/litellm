@@ -7,8 +7,8 @@ use crate::integrations::types::Usage;
 use crate::lifecycle::program::{CallProgram, ProgramOptions, actions_for};
 use crate::lifecycle::{
     ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall,
-    Lifecycle, LifecycleRoute, Outcome, RequestPolicy, StreamingCall, StreamingObserver,
-    TerminalDispatcher, TerminalRecord,
+    Lifecycle, LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, StreamingCall,
+    StreamingObserver, TerminalDispatcher, TerminalRecord,
 };
 
 use super::handler::execute_messages_provider_call;
@@ -139,12 +139,15 @@ mod program_tests {
 }
 
 pub trait MessagesServices:
-    RequestPolicy<MessagesRequest, MessagesRequest> + TerminalDispatcher + Clock
+    PreCallHooks<MessagesRequest> + ModerationHooks<MessagesRequest> + TerminalDispatcher + Clock
 {
 }
 
 impl<T> MessagesServices for T where
-    T: RequestPolicy<MessagesRequest, MessagesRequest> + TerminalDispatcher + Clock
+    T: PreCallHooks<MessagesRequest>
+        + ModerationHooks<MessagesRequest>
+        + TerminalDispatcher
+        + Clock
 {
 }
 
@@ -160,10 +163,8 @@ impl Clock for NoopServices {
     }
 }
 
-impl RequestPolicy<MessagesRequest, MessagesRequest> for NoopServices {
+impl PreCallHooks<MessagesRequest> for NoopServices {
     type PreCallFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
-    type DuringCallFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
@@ -171,12 +172,16 @@ impl RequestPolicy<MessagesRequest, MessagesRequest> for NoopServices {
     ) -> Self::PreCallFuture<'a> {
         ready(ActionResult::Continue(request))
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl ModerationHooks<MessagesRequest> for NoopServices {
+    type ModerationFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: MessagesRequest,
-    ) -> Self::DuringCallFuture<'a> {
+    ) -> Self::ModerationFuture<'a> {
         ready(ActionResult::Continue(request))
     }
 }

@@ -7,8 +7,8 @@ use futures_util::{StreamExt, stream};
 use litellm_core::Error;
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, RequestPolicy, TerminalClassification,
-    TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks,
+    TerminalClassification, TerminalDispatcher, TerminalRecord,
 };
 use litellm_core::messages::lifecycle::Options;
 use litellm_core::messages::types::MessagesRequest;
@@ -53,10 +53,8 @@ impl Clock for Session {
     }
 }
 
-impl RequestPolicy<MessagesRequest, MessagesRequest> for Session {
+impl PreCallHooks<MessagesRequest> for Session {
     type PreCallFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
-    type DuringCallFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
@@ -64,12 +62,16 @@ impl RequestPolicy<MessagesRequest, MessagesRequest> for Session {
     ) -> Self::PreCallFuture<'a> {
         ready(ActionResult::Continue(request))
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl ModerationHooks<MessagesRequest> for Session {
+    type ModerationFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: MessagesRequest,
-    ) -> Self::DuringCallFuture<'a> {
+    ) -> Self::ModerationFuture<'a> {
         ready(ActionResult::Continue(request))
     }
 }

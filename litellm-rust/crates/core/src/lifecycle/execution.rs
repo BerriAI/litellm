@@ -82,26 +82,28 @@ pub trait CallLifecycleRequest {
     fn lifecycle_context(&self) -> CallLifecycleContext;
 }
 
-pub trait RequestPolicy<InitialReq, ProviderReq>: Send + Sync {
-    type PreCallFuture<'a>: Future<Output = ActionResult<InitialReq, Error>> + Send
-    where
-        Self: 'a;
-
-    type DuringCallFuture<'a>: Future<Output = ActionResult<ProviderReq, Error>> + Send
+pub trait PreCallHooks<Request>: Send + Sync {
+    type PreCallFuture<'a>: Future<Output = ActionResult<Request, Error>> + Send
     where
         Self: 'a;
 
     fn async_pre_call_hook<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
-        request: InitialReq,
+        request: Request,
     ) -> Self::PreCallFuture<'a>;
+}
 
-    fn async_during_call_hook<'a>(
+pub trait ModerationHooks<Request>: Send + Sync {
+    type ModerationFuture<'a>: Future<Output = ActionResult<Request, Error>> + Send
+    where
+        Self: 'a;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
-        request: InitialReq,
-    ) -> Self::DuringCallFuture<'a>;
+        request: Request,
+    ) -> Self::ModerationFuture<'a>;
 }
 
 pub trait TerminalDispatcher: Send + Sync {
@@ -125,17 +127,18 @@ impl Clock for SystemClock {
 pub struct CallLifecycle;
 
 impl CallLifecycle {
-    pub async fn run_streaming<InitialReq, ProviderReq, Services, ProviderCall, ProviderFuture>(
+    pub async fn run_streaming<Request, Services, ProviderCall, ProviderFuture>(
         &self,
         context: CallLifecycleContext,
-        request: InitialReq,
+        request: Request,
         services: Arc<Services>,
         observer: Box<dyn StreamingObserver>,
         provider_call: ProviderCall,
     ) -> Result<StreamingCall, Error>
     where
-        Services: RequestPolicy<InitialReq, ProviderReq> + TerminalDispatcher + Clock + 'static,
-        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
+        Services:
+            PreCallHooks<Request> + ModerationHooks<Request> + TerminalDispatcher + Clock + 'static,
+        ProviderCall: FnOnce(Request) -> ProviderFuture,
         ProviderFuture: Future<Output = Result<StreamingSource, Error>>,
     {
         let start_time = services.now();
@@ -146,7 +149,7 @@ impl CallLifecycle {
                 return executed.into_result();
             }
         };
-        let provider_request = match services.async_during_call_hook(&context, request).await {
+        let provider_request = match services.async_moderation_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
                 let executed = failure(&*services, &*services, &context, error, start_time).await;
@@ -163,19 +166,10 @@ impl CallLifecycle {
         }
     }
 
-    pub async fn run<
-        InitialReq,
-        ProviderReq,
-        Resp,
-        Policy,
-        Dispatcher,
-        ClockImpl,
-        ProviderCall,
-        ProviderFuture,
-    >(
+    pub async fn run<Request, Resp, Policy, Dispatcher, ClockImpl, ProviderCall, ProviderFuture>(
         &self,
         context: CallLifecycleContext,
-        request: InitialReq,
+        request: Request,
         policy: &Policy,
         dispatcher: &Dispatcher,
         clock: &ClockImpl,
@@ -183,10 +177,10 @@ impl CallLifecycle {
     ) -> ExecutedCall<Resp, Error>
     where
         Resp: Serialize,
-        Policy: RequestPolicy<InitialReq, ProviderReq>,
+        Policy: PreCallHooks<Request> + ModerationHooks<Request>,
         Dispatcher: TerminalDispatcher,
         ClockImpl: Clock,
-        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
+        ProviderCall: FnOnce(Request) -> ProviderFuture,
         ProviderFuture: Future<Output = Result<Resp, Error>>,
     {
         self.run_with_usage(
@@ -201,8 +195,7 @@ impl CallLifecycle {
     }
 
     pub(crate) async fn run_with_usage<
-        InitialReq,
-        ProviderReq,
+        Request,
         Resp,
         Policy,
         Dispatcher,
@@ -212,7 +205,7 @@ impl CallLifecycle {
         ResponseUsage,
     >(
         &self,
-        input: (CallLifecycleContext, InitialReq),
+        input: (CallLifecycleContext, Request),
         policy: &Policy,
         dispatcher: &Dispatcher,
         clock: &ClockImpl,
@@ -221,10 +214,10 @@ impl CallLifecycle {
     ) -> ExecutedCall<Resp, Error>
     where
         Resp: Serialize,
-        Policy: RequestPolicy<InitialReq, ProviderReq>,
+        Policy: PreCallHooks<Request> + ModerationHooks<Request>,
         Dispatcher: TerminalDispatcher,
         ClockImpl: Clock,
-        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
+        ProviderCall: FnOnce(Request) -> ProviderFuture,
         ProviderFuture: Future<Output = Result<Resp, Error>>,
         ResponseUsage: FnOnce(&Resp) -> Option<Usage>,
     {
@@ -236,7 +229,7 @@ impl CallLifecycle {
                 return failure(dispatcher, clock, &context, error, start_time).await;
             }
         };
-        let provider_request = match policy.async_during_call_hook(&context, request).await {
+        let provider_request = match policy.async_moderation_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
                 return failure(dispatcher, clock, &context, error, start_time).await;
@@ -247,6 +240,73 @@ impl CallLifecycle {
                 if let Some(usage) = response_usage(&response) {
                     context.usage = usage;
                 }
+                let terminal = context.terminal(
+                    CallbackTiming::new(start_time, clock.now()),
+                    TerminalClassification::Success,
+                    serde_json::to_value(&response).unwrap_or(Value::Null),
+                );
+                let _ = dispatcher.dispatch(&terminal).await;
+                ExecutedCall::Success { response, terminal }
+            }
+            Err(error) => failure(dispatcher, clock, &context, error, start_time).await,
+        }
+    }
+
+    pub async fn run_prepared<
+        InitialRequest,
+        ProviderRequest,
+        Response,
+        Hooks,
+        Dispatcher,
+        ClockImpl,
+        Prepare,
+        PrepareFuture,
+        ProviderCall,
+        ProviderFuture,
+    >(
+        &self,
+        context: CallLifecycleContext,
+        request: InitialRequest,
+        hooks: &Hooks,
+        dispatcher: &Dispatcher,
+        clock: &ClockImpl,
+        prepare: Prepare,
+        provider_call: ProviderCall,
+    ) -> ExecutedCall<Response, Error>
+    where
+        Response: Serialize,
+        Hooks: PreCallHooks<InitialRequest> + ModerationHooks<ProviderRequest>,
+        Dispatcher: TerminalDispatcher,
+        ClockImpl: Clock,
+        Prepare: FnOnce(InitialRequest) -> PrepareFuture,
+        PrepareFuture: Future<Output = Result<ProviderRequest, Error>>,
+        ProviderCall: FnOnce(ProviderRequest) -> ProviderFuture,
+        ProviderFuture: Future<Output = Result<Response, Error>>,
+    {
+        let start_time = clock.now();
+        let request = match hooks.async_pre_call_hook(&context, request).await {
+            ActionResult::Continue(request) | ActionResult::Replace(request) => request,
+            ActionResult::Reject(error) => {
+                return failure(dispatcher, clock, &context, error, start_time).await;
+            }
+        };
+        let provider_request = match prepare(request).await {
+            Ok(request) => request,
+            Err(error) => {
+                return failure(dispatcher, clock, &context, error, start_time).await;
+            }
+        };
+        let provider_request = match hooks
+            .async_moderation_hook(&context, provider_request)
+            .await
+        {
+            ActionResult::Continue(request) | ActionResult::Replace(request) => request,
+            ActionResult::Reject(error) => {
+                return failure(dispatcher, clock, &context, error, start_time).await;
+            }
+        };
+        match provider_call(provider_request).await {
+            Ok(response) => {
                 let terminal = context.terminal(
                     CallbackTiming::new(start_time, clock.now()),
                     TerminalClassification::Success,
@@ -334,9 +394,8 @@ mod tests {
         reject: bool,
     }
 
-    impl RequestPolicy<String, String> for RecordingPolicy {
+    impl PreCallHooks<String> for RecordingPolicy {
         type PreCallFuture<'a> = PolicyFuture<'a, String>;
-        type DuringCallFuture<'a> = PolicyFuture<'a, String>;
 
         fn async_pre_call_hook<'a>(
             &'a self,
@@ -351,12 +410,16 @@ mod tests {
                 }
             })
         }
+    }
 
-        fn async_during_call_hook<'a>(
+    impl ModerationHooks<String> for RecordingPolicy {
+        type ModerationFuture<'a> = PolicyFuture<'a, String>;
+
+        fn async_moderation_hook<'a>(
             &'a self,
             _context: &'a CallLifecycleContext,
             request: String,
-        ) -> Self::DuringCallFuture<'a> {
+        ) -> Self::ModerationFuture<'a> {
             Box::pin(async move { ActionResult::Replace(format!("{request}:during")) })
         }
     }
@@ -422,5 +485,77 @@ mod tests {
             policy.terminals.lock().unwrap()[0].classification,
             TerminalClassification::Failure { .. }
         ));
+    }
+
+    #[derive(Default)]
+    struct PreparedHooks {
+        events: Mutex<Vec<&'static str>>,
+    }
+
+    impl PreCallHooks<String> for PreparedHooks {
+        type PreCallFuture<'a> = PolicyFuture<'a, String>;
+
+        fn async_pre_call_hook<'a>(
+            &'a self,
+            _: &'a CallLifecycleContext,
+            request: String,
+        ) -> Self::PreCallFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("pre_call");
+                ActionResult::Replace(format!("{request}:checked"))
+            })
+        }
+    }
+
+    impl ModerationHooks<usize> for PreparedHooks {
+        type ModerationFuture<'a> = PolicyFuture<'a, usize>;
+
+        fn async_moderation_hook<'a>(
+            &'a self,
+            _: &'a CallLifecycleContext,
+            request: usize,
+        ) -> Self::ModerationFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("moderation");
+                ActionResult::Continue(request)
+            })
+        }
+    }
+
+    impl TerminalDispatcher for PreparedHooks {
+        fn dispatch<'a>(&'a self, _: &'a TerminalRecord) -> LogFuture<'a> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn preparation_is_separate_from_callback_phases() {
+        let hooks = PreparedHooks::default();
+        let executed = CallLifecycle
+            .run_prepared(
+                CallLifecycleContext::new("audio_transcription", "model", "provider", "call-3"),
+                "request".to_string(),
+                &hooks,
+                &hooks,
+                &SystemClock,
+                |request| {
+                    hooks.events.lock().unwrap().push("prepare");
+                    std::future::ready(Ok(request.len()))
+                },
+                |request| {
+                    hooks.events.lock().unwrap().push("provider");
+                    std::future::ready(Ok(request))
+                },
+            )
+            .await;
+
+        assert!(matches!(
+            executed,
+            ExecutedCall::Success { response: 15, .. }
+        ));
+        assert_eq!(
+            hooks.events.lock().unwrap().as_slice(),
+            ["pre_call", "prepare", "moderation", "provider"]
+        );
     }
 }

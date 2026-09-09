@@ -67,16 +67,11 @@ pub async fn ocr<S: OcrServices>(
 
 struct SettledOcrPolicy;
 
-impl crate::lifecycle::RequestPolicy<SettledOcrRequest, SettledOcrRequest> for SettledOcrPolicy {
+impl crate::lifecycle::PreCallHooks<SettledOcrRequest> for SettledOcrPolicy {
     type PreCallFuture<'a>
         = std::future::Ready<crate::lifecycle::ActionResult<SettledOcrRequest, Error>>
     where
         Self: 'a;
-    type DuringCallFuture<'a>
-        = std::future::Ready<crate::lifecycle::ActionResult<SettledOcrRequest, Error>>
-    where
-        Self: 'a;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
@@ -84,12 +79,19 @@ impl crate::lifecycle::RequestPolicy<SettledOcrRequest, SettledOcrRequest> for S
     ) -> Self::PreCallFuture<'a> {
         std::future::ready(crate::lifecycle::ActionResult::Continue(request))
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl crate::lifecycle::ModerationHooks<SettledOcrRequest> for SettledOcrPolicy {
+    type ModerationFuture<'a>
+        = std::future::Ready<crate::lifecycle::ActionResult<SettledOcrRequest, Error>>
+    where
+        Self: 'a;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: SettledOcrRequest,
-    ) -> Self::DuringCallFuture<'a> {
+    ) -> Self::ModerationFuture<'a> {
         std::future::ready(crate::lifecycle::ActionResult::Continue(request))
     }
 }

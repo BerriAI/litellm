@@ -32,3 +32,18 @@ The checkout was clean before implementation. Python behavior in `litellm/utils.
 | Release point | Request roots release after the call and any scheduled logging owner finish; cleanup drops references without clearing shared containers | Same |
 
 Admission is the only replay boundary. A decline must happen before opening a call session, invoking a callback, reading credentials, consuming deferred input, or performing provider I/O. Every error after admission remains on the native lifecycle and cannot select legacy Python execution
+
+## Core capability boundaries
+
+Callback is the umbrella term. Core models each callback contract as a focused capability instead of reproducing Python's `CustomGuardrail(CustomLogger)` inheritance
+
+| Capability | Existing Python contract | Core responsibility |
+| --- | --- | --- |
+| `PreCallHooks` | `async_pre_call_hook` | Apply request-level allow, replacement, or rejection before provider request preparation |
+| Route preparation | No callback contract | Resolve the provider request, URL, headers, body, credentials, and authorization at the route-defined phase |
+| `ModerationHooks` | `async_moderation_hook` | Apply allow, replacement, or rejection to the prepared provider request |
+| Prepared-call logging | `Logging.pre_call` | Invoke direct logging with callback-visible request roots at the route-defined phase |
+| Deployment hooks | `async_pre_call_deployment_hook` and post-call deployment hooks | Run once per deployment attempt and adopt replacements where Python does |
+| `TerminalDispatcher` | success and failure logging handlers | Deliver the authoritative terminal record without changing the public response or original error |
+
+Guardrails implement pre-call or moderation hook capabilities. They do not prepare provider requests, call providers, or independently dispatch terminal failures. The shared lifecycle converts their rejection into the same terminal failure path used by provider and transformation errors

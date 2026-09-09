@@ -3,7 +3,7 @@ use serde::Serialize;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum ActionKind {
     RequestBuild,
-    RequestPolicy,
+    PreparedCallLogging,
     ProviderCall,
     Deployment,
     TerminalSuccess,

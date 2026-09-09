@@ -7,8 +7,8 @@ use crate::Error;
 use crate::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
 use crate::integrations::custom_logger::{LogError, LogFuture};
 use crate::lifecycle::{
-    ActionResult, BytesStream, CallLifecycleContext, Clock, RequestPolicy, StreamingCall,
-    TerminalDispatcher, TerminalRecord,
+    ActionResult, BytesStream, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks,
+    StreamingCall, TerminalDispatcher, TerminalRecord,
 };
 use crate::messages::lifecycle::{MessagesServices, Options as MessagesOptions};
 use crate::messages::types::{AnthropicMessagesResponse, MessagesRequest};
@@ -173,10 +173,8 @@ impl Clock for NativeSession {
     }
 }
 
-impl RequestPolicy<MessagesRequest, MessagesRequest> for NativeSession {
+impl PreCallHooks<MessagesRequest> for NativeSession {
     type PreCallFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
-    type DuringCallFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
@@ -184,21 +182,23 @@ impl RequestPolicy<MessagesRequest, MessagesRequest> for NativeSession {
     ) -> Self::PreCallFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl ModerationHooks<MessagesRequest> for NativeSession {
+    type ModerationFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: MessagesRequest,
-    ) -> Self::DuringCallFuture<'a> {
+    ) -> Self::ModerationFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
 }
 
 impl<'request>
-    RequestPolicy<
-        crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
-        crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
-    > for NativeSession
+    PreCallHooks<crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>>
+    for NativeSession
 {
     type PreCallFuture<'a>
         = std::future::Ready<
@@ -209,7 +209,20 @@ impl<'request>
     >
     where
         Self: 'a;
-    type DuringCallFuture<'a>
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+    ) -> Self::PreCallFuture<'a> {
+        std::future::ready(ActionResult::Continue(request))
+    }
+}
+
+impl<'request>
+    ModerationHooks<crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>>
+    for NativeSession
+{
+    type ModerationFuture<'a>
         = std::future::Ready<
         ActionResult<
             crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
@@ -219,19 +232,11 @@ impl<'request>
     where
         Self: 'a;
 
-    fn async_pre_call_hook<'a>(
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
-    ) -> Self::PreCallFuture<'a> {
-        std::future::ready(ActionResult::Continue(request))
-    }
-
-    fn async_during_call_hook<'a>(
-        &'a self,
-        _: &'a CallLifecycleContext,
-        request: crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
-    ) -> Self::DuringCallFuture<'a> {
+    ) -> Self::ModerationFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
 }
@@ -509,21 +514,15 @@ where
     }
 }
 
-impl<S, Session> RequestPolicy<MessagesRequest, MessagesRequest>
-    for StreamingRuntimeSession<S, Session>
+impl<S, Session> PreCallHooks<MessagesRequest> for StreamingRuntimeSession<S, Session>
 where
     S: Send + Sync,
-    Session: RequestPolicy<MessagesRequest, MessagesRequest>,
+    Session: PreCallHooks<MessagesRequest>,
 {
     type PreCallFuture<'a>
         = Session::PreCallFuture<'a>
     where
         Self: 'a;
-    type DuringCallFuture<'a>
-        = Session::DuringCallFuture<'a>
-    where
-        Self: 'a;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
@@ -531,13 +530,24 @@ where
     ) -> Self::PreCallFuture<'a> {
         self.invocation.async_pre_call_hook(context, request)
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl<S, Session> ModerationHooks<MessagesRequest> for StreamingRuntimeSession<S, Session>
+where
+    S: Send + Sync,
+    Session: ModerationHooks<MessagesRequest>,
+{
+    type ModerationFuture<'a>
+        = Session::ModerationFuture<'a>
+    where
+        Self: 'a;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
         request: MessagesRequest,
-    ) -> Self::DuringCallFuture<'a> {
-        self.invocation.async_during_call_hook(context, request)
+    ) -> Self::ModerationFuture<'a> {
+        self.invocation.async_moderation_hook(context, request)
     }
 }
 

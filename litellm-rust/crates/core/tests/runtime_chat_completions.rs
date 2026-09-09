@@ -6,7 +6,8 @@ use litellm_core::Error;
 use litellm_core::chat_completions::types::ChatCompletionsRequest;
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, RequestPolicy, TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks, TerminalDispatcher,
+    TerminalRecord,
 };
 use litellm_core::providers::auth::{AwsMechanisms, Environment, SigningClock};
 use litellm_core::runtime::{
@@ -72,10 +73,8 @@ impl Clock for RecordingSession {
 }
 
 impl<'request>
-    RequestPolicy<
-        litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
-        litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
-    > for RecordingSession
+    PreCallHooks<litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>>
+    for RecordingSession
 {
     type PreCallFuture<'a>
         = std::future::Ready<
@@ -86,16 +85,6 @@ impl<'request>
     >
     where
         Self: 'a;
-    type DuringCallFuture<'a>
-        = std::future::Ready<
-        ActionResult<
-            litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
-            Error,
-        >,
-    >
-    where
-        Self: 'a;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
@@ -107,12 +96,27 @@ impl<'request>
             ActionResult::Continue(request)
         })
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl<'request>
+    ModerationHooks<litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>>
+    for RecordingSession
+{
+    type ModerationFuture<'a>
+        = std::future::Ready<
+        ActionResult<
+            litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+            Error,
+        >,
+    >
+    where
+        Self: 'a;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
-    ) -> Self::DuringCallFuture<'a> {
+    ) -> Self::ModerationFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
 }

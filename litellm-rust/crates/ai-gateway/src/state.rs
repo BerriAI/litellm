@@ -5,7 +5,8 @@ use litellm_core::Error;
 use litellm_core::chat_completions::types::ResolvedChatCompletionsRequest;
 use litellm_core::integrations::custom_logger::{CustomLogger, CustomLoggerRunner, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, RequestPolicy, TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks, TerminalDispatcher,
+    TerminalRecord,
 };
 use litellm_core::messages::types::MessagesRequest;
 use litellm_core::router::Router;
@@ -55,42 +56,34 @@ impl Clock for GatewayMessagesSession {
     }
 }
 
-impl RequestPolicy<MessagesRequest, MessagesRequest> for GatewayMessagesSession {
+impl PreCallHooks<MessagesRequest> for GatewayMessagesSession {
     type PreCallFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
-    type DuringCallFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: MessagesRequest,
     ) -> Self::PreCallFuture<'a> {
-        std::future::ready(ActionResult::Continue(request))
-    }
-
-    fn async_during_call_hook<'a>(
-        &'a self,
-        _: &'a CallLifecycleContext,
-        request: MessagesRequest,
-    ) -> Self::DuringCallFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
 }
 
-impl<'request>
-    RequestPolicy<
-        ResolvedChatCompletionsRequest<'request>,
-        ResolvedChatCompletionsRequest<'request>,
-    > for GatewayMessagesSession
-{
+impl ModerationHooks<MessagesRequest> for GatewayMessagesSession {
+    type ModerationFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
+
+    fn async_moderation_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: MessagesRequest,
+    ) -> Self::ModerationFuture<'a> {
+        std::future::ready(ActionResult::Continue(request))
+    }
+}
+
+impl<'request> PreCallHooks<ResolvedChatCompletionsRequest<'request>> for GatewayMessagesSession {
     type PreCallFuture<'a>
         = std::future::Ready<ActionResult<ResolvedChatCompletionsRequest<'request>, Error>>
     where
         Self: 'a;
-    type DuringCallFuture<'a>
-        = std::future::Ready<ActionResult<ResolvedChatCompletionsRequest<'request>, Error>>
-    where
-        Self: 'a;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
@@ -98,12 +91,21 @@ impl<'request>
     ) -> Self::PreCallFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl<'request> ModerationHooks<ResolvedChatCompletionsRequest<'request>>
+    for GatewayMessagesSession
+{
+    type ModerationFuture<'a>
+        = std::future::Ready<ActionResult<ResolvedChatCompletionsRequest<'request>, Error>>
+    where
+        Self: 'a;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: ResolvedChatCompletionsRequest<'request>,
-    ) -> Self::DuringCallFuture<'a> {
+    ) -> Self::ModerationFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
 }

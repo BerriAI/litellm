@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use litellm_core::Error;
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, RequestPolicy, TerminalClassification,
-    TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks,
+    TerminalClassification, TerminalDispatcher, TerminalRecord,
 };
 use litellm_core::messages::lifecycle::{Options, messages};
 use litellm_core::messages::types::MessagesRequest;
@@ -28,10 +28,8 @@ impl Clock for Services {
     }
 }
 
-impl RequestPolicy<MessagesRequest, MessagesRequest> for Services {
+impl PreCallHooks<MessagesRequest> for Services {
     type PreCallFuture<'a> = PolicyFuture<'a, MessagesRequest>;
-    type DuringCallFuture<'a> = PolicyFuture<'a, MessagesRequest>;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
@@ -45,12 +43,16 @@ impl RequestPolicy<MessagesRequest, MessagesRequest> for Services {
             }
         })
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl ModerationHooks<MessagesRequest> for Services {
+    type ModerationFuture<'a> = PolicyFuture<'a, MessagesRequest>;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
         request: MessagesRequest,
-    ) -> Self::DuringCallFuture<'a> {
+    ) -> Self::ModerationFuture<'a> {
         Box::pin(async move { ActionResult::Continue(request) })
     }
 }

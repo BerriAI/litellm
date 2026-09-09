@@ -13,8 +13,8 @@ use crate::integrations::custom_guardrail::{
 use crate::integrations::custom_logger::{CallType, CustomLogger, CustomLoggerRunner, LogFuture};
 use crate::integrations::types::{RequestMetadata, StandardLoggingMetadata};
 use crate::lifecycle::{
-    ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall, RequestPolicy,
-    TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall, ModerationHooks,
+    PreCallHooks, TerminalDispatcher, TerminalRecord,
 };
 use crate::providers::dispatch::resolve_audio_route_provider;
 
@@ -130,9 +130,15 @@ impl AudioRoute {
             timeout: request.timeout,
         };
         CallLifecycle
-            .run(context, prepared, &policy, services, services, |request| {
-                execute_audio_transcription_provider_call(services, request)
-            })
+            .run_prepared(
+                context,
+                prepared,
+                &policy,
+                services,
+                services,
+                |request| std::future::ready(policy.prepare_provider_request(request)),
+                |request| execute_audio_transcription_provider_call(services, request),
+            )
             .await
     }
 }
@@ -200,22 +206,20 @@ impl AudioRequestPolicy {
         })
     }
 
-    async fn prepare_provider_request(
+    fn prepare_provider_request(
         &self,
         request: PreparedAudioTranscriptionRequest,
     ) -> Result<ProviderAudioTranscriptionRequest, Error> {
-        let provider_request =
-            prepare_audio_transcription_provider_call(AudioTranscriptionRequest {
-                model: &request.model,
-                audio: request.audio,
-                api_key: request.api_key.as_deref(),
-                api_base: request.api_base.as_deref(),
-                custom_llm_provider: Some(&request.custom_llm_provider),
-                extra_headers: request.extra_headers,
-                optional_params: request.optional_params,
-                timeout: request.timeout,
-            })?;
-        self.run_during_call_guardrails(provider_request).await
+        prepare_audio_transcription_provider_call(AudioTranscriptionRequest {
+            model: &request.model,
+            audio: request.audio,
+            api_key: request.api_key.as_deref(),
+            api_base: request.api_base.as_deref(),
+            custom_llm_provider: Some(&request.custom_llm_provider),
+            extra_headers: request.extra_headers,
+            optional_params: request.optional_params,
+            timeout: request.timeout,
+        })
     }
 
     async fn run_during_call_guardrails(
@@ -250,18 +254,11 @@ impl AudioRequestPolicy {
     }
 }
 
-impl RequestPolicy<PreparedAudioTranscriptionRequest, ProviderAudioTranscriptionRequest>
-    for AudioRequestPolicy
-{
+impl PreCallHooks<PreparedAudioTranscriptionRequest> for AudioRequestPolicy {
     type PreCallFuture<'a>
         = AudioFuture<'a, PreparedAudioTranscriptionRequest>
     where
         Self: 'a;
-    type DuringCallFuture<'a>
-        = AudioFuture<'a, ProviderAudioTranscriptionRequest>
-    where
-        Self: 'a;
-
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
@@ -274,14 +271,21 @@ impl RequestPolicy<PreparedAudioTranscriptionRequest, ProviderAudioTranscription
             }
         })
     }
+}
 
-    fn async_during_call_hook<'a>(
+impl ModerationHooks<ProviderAudioTranscriptionRequest> for AudioRequestPolicy {
+    type ModerationFuture<'a>
+        = AudioFuture<'a, ProviderAudioTranscriptionRequest>
+    where
+        Self: 'a;
+
+    fn async_moderation_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
-        request: PreparedAudioTranscriptionRequest,
-    ) -> Self::DuringCallFuture<'a> {
+        request: ProviderAudioTranscriptionRequest,
+    ) -> Self::ModerationFuture<'a> {
         Box::pin(async move {
-            match self.prepare_provider_request(request).await {
+            match self.run_during_call_guardrails(request).await {
                 Ok(request) => ActionResult::Replace(request),
                 Err(error) => ActionResult::Reject(error),
             }
