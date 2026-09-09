@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -340,7 +341,7 @@ async def test_streaming_ttft_ranking_percentile(
 
 @pytest.mark.parametrize("ttft_percentile", [0, -0.1, 1.1])
 def test_ttft_percentile_validation(ttft_percentile: float):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         RoutingArgs(ttft_percentile=ttft_percentile)
 
 
