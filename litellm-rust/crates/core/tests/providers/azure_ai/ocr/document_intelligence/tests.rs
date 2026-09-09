@@ -195,15 +195,19 @@ fn page_coercions_and_overflow_are_explicit() {
     let result = transform(&CONFIG,"model",json!({"status":"succeeded","analyzeResult":{"pages":[{"pageNumber":"2","width":"8.5","height":11.0}]}}),json!({})).unwrap();
     assert_eq!(result["pages"][0]["index"], 1);
     for page in [json!({"pageNumber":i64::MIN}), json!({"width":1e100})] {
-        assert!(
-            transform(
-                &CONFIG,
-                "model",
-                json!({"status":"succeeded","analyzeResult":{"pages":[page]}}),
-                json!({})
-            )
-            .is_err()
-        );
+        let error = transform(
+            &CONFIG,
+            "model",
+            json!({"status":"succeeded","analyzeResult":{"pages":[page]}}),
+            json!({}),
+        )
+        .expect_err("provider page overflows");
+        let error = crate::Error::from(error);
+        assert_eq!(error.kind(), crate::error::ErrorKind::InvalidResponse);
+        assert!(matches!(
+            error,
+            crate::Error::OcrResponse(crate::ocr::error::OcrResponseError::NumericRange(_))
+        ));
     }
 }
 #[test]

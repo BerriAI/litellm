@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(response["pages"][1]["markdown"], "Page 2 block A");
         assert_eq!(response["pages"][2]["markdown"], "Page 3 block A");
         assert_eq!(response["usage_info"]["pages_processed"], 3);
-        assert_eq!(response["usage_info"]["credits"], 3);
+        assert_eq!(response["usage_info"]["credits"], 3.0);
         assert_eq!(response["provider_native_response"]["job_id"], "job_123");
         let (upload_request, parse_request) = server.await.expect("server task completes");
         assert!(
