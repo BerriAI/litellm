@@ -123,7 +123,7 @@ def _clean_schema_dict(
         stack.extend(sub for sub in pp.values() if isinstance(sub, (dict, list)))
 
     for kw in ("properties", "$defs", "definitions", "dependentSchemas"):
-        mapping: Final = current.get(kw)
+        mapping = current.get(kw)
         if isinstance(mapping, dict):
             stack.extend(sub for sub in mapping.values() if isinstance(sub, (dict, list)))
 
@@ -155,7 +155,7 @@ def _sanitize_json_schema_regex_patterns(schema: object) -> object:
 
     while stack:
         current = stack.pop()
-        current_id: Final = id(current)
+        current_id = id(current)
         if current_id in seen_ids:
             continue
         seen_ids.add(current_id)
@@ -430,14 +430,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return None
         cleaned_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []  # mutable-ok: accumulating response tools
         for tool in tools:
-            if isinstance(tool, dict):
-                cleaned_tool: Final = dict(tool)  # mutable-ok: shallow copy of tool dict for mutation
+            if isinstance(tool, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # runtime defense against non-dict tool payloads
+                cleaned_tool = dict(tool)  # mutable-ok: shallow copy of tool dict for mutation
                 if "parameters" in cleaned_tool and isinstance(cleaned_tool["parameters"], dict):
                     cleaned_tool["parameters"] = _sanitize_json_schema_regex_patterns(cleaned_tool["parameters"])
                 if "input_schema" in cleaned_tool and isinstance(cleaned_tool["input_schema"], dict):
                     cleaned_tool["input_schema"] = _sanitize_json_schema_regex_patterns(cleaned_tool["input_schema"])
                 if "function" in cleaned_tool and isinstance(cleaned_tool["function"], dict):
-                    cleaned_func: Final = dict(cleaned_tool["function"])  # mutable-ok: copy function dict
+                    cleaned_func = dict(cleaned_tool["function"])  # mutable-ok: copy function dict
                     if "parameters" in cleaned_func and isinstance(cleaned_func["parameters"], dict):
                         cleaned_func["parameters"] = _sanitize_json_schema_regex_patterns(cleaned_func["parameters"])
                     cleaned_tool["function"] = cleaned_func
