@@ -679,6 +679,9 @@ def test_streamed_named_tool_choice_is_echoed_in_responses_api_shape() -> None:
         "response.in_progress",
         "response.completed",
     ]
-    assert response_events[0].response.tool_choice == {"type": "function", "name": "run_command"}
-    assert response_events[1].response.tool_choice == {"type": "function", "name": "run_command"}
+    assert [event.response.tool_choice for event in response_events] == [
+        {"type": "function", "name": "run_command"},
+        {"type": "function", "name": "run_command"},
+        {"type": "function", "name": "run_command"},
+    ]
     assert any(getattr(event, "type", None) == "response.output_item.done" for event in events)
