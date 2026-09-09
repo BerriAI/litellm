@@ -1,0 +1,39 @@
+interactions:
+- request:
+    body: '{"input":"reducto://invalid-document-for-parity"}'
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/parse
+  response:
+    body:
+      string: '{"error":{"code":404,"name":"NOT_FOUND","message":"Document ''The file
+        may have expired or been deleted. Please re-upload and try again.'' not found"},"detail":"Document
+        ''The file may have expired or been deleted. Please re-upload and try again.''
+        not found"}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 02 Sep 2026 01:14:02 GMT
+    status:
+      code: 404
+      message: ''
+recorded_at: '2026-09-02T01:14:02.538070+00:00'
+ttl_seconds: 0
+version: 1
+x-litellm:
+  case:
+    litellm_input:
+      contract: reducto_v3
+      document:
+        document_url: reducto://invalid-document-for-parity
+        type: document_url
+      model: reducto/parse-v3
+  request_source: python_replay
+  schema_version: 1

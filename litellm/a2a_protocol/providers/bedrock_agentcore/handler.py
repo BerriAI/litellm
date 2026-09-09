@@ -6,8 +6,8 @@ completion bridge that would otherwise strip the envelope.
 """
 
 import json
-from collections.abc import AsyncIterator
-from typing import Any, Final, cast
+from collections.abc import AsyncIterator, Mapping
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
@@ -28,7 +28,7 @@ class BedrockAgentCoreA2AHandler:
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
-        params: dict[str, Any],
+        params: Mapping[str, object],
         litellm_params: dict[str, Any],
         agent_extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
@@ -56,7 +56,7 @@ class BedrockAgentCoreA2AHandler:
         verbose_logger.info("BedrockAgentCore A2A: Sending non-streaming request to %s", url)
 
         client: Final = get_async_httpx_client(
-            llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
+            llm_provider=httpxSpecialProvider.A2AProvider,
         )
         response: Final = await client.post(
             url,
@@ -74,7 +74,7 @@ class BedrockAgentCoreA2AHandler:
     @staticmethod
     async def handle_streaming(
         request_id: str,
-        params: dict[str, Any],
+        params: Mapping[str, object],
         litellm_params: dict[str, Any],
         agent_extra_headers: dict[str, str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
@@ -103,7 +103,7 @@ class BedrockAgentCoreA2AHandler:
         verbose_logger.info("BedrockAgentCore A2A: Sending streaming request to %s", url)
 
         client: Final = get_async_httpx_client(
-            llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
+            llm_provider=httpxSpecialProvider.A2AProvider,
         )
         response: Final = await client.post(
             url,

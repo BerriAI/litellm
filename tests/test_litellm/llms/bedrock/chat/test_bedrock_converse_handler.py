@@ -48,7 +48,7 @@ RESOLVED_CREDENTIALS = Credentials(
 
 @pytest.fixture(autouse=True)
 def reset_bridge(monkeypatch):
-    monkeypatch.delenv("LITELLM_RUST", raising=False)
+    monkeypatch.setenv("LITELLM_RUST", "1")
     bridge.set_rust_chat_completions(
         chat_completions=None, achat_completions=None, decline=None
     )
@@ -87,7 +87,7 @@ def _completion_kwargs(**overrides):
         "optional_params": {"maxTokens": 16},
         "acompletion": False,
         "timeout": 30.0,
-        "litellm_params": {"rust": True},
+        "litellm_params": {},
         "extra_headers": None,
         "client": None,
         "api_key": None,
@@ -157,7 +157,8 @@ def test_the_core_receives_the_untranslated_openai_messages():
     ]
 
 
-def test_without_the_opt_in_the_core_is_never_consulted():
+def test_without_the_opt_in_the_core_is_never_consulted(monkeypatch):
+    monkeypatch.setenv("LITELLM_RUST", "0")
     seen = _inject()
     try:
         _run(litellm_params={})
@@ -401,9 +402,10 @@ def test_pre_call_logging_fires_once_when_the_sync_rust_path_declines():
     assert logging_obj.pre_call.call_count == 1
 
 
-def test_the_sync_python_path_still_logs_pre_call_without_the_opt_in():
+def test_the_sync_python_path_still_logs_pre_call_without_the_opt_in(monkeypatch):
     """The suppression must not swallow the log on a request the gate declined,
     so a deployment with no `rust` flag keeps exactly the log it always had."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
     logging_obj = MagicMock()
     response = _run(
         logging_obj=logging_obj,
@@ -491,6 +493,7 @@ def test_bearer_token_auth_serves_when_boto3_resolves_no_sigv4_credentials(monke
     """With only `AWS_BEARER_TOKEN_BEDROCK` configured boto3 resolves no
     credentials at all. Preparing the Rust handoff must not dereference that
     None: the bearer token signs the request on its own."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
     client = _sync_client_returning_converse_response()
 
@@ -513,3 +516,28 @@ def test_the_rust_opt_in_needs_no_sigv4_principal():
     assert not {"aws_access_key_id", "aws_secret_access_key", "aws_session_token"} & params.keys()
     assert params["aws_region_name"] == "us-east-1"
     assert seen["call"][0]["api_key"] == "bedrock-bearer-token"
+
+
+@pytest.mark.parametrize("configured_through", ["env_var", "api_key"])
+def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, configured_through):
+    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
+    raises; a bearer-token deployment must still serve the request, since the
+    bearer token alone signs it."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    if configured_through == "env_var":
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
+    else:
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    client = _sync_client_returning_converse_response()
+
+    response = BedrockConverseLLM().completion(
+        **_completion_kwargs(
+            optional_params={"maxTokens": 16, "aws_profile_name": "litellm-no-such-aws-profile"},
+            litellm_params={},
+            client=client,
+            api_key="bedrock-bearer-token" if configured_through == "api_key" else None,
+        )
+    )
+
+    assert response.choices[0].message.content == "hi"
+    assert client.post.call_args.kwargs["headers"]["Authorization"] == "Bearer bedrock-bearer-token"

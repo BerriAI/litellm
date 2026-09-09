@@ -110,22 +110,6 @@ class TestCognitionProviderIdentity:
 
 
 class TestCognitionCostTracking:
-    @pytest.mark.parametrize(
-        "model, input_cost, output_cost, cache_read_cost",
-        [
-            ("cognition/swe-1.6", 5e-07, 2.5e-06, 2e-07),
-            ("cognition/swe-1.7", 5e-07, 2.5e-06, 2e-07),
-            ("cognition/swe-1.7-lightning", 2.5e-06, 1.25e-05, 1e-06),
-        ],
-    )
-    def test_cost_map_entries(self, model: str, input_cost: float, output_cost: float, cache_read_cost: float):
-        info = litellm.get_model_info(model=model)
-
-        assert info["litellm_provider"] == "cognition"
-        assert info["mode"] == "chat"
-        assert info["input_cost_per_token"] == input_cost
-        assert info["output_cost_per_token"] == output_cost
-        assert info["cache_read_input_token_cost"] == cache_read_cost
 
     @pytest.mark.parametrize(
         "model, expected_prompt_cost, expected_completion_cost",

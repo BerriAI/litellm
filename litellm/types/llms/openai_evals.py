@@ -2,7 +2,8 @@
 Type definitions for OpenAI Evals API
 """
 
-from typing import Any, Literal
+import builtins
+from typing import Literal
 
 from pydantic import BaseModel
 from typing_extensions import Required, TypedDict
@@ -15,7 +16,7 @@ class DataSourceConfigCustom(TypedDict, total=False):
     type: Required[Literal["custom"]]
     """Data source type - custom"""
 
-    item_schema: Required[dict[str, Any]]
+    item_schema: Required[dict[str, object]]
     """JSON schema describing the structure of each row in the dataset"""
 
     include_sample_schema: bool | None
@@ -28,7 +29,7 @@ class DataSourceConfigLogs(TypedDict, total=False):
     type: Required[Literal["logs"]]
     """Data source type - logs"""
 
-    metadata: dict[str, Any] | None
+    metadata: dict[str, object] | None
     """Optional metadata for filtering logs"""
 
 
@@ -38,7 +39,7 @@ class DataSourceConfigStoredCompletions(TypedDict, total=False):
     type: Required[Literal["stored_completions"]]
     """Data source type - stored_completions (deprecated)"""
 
-    metadata: dict[str, Any] | None
+    metadata: dict[str, object] | None
     """Optional metadata for filtering stored completions"""
 
 
@@ -93,7 +94,7 @@ class CreateEvalRequest(TypedDict, total=False):
     testing_criteria: Required[list[GraderConfig]]
     """List of graders for all eval runs"""
 
-    metadata: dict[str, Any] | None
+    metadata: dict[str, object] | None
     """Set of 16 key-value pairs that can be attached to an object (max 64 char keys, 512 char values)"""
 
 
@@ -103,7 +104,7 @@ class UpdateEvalRequest(TypedDict, total=False):
     name: str | None
     """Updated name"""
 
-    metadata: dict[str, Any] | None
+    metadata: dict[str, object] | None
     """Updated metadata"""
 
 
@@ -145,13 +146,13 @@ class Eval(BaseModel):
     name: str | None = None
     """The name of the evaluation"""
 
-    data_source_config: dict[str, Any]
+    data_source_config: dict[str, builtins.object]
     """Configuration for the data source"""
 
-    testing_criteria: list[dict[str, Any]]
+    testing_criteria: list[dict[str, builtins.object]]
     """List of graders for the evaluation"""
 
-    metadata: dict[str, Any] | None = None
+    metadata: dict[str, builtins.object] | None = None
     """Additional metadata"""
 
 
@@ -227,7 +228,7 @@ class DataSourceInlineConfig(TypedDict, total=False):
     type: Required[Literal["inline"]]
     """Data source type - inline"""
 
-    samples: Required[list[dict[str, Any]]]
+    samples: Required[list[dict[str, object]]]
     """List of inline samples to use for the run"""
 
 
@@ -259,13 +260,13 @@ class CompletionConfig(TypedDict, total=False):
 class CreateRunRequest(TypedDict, total=False):
     """Request parameters for creating a run"""
 
-    data_source: Required[dict[str, Any]]
+    data_source: Required[dict[str, object]]
     """Data source configuration for the run (can be jsonl, completions, or responses type)"""
 
     name: str | None
     """Optional name for the run"""
 
-    metadata: dict[str, Any] | None
+    metadata: dict[str, object] | None
     """Optional metadata for the run"""
 
 
@@ -330,7 +331,7 @@ class Run(BaseModel):
     status: Literal["queued", "running", "completed", "failed", "cancelled"]
     """Current status of the run"""
 
-    data_source: dict[str, Any]
+    data_source: dict[str, builtins.object]
     """Data source configuration used for the run"""
 
     eval_id: str
@@ -348,7 +349,7 @@ class Run(BaseModel):
     model: str | None = None
     """Model used for the run, if any"""
 
-    per_model_usage: Any | None = None
+    per_model_usage: builtins.object | None = None
     """Model usage details per model, if available"""
 
     per_testing_criteria_results: list[PerTestingCriteriaResult] | None = None
@@ -363,10 +364,10 @@ class Run(BaseModel):
     shared_with_openai: bool | None = None
     """Whether run is shared with OpenAI"""
 
-    metadata: dict[str, Any] | None = None
+    metadata: dict[str, builtins.object] | None = None
     """Additional metadata"""
 
-    error: dict[str, Any] | None = None
+    error: dict[str, builtins.object] | None = None
     """Error details if the run failed"""
 
 

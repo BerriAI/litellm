@@ -6,17 +6,36 @@ import asyncio
 import base64
 import os
 from collections.abc import Awaitable, Callable, Generator
+from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from functools import partial
 from importlib import metadata
-from typing import Any, Final, TypeVar
+from typing import Any, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import ClientSession, McpError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+from mcp.shared.message import SessionMessage
+from mcp.shared.session import RequestResponder
+from typing_extensions import Unpack
 
-streamable_http_client: Any | None = None
+_TransportStreams: TypeAlias = tuple[
+    MemoryObjectReceiveStream[SessionMessage | Exception],
+    MemoryObjectSendStream[SessionMessage],
+    Unpack[tuple[object, ...]],
+]
+_TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
+
+
+class _StreamableHttpClientFactory(Protocol):
+    """The ``streamable_http_client`` entry point this module calls on the installed MCP SDK."""
+
+    def __call__(self, *, url: str, http_client: httpx.AsyncClient | None) -> _TransportContext: ...
+
+
+streamable_http_client: _StreamableHttpClientFactory | None = None
 try:
     import mcp.client.streamable_http as streamable_http_module
 
@@ -38,10 +57,13 @@ def missing_streamable_http_client_error() -> ImportError:
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
+    ClientResult,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
+    ServerNotification,
+    ServerRequest,
     TextContent,
 )
 from mcp.types import Tool as MCPTool
@@ -70,7 +92,7 @@ def to_basic_auth(auth_value: str) -> str:
 
 
 def strip_auth_scheme(auth_value: str, scheme: str) -> str:
-    """Return ``auth_value`` with a leading ``<scheme> `` removed, or unchanged when absent.
+    """Return ``auth_value`` with a leading ``<scheme>`` and separator removed, or unchanged when absent.
 
     Callers supply both a bare credential and a complete header value, so prefixing
     unconditionally yields ``Bearer Bearer <jwt>``. Scheme names are case-insensitive per
@@ -78,10 +100,9 @@ def strip_auth_scheme(auth_value: str, scheme: str) -> str:
     with the scheme text and a scheme with nothing behind it are returned untouched.
     Surrounding whitespace is left to ``_strip_header_whitespace`` at header-build time.
     """
-    scheme_name, _, remainder = auth_value.lstrip().partition(" ")
-    credential: Final = remainder.lstrip()
-    if credential and scheme_name.lower() == scheme.lower():
-        return credential
+    parts: Final = auth_value.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == scheme.lower():
+        return parts[1]
     return auth_value
 
 
@@ -129,8 +150,8 @@ _SDK_READ_TIMEOUT_CODE: Final = int(httpx.codes.REQUEST_TIMEOUT)
 otherwise carries JSON-RPC error codes."""
 
 
-def _as_read_timeout(exc: BaseException) -> TimeoutError | None:
-    """The session read timeout elapsing, re-expressed as a ``TimeoutError``, or ``None``.
+def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
+    """Normalize an MCP SDK read timeout for client and gateway diagnostics, or return ``None``.
 
     The SDK reports its own elapsed read timeout as ``McpError`` carrying an HTTP status code in a
     field that otherwise holds JSON-RPC error codes, and it relays an upstream's JSON-RPC error
@@ -217,10 +238,12 @@ class MCPSigV4Auth(httpx.Auth):
         aws_region_name: str,
     ):
         """Call STS AssumeRole and return temporary credentials."""
+        import time
+
         import boto3
         from botocore.credentials import Credentials
 
-        session_name: Final = aws_session_name or f"litellm-mcp-{int(__import__('time').time())}"
+        session_name: Final = aws_session_name or f"litellm-mcp-{int(time.time())}"
         sts_kwargs: Final[dict] = {"region_name": aws_region_name}
         if aws_access_key_id and aws_secret_access_key:
             sts_kwargs["aws_access_key_id"] = aws_access_key_id
@@ -316,7 +339,7 @@ class MCPClient:
 
     def _create_transport_context(
         self,
-    ) -> tuple[Any, httpx.AsyncClient | None]:
+    ) -> tuple[_TransportContext, httpx.AsyncClient | None]:
         """
         Create the appropriate transport context based on transport type.
         Returns:
@@ -409,7 +432,7 @@ class MCPClient:
 
     async def _execute_session_operation(
         self,
-        transport_ctx: Any,
+        transport_ctx: _TransportContext,
         operation: Callable[[ClientSession], Awaitable[TSessionResult]],
     ) -> TSessionResult:
         """
@@ -423,6 +446,18 @@ class MCPClient:
         in_flight_error: BaseException | None = None
         try:
             read_stream, write_stream = transport[0], transport[1]
+            stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
+
+            async def receive_message(
+                message: RequestResponder[ServerRequest, ClientResult] | ServerNotification | Exception,
+            ) -> None:
+                if not isinstance(message, (ValueError, httpx.RequestError, OSError)):
+                    return
+                if not stream_error.done():
+                    stream_error.set_result(message)
+                # The SDK closes pending requests when its message handler raises.
+                raise RuntimeError("MCP response stream failed")
+
             # Build session kwargs with optional callbacks
             session_kwargs: Final[dict[str, Any]] = {}
             if self._sampling_callback is not None:
@@ -437,6 +472,7 @@ class MCPClient:
                 read_stream,
                 write_stream,
                 read_timeout_seconds=timedelta(seconds=self.timeout),
+                message_handler=receive_message,
                 **session_kwargs,
             )
             session: Final = await session_ctx.__aenter__()
@@ -448,6 +484,10 @@ class MCPClient:
                     if isinstance(ins, str) and ins.strip():
                         self._last_initialize_instructions = ins.strip()
                 return await operation(session)
+            except McpError:
+                if stream_error.done():
+                    raise stream_error.result()
+                raise
             finally:
                 try:
                     await session_ctx.__aexit__(None, None, None)
@@ -482,11 +522,10 @@ class MCPClient:
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception as e:
-            read_timeout: Final = _as_read_timeout(e)
+            read_timeout: Final = as_mcp_read_timeout(e)
             if read_timeout is not None:
                 verbose_logger.warning(
-                    "MCP client timed out after %ss waiting for %s to answer; the server accepted the "
-                    "request and ended its response stream without a JSON-RPC reply",
+                    "MCP client timed out after %ss waiting for a valid MCP response from %s",
                     self.timeout,
                     self.server_url or "stdio",
                 )

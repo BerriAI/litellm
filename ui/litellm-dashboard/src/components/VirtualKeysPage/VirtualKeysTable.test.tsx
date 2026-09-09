@@ -182,6 +182,8 @@ const lastSearchParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>, name: string) =
 
 const lastKeyParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => lastSearchParam(onUrlUpdate, "key");
 
+const lastHistoryMode = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].options.history;
+
 beforeEach(() => {
   vi.clearAllMocks();
 
@@ -377,6 +379,7 @@ it("clicking the key cell deep-links via ?key=", async () => {
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token);
   });
+  expect(lastHistoryMode(onUrlUpdate)).toBe("push");
 });
 
 it("renders KeyInfoView when the URL has ?key= for a key on the current page, without refetching it", async () => {
@@ -417,6 +420,7 @@ it("repoints ?key= to the rotated hash once the regenerate dialog is dismissed",
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBe("rotated-hash-456");
   });
+  expect(lastHistoryMode(onUrlUpdate)).toBe("replace");
 });
 
 it("fetches the key by id when the URL has ?key= for a key not in the loaded page", async () => {
@@ -537,6 +541,19 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
       const lastCall = mockUseKeys.mock.calls[mockUseKeys.mock.calls.length - 1];
       expect((lastCall[2] ?? {}).userID).toBeUndefined();
     });
+  });
+
+  it("sends the search box as the combined alias-or-ID search rather than the key-alias filter", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    fireEvent.change(screen.getByPlaceholderText(/Search by key alias or ID/), { target: { value: mockKey.token } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: mockKey.token }));
+    });
+    const lastOptions = mockUseKeys.mock.calls.at(-1)?.[2];
+    expect(lastOptions?.selectedKeyAlias).toBeUndefined();
+    expect(lastOptions?.keyHash).toBeUndefined();
   });
 });
 
@@ -659,7 +676,7 @@ describe("table state lives in the URL so it survives leaving and returning to t
       expect(mockUseKeys).toHaveBeenLastCalledWith(
         3,
         25,
-        expect.objectContaining({ selectedKeyAlias: "prod", sortBy: "spend", sortOrder: "asc" }),
+        expect.objectContaining({ search: "prod", sortBy: "spend", sortOrder: "asc" }),
       );
     });
     expect(screen.getByPlaceholderText(/Search by key alias/)).toHaveValue("prod");
@@ -732,7 +749,7 @@ describe("table state lives in the URL so it survives leaving and returning to t
     fireEvent.change(screen.getByPlaceholderText(/Search by key alias/), { target: { value: "prod" } });
 
     await waitFor(() => {
-      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ selectedKeyAlias: "prod" }));
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: "prod" }));
     });
     await waitFor(() => {
       expect(lastSearchParam(onUrlUpdate, "page")).toBeNull();

@@ -43,9 +43,11 @@ from litellm.proxy._experimental.mcp_server.faults import (
     render_token_fault,
 )
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    VendorCredentialState,
     aggregate_authorize,
     aggregate_token,
     complete_connect_flow,
+    describe_connect_flow,
     introspect_gateway_token,
     is_gateway_dcr_client_id,
     is_proxy_api_resource,
@@ -430,7 +432,7 @@ def _clear_oauth_state_cookie(response: Response, request: Request, state: str) 
     )
 
 
-def _get_validated_client_redirect_uri(request: Request, state_data: dict[str, Any]) -> str:
+def _get_validated_client_redirect_uri(request: Request, state_data: Mapping[str, object]) -> str:
     """Return a trusted (same-origin, loopback, or ops-allowlisted)
     client redirect URI from OAuth state.
     """
@@ -446,6 +448,17 @@ def _append_query_params(url: str, params: dict[str, str]) -> str:
     query_params: Final = parse_qsl(parsed.query, keep_blank_values=True)
     query_params.extend(params.items())
     return urlunparse(parsed._replace(query=urlencode(query_params)))
+
+
+def _resolve_mcp_server_by_name_or_id(lookup: str, client_ip: str | None) -> MCPServer | None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    by_name: Final = global_mcp_server_manager.get_mcp_server_by_name(lookup, client_ip=client_ip)
+    if by_name is not None:
+        return by_name
+    return global_mcp_server_manager.get_mcp_server_by_id(lookup, client_ip=client_ip)
 
 
 def _resolve_oauth2_server_for_root_endpoints(
@@ -469,7 +482,7 @@ def _resolve_oauth2_server_for_root_endpoints(
     return None
 
 
-def _normalize_for_token_comparison(value: Any) -> str:
+def _normalize_for_token_comparison(value: object) -> str:
     """Stringify ``value`` for token-rule comparison.
 
     Booleans are lower-cased so Python's ``True`` / ``False`` line up with
@@ -481,8 +494,8 @@ def _normalize_for_token_comparison(value: Any) -> str:
 
 
 def _validate_token_response(
-    token_response: dict[str, Any],
-    validation_rules: dict[str, Any],
+    token_response: Mapping[str, object],
+    validation_rules: Mapping[str, object],
     server_id: str,
 ) -> None:
     """Raise HTTPException 403 if any validation rule doesn't match the token response.
@@ -496,10 +509,10 @@ def _validate_token_response(
     responses of ``{"verified": true}``.
     """
     for key, expected in validation_rules.items():
-        actual: Any = token_response.get(key)
+        actual: object | None = token_response.get(key)
         # Try dot-notation traversal when top-level lookup returns None
         if actual is None and "." in key:
-            obj: Any = token_response
+            obj: object = token_response
             for part in key.split("."):
                 if isinstance(obj, dict):
                     obj = obj.get(part)
@@ -787,21 +800,7 @@ def _bridge_access_denied_redirect(redirect_uri: str, state: str, mcp_server: MC
     return RedirectResponse(_append_query_params(redirect_uri, params), status_code=302)
 
 
-async def _bridge_authorize_access_denial(
-    litellm_user_id: str,
-    mcp_server: MCPServer,
-    redirect_uri: str,
-    state: str,
-) -> RedirectResponse | None:
-    """The denial redirect for a signed-in user who cannot reach the target server, or None to proceed.
-
-    Admits the user exactly as MCP egress will (the same ``reload_admitted_user`` constructor and the
-    same ``get_allowed_mcp_servers`` resolver), so an envelope is minted only when the resulting
-    session can actually list and call the server's tools. Without this gate the flow completes, the
-    client shows connected, and every tool request fail-closes to an empty list with nothing telling
-    the operator why. An availability fault (5xx, e.g. a DB outage's 503) propagates; an unknown or
-    deactivated user denies like a missing grant, fail closed.
-    """
+async def _user_can_reach_mcp_server(user_id: str, server_id: str) -> bool:
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
@@ -810,13 +809,22 @@ async def _bridge_authorize_access_denial(
     )
 
     try:
-        admitted: Final = await MCPRequestHandler.reload_admitted_user(litellm_user_id)
+        admitted: Final = await MCPRequestHandler.reload_admitted_user(user_id)
     except HTTPException as exc:
         if exc.status_code >= 500:
             raise
-        return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
-    allowed_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(admitted)
-    if mcp_server.server_id in allowed_server_ids:
+        return False
+    return server_id in await global_mcp_server_manager.get_allowed_mcp_servers(admitted)
+
+
+async def _bridge_authorize_access_denial(
+    litellm_user_id: str,
+    mcp_server: MCPServer,
+    redirect_uri: str,
+    state: str,
+) -> RedirectResponse | None:
+    """The denial redirect for a signed-in user who cannot reach the target server, or None to proceed."""
+    if await _user_can_reach_mcp_server(litellm_user_id, mcp_server.server_id):
         return None
     return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
 
@@ -1470,11 +1478,19 @@ async def _persist_dcr_client_registration(
         )
         updated_row: Final = await update_mcp_server(
             prisma_client=prisma_client,
-            data=UpdateMCPServerRequest(
-                server_id=mcp_server.server_id,
-                credentials=credentials,
-                oauth2_flow="authorization_code",
-                **({"token_url": mcp_server.token_url} if mcp_server.token_url else {}),
+            data=(
+                UpdateMCPServerRequest(
+                    server_id=mcp_server.server_id,
+                    credentials=credentials,
+                    oauth2_flow="authorization_code",
+                    token_url=mcp_server.token_url,
+                )
+                if mcp_server.token_url
+                else UpdateMCPServerRequest(
+                    server_id=mcp_server.server_id,
+                    credentials=credentials,
+                    oauth2_flow="authorization_code",
+                )
             ),
             touched_by="mcp_oauth_dcr",
         )
@@ -1766,10 +1782,6 @@ async def authorize(
     resource: str | None = None,
 ):
     # Redirect to real OAuth provider with PKCE support
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-
     if mcp_server_name is None and client_id and is_gateway_dcr_client_id(client_id):
         if is_proxy_api_resource(request, resource):
             return await native_client_authorize(
@@ -1797,9 +1809,7 @@ async def authorize(
 
     lookup_name: Final[str | None] = mcp_server_name or client_id
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-    mcp_server = (
-        global_mcp_server_manager.get_mcp_server_by_name(lookup_name, client_ip=client_ip) if lookup_name else None
-    )
+    mcp_server = _resolve_mcp_server_by_name_or_id(lookup_name, client_ip) if lookup_name else None
     if mcp_server is None and mcp_server_name is None:
         mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
@@ -1855,10 +1865,6 @@ async def token_endpoint(
     3. Return the token
     4. Return a virtual key in this response
     """
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-
     if mcp_server_name is None and is_gateway_dcr_client_id(client_id):
         from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
             master_key,
@@ -1882,7 +1888,7 @@ async def token_endpoint(
 
     lookup_name: Final = mcp_server_name or client_id
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name, client_ip=client_ip)
+    mcp_server = _resolve_mcp_server_by_name_or_id(lookup_name, client_ip)
     if mcp_server is None and mcp_server_name is None:
         mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
@@ -1898,6 +1904,38 @@ async def token_endpoint(
         code_verifier=code_verifier,
         refresh_token=refresh_token,
         scope=scope,
+    )
+
+
+async def _vendor_credential_state(user_id: str, server_id: str) -> VendorCredentialState:
+    """Whether the gateway itself can see a live vendor credential for this user and server.
+
+    The one reading of "authorized" the connect page displays and the finish step enforces, so
+    the button a user sees and the grant they get cannot disagree. A read fault is neither, and
+    fails the scoped grant closed."""
+    from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # circular import at module load
+        get_user_oauth_credential,
+        oauth_grant_state,
+    )
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import at module load
+
+    if prisma_client is None:
+        return "unavailable"
+    try:
+        credential: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
+    except Exception:  # noqa: BLE001  # a credential-read fault must fail the scoped grant closed
+        return "unavailable"
+    return "absent" if oauth_grant_state(credential) == "absent" else "present"
+
+
+@router.get("/authorize/flow")
+async def authorize_flow(request: Request, flow: str) -> Response:
+    return await describe_connect_flow(
+        request=request,
+        flow_handle=flow,
+        session_user_id=_session_cookie_user_id(request),
+        lookup_vendor_credential=_vendor_credential_state,
+        lookup_server_reachability=_user_can_reach_mcp_server,
     )
 
 
@@ -1925,6 +1963,8 @@ async def authorize_complete(
         delivery=delivery,
         team_id=team_id,
         decision=decision,
+        lookup_vendor_credential=_vendor_credential_state,
+        lookup_server_reachability=_user_can_reach_mcp_server,
     )
 
 
@@ -2288,10 +2328,6 @@ async def _build_oauth_protected_resource_response(
     Returns:
         OAuth protected resource metadata dict
     """
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
     explicitly_named: Final = mcp_server_name is not None
@@ -2304,7 +2340,7 @@ async def _build_oauth_protected_resource_response(
 
     mcp_server: MCPServer | None = None
     if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
+        mcp_server = _resolve_mcp_server_by_name_or_id(mcp_server_name, client_ip)
 
     # Build resource URL based on the pattern
     if mcp_server_name:
@@ -2370,7 +2406,7 @@ async def _build_oauth_protected_resource_response(
     if mcp_server is None or mcp_server.auth_type != MCPAuth.oauth2_token_exchange:
         _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
 
-    if explicitly_named and mcp_server is not None and mcp_server.is_gateway_managed_oauth2:
+    if explicitly_named and mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
             "authorization_servers": [f"{request_base_url}/mcp"],
             "resource": resource_url,
@@ -2562,10 +2598,6 @@ def _build_oauth_authorization_server_response(
     registry lookups; unlike :func:`_build_oauth_protected_resource_response`
     it does not need to await any upstream IO.
     """
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
     explicitly_named: Final = mcp_server_name is not None
@@ -2583,7 +2615,7 @@ def _build_oauth_authorization_server_response(
 
     mcp_server: MCPServer | None = None
     if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
+        mcp_server = _resolve_mcp_server_by_name_or_id(mcp_server_name, client_ip)
 
     _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
@@ -2709,10 +2741,6 @@ async def oauth_authorization_server_legacy(request: Request, mcp_server_name: s
 @router.post("/{mcp_server_name}/register")
 @router.post("/register")
 async def register_client(request: Request, mcp_server_name: str | None = None):
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
-
     # Get the correct base URL considering X-Forwarded-* headers
     request_base_url: Final = get_request_base_url(request)
 
@@ -2748,7 +2776,7 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
             )
         return dummy_return
 
-    mcp_server: Final = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
+    mcp_server: Final = _resolve_mcp_server_by_name_or_id(mcp_server_name, client_ip)
     if mcp_server is None:
         return dummy_return
     return await register_client_with_server(
