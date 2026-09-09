@@ -184,10 +184,6 @@ def mark_litellm_import_complete() -> None:
     _litellm_import_complete.set()
 
 
-def _start_daemon_thread(fn: Callable[[], None]) -> None:
-    threading.Thread(target=fn, name="litellm-model-cost-map-retry", daemon=True).start()
-
-
 @dataclass(frozen=True, slots=True)
 class ModelCostMapReloaded:
     model_cost_map: dict  # mutable-ok: adopted as litellm.model_cost, whose consumer contract is a plain mutable dict
@@ -531,32 +527,6 @@ def _finalize_loaded_model_cost_map(loaded: ModelCostMapReloaded) -> ModelCostMa
     return replace(loaded, model_cost_map=_finalize_model_cost_map(loaded.model_cost_map))
 
 
-def _use_local_backup(reason: str | None) -> dict:  # mutable-ok: returns the mutable model-cost map contract
-    _cost_map_source_info.source = "local"
-    _cost_map_source_info.fallback_reason = reason
-    return _finalize_loaded_model_cost_map(GetModelCostMap.load_local_model_cost_map_with_revision()).model_cost_map
-
-
-def _accept_remote(
-    result: ModelCostMapReloaded, url: str
-) -> dict | None:  # mutable-ok: returns the mutable model-cost map contract
-    if not GetModelCostMap.validate_model_cost_map(
-        fetched_map=result.model_cost_map,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),  # pyright: ignore[reportPrivateUsage]  # integrity cache
-    ):
-        verbose_logger.warning(
-            "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
-            url,
-        )
-        return None
-    finalized: Final = _finalize_loaded_model_cost_map(result).model_cost_map
-    _cost_map_source_info.source = "remote"
-    _cost_map_source_info.url = url
-    _cost_map_source_info.is_env_forced = False
-    _cost_map_source_info.fallback_reason = None
-    return finalized
-
-
 def adopt_model_cost_map(
     new_model_cost_map: dict,  # mutable-ok: public API preserves the mutable cost-map contract
 ) -> int:
@@ -579,7 +549,6 @@ def _retry_remote_fetch_in_background(
     rng: random.Random,
     client: _SyncGetClient,
     first_outcome: _FetchAttemptRetryable,
-    apply: Callable[[dict], object],  # mutable-ok: injected callback receives the mutable cost-map dict
 ) -> None:
     try:
         first_wait: Final = _next_retry_wait(outcome=first_outcome, attempt=1, max_attempts=max_attempts, rng=rng)
@@ -602,12 +571,20 @@ def _retry_remote_fetch_in_background(
             )
             return
         _litellm_import_complete.wait()
-        accepted: Final = _accept_remote(result, url)
-        if accepted is None:
-            _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
+        if not GetModelCostMap.validate_model_cost_map(
+            fetched_map=result.model_cost_map,
+            backup_model_count=GetModelCostMap._get_backup_model_count(),  # pyright: ignore[reportPrivateUsage]  # integrity cache
+        ):
+            verbose_logger.warning(
+                "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
+                url,
+            )
             return
-        apply(accepted)
+        finalized: Final = _finalize_loaded_model_cost_map(result).model_cost_map
+        _cost_map_source_info.source = "remote"
+        _cost_map_source_info.fallback_reason = None
         _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
+        adopt_model_cost_map(finalized)
     except Exception as e:
         verbose_logger.warning("LiteLLM: Background model cost map retry failed: %s", e)
 
@@ -619,19 +596,12 @@ def get_model_cost_map(
     sleep: Callable[[float], None] = time.sleep,
     rng: random.Random | None = None,
     client: "_SyncGetClient | None" = None,
-    start_background: Callable[[Callable[[], None]], None] = _start_daemon_thread,
-    apply: Callable[  # mutable-ok: injected callback receives the mutable cost-map dict
-        [dict],
-        object,
-    ] = adopt_model_cost_map,
 ) -> dict:
     """
     Public entry point — returns the model cost map dict.
 
     1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set, uses the local backup only.
-    2. Otherwise fetches from ``url``, validates the first response, and falls
-       back to the local backup while retrying transient HTTP errors in the
-       background.
+    2. Otherwise fetches from ``url``, retrying transient errors in a background thread.
 
     Only the backup model count is cached (a single int) for validation.
     The full backup dict is only parsed when it must be *returned* as a
@@ -641,9 +611,11 @@ def get_model_cost_map(
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+        _cost_map_source_info.source = "local"
         _cost_map_source_info.url = None
         _cost_map_source_info.is_env_forced = True
-        return _use_local_backup(None)
+        _cost_map_source_info.fallback_reason = None
+        return _finalize_loaded_model_cost_map(GetModelCostMap.load_local_model_cost_map_with_revision()).model_cost_map
 
     _cost_map_source_info.url = url
     _cost_map_source_info.is_env_forced = False
@@ -651,32 +623,45 @@ def get_model_cost_map(
     fetch_client: Final = client if client is not None else httpx
     fetch_rng: Final = rng if rng is not None else random.Random()
     outcome: Final = _attempt_fetch_sync(client=fetch_client, url=url, timeout=timeout)
-    if isinstance(outcome, ModelCostMapReloaded):
-        accepted: Final = _accept_remote(outcome, url)
-        return accepted if accepted is not None else _use_local_backup("Remote data failed integrity validation")
     if isinstance(outcome, _FetchAttemptRetryable) and max_attempts > 1:
-        verbose_logger.warning(
-            "LiteLLM: model cost map fetch attempt 1/%d failed: %s; "
-            "using local backup while retrying in the background",
-            max_attempts,
-            outcome.reason,
-        )
-        start_background(
-            lambda: _retry_remote_fetch_in_background(
-                url=url,
-                timeout=timeout,
-                max_attempts=max_attempts,
-                sleep=sleep,
-                rng=fetch_rng,
-                client=fetch_client,
-                first_outcome=outcome,
-                apply=apply,
-            )
-        )
-    else:
+        threading.Thread(
+            target=_retry_remote_fetch_in_background,
+            kwargs={  # mutable-ok: threading requires a mutable keyword-arguments mapping
+                "url": url,
+                "timeout": timeout,
+                "max_attempts": max_attempts,
+                "sleep": sleep,
+                "rng": fetch_rng,
+                "client": fetch_client,
+                "first_outcome": outcome,
+            },
+            name="litellm-model-cost-map-retry",
+            daemon=True,
+        ).start()
+    if not isinstance(outcome, ModelCostMapReloaded):
         verbose_logger.warning(
             "LiteLLM: Failed to fetch remote model cost map from %s: %s. Falling back to local backup.",
             url,
             outcome.reason,
         )
-    return _use_local_backup(f"Remote fetch failed: {outcome.reason}")
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {outcome.reason}"
+        return _finalize_loaded_model_cost_map(GetModelCostMap.load_local_model_cost_map_with_revision()).model_cost_map
+    content: Final = outcome.model_cost_map
+
+    # Validate using cached count (cheap int comparison, no file I/O)
+    if not GetModelCostMap.validate_model_cost_map(
+        fetched_map=content,
+        backup_model_count=GetModelCostMap._get_backup_model_count(),
+    ):
+        verbose_logger.warning(
+            "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
+            url,
+        )
+        _cost_map_source_info.source = "local"
+        _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
+        return _finalize_loaded_model_cost_map(GetModelCostMap.load_local_model_cost_map_with_revision()).model_cost_map
+
+    _cost_map_source_info.source = "remote"
+    _cost_map_source_info.fallback_reason = None
+    return _finalize_loaded_model_cost_map(outcome).model_cost_map
