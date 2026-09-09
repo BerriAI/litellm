@@ -1169,6 +1169,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/authorize/flow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Authorize Flow */
+        get: operations["authorize_flow_authorize_flow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/benchmarks": {
         parameters: {
             query?: never;
@@ -8017,6 +8034,11 @@ export interface paths {
          * Update Key Fn
          * @description Update an existing API key's parameters.
          *
+         *     The body is a merge patch: a field left out keeps its stored value, and on the key's own columns
+         *     an explicit null clears it. The metadata-backed fields below are the exception, merging into the
+         *     stored metadata instead: passing one as null leaves it unchanged, while `metadata` itself
+         *     replaces the stored metadata wholesale.
+         *
          *     Parameters:
          *     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
          *     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
@@ -8034,7 +8056,7 @@ export interface paths {
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
-         *     - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+         *     - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached. Set to null to remove the soft budget.
          *     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
          *     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
          *     - tpm_limit: Optional[int] - Tokens per minute limit
@@ -8520,6 +8542,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mcp/proxy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        get: operations["proxy_mcp_route_mcp_proxy_get"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        put: operations["proxy_mcp_route_mcp_proxy_put"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        post: operations["proxy_mcp_route_mcp_proxy_post"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        delete: operations["proxy_mcp_route_mcp_proxy_delete"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        options: operations["proxy_mcp_route_mcp_proxy_options"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        head: operations["proxy_mcp_route_mcp_proxy_head"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        patch: operations["proxy_mcp_route_mcp_proxy_patch"];
+        trace?: never;
+    };
     "/memory-usage-in-mem-cache": {
         parameters: {
             query?: never;
@@ -8679,6 +8745,9 @@ export interface paths {
          *     - url: the remote URL that was attempted (null when env-forced local)
          *     - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
          *     - fallback_reason: human-readable reason why remote failed (null on success)
+         *     - loaded_at: when this pod last loaded the map
+         *     - source_revision: git blob id of the loaded file, what git rev-parse <commit>:<path> prints for it
+         *     - etag: the ETag of the remote fetch (null for the bundled backup)
          *     - model_count: number of models in the currently loaded cost map
          */
         get: operations["get_model_cost_map_source_model_cost_map_source_get"];
@@ -19867,6 +19936,12 @@ export interface paths {
          *     curl "http://localhost:4000/v1/skills?beta=true&limit=10"       -H "Authorization: Bearer your-key"       -H "x-litellm-model: claude-account-1"
          *     ```
          *
+         *     Pass `?custom_llm_provider=litellm_proxy&query=<task>` to rank the LiteLLM-hosted skills you can
+         *     access by semantic similarity instead of paging through the whole registry:
+         *     ```bash
+         *     curl "http://localhost:4000/v1/skills?custom_llm_provider=litellm_proxy&query=summarize+a+pdf&top_k=5"       -H "Authorization: Bearer your-key"
+         *     ```
+         *
          *     Returns: ListSkillsResponse with list of skills
          */
         get: operations["list_skills_v1_skills_get"];
@@ -23078,6 +23153,8 @@ export interface components {
             mcp_tool_permissions?: {
                 [key: string]: string[];
             } | null;
+            /** Mcp Toolsets */
+            mcp_toolsets?: string[] | null;
             /** Models */
             models?: string[] | null;
         };
@@ -23293,6 +23370,11 @@ export interface components {
             baseline_spend: number;
             cache: components["schemas"]["AutoRouterCacheStats"];
             /**
+             * Classifier Cost
+             * @description Recorded LLM classifier cost already included in spend; null when any session turns predate subtotal recording, and zero for an empty window
+             */
+            classifier_cost: number | null;
+            /**
              * Router Name
              * @description The auto-router alias requests were sent to
              */
@@ -23348,6 +23430,11 @@ export interface components {
              */
             baseline_spend: number;
             cache: components["schemas"]["AutoRouterCacheStats"];
+            /**
+             * Classifier Cost
+             * @description Recorded LLM classifier cost already included in spend; null when any session turns predate subtotal recording, and zero for an empty window
+             */
+            classifier_cost: number | null;
             /**
              * Saved Pct
              * @description saved_spend over baseline_spend, as a percentage
@@ -23712,6 +23799,11 @@ export interface components {
              */
             guard_name?: string | null;
             /**
+             * Inspect Embeddings
+             * @description When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.
+             */
+            inspect_embeddings?: boolean | null;
+            /**
              * Keyword Redaction Tag
              * @description Tag to use for keyword redaction
              */
@@ -23743,9 +23835,9 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
-            on_violation?: ("warn" | "end_session") | null;
+            on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
              * Only Scan New Messages
              * @description When True, the guardrail only scans messages that have not already been scanned earlier in the same session (identified by litellm_session_id / session_id). Message content is hashed per session and cached; only the diff (new or edited messages) is sent to the guardrail provider on follow-up calls. Falls back to a full scan when the request has no session id or the cache is unavailable. Intended for blocking/detection guardrails; not applied when mask_request_content is set.
@@ -25534,7 +25626,7 @@ export interface components {
          * @description Complexity tiers for routing decisions.
          * @enum {string}
          */
-        ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+        ComplexityTier: "NON_REASONING" | "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
         /** ComplexityTierModel */
         ComplexityTierModel: {
             /** Litellm Params */
@@ -25770,7 +25862,7 @@ export interface components {
             disable_auto_add_proxy_admin_to_teams?: boolean | null;
             /**
              * Disable Budget Reservation
-             * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). A proxy-level WARNING is logged on every request while this flag is active as a reminder that hard enforcement is relaxed.
+             * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). An INFO notice is logged once per worker at config load while this flag is active as a reminder that hard enforcement is relaxed.
              */
             disable_budget_reservation?: boolean | null;
             /**
@@ -26531,6 +26623,30 @@ export interface components {
             credential_values: {
                 [key: string]: unknown;
             };
+        };
+        /** CustomDimension */
+        CustomDimension: {
+            /**
+             * Keywords
+             * @default []
+             */
+            keywords: string[];
+            /** Name */
+            name: string;
+            /**
+             * Patterns
+             * @default []
+             */
+            patterns: string[];
+            /**
+             * Scoring Mode
+             * @description 'binary' scores 1 when any matcher hits. 'match_count' scores 0.5 when one distinct matcher hits and 1 when two or more do; repeated occurrences of one matcher never raise it. Keywords are distinct case-insensitively, patterns by source, and a keyword and a pattern are always distinct from each other.
+             * @default binary
+             * @enum {string}
+             */
+            scoring_mode: "binary" | "match_count";
+            /** Weight */
+            weight: number;
         };
         /**
          * CustomerResponse
@@ -28865,6 +28981,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Review Notes */
@@ -29375,6 +29496,8 @@ export interface components {
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
             default_api_key_tpm_limit?: number | null;
+            /** Drop Params */
+            drop_params?: boolean | string | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -29552,8 +29675,6 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
-            /** Rust */
-            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -30494,6 +30615,12 @@ export interface components {
             categories?: components["schemas"]["ContentFilterCategoryConfig"][] | null;
             /** @description Threshold configuration for Lakera guardrail categories */
             category_thresholds?: components["schemas"]["LakeraCategoryThresholds"] | null;
+            /**
+             * Ccr Retrieval
+             * @description Inject the Headroom retrieval tool for hashes declared by the compression service.
+             * @default true
+             */
+            ccr_retrieval: boolean;
             /** @description Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier. */
             checks?: components["schemas"]["BedrockChecksConfigModel"] | null;
             /**
@@ -30675,6 +30802,11 @@ export interface components {
              */
             include_scanners: boolean | null;
             /**
+             * Inspect Embeddings
+             * @description When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.
+             */
+            inspect_embeddings?: boolean | null;
+            /**
              * Is Detector Server
              * @description Boolean flag to determine if calling a detector server (True) or the FMS Orchestrator (False). Defaults to True.
              * @default true
@@ -30771,9 +30903,9 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
-            on_violation?: ("warn" | "end_session") | null;
+            on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
              * Only Scan New Messages
              * @description When True, the guardrail only scans messages that have not already been scanned earlier in the same session (identified by litellm_session_id / session_id). Message content is hashed per session and cached; only the diff (new or edited messages) is sent to the guardrail provider on follow-up calls. Falls back to a full scan when the request has no session id or the cache is unavailable. Intended for blocking/detection guardrails; not applied when mask_request_content is set.
@@ -31994,6 +32126,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -34827,6 +34964,12 @@ export interface components {
              */
             context_window_escalation_buffer: number;
             /**
+             * Custom Dimensions
+             * @description Named dimensions added to the heuristic-v1 score. Each contributes its inline weight once when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters; scoring_mode 'match_count' instead grades half weight for one distinct matcher and full for two or more. Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, backreferences and lookarounds are rejected. Conservative work limits include alternation paths, repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota.
+             * @default []
+             */
+            custom_dimensions: components["schemas"]["CustomDimension"][];
+            /**
              * Custom Technical Keywords
              * @description Domain-specific technical keywords appended to the effective base list (technical_keywords if set, otherwise DEFAULT_TECHNICAL_KEYWORDS). Order is preserved; duplicates are removed case-insensitively against the base list and within this list.
              */
@@ -34860,6 +35003,12 @@ export interface components {
              * @default true
              */
             enable_context_window_escalation: boolean;
+            /**
+             * Enable Non Reasoning Tier
+             * @description Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic that relays or reformats information rather than reasoning about it. Off by default: turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's rubric, and a value the classifier may return, all of which move tier decisions and spend on an already-deployed router. Requires an LLM classifier or a custom classifier plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` under the NON_REASONING key. Escalation still walks up from it, and it is never the savings baseline or a `heuristic_v2` prediction.
+             * @default false
+             */
+            enable_non_reasoning_tier: boolean;
             /**
              * Escalation Keywords
              * @description Case-sensitive phrases a user can include to force a bump to the next-higher complexity tier when they aren't satisfied with results (they can force a stronger model, but not choose which one). Defaults to ['LITELLM ESCALATE'] when unset; set to an empty list to disable.
@@ -34902,6 +35051,12 @@ export interface components {
              * @default 0.5
              */
             match_threshold: number;
+            /**
+             * Max Tokens From Tier Model
+             * @description Set max_tokens on every routed request to the output ceiling of the tier model it lands on, replacing whatever the caller sent. A caller behind an auto-router cannot pick one value that fits every tier: the smallest tier's ceiling starves a bigger tier's thinking budget, and a bigger tier's ceiling is rejected by the smallest. The ceiling is the smallest max_output_tokens across the tier model's deployments, read from each deployment's model_info and then the model cost map; a tier model with a deployment whose ceiling is unknown keeps the caller's value. A max_tokens, max_completion_tokens or max_output_tokens in the tier's own litellm_params still wins. Set false to forward the caller's value unchanged.
+             * @default true
+             */
+            max_tokens_from_tier_model: boolean;
             /**
              * Modality Pin Override
              * @description Let modality_routing replace a kept session-affinity pin on the turns that carry an image. Without this, a session pinned to a text-only model fails every image turn with a provider 400, since the pin is exempt from the modality gate. When enabled, such a turn routes to a capable model for that request only and the stored pin is left untouched, so the next text turn replays the session's own model; the override is reported as cause modality_pin_override and is never itself pinned. Inert unless modality_routing is also enabled.
@@ -36021,12 +36176,16 @@ export interface components {
         Skill: {
             /** Created At */
             created_at: string;
+            /** Description */
+            description?: string | null;
             /** Display Title */
             display_title?: string | null;
             /** Id */
             id: string;
             /** Latest Version */
             latest_version?: string | null;
+            /** Search Score */
+            search_score?: number | null;
             /** Source */
             source: string;
             /**
@@ -37121,7 +37280,7 @@ export interface components {
         TierDefinition: {
             /**
              * Description
-             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which inherits the built-in criteria when omitted
+             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (NON_REASONING, SIMPLE, MEDIUM, COMPLEX, REASONING), which inherits the built-in criteria when omitted
              */
             description?: string | null;
             /**
@@ -37722,6 +37881,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Rpm Limit Type */
             rpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
             /** Spend */
             spend?: number | null;
             /** Tag Rpm Limit */
@@ -37817,6 +37978,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -39521,6 +39687,8 @@ export interface components {
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
             default_api_key_tpm_limit?: number | null;
+            /** Drop Params */
+            drop_params?: boolean | string | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -39698,8 +39866,6 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
-            /** Rust */
-            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -41354,6 +41520,37 @@ export interface operations {
             };
         };
     };
+    authorize_flow_authorize_flow_get: {
+        parameters: {
+            query: {
+                flow: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_auto_router_benchmarks_auto_router_benchmarks_get: {
         parameters: {
             query?: {
@@ -41361,6 +41558,8 @@ export interface operations {
                 start_date?: string | null;
                 /** @description YYYY-MM-DD UTC, inclusive (defaults to today) */
                 end_date?: string | null;
+                /** @description Filter to one virtual key token hash */
+                api_key?: string | null;
             };
             header?: never;
             path?: never;
@@ -50827,6 +51026,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -64522,6 +64861,10 @@ export interface operations {
                 after_id?: string | null;
                 before_id?: string | null;
                 custom_llm_provider?: string | null;
+                /** @description Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model. */
+                query?: string | null;
+                /** @description With query: the maximum number of ranked skills to return. */
+                top_k?: number;
             };
             header?: never;
             path?: never;

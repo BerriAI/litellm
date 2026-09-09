@@ -1,4 +1,5 @@
 import base64
+import json
 from typing import Any, Final, cast
 
 import pytest
@@ -38,6 +39,51 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+
+
+def test_translate_chat_refusal_to_anthropic_response():
+    response = ModelResponse(
+        id="chatcmpl-refusal",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(content=None, role="assistant", refusal="I cannot fulfill this request."),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["content"] == [{"type": "text", "text": "I cannot fulfill this request."}]
+    assert result["stop_reason"] == "refusal"
+    assert result.get("stop_details") == {
+        "type": "refusal",
+        "category": None,
+        "explanation": "I cannot fulfill this request.",
+    }
+
+
+def test_translate_chat_length_takes_precedence_over_refusal():
+    response = ModelResponse(
+        id="chatcmpl-partial-refusal",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="length",
+                message=Message(content=None, role="assistant", refusal="Partial refusal"),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "max_tokens"
+    assert result.get("stop_details") is None
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_content_block():
@@ -679,9 +725,14 @@ def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
     ]
 
 
-def _translate_with_metadata(
-    model: str, metadata: dict[str, str], custom_llm_provider: str | None
-) -> dict[str, Any]:
+def _claude_code_user_id(session_id: str) -> str:
+    return json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": session_id})
+
+
+CLAUDE_CODE_USER_ID: Final = _claude_code_user_id("session-abc")
+
+
+def _translate_with_metadata(model: str, metadata: dict[str, str], custom_llm_provider: str | None) -> dict[str, Any]:
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         anthropic_message_request={
             "model": model,
@@ -694,23 +745,51 @@ def _translate_with_metadata(
     return cast(dict[str, Any], openai_request)
 
 
-def test_translate_anthropic_to_openai_maps_user_id_to_prompt_cache_key_for_openai():
-    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, "openai")
-    assert openai_request["user"] == "session-abc"
+def test_translate_anthropic_to_openai_maps_claude_code_session_id_to_prompt_cache_key_for_openai():
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": CLAUDE_CODE_USER_ID}, "openai")
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert openai_request["prompt_cache_key"] == "session-abc"
 
 
-def test_translate_anthropic_to_openai_truncates_prompt_cache_key_but_keeps_full_user():
-    long_id = "".join(str(i % 10) for i in range(100))
-    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": long_id}, "openai")
-    assert openai_request["user"] == long_id
-    assert openai_request["prompt_cache_key"] == long_id[:64]
-    assert len(openai_request["prompt_cache_key"]) == 64
+def test_translate_anthropic_to_openai_gives_each_claude_code_session_its_own_prompt_cache_key():
+    """BerriAI/litellm#39145: the first 64 chars of Claude Code's user_id are the per-install device_id."""
+    keys = tuple(
+        _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": _claude_code_user_id(session_id)}, "openai")[
+            "prompt_cache_key"
+        ]
+        for session_id in ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+    )
+    assert keys == ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+
+
+def test_translate_anthropic_to_openai_truncates_long_session_id_to_openai_limit():
+    long_session_id = "".join(str(i % 10) for i in range(100))
+    openai_request = _translate_with_metadata(
+        "openai/gpt-5.6-luna", {"user_id": _claude_code_user_id(long_session_id)}, "openai"
+    )
+    assert openai_request["prompt_cache_key"] == long_session_id[:64]
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        "alice",
+        "".join(str(i % 10) for i in range(100)),
+        json.dumps({"device_id": "d" * 64, "account_uuid": ""}),
+        json.dumps({"session_id": ""}),
+        json.dumps({"session_id": 123}),
+        "{not json",
+    ],
+)
+def test_translate_anthropic_to_openai_keeps_plain_user_id_off_prompt_cache_key(user_id: str):
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": user_id}, "openai")
+    assert openai_request["user"] == user_id
+    assert "prompt_cache_key" not in openai_request
 
 
 @pytest.mark.parametrize("model", ["azure/my-gpt-5-deployment", "my-gpt-5-deployment"])
 def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: str):
-    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, "azure")
+    openai_request = _translate_with_metadata(model, {"user_id": CLAUDE_CODE_USER_ID}, "azure")
     assert openai_request["prompt_cache_key"] == "session-abc"
 
 
@@ -727,8 +806,8 @@ def test_translate_anthropic_to_openai_sets_prompt_cache_key_for_azure(model: st
 def test_translate_anthropic_to_openai_skips_prompt_cache_key_when_provider_lacks_it(
     model: str, custom_llm_provider: str
 ):
-    openai_request = _translate_with_metadata(model, {"user_id": "session-abc"}, custom_llm_provider)
-    assert openai_request["user"] == "session-abc"
+    openai_request = _translate_with_metadata(model, {"user_id": CLAUDE_CODE_USER_ID}, custom_llm_provider)
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
 
 
@@ -736,14 +815,14 @@ def test_translate_anthropic_to_openai_skips_prompt_cache_key_for_chained_litell
     assert "prompt_cache_key" in litellm.get_supported_openai_params(
         model="xai", custom_llm_provider="litellm_proxy"
     )
-    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": "session-abc"}, "litellm_proxy")
-    assert openai_request["user"] == "session-abc"
+    openai_request = _translate_with_metadata("litellm_proxy/xai", {"user_id": CLAUDE_CODE_USER_ID}, "litellm_proxy")
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
 
 
 def test_translate_anthropic_to_openai_skips_prompt_cache_key_without_provider():
-    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": "session-abc"}, None)
-    assert openai_request["user"] == "session-abc"
+    openai_request = _translate_with_metadata("openai/gpt-5.6-luna", {"user_id": CLAUDE_CODE_USER_ID}, None)
+    assert openai_request["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in openai_request
 
 
@@ -798,6 +877,7 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert (
         result[0]["input"] == {}
     ), "Empty function arguments should result in empty dict"
+    assert "provider_specific_fields" not in result[0]
 
 
 def test_translate_openai_content_to_anthropic_text_and_tool_calls():
@@ -843,6 +923,11 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     base = "call_3e9417b7925e49aca9a71dc1885e"
     sig = "CiIBDDnWx+/a=="
     combined = f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}"
+    function = Function(
+        name="get_weather",
+        arguments='{"location": "Boston"}',
+    )
+    function.provider_specific_fields = {"thought_signature": sig}
     openai_choices = [
         Choices(
             message=Message(
@@ -852,10 +937,7 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
                     ChatCompletionAssistantToolCall(
                         id=combined,
                         type="function",
-                        function=Function(
-                            name="get_weather",
-                            arguments='{"location": "Boston"}',
-                        ),
+                        function=function,
                     )
                 ],
             )
@@ -871,6 +953,7 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     assert THOUGHT_SIGNATURE_SEPARATOR not in result[0]["id"]
     assert result[0]["name"] == "get_weather"
     assert result[0]["input"] == {"location": "Boston"}
+    assert result[0]["provider_specific_fields"] == {"signature": sig}
 
 
 def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():

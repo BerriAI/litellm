@@ -193,6 +193,7 @@ if MCP_AVAILABLE:
         UpdateMCPServerRequest,
         UserAPIKeyAuth,
         UserMCPManagementMode,
+        is_per_server_oauth_discovery_eligible,
     )
     from litellm.proxy.auth.user_api_key_auth import (
         _user_api_key_auth_builder,
@@ -2672,6 +2673,8 @@ if MCP_AVAILABLE:
         """
         Updates the MCP Server in the db.
 
+        Partial update: a field left out of the payload keeps its stored value, and a field sent as null is cleared.
+
         Parameters:
         - payload: UpdateMCPServerRequest - Required. The updated mcp server data.
         ```
@@ -2713,6 +2716,27 @@ if MCP_AVAILABLE:
             )
             old_server_record = None
             old_server_record_read_failed = True
+
+        if payload.per_server_oauth_discovery and (old_server_record is not None or old_server_record_read_failed):
+            relay_eligible: Final = old_server_record is not None and is_per_server_oauth_discovery_eligible(
+                payload.auth_type if "auth_type" in payload_fields_set else old_server_record.auth_type,
+                payload.oauth2_flow if "oauth2_flow" in payload_fields_set else old_server_record.oauth2_flow,
+                (
+                    payload.delegate_auth_to_upstream
+                    if "delegate_auth_to_upstream" in payload_fields_set
+                    else old_server_record.delegate_auth_to_upstream
+                ),
+            )
+            if not relay_eligible:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                        "error": (
+                            "per_server_oauth_discovery is only supported for auth_type oauth2 with oauth2_flow "
+                            "authorization_code and without delegate_auth_to_upstream."
+                        )
+                    },
+                )
 
         if (
             payload.dcr_bridge
@@ -3076,6 +3100,8 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         litellm_changed_by: str | None = Header(None),
     ):
+        """Partial update: a field left out keeps its stored value, and a field sent as null is cleared, except
+        ``toolset_name`` and ``tools``, which a toolset always has; empty the tool selection with an explicit []."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(

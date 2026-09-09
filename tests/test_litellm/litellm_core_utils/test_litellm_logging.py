@@ -1,7 +1,9 @@
+import asyncio
 import contextlib
+import datetime
 import os
 import sys
-import asyncio
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +22,13 @@ from litellm.litellm_core_utils.litellm_logging import (
     _get_status_fields,
     set_callbacks,
 )
-from litellm.types.utils import ModelResponse, TextCompletionResponse
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import (
+    CallTypes,
+    LiteLLMRealtimeStreamLoggingObject,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 
 @pytest.fixture
@@ -630,6 +638,86 @@ class TestRetrieveBatchCostPassesModelIdentity:
         assert captured["model_name"] == "bedrock/global.anthropic.claude-sonnet-4-6"
         assert captured["model_info"] is not None
         assert captured["model_info"]["input_cost_per_token"] == 0.0
+
+
+class TestRetrieveBatchPricesOnlyFinalBatches:
+    """Regression (LIT-7048): retrieving a provider-id batch priced it on every poll.
+
+    Every retrieve of one batch logs under the same spend row, so pricing a poll
+    that landed before the output existed wrote that row at $0 and pinned it there.
+    Only a final batch gets priced; an in-flight poll carries no cost at all.
+    """
+
+    @staticmethod
+    def _logging_obj() -> LitellmLogging:
+        obj = LitellmLogging(
+            model="gpt-5.6-luna",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-2",
+            function_id="f",
+        )
+        obj.custom_llm_provider = "openai"
+        return obj
+
+    @staticmethod
+    def _batch(status: str, output_file_id: str | None):
+        from litellm.types.utils import LiteLLMBatch
+
+        return LiteLLMBatch(
+            id="batch_6a9c99e185588190877d391f8b9d7f8a",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-in",
+            object="batch",
+            status="validating",
+            output_file_id=output_file_id,
+        ).model_copy(update={"status": status})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status", "output_file_id"),
+        [("validating", None), ("in_progress", None), ("finalizing", None), ("completed", None), ("complete", None)],
+    )
+    async def test_non_final_batch_is_not_priced(self, monkeypatch, status, output_file_id) -> None:
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        handle_completed_batch = AsyncMock()
+        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        batch = self._batch(status, output_file_id)
+
+        await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
+
+        handle_completed_batch.assert_not_awaited()
+        assert "response_cost" not in batch._hidden_params
+
+    @pytest.mark.asyncio
+    async def test_completed_batch_with_output_is_priced(self, monkeypatch) -> None:
+        from litellm.batches.batch_utils import BatchCostUsageResult
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+        from litellm.types.utils import Usage
+
+        handle_completed_batch = AsyncMock(
+            return_value=BatchCostUsageResult(
+                cost=8e-06,
+                usage=Usage(prompt_tokens=26, completion_tokens=9, total_tokens=35),
+                models=["gpt-5.6-luna"],
+                successful_requests=2,
+                failed_requests=0,
+            )
+        )
+        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        batch = self._batch("completed", "file-out")
+
+        await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
+
+        handle_completed_batch.assert_awaited_once()
+        assert batch._hidden_params["response_cost"] == 8e-06
+        assert batch.usage is not None
+        assert batch.usage.total_tokens == 35
 
 
 class TestAnthropicPassthroughCustomPricing:
@@ -4391,6 +4479,39 @@ def test_handle_anthropic_messages_response_logging_translates_bare_responses_ap
     assert result.usage.total_tokens == 18  # type: ignore[attr-defined]
 
 
+def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id():
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    served_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="deployment-1", response_id="resp_upstream"
+    )
+    logging_obj = _anthropic_messages_logging_obj()
+    result = logging_obj._handle_anthropic_messages_response_logging(
+        result=ResponsesAPIResponse(
+            id=served_id,
+            created_at=1700000000,
+            output=[
+                ResponseOutputMessage(
+                    id="msg-1",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[ResponseOutputText(annotations=[], text="hi", type="output_text")],
+                )
+            ],
+            usage=ResponseAPIUsage(input_tokens=2, output_tokens=1, total_tokens=3),
+            service_tier="flex",
+        )
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == served_id, "the spend log row must keep the id the caller was served"
+    assert result.service_tier == "flex"
+
+
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
     """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
     logging_obj = _anthropic_messages_logging_obj()
@@ -5953,15 +6074,17 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
         for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
 def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
-    """With LITELLM_OTEL_V2 on, the "newrelic" callback builds the OTel v2
-    logger (per-team credential routing); with the flag off (default) it keeps
-    the legacy agent-based logger, so existing deployments are untouched."""
+    """With LITELLM_OTEL_V2 on and operator credentials present, the "newrelic"
+    callback builds the OTel v2 logger (per-team credential routing); with the
+    flag off (default) it keeps the legacy agent-based logger, so existing
+    deployments are untouched."""
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
     try:
         v2_logger = logging_module._init_custom_logger_compatible_class(
@@ -6016,6 +6139,7 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
 
     logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
     try:
         created = logging_module._init_custom_logger_compatible_class(
@@ -6278,6 +6402,90 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
     assert pre_choice["metadata"]["litellm_gateway_injected_cache"] == ""
 
 
+def _responses_ws_logging_obj() -> LitellmLogging:
+    return LitellmLogging(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id="responses-ws-usage-test",
+        function_id="responses-ws-usage-test",
+    )
+
+
+def test_normalize_logging_result_extracts_usage_for_responses_websocket(monkeypatch):
+    """LIT-6512: native /v1/responses WebSocket sessions logged $0 spend because the usage
+    carried by stored response.completed events was never extracted. The session must cost
+    exactly what the same usage costs over HTTP /v1/responses, discounts included."""
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.5})
+    logging_obj = _responses_ws_logging_obj()
+    events = [
+        {"type": "response.created", "response": {}},
+        {
+            "type": "response.completed",
+            "response": {"usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140}},
+        },
+        {
+            "type": "response.completed",
+            "response": {"usage": {"input_tokens": 60, "output_tokens": 10, "total_tokens": 70}},
+        },
+    ]
+
+    normalized = logging_obj.normalize_logging_result(result=events)
+
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.usage.prompt_tokens == 160
+    assert normalized.usage.completion_tokens == 50
+
+    ws_cost = litellm.completion_cost(
+        completion_response=normalized,
+        model="gpt-4o",
+        call_type=CallTypes.aresponses_websocket.value,
+        custom_llm_provider="openai",
+    )
+    http_cost = litellm.completion_cost(
+        completion_response=ResponsesAPIResponse(
+            id="resp-6512",
+            created_at=1700000000,
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=160, output_tokens=50, total_tokens=210),
+        ),
+        model="gpt-4o",
+        call_type=CallTypes.aresponses.value,
+        custom_llm_provider="openai",
+    )
+    assert ws_cost > 0
+    assert ws_cost == http_cost
+
+
+def test_normalize_logging_result_bills_incomplete_responses_websocket_turns():
+    """LIT-6512: a turn cut short by max_output_tokens ends in response.incomplete, which
+    OpenAI bills, so its usage counts toward the session like a completed turn."""
+    events = [
+        {
+            "type": "response.created",
+            "response": {"usage": {"input_tokens": 999, "output_tokens": 999, "total_tokens": 1998}},
+        },
+        {
+            "type": "response.incomplete",
+            "response": {"usage": {"input_tokens": 15, "output_tokens": 16, "total_tokens": 31}},
+        },
+        {
+            "type": "response.completed",
+            "response": {"usage": {"input_tokens": 40, "output_tokens": 4, "total_tokens": 44}},
+        },
+        {"type": "response.failed", "response": {"usage": None}},
+    ]
+
+    normalized = _responses_ws_logging_obj().normalize_logging_result(result=events)
+
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.usage.prompt_tokens == 55
+    assert normalized.usage.completion_tokens == 20
+    assert normalized.usage.total_tokens == 75
+
+
 def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for_dict_results(logging_obj):
     """LIT-5466: /v1/messages returns a plain dict with no _hidden_params, so the overhead
     recorded on the logging object must reach hidden_params.litellm_overhead_time_ms (SpendLogs)."""
@@ -6324,6 +6532,113 @@ def test_get_standard_logging_object_payload_survives_logging_obj_without_timing
 
     assert payload is not None
     assert payload["hidden_params"]["litellm_overhead_time_ms"] is None
+
+
+@pytest.mark.parametrize(
+    ("header_name", "header_source"),
+    (
+        ("x-amzn-RequestId", "response"),
+        ("x-request-id", "response"),
+        ("request-id", "response"),
+        ("x-ms-request-id", "response"),
+        ("apim-request-id", "response"),
+        ("x-goog-request-id", "response"),
+        ("cf-ray", "response"),
+        ("X-Request-Id", "litellm_response_headers"),
+        ("X-MS-Request-ID", "headers"),
+    ),
+)
+def test_failure_standard_logging_payload_captures_provider_request_id(
+    logging_obj: LitellmLogging,
+    header_name: str,
+    header_source: Literal["response", "litellm_response_headers", "headers"],
+):
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    request_id = "provider-request-123"
+    request = httpx.Request("POST", "https://provider.example/v1/chat/completions")
+    response = httpx.Response(429, headers={header_name: request_id}, request=request)
+    provider_error = httpx.HTTPStatusError("provider error", request=request, response=response)
+    if header_source == "litellm_response_headers":
+        response.headers.clear()
+        provider_error.litellm_response_headers = {header_name: request_id}
+    elif header_source == "headers":
+        response.headers.clear()
+        provider_error.headers = {header_name: request_id}
+    now = datetime.datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "test-model", "messages": []},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="failure",
+        original_exception=provider_error,
+    )
+
+    assert payload is not None
+    assert payload["error_information"] is not None
+    assert payload["error_information"]["error_provider_request_id"] == request_id
+
+
+def test_get_error_information_ignores_unsupported_headers() -> None:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    request = httpx.Request("POST", "https://provider.example/v1/chat/completions")
+    response = httpx.Response(429, headers={"retry-after": "3"}, request=request)
+    provider_error = httpx.HTTPStatusError("provider error", request=request, response=response)
+
+    error_information = StandardLoggingPayloadSetup.get_error_information(provider_error)
+
+    assert error_information["error_provider_request_id"] is None
+
+
+def test_get_error_information_uses_header_precedence_and_fallback() -> None:
+    from litellm.exceptions import RateLimitError
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    request = httpx.Request("POST", "https://provider.example/v1/chat/completions")
+    response = httpx.Response(
+        429,
+        headers={"x-request-id": "response-id", "x-amzn-requestid": "amazon-id"},
+        request=request,
+    )
+    provider_error = RateLimitError(
+        message="provider error",
+        llm_provider="test-provider",
+        model="test-model",
+        response=response,
+        headers={"retry-after": "3"},
+    )
+
+    error_information = StandardLoggingPayloadSetup.get_error_information(provider_error)
+
+    assert error_information["error_provider_request_id"] == "amazon-id"
+
+
+def test_get_error_information_ignores_malformed_headers() -> None:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    provider_error = Exception("provider error")
+    provider_error.headers = [("x-request-id", "provider-request-123")]
+
+    error_information = StandardLoggingPayloadSetup.get_error_information(provider_error)
+
+    assert error_information["error_provider_request_id"] is None
+
+
+def test_get_provider_request_id_ignores_header_lookup_errors() -> None:
+    from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
+
+    class HeaderLookupError(Exception):
+        @property
+        def response(self) -> object:
+            raise RuntimeError("headers unavailable")
+
+    assert _get_provider_request_id(HeaderLookupError("provider error")) is None
 
 
 def test_get_standard_logging_object_payload_failure_status_keeps_overhead_none(logging_obj):
@@ -6457,3 +6772,32 @@ def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervene
     assert _get_status_fields(
         "success", [flagged, {"guardrail_status": "guardrail_intervened"}], None
     )["guardrail_status"] == "guardrail_intervened"
+
+
+def test_get_error_information_redacts_provider_key_from_upstream_url():
+    """A pass-through upstream failure logs the httpx traceback, whose message
+    quotes the upstream URL with the provider key in its query string. That
+    key must never reach spend logs or logging callbacks."""
+    import traceback
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    provider_key = "AIza" + "S" * 35
+    upstream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key={provider_key}"
+    response = httpx.Response(400, request=httpx.Request("POST", upstream_url))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as caught:
+        upstream_error = caught
+        upstream_traceback = traceback.format_exc()
+    assert provider_key in upstream_traceback
+
+    result = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=upstream_error, traceback_str=upstream_traceback
+    )
+
+    assert provider_key not in result["traceback"]
+    assert provider_key not in result["error_message"]
+    assert "REDACTED" in result["traceback"]
+    assert "REDACTED" in result["error_message"]
+    assert result["error_code"] == "400"
