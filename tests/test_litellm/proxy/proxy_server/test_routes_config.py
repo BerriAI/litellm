@@ -1292,6 +1292,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.integrations.langsmith import LangsmithLogger
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import VectorStorePreCallHook
     from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
     from litellm.router import Router
     from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
@@ -1318,6 +1319,7 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
             _PROXY_MaxBudgetLimiter(),
             _PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock()),
             ServiceLogging(),
+            VectorStorePreCallHook(),
             _InventoryTestGuardrail(guardrail_name="inventory-test-guardrail"),
             _UserCodeLogger(),
         ],
