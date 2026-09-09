@@ -850,20 +850,24 @@ class CustomGuardrail(CustomLogger):
         if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
             return None
 
-        # CHECK IF GUARDRAIL REJECTS THE REQUEST
         target: Final = self._deployment_hook_target()
-        hook_request_data: Final = {**request_data, "guardrail_to_apply": self} if target is not self else request_data
-        result: Final = await target.async_post_call_success_hook(
-            user_api_key_dict=UserAPIKeyAuth(
-                user_id=request_data.get("user_api_key_user_id"),
-                team_id=request_data.get("user_api_key_team_id"),
-                end_user_id=request_data.get("user_api_key_end_user_id"),
-                api_key=request_data.get("user_api_key_hash"),
-                request_route=request_data.get("user_api_key_request_route"),
-            ),
-            data=hook_request_data,
-            response=response,
-        )
+        try:
+            if target is not self:
+                request_data["guardrail_to_apply"] = self  # rebind-ok: dispatch consumes this key
+            result: Final = await target.async_post_call_success_hook(
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id=request_data.get("user_api_key_user_id"),
+                    team_id=request_data.get("user_api_key_team_id"),
+                    end_user_id=request_data.get("user_api_key_end_user_id"),
+                    api_key=request_data.get("user_api_key_hash"),
+                    request_route=request_data.get("user_api_key_request_route"),
+                ),
+                data=request_data,
+                response=response,
+            )
+        finally:
+            if target is not self:
+                request_data.pop("guardrail_to_apply", None)
 
         if not self._is_valid_response_type(result):
             return None
