@@ -60,6 +60,20 @@ const optionByLabel = (label: string): HTMLElement | undefined =>
 
 const isOptionDisabled = (option: HTMLElement): boolean => option.getAttribute("aria-disabled") === "true";
 
+const tierChips = (tier: string): HTMLElement => {
+  const placeholder = `Select model(s) for ${tier.toLowerCase()} queries`;
+  const chips = screen
+    .getAllByRole("toolbar")
+    .find((candidate) => within(candidate).queryByLabelText(placeholder) !== null);
+  if (!chips) throw new Error(`No tier row found for "${tier}"`);
+  return chips;
+};
+
+const expectTierModel = (tier: string, model: string): void => {
+  const chips = within(tierChips(tier)).getAllByLabelText(/.+/, { selector: '[data-slot="combobox-chip"]' });
+  expect(chips.map((chip) => chip.getAttribute("aria-label"))).toEqual([model]);
+};
+
 const selectTemplate = async (label: string): Promise<void> => {
   await userEvent.click(optionByLabel(label)!);
 };
@@ -188,11 +202,10 @@ describe("AddAutoRouterTab", () => {
     const button = await screen.findByTestId("configure-automatically-button");
     await userEvent.click(button);
 
-    expect(
-      screen.getByText(
-        /Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: claude-opus-5.*Reasoning: claude-opus-5/,
-      ),
-    ).toBeInTheDocument();
+    expectTierModel("Simple", "gpt-5.6-luna");
+    expectTierModel("Medium", "claude-sonnet-5");
+    expectTierModel("Complex", "claude-opus-5");
+    expectTierModel("Reasoning", "claude-opus-5");
     expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining("Configured with"));
   });
 
@@ -209,9 +222,23 @@ describe("AddAutoRouterTab", () => {
     const button = await screen.findByTestId("configure-automatically-button");
     await userEvent.click(button);
 
-    expect(
-      screen.getByText(/Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: gpt-5.6-sol.*Reasoning: gpt-5.6-sol/),
-    ).toBeInTheDocument();
+    expectTierModel("Simple", "gpt-5.6-luna");
+    expectTierModel("Medium", "claude-sonnet-5");
+    expectTierModel("Complex", "gpt-5.6-sol");
+    expectTierModel("Reasoning", "gpt-5.6-sol");
+  });
+
+  it("opens Detailed Configuration on the tiers automatic setup just filled in", async () => {
+    const simpleModel = "gpt-5.6-luna";
+    mockFetchAvailableModels.mockResolvedValue([...ALL_FAMILY_MODELS, { model_group: simpleModel, mode: "chat" }]);
+    renderWithProviders(<Harness />);
+
+    expect(screen.queryByText("Complexity Tier Configuration")).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByTestId("configure-automatically-button"));
+
+    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+    expectTierModel("Simple", simpleModel);
   });
 
   // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of

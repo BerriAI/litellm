@@ -90,6 +90,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
                 enable_prompt_caching=(
                     request_kwargs.get("enable_prompt_caching") is True if request_kwargs is not None else None
                 ),
+                request_kwargs=request_kwargs,
             )
 
             model_id_dict: Final = await prompt_cache.async_get_model_id(

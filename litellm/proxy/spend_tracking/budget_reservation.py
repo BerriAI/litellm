@@ -173,6 +173,29 @@ def _raise_counter_budget_exceeded(
     )
 
 
+_UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
+    {
+        "/models",
+        "/v1/models",
+        "/utils/token_counter",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
+    }
+)
+_TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
+_TOKEN_COUNTING_ACTION: Final = "countTokens"
+
+
+def _is_token_counting_route(route: str) -> bool:
+    resource, _, action = route.rsplit("/", 1)[-1].partition(":")
+    return resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
+
+
+def _is_unbilled_route(route: str) -> bool:
+    return route in _UNBILLED_ROUTES or _is_token_counting_route(route)
+
+
 async def reserve_budget_for_request(
     request_body: dict,
     route: str,
@@ -190,14 +213,7 @@ async def reserve_budget_for_request(
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
-    if route in {
-        "/models",
-        "/v1/models",
-        "/utils/token_counter",
-        "/responses/input_tokens",
-        "/v1/responses/input_tokens",
-        "/openai/v1/responses/input_tokens",
-    }:
+    if _is_unbilled_route(route):
         return None
     if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
@@ -905,13 +921,13 @@ async def _set_reserved_entry_actual_cost(
             increment=adjustment,
         )
     elif reseed_on_inconsistent:
-        # Post-call reconcile / release: the counter was flushed or reseeded
-        # between reservation and reconcile (Redis restart / cross-pod reset),
-        # so the optimistic delta no longer applies. Recover by reseeding from
-        # the DB's lagging authoritative floor rather than deleting the counter
-        # and failing open — deleting it is what left budgets unenforced after a
-        # Redis reload.
-        await reseed_spend_counter_from_db(counter_key=counter_key)
+        # Post-call reconcile / release: the counter was flushed, expired or reseeded
+        # between reservation and reconcile, so the optimistic delta no longer applies.
+        # Reseed from the DB floor (which cannot include this request's cost yet) and
+        # add the settled cost, since increment_spend_counters skips reserved keys.
+        reseeded: Final = await reseed_spend_counter_from_db(counter_key=counter_key)
+        if reseeded and actual_cost > 0:
+            await _increment_spend_counter_cache(counter_key=counter_key, increment=actual_cost)
     else:
         # Pre-call admission resize: the in-flight reservation cost is not yet
         # persisted, so the DB floor would discard it. Keep the original
@@ -925,18 +941,16 @@ async def _counter_can_apply_adjustment(
     counter_key: str,
     adjustment: float,
 ) -> bool:
-    from litellm.proxy.proxy_server import spend_counter_cache
+    from litellm.proxy.proxy_server import read_spend_counter_cache_value
 
-    current_value: Final = await spend_counter_cache.async_get_cache(key=counter_key)
+    try:
+        current_value, _ = await read_spend_counter_cache_value(counter_key=counter_key)
+    except (TypeError, ValueError):
+        return False
     if current_value is None:
         return False
 
-    try:
-        current_float: Final = float(current_value)
-    except (TypeError, ValueError):
-        return False
-
-    return not (adjustment < 0 and current_float + adjustment < -1e-12)
+    return not (adjustment < 0 and current_value + adjustment < -1e-12)
 
 
 async def _release_applied_entries_best_effort(
@@ -1389,12 +1403,15 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
 def _count_input_tokens(request_body: dict, model: str) -> int | None:
     try:
         if "messages" in request_body:
-            return litellm.token_counter(
-                model=model,
-                messages=request_body.get("messages") or [],
-                tools=request_body.get("tools"),
-                tool_choice=request_body.get("tool_choice"),
-            )
+            try:
+                return litellm.token_counter(
+                    model=model,
+                    messages=request_body.get("messages") or (),
+                    tools=request_body.get("tools"),
+                    tool_choice=request_body.get("tool_choice"),
+                )
+            except ValueError:
+                return _count_text_tokens(model=model, text=request_body.get("messages"))
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
@@ -1442,11 +1459,7 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
-    requested: int | None = None
-    for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
-        requested = _to_int(request_body.get(key))
-        if requested is not None:
-            break
+    requested: Final = _requested_output_tokens(request_body)
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the
@@ -1457,9 +1470,19 @@ def _estimate_output_tokens(
     #     at the cap — the model can only physically emit max_output_tokens
     #     anyway, so reserving more is both wasteful and a DoS surface.
     model_ceiling: Final = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
-    if requested is None:
-        requested = DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
-    return min(requested, model_ceiling)
+    return min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK if requested is None else requested, model_ceiling)
+
+
+_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
+
+
+def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
+    inference_config: Final = request_body.get("inferenceConfig")
+    candidates: Final = (
+        *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
+        inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
+    )
+    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
 
 
 def _count_text_tokens(model: str, text: object) -> int:

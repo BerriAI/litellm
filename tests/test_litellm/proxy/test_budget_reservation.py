@@ -2198,6 +2198,74 @@ async def test_release_non_numeric_counter_reseeds_from_db(spend_counter_state):
     assert reservation["finalized"] is True
 
 
+class _ExpiringRedisCache:
+    def __init__(self) -> None:
+        self.store: dict[str, float] = {}
+
+    async def async_get_cache(self, key: str, *args: object, **kwargs: object) -> float | None:
+        return self.store.get(key)
+
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
+        self.store[key] = self.store.get(key, 0.0) + float(value)
+        return self.store[key]
+
+    async def async_set_max(self, key: str, value: float, **kwargs: object) -> float:
+        self.store[key] = max(self.store.get(key, float("-inf")), float(value))
+        return self.store[key]
+
+    async def async_set_cache(self, key: str, value: float, *args: object, **kwargs: object) -> bool:
+        self.store[key] = float(value)
+        return True
+
+    async def async_delete_cache(self, key: str, *args: object, **kwargs: object) -> None:
+        self.store.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
+    spend_counter_state,
+):
+    """Redis key expired mid-stream while the pod's in-memory copy still holds the
+    reserved value: reconcile must reseed from the DB floor plus the settled cost
+    instead of applying ``actual - reserved`` to the empty key."""
+    import litellm.proxy.proxy_server as ps
+
+    counter_cache, _ = spend_counter_state
+    counter_key = "spend:team_member:user-expiry:team-expiry"
+    redis_cache = _ExpiringRedisCache()
+    counter_cache.redis_cache = redis_cache
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.6)
+
+    reservation = {
+        "reserved_cost": 0.6,
+        "entries": [
+            {
+                "counter_key": counter_key,
+                "entity_type": "TeamMember",
+                "entity_id": "user-expiry:team-expiry",
+                "reserved_cost": 0.6,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    with patch.object(  # test-quality-ok: the reseed reads the DB floor through a Prisma client the test has no seam for
+        ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.3)
+    ):
+        await ps.increment_spend_counters(
+            token="key-expiry",
+            team_id="team-expiry",
+            user_id="user-expiry",
+            response_cost=0.05,
+            budget_reservation=reservation,
+        )
+
+    assert redis_cache.store[counter_key] == pytest.approx(0.35)
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.35)
+    assert reservation["finalized"] is True
+
+
 @pytest.mark.asyncio
 async def test_should_invalidate_reserved_counters_after_persisted_spend_failure(
     spend_counter_state,

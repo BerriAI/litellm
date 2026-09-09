@@ -212,6 +212,45 @@ locals {
   # pull the config from S3 first, so the command goes through `sh -c`;
   # otherwise we keep the image's ENTRYPOINT and only override `command`.
   gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
+
+  metrics_enabled       = var.gateway_metrics_port != null
+  metrics_multiproc_dir = "/tmp/litellm_prometheus_multiproc"
+  metrics_volume        = "prometheus-multiproc"
+  metrics_env           = local.metrics_enabled ? [{ name = "PROMETHEUS_MULTIPROC_DIR", value = local.metrics_multiproc_dir }] : []
+  metrics_mount_points  = local.metrics_enabled ? [{ sourceVolume = local.metrics_volume, containerPath = local.metrics_multiproc_dir }] : []
+  metrics_health_cmd    = "import socket; socket.create_connection(('127.0.0.1', ${coalesce(var.gateway_metrics_port, 0)}), timeout=2).close()"
+
+  gateway_metrics_container = local.metrics_enabled ? [
+    {
+      name       = "metrics"
+      image      = var.gateway_image
+      essential  = false
+      entryPoint = ["python", "-m", "litellm.proxy.prometheus_metrics_server"]
+      command    = ["--port", tostring(var.gateway_metrics_port)]
+
+      portMappings = [{ containerPort = var.gateway_metrics_port, protocol = "tcp" }]
+      environment  = local.metrics_env
+      mountPoints  = local.metrics_mount_points
+
+      healthCheck = {
+        command     = ["CMD", "python", "-c", local.metrics_health_cmd]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 30
+      }
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.gateway.name
+          awslogs-region        = var.region
+          awslogs-stream-prefix = "metrics"
+        }
+      }
+    }
+  ] : []
+
   backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
 
   gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args};; *) exec uvicorn gateway.main:app ${local.gateway_uvicorn_args};; esac"
@@ -269,7 +308,7 @@ resource "aws_ecs_task_definition" "gateway" {
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
-  container_definitions = jsonencode([
+  container_definitions = jsonencode(concat([
     merge(
       {
         name      = "gateway"
@@ -283,8 +322,10 @@ resource "aws_ecs_task_definition" "gateway" {
           local.billing_metrics_env,
           local.gateway_extra_env_list,
           local.proxy_config_env,
+          local.metrics_env,
         )
-        secrets = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+        secrets     = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+        mountPoints = local.metrics_mount_points
 
         # Container-level healthCheck intentionally omitted — the wolfi
         # runtime image doesn't ship curl/wget. The ALB target group polls
@@ -301,7 +342,14 @@ resource "aws_ecs_task_definition" "gateway" {
       },
       local.gateway_proxy_overrides,
     )
-  ])
+  ], local.gateway_metrics_container))
+
+  dynamic "volume" {
+    for_each = local.metrics_enabled ? [1] : []
+    content {
+      name = local.metrics_volume
+    }
+  }
 
   tags = local.tags
 }

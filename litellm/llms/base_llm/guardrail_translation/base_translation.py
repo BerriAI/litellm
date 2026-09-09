@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
@@ -52,6 +52,14 @@ class StreamingScanKey:
 
 
 class BaseTranslation(ABC):
+    delivers_ended_stream_text_rewrites: ClassVar[bool] = False
+    """Whether ``process_output_streaming_response`` accepts
+    ``deliver_ended_stream_rewrites=True`` and, on an ended (fully buffered)
+    stream, writes guardrail text rewrites back across ``responses_so_far`` so
+    a buffered pipeline can release rewritten chunks. Tool-call rewrites, and
+    text rewrites on every other translation, are undeliverable: the pipeline
+    executor discards them and releases the original chunks."""
+
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
         user_api_key_dict: Any | None,
@@ -157,6 +165,7 @@ class BaseTranslation(ABC):
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
+        deliver_ended_stream_rewrites: bool = False,
     ) -> Any:
         """
         Process output streaming response with guardrails.
@@ -164,6 +173,11 @@ class BaseTranslation(ABC):
         Optional to override in subclasses. ``stream_transform_sink`` is the
         out-parameter used by handlers that support streaming text
         transformations (see ``StreamTransformSink``); base handlers ignore it.
+        ``deliver_ended_stream_rewrites`` is passed True only when the caller
+        holds the whole buffered stream and the subclass declares
+        ``delivers_ended_stream_text_rewrites``: the handler then writes
+        guardrail text rewrites back across ``responses_so_far`` instead of
+        discarding them.
         """
         return responses_so_far
 
