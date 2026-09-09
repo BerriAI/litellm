@@ -21,6 +21,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
+    is_encrypted_reasoning_block,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -1235,8 +1236,10 @@ def strip_empty_content_blocks_from_anthropic_messages(
     on the unified ``/v1/messages`` path.  ``/v1/chat/completions`` already
     handles this in ``anthropic_messages_pt``; this helper provides the
     equivalent guarantee for the native Anthropic Messages path.
-    ``redacted_thinking`` blocks are never touched: they carry opaque
-    ``data`` instead of thinking text.
+    A thinking or ``redacted_thinking`` block whose signature or data carries
+    another provider's encrypted reasoning (a turn served by the Responses API
+    bridge) is dropped too, since Anthropic cannot verify it; every other
+    ``redacted_thinking`` block is left alone.
 
     Messages whose content is a list and becomes empty after stripping are
     omitted, matching :func:`strip_thinking_blocks_from_anthropic_messages`.
@@ -1249,7 +1252,11 @@ def strip_empty_content_blocks_from_anthropic_messages(
             out.append(m)
             continue
         content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_thinking_block(b)]
+        filtered = [  # mutable-ok: rebuilt message content list
+            b
+            for b in content
+            if not _is_empty_text_block(b) and not is_empty_thinking_block(b) and not is_encrypted_reasoning_block(b)
+        ]
         if len(filtered) == len(content):
             out.append(m)
         elif filtered:

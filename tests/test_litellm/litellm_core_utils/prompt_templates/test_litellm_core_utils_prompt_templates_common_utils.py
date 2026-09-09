@@ -10,10 +10,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
+    encrypted_content_from_signature,
+    encrypted_reasoning_signature,
     get_file_ids_from_messages,
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
+    is_encrypted_reasoning_block,
+    responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
     update_messages_with_model_file_ids,
 )
@@ -1554,3 +1558,63 @@ class TestRequestContainsImageContent:
         for _ in range(50):
             nested = {"type": "tool_result", "content": [nested]}
         assert request_contains_image_content([{"role": "user", "content": [nested]}]) is False
+
+
+class TestEncryptedReasoningReplay:
+    """Regression for https://github.com/BerriAI/litellm/issues/40288."""
+
+    def test_signature_round_trips_the_encrypted_content(self):
+        assert encrypted_content_from_signature(encrypted_reasoning_signature("gAAAA_bytes")) == "gAAAA_bytes"
+
+    @pytest.mark.parametrize("signature", [None, "", "ErcBCkgIValidAnthropicSignature", "litellm_encrypted_reasoning:", 7])
+    def test_anything_else_is_not_encrypted_content(self, signature):
+        assert encrypted_content_from_signature(signature) is None
+
+    def test_encrypted_thinking_block_replays_its_own_item(self):
+        items = responses_reasoning_items_from_thinking_blocks(
+            [{"type": "thinking", "thinking": "Plan.", "signature": encrypted_reasoning_signature("gAAAA_1")}]
+        )
+        assert items == (
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Plan."}], "encrypted_content": "gAAAA_1"},
+        )
+
+    def test_encrypted_redacted_block_replays_with_an_empty_summary(self):
+        items = responses_reasoning_items_from_thinking_blocks(
+            [{"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_1")}]
+        )
+        assert items == ({"type": "reasoning", "summary": [], "encrypted_content": "gAAAA_1"},)
+
+    def test_plain_blocks_collapse_into_one_summary_item_around_encrypted_ones(self):
+        items = responses_reasoning_items_from_thinking_blocks(
+            [
+                {"type": "thinking", "thinking": "A.", "signature": None},
+                {"type": "thinking", "thinking": "B.", "signature": ""},
+                {"type": "thinking", "thinking": "C.", "signature": encrypted_reasoning_signature("gAAAA_c")},
+                {"type": "redacted_thinking", "data": "anthropic-minted-opaque-data"},
+                {"type": "thinking", "thinking": "D."},
+            ]
+        )
+        assert items == (
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "A."}, {"type": "summary_text", "text": "B."}]},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "C."}], "encrypted_content": "gAAAA_c"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "D."}]},
+        )
+        assert all("id" not in item for item in items)
+
+    def test_blocks_without_text_or_encrypted_content_produce_nothing(self):
+        assert responses_reasoning_items_from_thinking_blocks([{"type": "thinking", "thinking": ""}]) == ()
+        assert responses_reasoning_items_from_thinking_blocks([]) == ()
+
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            ({"type": "thinking", "thinking": "x", "signature": encrypted_reasoning_signature("g")}, True),
+            ({"type": "redacted_thinking", "data": encrypted_reasoning_signature("g")}, True),
+            ({"type": "thinking", "thinking": "x", "signature": "ErcBCkgIValid"}, False),
+            ({"type": "redacted_thinking", "data": "EmwKAhgBEgy"}, False),
+            ({"type": "text", "text": encrypted_reasoning_signature("g")}, False),
+            ("not a block", False),
+        ],
+    )
+    def test_is_encrypted_reasoning_block(self, block, expected):
+        assert is_encrypted_reasoning_block(block) is expected

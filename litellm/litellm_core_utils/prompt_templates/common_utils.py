@@ -1823,14 +1823,11 @@ def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     return None, message_content
 
 
-def _readable_thinking_text(
-    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
-) -> str:
+def _readable_thinking_text(block: Mapping[str, object]) -> str:
     """The text a chat model can read back, empty for redacted blocks and malformed ones."""
     if block.get("type") != "thinking":
         return ""
-    thinking: Final = cast(ChatCompletionThinkingBlock, block).get("thinking")  # cast-ok: narrowed by the type tag
-    return str(thinking or "")
+    return str(block.get("thinking") or "")
 
 
 def reasoning_content_from_thinking_blocks(
@@ -1843,22 +1840,81 @@ def reasoning_content_from_thinking_blocks(
     return "\n".join(text for block in thinking_blocks if (text := _readable_thinking_text(block)))
 
 
-def responses_reasoning_item_from_thinking_blocks(
-    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
-) -> ChatCompletionReasoningItem | None:
-    """Build a Responses API `reasoning` input item from Anthropic thinking blocks.
+ENCRYPTED_REASONING_SIGNATURE_PREFIX: Final = "litellm_encrypted_reasoning:"
 
-    The item carries no `id`: the Responses API rejects an empty one and 404s on any id it
-    did not mint itself, while an item without an id is always accepted.
+
+def encrypted_reasoning_signature(encrypted_content: str) -> str:
+    """The opaque value a Responses API reasoning item's `encrypted_content` travels in.
+
+    Anthropic clients echo a thinking block's `signature` and a redacted block's `data`
+    back verbatim, so either field can carry the encrypted reasoning across turns; the
+    prefix tells the two apart from a signature Anthropic minted.
     """
+    return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
+
+
+def encrypted_content_from_signature(signature: object) -> str | None:
+    if not isinstance(signature, str) or not signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX):
+        return None
+    return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
+
+
+def _encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
+    match block.get("type"):
+        case "thinking":
+            return encrypted_content_from_signature(block.get("signature"))
+        case "redacted_thinking":
+            return encrypted_content_from_signature(block.get("data"))
+        case _:
+            return None
+
+
+def is_encrypted_reasoning_block(block: object) -> bool:
+    """A thinking or redacted_thinking block carrying Responses API encrypted reasoning.
+
+    Only the Responses API that minted the content can read it back, so an Anthropic
+    backend has to drop such a block rather than fail signature verification on it.
+    """
+    if not isinstance(block, Mapping):
+        return False
+    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
+    return _encrypted_content_of_block(mapping) is not None
+
+
+def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
+    index, block = indexed_block
+    return f"encrypted:{index}" if is_encrypted_reasoning_block(block) else "summary"
+
+
+def _reasoning_item_from_block_group(group: tuple[Mapping[str, object], ...]) -> ChatCompletionReasoningItem | None:
     summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
         ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
-        for block in thinking_blocks
+        for block in group
         if (text := _readable_thinking_text(block))
     ]
+    encrypted_content: Final = _encrypted_content_of_block(group[0])
+    if encrypted_content is not None:
+        return ChatCompletionReasoningItem(type="reasoning", summary=summary, encrypted_content=encrypted_content)
     if not summary:
         return None
     return ChatCompletionReasoningItem(type="reasoning", summary=summary)
+
+
+def responses_reasoning_items_from_thinking_blocks(
+    thinking_blocks: Iterable[Mapping[str, object]],
+) -> tuple[ChatCompletionReasoningItem, ...]:
+    """Build Responses API `reasoning` input items from Anthropic thinking blocks.
+
+    A block carrying encrypted reasoning replays the item it came from byte for byte;
+    a run of plain thinking blocks collapses into one summary-only item. No item carries
+    an `id`: the Responses API 404s on any id it did not mint itself and rejects an empty
+    one, while an item without an id is always accepted.
+    """
+    return tuple(
+        item
+        for _, group in groupby(enumerate(thinking_blocks), key=_reasoning_replay_group_key)
+        if (item := _reasoning_item_from_block_group(tuple(block for _, block in group))) is not None
+    )
 
 
 def _parse_content_for_reasoning(
