@@ -1,4 +1,7 @@
 {{- if and .Values.gateway.enabled .Values.gateway.serviceMonitor.enabled }}
+{{- if not .Values.gateway.metricsServer.enabled }}
+{{- fail "gateway.serviceMonitor.enabled requires gateway.metricsServer.enabled: the http port serves /metrics/ behind virtual-key auth, so an unauthenticated scrape gets 401" }}
+{{- end }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -17,7 +20,7 @@ spec:
     matchNames:
       - {{ .Release.Namespace | quote }}
   endpoints:
-    - port: {{ ternary "metrics" "http" .Values.gateway.metricsServer.enabled }}
+    - port: metrics
       path: /metrics/
       interval: {{ .Values.gateway.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.gateway.serviceMonitor.scrapeTimeout }}

@@ -141,13 +141,22 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: scrapes each gateway pod through the http port when the metrics sidecar is off
+  - it: refuses a ServiceMonitor without the metrics server, whose http port needs a bearer token
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: gateway.serviceMonitor.enabled requires gateway.metricsServer.enabled
+
+  - it: scrapes each gateway pod through the metrics port
     template: gateway/servicemonitor.yaml
     release:
       name: rel
       namespace: llm
     set:
       gateway.serviceMonitor.enabled: true
+      gateway.metricsServer.enabled: true
       gateway.serviceMonitor.labels:
         release: kube-prometheus-stack
     asserts:
@@ -169,22 +178,19 @@ tests:
       - equal:
           path: spec.endpoints
           value:
-            - port: http
+            - port: metrics
               path: /metrics/
               interval: 15s
               scrapeTimeout: 10s
               scheme: http
 
-  - it: scrapes the metrics sidecar port when the metrics server is on
+  - it: honours a custom scrape interval
     template: gateway/servicemonitor.yaml
     set:
       gateway.serviceMonitor.enabled: true
       gateway.serviceMonitor.interval: 30s
       gateway.metricsServer.enabled: true
     asserts:
-      - equal:
-          path: spec.endpoints[0].port
-          value: metrics
       - equal:
           path: spec.endpoints[0].interval
           value: 30s

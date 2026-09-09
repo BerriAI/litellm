@@ -260,8 +260,10 @@ keda:
   # carry: KEDA divides the release-wide rate by it to pick the replica count.
   # The queries select samples by the release namespace and the `job` label the
   # chart's ServiceMonitor produces (the metrics Service name), so enable
-  # serviceMonitor below. Tokens are counted at completion, so TPM trails long
-  # streams. serverAddress is required once either target is set.
+  # serviceMonitor below together with metricsServer: the http port serves
+  # /metrics/ behind virtual-key auth and answers an unauthenticated scrape
+  # with 401. Tokens are counted at completion, so TPM trails long streams.
+  # serverAddress is required once either target is set.
   prometheus:
     serverAddress: ""
     requestsPerMinute: ""

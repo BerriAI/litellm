@@ -285,8 +285,8 @@ gateway:
       limits:
         memory: 512Mi
   # Prometheus Operator ServiceMonitor for the gateway pods. Scrapes the
-  # `<gateway>-metrics` Service when metricsServer is enabled, otherwise the
-  # gateway Service on the http port. Either way every pod is its own scrape
+  # `<gateway>-metrics` Service, so it requires metricsServer above (the http
+  # port serves /metrics/ behind virtual-key auth). Every pod is its own scrape
   # target, so the samples carry the `pod` label the per-pod autoscaling
   # queries below group by.
   serviceMonitor:
