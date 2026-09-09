@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from openai.types.responses import ResponseFunctionToolCall
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
@@ -1238,7 +1239,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 inputs: GenericGuardrailAPIInputs,
                 request_data: dict,
                 input_type: Literal["request", "response"],
-                logging_obj: Optional[Any] = None,
+                logging_obj: LiteLLMLoggingObj | None = None,
             ) -> GenericGuardrailAPIInputs:
                 tool_calls = [
                     {**tool_call, "function": {**tool_call["function"], "arguments": '{"fruit": "[MASKED]"}'}}
