@@ -18,14 +18,14 @@ import httpx
 import pytest
 import uvicorn
 import yaml
-from fastapi import HTTPException, Request
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from mcp.types import CallToolResult
+from starlette.requests import Request
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._experimental.mcp_server.tool_search import handle_mcp_proxy_tool
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
 from litellm.proxy.proxy_server import (
     app as proxy_app,
 )
@@ -463,7 +463,7 @@ async def authorize_proxy_key(request: Request, api_key: str) -> UserAPIKeyAuth:
     }
     permission = permissions.get(api_key)
     if permission is None:
-        raise HTTPException(status_code=401, detail="Unknown test key")
+        raise ProxyException(message="Unknown test key", type="authentication_error", param=None, code=401)
     return UserAPIKeyAuth(api_key=api_key, user_id=api_key, object_permission=permission)
 
 
