@@ -186,3 +186,73 @@ class TestExecuteSearchShape:
 
         call_kwargs = mock_asearch.await_args.kwargs
         assert call_kwargs["objective"] == "configured objective"
+
+
+class TestCallSiteWiring:
+    """Drive the patch builders end to end so regressions in the tool-call ->
+    _rich_search_input wiring are caught, not just _execute_search itself."""
+
+    @pytest.mark.asyncio
+    async def test_anthropic_tool_call_forwards_rich_shape(self, monkeypatch):
+        import litellm
+        from litellm.proxy import proxy_server
+
+        logger = WebSearchInterceptionLogger()
+        mock_asearch = AsyncMock(return_value=_search_response())
+        monkeypatch.setattr(proxy_server, "llm_router", _mock_router("parallel_ai"))
+        monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+        tool_calls = [
+            {"id": "toolu_1", "name": "litellm_web_search", "input": dict(RICH_INPUT)}
+        ]
+        await logger._build_anthropic_request_patch(
+            model="claude",
+            messages=[{"role": "user", "content": "hi"}],
+            tool_calls=tool_calls,
+            thinking_blocks=[],
+            anthropic_messages_optional_request_params={},
+            logging_obj=None,
+            kwargs={},
+        )
+
+        call_kwargs = mock_asearch.await_args.kwargs
+        assert call_kwargs["query"] == RICH_INPUT["search_queries"]
+        assert call_kwargs["objective"] == RICH_INPUT["objective"]
+
+    @pytest.mark.asyncio
+    async def test_chat_completion_tool_call_forwards_rich_shape(self, monkeypatch):
+        import json
+
+        import litellm
+        from litellm.proxy import proxy_server
+
+        logger = WebSearchInterceptionLogger()
+        mock_asearch = AsyncMock(return_value=_search_response())
+        monkeypatch.setattr(proxy_server, "llm_router", _mock_router("parallel_ai"))
+        monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+        # The normalized shape transform_request produces for OpenAI responses:
+        # function.arguments (raw) plus top-level name/input (parsed).
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "name": "litellm_web_search",
+                "function": {
+                    "name": "litellm_web_search",
+                    "arguments": json.dumps(RICH_INPUT),
+                },
+                "input": dict(RICH_INPUT),
+            }
+        ]
+        await logger._build_chat_completion_request_patch(
+            model="claude",
+            messages=[{"role": "user", "content": "hi"}],
+            tool_calls=tool_calls,
+            optional_params={},
+            kwargs={},
+        )
+
+        call_kwargs = mock_asearch.await_args.kwargs
+        assert call_kwargs["query"] == RICH_INPUT["search_queries"]
+        assert call_kwargs["objective"] == RICH_INPUT["objective"]

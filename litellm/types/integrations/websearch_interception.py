@@ -36,10 +36,10 @@ class RichWebSearchInput(TypedDict, total=False):
     other provider keeps receiving the single ``query`` string.
     """
 
-    objective: str
+    objective: ReadOnly[str]
     """Natural-language description of the goal behind the search."""
 
-    search_queries: list[str]
+    search_queries: ReadOnly[list[str]]
     """Two to five short keyword queries covering different angles."""
 
 
