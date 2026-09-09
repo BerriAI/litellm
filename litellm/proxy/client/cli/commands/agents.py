@@ -453,7 +453,11 @@ def _replace_file(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
         _ = tmp.write(text)
-    os.replace(tmp.name, path)
+    try:
+        os.replace(tmp.name, path)
+    except OSError:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
 
 
 def codex_model_sync_args(
