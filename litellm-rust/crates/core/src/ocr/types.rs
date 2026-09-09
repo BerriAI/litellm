@@ -7,7 +7,7 @@ use crate::providers::auth::azure::AzureAuthInputs;
 pub enum OcrAuthInputs {
     #[default]
     None,
-    AzureAi(AzureAuthInputs),
+    AzureAi(Box<AzureAuthInputs>),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

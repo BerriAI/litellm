@@ -1,6 +1,7 @@
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
+use super::auth::resolve_api_key;
 use super::transformation::*;
 use crate::ocr::transformation::OcrProviderConfig;
 

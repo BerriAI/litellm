@@ -4,17 +4,17 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::{Map, Value, json};
 
-use crate::error::{AuthError, Error, json_type_name};
+use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 
+use super::auth::resolve_api_key;
+
 pub const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
-pub const REDUCTO_API_KEY_ENV: &str = "REDUCTO_API_KEY";
 pub const REDUCTO_ID_PREFIX: &str = "reducto://";
 
 const PARSE_V3_SUPPORTED_OCR_PARAMS: &[&str] = &["formatting", "retrieval", "settings"];
 const PARSE_LEGACY_SUPPORTED_OCR_PARAMS: &[&str] = &["enhance"];
-const MISSING_KEY_MESSAGE: &str = "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()";
 const DATA_URI_UPLOAD_REQUIRED: &str =
     "Reducto data URI upload must complete before OCR request transformation";
 
@@ -62,22 +62,6 @@ pub fn parse_url(api_base: Option<&str>) -> String {
 
 pub fn upload_url(api_base: Option<&str>) -> String {
     format!("{}/upload", normalize_api_base(api_base))
-}
-
-pub fn resolve_api_key(
-    api_key: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
-    api_key
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            env_lookup(REDUCTO_API_KEY_ENV)
-                .map(|key| key.trim().to_string())
-                .filter(|key| !key.is_empty())
-        })
-        .ok_or_else(|| Error::Auth(AuthError::Message(MISSING_KEY_MESSAGE.to_string())))
 }
 
 pub fn extract_document_source(document: &Value) -> Result<ReductoDocumentSource, Error> {

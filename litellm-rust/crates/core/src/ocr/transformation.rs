@@ -10,6 +10,18 @@ use super::types::{OcrAuthInputs, OcrRequestData, OcrResponseData};
 
 pub type OcrAuthFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<(String, String)>, Error>> + Send + 'a>>;
+pub type OcrRequestSetupFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<(String, Vec<(String, String)>), Error>> + Send + 'a>>;
+
+pub struct OcrRequestSetup<'a> {
+    pub api_base: Option<&'a str>,
+    pub model: &'a str,
+    pub optional_params: &'a Map<String, Value>,
+    pub headers: Vec<(String, String)>,
+    pub api_key: Option<&'a str>,
+    pub auth_inputs: &'a OcrAuthInputs,
+    pub env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrResponseHandling {
@@ -99,6 +111,29 @@ pub trait OcrProviderConfig: Sync {
         Box::pin(async move {
             let _ = auth_inputs;
             self.validate_environment(headers, api_key, env_lookup)
+        })
+    }
+
+    fn prepare_url_and_headers<'a>(
+        &'a self,
+        request: OcrRequestSetup<'a>,
+    ) -> OcrRequestSetupFuture<'a> {
+        Box::pin(async move {
+            let url = self.complete_url(
+                request.api_base,
+                request.model,
+                request.optional_params,
+                request.env_lookup,
+            )?;
+            let headers = self
+                .authenticate(
+                    request.headers,
+                    request.api_key,
+                    request.auth_inputs,
+                    request.env_lookup,
+                )
+                .await?;
+            Ok((url, headers))
         })
     }
 

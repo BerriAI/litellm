@@ -4,19 +4,8 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use litellm_core::error::Error;
-use litellm_core::ocr::transformation::OcrProviderConfig;
 use reqwest::Url;
 use serde_json::{Map, Value};
-
-use litellm_core::providers::azure_ai::ocr::transformation::{
-    AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
-};
-use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
-use litellm_core::providers::reducto::ocr::transformation as reducto;
-use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
-use litellm_core::providers::vertex_ai::ocr::transformation::{
-    VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
-};
 
 use crate::client::http_client;
 
@@ -31,29 +20,6 @@ pub(super) fn truncate_error_body(body: &str) -> String {
     }
     let truncated: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
     format!("{truncated}... (truncated)")
-}
-
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(super) fn ocr_provider_config(
-    provider: &str,
-    model: &str,
-) -> Option<&'static dyn OcrProviderConfig> {
-    match provider {
-        "mistral" => Some(&MISTRAL_OCR_CONFIG),
-        "reducto" => reducto::config_for_model(model),
-        "azure_ai" if is_azure_document_intelligence_model(model) => {
-            Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
-        }
-        "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
-        "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
-        "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),
-        _ => None,
-    }
-}
-
-fn is_azure_document_intelligence_model(model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    model.contains("doc-intelligence") || model.contains("documentintelligence")
 }
 
 pub(super) fn string_headers(
@@ -395,7 +361,6 @@ pub(super) async fn poll_document_intelligence(
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::ocr::transformation::OcrResponseHandling;
     use serde_json::json;
 
     use super::*;
@@ -469,29 +434,6 @@ mod tests {
         let body = "é".repeat(266);
         let truncated = truncate_error_body(&body);
         assert!(truncated.is_char_boundary(truncated.len()));
-    }
-
-    #[test]
-    fn ocr_dispatch_supports_migrated_providers() {
-        assert!(ocr_provider_config("mistral", "mistral-ocr-latest").is_some());
-        assert!(
-            ocr_provider_config("azure_ai", "pixtral-12b-2409")
-                .expect("azure ai config resolves")
-                .requires_data_uri_document()
-        );
-        assert_eq!(
-            ocr_provider_config("azure_ai", "doc-intelligence/prebuilt-read")
-                .expect("document intelligence config resolves")
-                .response_handling(),
-            OcrResponseHandling::AzureDocumentIntelligencePoll
-        );
-        assert!(
-            ocr_provider_config("vertex_ai", "deepseek-ocr-maas")
-                .expect("vertex deepseek config resolves")
-                .supported_ocr_params()
-                .contains(&"temperature")
-        );
-        assert!(ocr_provider_config("openai", "gpt-4o").is_none());
     }
 
     #[test]

@@ -1,7 +1,9 @@
-use crate::error::{AuthError, Error, json_type_name};
+use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value};
+
+use super::auth::resolve_api_key;
 
 const SUPPORTED_OCR_PARAMS: &[&str] = &[
     "pages",
@@ -22,9 +24,6 @@ const SUPPORTED_OCR_PARAMS: &[&str] = &[
 /// Default Mistral API base, used when the caller does not override `api_base`.
 pub const MISTRAL_DEFAULT_API_BASE: &str = "https://api.mistral.ai/v1";
 
-/// Environment variable holding the Mistral API key.
-pub const MISTRAL_API_KEY_ENV: &str = "MISTRAL_API_KEY";
-
 /// Build the complete OCR endpoint URL, de-duplicating a trailing `/v1`.
 ///
 /// Blank/whitespace `api_base` is treated as absent (guard at resolution time).
@@ -40,28 +39,6 @@ pub fn complete_url(api_base: Option<&str>) -> String {
     } else {
         format!("{base}/v1/ocr")
     }
-}
-
-/// Resolve the Mistral API key from the explicit param or the environment.
-///
-/// Blank/whitespace values are treated as absent. Returns `Error::Auth`
-/// when no usable key is available.
-///
-/// Note: the env fallback only reads the process environment. Secret-manager
-/// backends (AWS/Azure/GCP/Vault) are resolved on the Python side and passed in
-/// via `api_key`; this fallback is a last resort for direct/standalone use.
-pub fn resolve_api_key(
-    api_key: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
-    api_key
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(str::to_string)
-        .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or(Error::Auth(AuthError::MissingApiKey {
-            provider: "Mistral",
-        }))
 }
 
 pub struct MistralOcrConfig;
@@ -407,31 +384,6 @@ mod tests {
         assert_eq!(
             complete_url(Some("https://proxy.internal/v1/")),
             "https://proxy.internal/v1/ocr"
-        );
-    }
-
-    #[test]
-    fn resolve_api_key_prefers_param_then_env() {
-        let no_env = |_: &str| None;
-        assert_eq!(
-            resolve_api_key(Some("sk-param"), &no_env).unwrap(),
-            "sk-param"
-        );
-
-        let with_env = |key: &str| (key == MISTRAL_API_KEY_ENV).then(|| "sk-env".to_string());
-        assert_eq!(resolve_api_key(None, &with_env).unwrap(), "sk-env");
-        // Blank param falls through to the environment.
-        assert_eq!(resolve_api_key(Some("  "), &with_env).unwrap(), "sk-env");
-    }
-
-    #[test]
-    fn resolve_api_key_errors_when_absent() {
-        let err = resolve_api_key(None, &|_| None).expect_err("missing key should error");
-        assert_eq!(
-            err,
-            Error::Auth(AuthError::MissingApiKey {
-                provider: "Mistral",
-            })
         );
     }
 }

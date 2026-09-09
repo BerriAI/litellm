@@ -435,7 +435,9 @@ impl OcrProviderConfig for AzureAiOcrConfig {
         &self,
         provider_params: &Map<String, Value>,
     ) -> Result<OcrAuthInputs, AuthError> {
-        AzureAuthInputs::from_optional_params(provider_params).map(OcrAuthInputs::AzureAi)
+        AzureAuthInputs::from_optional_params(provider_params)
+            .map(Box::new)
+            .map(OcrAuthInputs::AzureAi)
     }
 
     fn authenticate<'a>(
@@ -551,7 +553,9 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         &self,
         provider_params: &Map<String, Value>,
     ) -> Result<OcrAuthInputs, AuthError> {
-        AzureAuthInputs::from_optional_params(provider_params).map(OcrAuthInputs::AzureAi)
+        AzureAuthInputs::from_optional_params(provider_params)
+            .map(Box::new)
+            .map(OcrAuthInputs::AzureAi)
     }
 
     fn authenticate<'a>(

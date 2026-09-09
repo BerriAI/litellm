@@ -1,6 +1,8 @@
 use litellm_core::AuthError;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
+use litellm_core::ocr::prepare::map_ocr_params;
+use litellm_core::ocr::transformation::OcrRequestSetup;
 use litellm_core::providers::reducto::ocr::transformation::{
     build_upload_request, extract_document_source, extract_upload_file_id,
 };
@@ -65,7 +67,7 @@ impl OcrLifecycleHooks {
             .map_err(guardrail_error_to_core_error)?;
         let (document, optional_params) = parse_ocr_pre_call_guardrail_request(guardrail_request)?;
         let optional_params = match &request.config {
-            Ok(config) => config.map_ocr_params(&optional_params),
+            Ok(config) => map_ocr_params(*config, &optional_params),
             Err(_) => optional_params,
         };
         Ok(PreparedOcrRequest {
@@ -81,19 +83,16 @@ impl OcrLifecycleHooks {
     ) -> Result<ProviderOcrRequest, Error> {
         let config = request.config?;
         let env_lookup = |key: &str| std::env::var(key).ok();
-        let url = config.complete_url(
-            request.api_base.as_deref(),
-            &request.model,
-            &request.optional_params,
-            &env_lookup,
-        )?;
-        let upstream_headers = config
-            .authenticate(
-                string_headers(request.extra_headers)?,
-                request.api_key.as_deref(),
-                &request.auth_inputs,
-                &env_lookup,
-            )
+        let (url, upstream_headers) = config
+            .prepare_url_and_headers(OcrRequestSetup {
+                api_base: request.api_base.as_deref(),
+                model: &request.model,
+                optional_params: &request.optional_params,
+                headers: string_headers(request.extra_headers)?,
+                api_key: request.api_key.as_deref(),
+                auth_inputs: &request.auth_inputs,
+                env_lookup: &env_lookup,
+            })
             .await?;
         let model = request.model.clone();
         let custom_llm_provider = request.custom_llm_provider.clone();
