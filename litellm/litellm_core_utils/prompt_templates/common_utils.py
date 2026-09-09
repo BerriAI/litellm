@@ -1855,8 +1855,12 @@ def pack_responses_reasoning_signature(item_id: str | None, encrypted_content: s
     """
     if not encrypted_content:
         return None
-    payload: Final = {"id": item_id, "ec": encrypted_content} if item_id else {"ec": encrypted_content}
-    encoded: Final = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    body: Final = (
+        f'{{"id":{json.dumps(item_id)},"ec":{json.dumps(encrypted_content)}}}'
+        if item_id
+        else f'{{"ec":{json.dumps(encrypted_content)}}}'
+    )
+    encoded: Final = base64.b64encode(body.encode()).decode()
     return f"{_RESPONSES_REASONING_SIGNATURE_PREFIX}{encoded}"
 
 

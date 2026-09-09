@@ -609,7 +609,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning
-                responses_kwargs["include"] = ["reasoning.encrypted_content"]
+                responses_kwargs["include"] = ("reasoning.encrypted_content",)
 
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}

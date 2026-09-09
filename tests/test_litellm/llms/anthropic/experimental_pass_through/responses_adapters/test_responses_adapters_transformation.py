@@ -1096,7 +1096,7 @@ class TestTranslateRequestBroaderCoverage:
         # reasoning_auto_summary is False by default, so no summary key
         assert kwargs["reasoning"] == {"effort": "high"}
         assert "summary" not in kwargs["reasoning"]
-        assert kwargs["include"] == ["reasoning.encrypted_content"]
+        assert kwargs["include"] == ("reasoning.encrypted_content",)
 
     def test_disabled_thinking_not_included_in_kwargs(self):
         req = _make_request(thinking={"type": "disabled"})
