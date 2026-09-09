@@ -20,6 +20,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    infer_video_provider_from_model,
     resolve_video_request_model,
     video_reference_to_id,
 )
@@ -253,15 +254,12 @@ async def video_status(
     provider_from_id: Final = decoded.get("custom_llm_provider")
     model_id_from_decoded: Final = decoded.get("model_id")
 
-    custom_llm_provider: Final = (
+    explicit_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
         or provider_from_id
-        or "openai"
     )
-    if custom_llm_provider:
-        data["custom_llm_provider"] = custom_llm_provider
 
     resolved_model: Final = resolve_video_request_model(
         model_id_from_decoded=model_id_from_decoded,
@@ -270,6 +268,12 @@ async def video_status(
     )
     if resolved_model:
         data["model"] = resolved_model
+
+    custom_llm_provider: Final = (
+        explicit_provider or infer_video_provider_from_model(resolved_model) or "openai"
+    )
+    if custom_llm_provider:
+        data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)

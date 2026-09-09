@@ -21,6 +21,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    infer_video_provider_from_model,
     resolve_video_request_model,
     video_reference_to_id,
 )
@@ -73,6 +74,21 @@ def test_resolve_video_request_model__query_model_on_plain_id():
         )
         == "grok-imagine-video-1.5"
     )
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("grok-imagine-video", "xai"),
+        ("grok-imagine-video-1.5", "xai"),
+        ("xai/grok-imagine-video", "xai"),
+        ("sora-2", None),
+        (None, None),
+        ("", None),
+    ],
+)
+def test_infer_video_provider_from_model(model, expected):
+    assert infer_video_provider_from_model(model) == expected
 
 
 # =========================================================================== #

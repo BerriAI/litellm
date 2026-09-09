@@ -7,6 +7,7 @@ from httpx._types import RequestFiles
 import litellm
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.url_utils import async_safe_get, encode_url_path_segment, safe_get
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -248,6 +249,13 @@ class XAIVideoConfig(BaseVideoConfig):
         video_obj._hidden_params["video_url"] = None
         return video_obj
 
+    def _video_resource_url(self, api_base: str, video_id: str) -> str:
+        encoded_video_id: Final = encode_url_path_segment(
+            extract_original_video_id(video_id),
+            field_name="video_id",
+        )
+        return f"{self._v1_root(api_base)}/videos/{encoded_video_id}"
+
     def transform_video_status_retrieve_request(
         self,
         video_id: str,
@@ -255,8 +263,7 @@ class XAIVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[str, dict]:
-        original_id: Final = extract_original_video_id(video_id)
-        return f"{self._v1_root(api_base)}/videos/{original_id}", {}
+        return self._video_resource_url(api_base, video_id), {}
 
     def transform_video_status_retrieve_response(
         self,
@@ -303,8 +310,7 @@ class XAIVideoConfig(BaseVideoConfig):
         headers: dict,
         variant: str | None = None,
     ) -> tuple[str, dict]:
-        original_id: Final = extract_original_video_id(video_id)
-        return f"{self._v1_root(api_base)}/videos/{original_id}", {}
+        return self._video_resource_url(api_base, video_id), {}
 
     def _video_cdn_url(self, raw_response: httpx.Response) -> str | None:
         content_type: Final = (raw_response.headers.get("content-type") or "").lower()
@@ -328,7 +334,7 @@ class XAIVideoConfig(BaseVideoConfig):
         if url is None:
             return raw_response.content
         httpx_client: Final[HTTPHandler] = _get_httpx_client()
-        video_response: Final = httpx_client.get(url)
+        video_response: Final = safe_get(httpx_client, url)
         video_response.raise_for_status()
         return video_response.content
 
@@ -343,7 +349,7 @@ class XAIVideoConfig(BaseVideoConfig):
         async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.XAI,
         )
-        video_response: Final = await async_httpx_client.get(url)
+        video_response: Final = await async_safe_get(async_httpx_client, url)
         video_response.raise_for_status()
         return video_response.content
 

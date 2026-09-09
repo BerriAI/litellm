@@ -338,9 +338,23 @@ async def test_status__query_model_on_plain_id(harness):
     harness.resolve_model.assert_not_called()
     assert harness.processor_data() == {
         "video_id": "9b444cea-aaaa-bbbb-cccc-dddddddddddd",
-        "custom_llm_provider": "openai",
+        "custom_llm_provider": "xai",
         "model": "grok-imagine-video-1.5",
     }
+
+
+@pytest.mark.asyncio
+async def test_status__query_model_grok_imagine_does_not_default_openai_before_inference(
+    harness,
+):
+    await call_status(
+        harness,
+        "video_plain_xai",
+        query={"model": "grok-imagine-video"},
+    )
+
+    assert harness.processor_data()["custom_llm_provider"] == "xai"
+    assert harness.processor_data()["model"] == "grok-imagine-video"
 
 
 # =========================================================================== #

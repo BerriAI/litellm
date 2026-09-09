@@ -9,6 +9,15 @@ class VideoModelIdResolver(Protocol):
     def resolve_model_name_from_model_id(self, model_id: str | None) -> str | None: ...
 
 
+def infer_video_provider_from_model(model: str | None) -> str | None:
+    if not isinstance(model, str) or not model:
+        return None
+    unprefixed: Final = model.split("/", 1)[-1]
+    if unprefixed.startswith("grok-imagine-video"):
+        return "xai"
+    return None
+
+
 def resolve_video_request_model(
     *,
     model_id_from_decoded: str | None,
