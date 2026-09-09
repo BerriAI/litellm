@@ -505,10 +505,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_request(
         self,
         anthropic_request: AnthropicMessagesRequest,
+        include_encrypted_reasoning: bool = True,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.
+
+        ``include_encrypted_reasoning`` asks the provider for ``reasoning.encrypted_content``
+        on every call, so a reasoning model's items can be replayed intact next turn even
+        when the client sent no ``thinking`` block; pass False for a provider whose
+        Responses API rejects ``include``.
         """
         model: Final[str] = anthropic_request["model"]
         messages_list: Final = cast(
@@ -538,6 +544,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             "model": model,
             "input": input_items,
         }
+        if include_encrypted_reasoning:
+            responses_kwargs["include"] = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]  # mutable-ok: API request payload
 
         if system and not developer_parts:
             if isinstance(system, str):
@@ -582,7 +590,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning
-                responses_kwargs["include"] = [RESPONSES_INCLUDE_ENCRYPTED_REASONING]  # mutable-ok: json list
 
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}

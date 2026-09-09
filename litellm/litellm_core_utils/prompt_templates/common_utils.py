@@ -1853,20 +1853,28 @@ def encrypted_reasoning_signature(encrypted_content: str) -> str:
     return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
 
 
+def _carries_encrypted_reasoning(signature: object) -> bool:
+    return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+
+
 def encrypted_content_from_signature(signature: object) -> str | None:
-    if not isinstance(signature, str) or not signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX):
+    if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
         return None
     return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
 
 
-def _encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
+def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
     match block.get("type"):
         case "thinking":
-            return encrypted_content_from_signature(block.get("signature"))
+            return block.get("signature")
         case "redacted_thinking":
-            return encrypted_content_from_signature(block.get("data"))
+            return block.get("data")
         case _:
             return None
+
+
+def _encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
+    return encrypted_content_from_signature(_encrypted_reasoning_field(block))
 
 
 def is_encrypted_reasoning_block(block: object) -> bool:
@@ -1878,7 +1886,7 @@ def is_encrypted_reasoning_block(block: object) -> bool:
     if not isinstance(block, Mapping):
         return False
     mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
-    return _encrypted_content_of_block(mapping) is not None
+    return _carries_encrypted_reasoning(_encrypted_reasoning_field(mapping))
 
 
 def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:

@@ -1162,13 +1162,23 @@ class TestTranslateRequestBroaderCoverage:
         req = _make_request(thinking={"type": "disabled"})
         kwargs = _ADAPTER.translate_request(req)
         assert "reasoning" not in kwargs
-        assert "include" not in kwargs
 
     def test_thinking_asks_for_the_encrypted_reasoning(self):
         """The documented way to get reasoning that survives store=false is to ask for it."""
         req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["include"] == ["reasoning.encrypted_content"]
+
+    def test_encrypted_reasoning_is_asked_for_without_a_thinking_block(self):
+        """A reasoning model reasons whether or not the client sent `thinking`, so the replay needs it either way."""
+        kwargs = _ADAPTER.translate_request(_make_request())
+        assert kwargs["include"] == ["reasoning.encrypted_content"]
+
+    def test_encrypted_reasoning_is_not_asked_for_when_the_provider_rejects_include(self):
+        req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
+        kwargs = _ADAPTER.translate_request(req, include_encrypted_reasoning=False)
+        assert kwargs["reasoning"] == {"effort": "high"}
+        assert "include" not in kwargs
 
     def test_metadata_user_id_mapped_to_user(self):
         req = _make_request(metadata={"user_id": "user-42"})

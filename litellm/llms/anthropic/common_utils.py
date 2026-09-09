@@ -1203,6 +1203,8 @@ def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[A
 
 
 def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+    if not isinstance(message, Mapping):
+        return message
     content: Final = message.get("content")
     if not isinstance(content, list):
         return message
