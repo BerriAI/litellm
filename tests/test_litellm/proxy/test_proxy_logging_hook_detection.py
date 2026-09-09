@@ -346,14 +346,14 @@ async def test_post_call_stream_guardrail_keeps_own_iterator_on_chat_completions
 
 
 @pytest.mark.asyncio
-async def test_unified_guardrail_iterator_accepts_explicit_guardrail(monkeypatch):
+async def test_unified_guardrail_iterator_accepts_explicit_guardrail():
     """
     The dispatch passes each guardrail explicitly instead of through a shared
     request_data key, so chaining two unified-routed guardrails cannot drop
-    all but the last one.
+    all but the last one.  The block fires after the deltas were already
+    flushed to the client, so it surfaces as a trailing in-stream error frame
+    rather than a raised HTTPException.
     """
-    from fastapi import HTTPException
-
     from litellm.proxy.utils import unified_guardrail
 
     guardrail = _content_filter_guardrail("BLOCK")
@@ -367,14 +367,19 @@ async def test_unified_guardrail_iterator_accepts_explicit_guardrail(monkeypatch
         for chunk in _anthropic_stream_chunks(["the", " zebra runs"]):
             yield chunk
 
-    with pytest.raises(HTTPException):
-        async for _ in unified_guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
-            response=fake_stream(),
-            request_data=request_data,
-            guardrail_to_apply=guardrail,
-        ):
-            pass
+    delivered = []
+    async for item in unified_guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/messages"),
+        response=fake_stream(),
+        request_data=request_data,
+        guardrail_to_apply=guardrail,
+    ):
+        delivered.append(item)
+
+    raw = b"".join(c for c in delivered if isinstance(c, bytes)).decode()
+    assert "event: error" in raw
+    assert "guardrail_error" in raw
+    assert raw.index("guardrail_error") > raw.index(" zebra runs")
 
 
 @pytest.mark.asyncio
@@ -632,14 +637,14 @@ def test_callback_capabilities_excludes_opted_out_guardrail_from_iterator_overri
     assert [cb for cb, _ in caps.iterator_overrides if cb is opted_out] == []
 
 
-def test_deployment_pre_call_target_stays_native_when_opted_out():
+def test_deployment_hook_target_stays_native_when_opted_out():
     """Model-level guardrails resolve their target here rather than through ProxyLogging."""
-    assert _KeepsNativeHooks()._deployment_pre_call_target() is not None
+    assert _KeepsNativeHooks()._deployment_hook_target() is not None
     opted_out = _KeepsNativeHooks()
-    assert opted_out._deployment_pre_call_target() is opted_out
-    assert _AppliesGuardrail()._deployment_pre_call_target() is not None
+    assert opted_out._deployment_hook_target() is opted_out
+    assert _AppliesGuardrail()._deployment_hook_target() is not None
     routed = _AppliesGuardrail()
-    assert routed._deployment_pre_call_target() is not routed
+    assert routed._deployment_hook_target() is not routed
 
 
 @pytest.mark.asyncio

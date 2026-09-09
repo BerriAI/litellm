@@ -38,6 +38,9 @@ export const useModelsInfo = (
   sortBy?: string,
   sortOrder?: string,
   excludeAutoRouters: boolean = false,
+  modelName?: string,
+  accessGroup?: string,
+  wildcardOnly: boolean = false,
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -48,6 +51,7 @@ export const useModelsInfo = (
         page,
         size,
         ...(search && { search }),
+        ...(modelName && { modelName }),
         ...(modelId && { modelId }),
         ...(teamId && { teamId }),
         ...(sortBy && { sortBy }),
@@ -55,6 +59,8 @@ export const useModelsInfo = (
         // Part of the key: callers that exclude auto-routers must not share a cache entry
         // with callers that keep them.
         ...(excludeAutoRouters && { excludeAutoRouters: "true" }),
+        ...(accessGroup && { accessGroup }),
+        ...(wildcardOnly && { wildcardOnly: "true" }),
       },
     }),
     queryFn: async () =>
@@ -70,6 +76,9 @@ export const useModelsInfo = (
         sortBy,
         sortOrder,
         excludeAutoRouters,
+        modelName,
+        accessGroup,
+        wildcardOnly,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });

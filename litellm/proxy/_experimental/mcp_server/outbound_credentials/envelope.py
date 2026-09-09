@@ -19,17 +19,16 @@ in plaintext anywhere in the envelope.
 
 Failures are values: :func:`open_envelope` returns one of the frozen
 ``EnvelopeOpenError`` variants (discriminated on ``tag``) for invalid, expired,
-tampered, or undecryptable input, and :func:`mint_envelope` returns
-``EnvelopeTooLarge`` for oversized grants. Error values carry tags and sizes only,
-never token material.
+tampered, or undecryptable input, and :func:`mint_envelope` returns a typed error
+for oversized grants or an unrepresentable provider lifetime. Error values carry
+tags and metadata only, never token material.
 
 The pydantic input models reject programmer errors at construction (e.g. a
 non-positive ``expires_in`` or an empty required field). :func:`open_envelope` is
 additionally total over hostile, attacker-controlled input: it never raises, only
 returns an ``EnvelopeOpenError``. :func:`mint_envelope` operates on a
 gateway-supplied grant (an upstream IdP's UTF-8 JSON token response), so it does not
-defend against non-UTF-8 field content that cannot survive JSON parsing; its only
-value-typed failure is ``EnvelopeTooLarge``.
+defend against non-UTF-8 field content that cannot survive JSON parsing.
 """
 
 from __future__ import annotations
@@ -57,10 +56,11 @@ ENVELOPE_ISSUER: Final = "litellm-mcp-bridge"
 """``iss`` claim stamped into every envelope and required back on open."""
 
 MAX_ENVELOPE_TTL_SECONDS: Final = 3600
-"""Hard ceiling on ACCESS envelope lifetime. ``exp`` is ``min(upstream expires_in, this cap)``
-(the cap alone when the upstream omits ``expires_in``), matching the 1h lifetime of the
-BYOK session bearer this module's signing approach is borrowed from: a client-held
-credential should never outlive a bounded window even when the upstream token does."""
+"""Fallback ACCESS envelope lifetime when the upstream omits ``expires_in``.
+
+The historical exported name is retained for import compatibility. When the upstream
+reports a positive lifetime, the envelope matches it so a renewal does not consume a
+still-valid provider refresh grant."""
 
 MAX_REFRESH_ENVELOPE_TTL_SECONDS: Final = 1209600
 """Hard ceiling on REFRESH envelope lifetime (14 days). A refresh envelope only renews the short-lived
@@ -202,7 +202,15 @@ class EnvelopeTooLarge(BaseModel):
     max_bytes: int
 
 
-EnvelopeMintError: TypeAlias = EnvelopeTooLarge
+class EnvelopeLifetimeUnrepresentable(BaseModel):
+    """A positive provider lifetime cannot be represented as a Python datetime."""
+
+    model_config = ConfigDict(frozen=True)
+    tag: Literal["envelope_lifetime_unrepresentable"] = "envelope_lifetime_unrepresentable"
+    expires_in: int
+
+
+EnvelopeMintError: TypeAlias = EnvelopeTooLarge | EnvelopeLifetimeUnrepresentable
 
 
 class NotAnEnvelope(BaseModel):
@@ -307,11 +315,17 @@ def mint_envelope(
 ) -> SealedEnvelope | EnvelopeMintError:
     """Seal ``grant`` for ``identity`` into a client-held envelope.
 
-    ``exp`` is ``min(grant.expires_in, MAX_ENVELOPE_TTL_SECONDS)`` seconds from ``now``
-    (the cap alone when ``expires_in`` is absent). Returns ``EnvelopeTooLarge`` when the
-    serialized envelope exceeds ``MAX_ENVELOPE_BYTES``.
+    ``exp`` is ``grant.expires_in`` seconds from ``now`` when the upstream reports a
+    lifetime, or ``MAX_ENVELOPE_TTL_SECONDS`` when it does not. Returns
+    ``EnvelopeLifetimeUnrepresentable`` when that positive lifetime cannot be represented
+    as a Python datetime, or ``EnvelopeTooLarge`` when the serialized envelope exceeds
+    ``MAX_ENVELOPE_BYTES``.
     """
-    expires_at: Final = now + timedelta(seconds=_envelope_ttl_seconds(grant.expires_in))
+    ttl_seconds: Final = _envelope_ttl_seconds(grant.expires_in)
+    try:
+        expires_at: Final = now + timedelta(seconds=ttl_seconds)
+    except OverflowError:
+        return EnvelopeLifetimeUnrepresentable(expires_in=ttl_seconds)
     return _seal(
         kind="access",
         prefix=ENVELOPE_PREFIX,
@@ -457,7 +471,7 @@ def _open_claims(
 def _envelope_ttl_seconds(upstream_expires_in: int | None) -> int:
     if upstream_expires_in is None:
         return MAX_ENVELOPE_TTL_SECONDS
-    return min(upstream_expires_in, MAX_ENVELOPE_TTL_SECONDS)
+    return upstream_expires_in
 
 
 def _refresh_ttl_seconds(upstream_refresh_expires_in: int | None) -> int:

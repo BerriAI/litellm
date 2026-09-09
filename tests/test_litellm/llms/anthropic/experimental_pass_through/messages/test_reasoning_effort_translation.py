@@ -42,7 +42,7 @@ def test_reasoning_effort_maps_to_output_config_for_adaptive_model(
     )
 
     assert "reasoning_effort" not in result
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": expected_effort}
 
 
@@ -70,7 +70,7 @@ def test_reasoning_effort_none_clears_thinking_and_output_config():
 
 def test_reasoning_effort_on_non_adaptive_model_uses_thinking_budget():
     config = AnthropicMessagesConfig()
-    optional_params = {"max_tokens": 1024, "reasoning_effort": "high"}
+    optional_params = {"max_tokens": 8192, "reasoning_effort": "high"}
 
     result = config.transform_anthropic_messages_request(
         model="claude-opus-4-5",
@@ -86,7 +86,7 @@ def test_reasoning_effort_on_non_adaptive_model_uses_thinking_budget():
     assert isinstance(thinking, dict)
     assert thinking.get("type") == "enabled"
     assert isinstance(thinking.get("budget_tokens"), int)
-    assert thinking["budget_tokens"] >= 1024
+    assert 1024 <= thinking["budget_tokens"] < result["max_tokens"]
 
 
 @pytest.mark.parametrize("bad_effort", ["invalid", "disabled", ""])

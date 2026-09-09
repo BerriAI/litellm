@@ -151,6 +151,25 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
 
 
 @pytest.mark.asyncio
+async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"_target_order": 2},
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
 async def test_async_filter_deployments_narrows_for_group_whose_model_minimum_is_lower():
     """
     Same ~1400-token prompt that must not pin an Opus 4.6 group, on an Opus 4.8 group whose real
@@ -311,6 +330,67 @@ async def test_per_request_enable_prompt_caching_reaches_the_affinity_key(monkey
     )
 
     assert filtered == [deployments[1]]
+
+
+@pytest.mark.asyncio
+async def test_claude_code_one_shot_subagent_does_not_reuse_an_auto_injected_affinity_key(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": "unique " * 3000}])
+    request_kwargs = {
+        "system": [
+            {
+                "type": "text",
+                "text": "x-anthropic-billing-header: cc_version=2.1.263; cc_is_subagent=true;",
+            }
+        ],
+        "proxy_server_request": {"headers": {"user-agent": "claude-cli/2.1.263 (external, cli)"}},
+    }
+    auto_injected_messages = AnthropicCacheControlHook.messages_with_default_injections(
+        messages=messages,
+        models=(AUTO_CACHING_MODEL,),
+    )
+    assert auto_injected_messages != messages
+    await PromptCachingCache(cache=cache).async_add_model_id(
+        model_id="dep-2", messages=auto_injected_messages, tools=None
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs=request_kwargs,
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
+async def test_root_cache_control_does_not_reuse_an_auto_injected_affinity_key(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    messages = _auto_caching_messages()
+    auto_injected_messages = AnthropicCacheControlHook.messages_with_default_injections(
+        messages=messages,
+        models=(AUTO_CACHING_MODEL,),
+    )
+    assert auto_injected_messages != messages
+    await PromptCachingCache(cache=cache).async_add_model_id(
+        model_id="dep-2", messages=auto_injected_messages, tools=None
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"cache_control": {"type": "ephemeral"}},
+    )
+
+    assert filtered == deployments
 
 
 @pytest.mark.asyncio

@@ -181,7 +181,7 @@ class RouteChecks:
 
         # check if wildcard pattern is allowed
         for allowed_route in valid_token.allowed_routes:
-            if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
+            if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                 return True
 
         if denied_auth_enforced_pass_through_route:
@@ -329,7 +329,7 @@ class RouteChecks:
                     route_allowed = True
                     break
 
-                if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route):
+                if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route):
                     route_allowed = True
                     break
 
@@ -397,7 +397,7 @@ class RouteChecks:
                     return True
             # Check for wildcard patterns like "/containers/*"
             if RouteChecks._is_wildcard_pattern(pattern=openai_route):
-                if RouteChecks._route_matches_wildcard_pattern(route=route, pattern=openai_route):
+                if RouteChecks.route_matches_wildcard_pattern(route=route, pattern=openai_route):
                     return True
 
         # Check for Google routes with placeholders like "/v1beta/models/{model_name}:generateContent"
@@ -497,10 +497,22 @@ class RouteChecks:
 
         def _placeholder_to_regex(match: re.Match) -> str:
             placeholder: Final = match.group(0).strip("{}")
-            if placeholder.endswith(":path"):
-                # allow "/" in the placeholder value, but don't eat the route suffix after ":"
-                return r"[^:]+"
-            return r"[^/]+"
+            if not placeholder.endswith(":path"):
+                return r"[^/]+"
+            # A ":path" placeholder takes whatever the router's own path
+            # converter takes, slashes and colons alike, so an id spelled with
+            # either (or both) still matches the template it was mounted under.
+            #
+            # Unless the template puts a ":" literal of its own after the
+            # placeholder: the Google routes end in ":generateContent" and
+            # friends, and there the value has to stop before that suffix
+            # rather than swallow it and match a different verb.
+            #
+            # "[\s\S]" rather than ".", because "." stops at a newline and the
+            # path converter does not: a %0A anywhere in the value would leave
+            # the route unmatched here while still reaching the handler, which
+            # turns this gate into a bypass for the lists built on it.
+            return r"[^:]+" if ":" in match.string[match.end() :] else r"[\s\S]+"
 
         pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string
@@ -517,7 +529,7 @@ class RouteChecks:
         return pattern.endswith("*")
 
     @staticmethod
-    def _route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
+    def route_matches_wildcard_pattern(route: str, pattern: str) -> bool:
         """
         Check if route matches the wildcard pattern
 
@@ -594,7 +606,7 @@ class RouteChecks:
         # e.g calling /anthropic/v1/messages is allowed if allowed_routes has /anthropic/*
         #########################################################
         if any(
-            RouteChecks._route_matches_wildcard_pattern(route=route, pattern=allowed_route)
+            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
             for allowed_route in allowed_routes
             if RouteChecks._is_wildcard_pattern(pattern=allowed_route)
         ):

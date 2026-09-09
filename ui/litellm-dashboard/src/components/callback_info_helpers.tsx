@@ -109,6 +109,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
       langfuse_host: "text",
+      langfuse_environment: "text",
     },
     description: "Langfuse v2 Logging Integration",
   },
@@ -121,6 +122,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
       langfuse_host: "text",
+      langfuse_environment: "text",
     },
     description: "Langfuse v3 OTEL Logging Integration",
   },
@@ -156,6 +158,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     dynamic_params: {
       otel_endpoint: "text",
       otel_headers: "text",
+      otel_exporter_otlp_protocol: "select",
     },
     description: "OpenTelemetry Logging Integration",
   },

@@ -9,9 +9,11 @@ returning the stub.
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import jwt as pyjwt
 import pytest
 from pydantic import SecretStr
 
@@ -41,6 +43,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
     TokenStoreUnavailable,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import (
+    RefreshingSSOAssertionStore,
+    SSOAssertionRefresher,
+    SSOClientConfig,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     AssertionStoreUnavailable,
@@ -112,6 +119,35 @@ def _emitted(auth: httpx.Auth) -> httpx.Headers:
 @pytest.mark.asyncio
 async def test_none_mode_yields_a_no_op_auth():
     result = await UpstreamCredentialProvider().resolve_credentials(_SUBJECT, _spec(NoneConfig()))
+    assert isinstance(result, Ok)
+    assert isinstance(result.ok, NoOpAuth)
+
+
+@pytest.mark.asyncio
+async def test_none_mode_rejects_url_userinfo():
+    spec = ServerSpec(
+        server_id="s",
+        resource="https://lit-user:s3cr3t@upstream.example.com/mcp",
+        config=NoneConfig(),
+    )
+
+    result = await UpstreamCredentialProvider().resolve_credentials(_SUBJECT, spec)
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "url_credentials_not_allowed"
+    assert "Basic Auth" in result.error.summary
+    assert "auth_type: basic" in result.error.summary
+    assert "auth_value: username:password" in result.error.summary
+    assert "lit-user" not in result.error.summary
+    assert "s3cr3t" not in result.error.summary
+
+
+@pytest.mark.asyncio
+async def test_none_mode_does_not_validate_non_credential_resource():
+    spec = ServerSpec(server_id="s", resource="https://[::1", config=NoneConfig())
+
+    result = await UpstreamCredentialProvider().resolve_credentials(_SUBJECT, spec)
+
     assert isinstance(result, Ok)
     assert isinstance(result.ok, NoOpAuth)
 
@@ -558,6 +594,73 @@ async def test_id_jag_refuses_an_expired_stored_assertion_without_calling_the_id
     assert isinstance(result, Error)
     assert result.error.tag == "precondition_required"
     assert endpoint.calls == []
+
+
+@pytest.mark.asyncio
+async def test_id_jag_renews_an_expired_stored_assertion_instead_of_challenging():
+    """The unattended-agent case end to end: the user last signed in more than an id_token lifetime
+    ago, so without renewal this is the 412 above. With the renewing store wired the arm resolves,
+    and leg 1 asserts the renewed token rather than the one that ran out."""
+    renewed_id_token = pyjwt.encode(
+        {"iss": "https://idp.example.com", "sub": "alice", "exp": int(time.time()) + 3600},
+        "test-idp-signing-key-32-bytes-long-xxxx",
+        algorithm="HS256",
+    )
+    expired = SSOIdentityAssertion(
+        id_token=SecretStr("stale-id-token"),
+        refresh_token=SecretStr("rt_1"),
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    rows = {"alice": expired}
+
+    async def _read(user_id: str) -> SSOIdentityAssertion | None:
+        return rows.get(user_id)
+
+    async def _write(user_id: str, assertion: SSOIdentityAssertion) -> None:
+        rows[user_id] = assertion
+
+    class _Inner:
+        async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
+            return await _read(user_id)
+
+    class _Transport:
+        async def post(self, url, form, headers):
+            return Ok({"access_token": "at", "id_token": renewed_id_token})
+
+    refresher = SSOAssertionRefresher(
+        _Transport(),
+        client_config=lambda: SSOClientConfig(
+            token_endpoint="https://idp.example.com/token",
+            client_id="litellm",
+            client_secret=SecretStr("s"),
+            auth_method="client_secret_basic",
+        ),
+        read=_read,
+        write=_write,
+    )
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("final-access"))
+    provider = UpstreamCredentialProvider(
+        token_endpoint=endpoint,
+        sso_assertion_store=RefreshingSSOAssertionStore(
+            _Inner(), refresher, fresh_read=_read, coordinator_factory=lambda: None
+        ),
+    )
+
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
+    )
+
+    assert isinstance(result, Ok)
+    _, _, leg1_params = endpoint.calls[0]
+    assert leg1_params["subject_token"] == renewed_id_token
+
+
+def test_the_resolver_defaults_to_the_renewing_assertion_store():
+    """A resolver built without collaborators is what production gets, so the default has to renew;
+    the plain database reader would strand every agent an id_token lifetime after its user's login."""
+    provider = UpstreamCredentialProvider()
+
+    assert isinstance(provider._sso_assertion_store, RefreshingSSOAssertionStore)  # noqa: SLF001  # the wiring is the assertion
 
 
 @pytest.mark.asyncio
@@ -1033,3 +1136,70 @@ async def test_invalidate_credentials_for_id_jag_is_a_noop_without_a_caller_toke
     assert isinstance(first, Ok) and isinstance(second, Ok)
     assert _emitted(second.ok)["Authorization"] == "Bearer cached-bearer"
     assert len(endpoint.calls) == 2
+
+
+async def _resolve_with_carrier(kind: str, header: str):
+    """Resolve one minted-token arm whose config targets ``header``."""
+    if kind == "client_credentials":
+        source = _FakeM2MSource(Ok(OAuthToken(access_token="minted")))
+        config = _M2M.model_copy(update={"header_name": header})
+        provider = UpstreamCredentialProvider(client_credentials_source=source)
+        return await provider.resolve_credentials(_SUBJECT, _spec(config))
+    if kind == "token_exchange":
+        exchanger = _FakeExchanger(Ok(OAuthToken(access_token="minted")))
+        config = _OBO.model_copy(update={"header_name": header})
+        subject = Subject(tenant_id="acme", subject_id="alice", inbound_token=SecretStr("caller-jwt"))
+        provider = UpstreamCredentialProvider(token_exchanger=exchanger)
+        return await provider.resolve_credentials(subject, _spec(config))
+    if kind == "authorization_code":
+        store = _FakeTokenStore({("alice", "s"): OAuthToken(access_token="minted")})
+        provider = UpstreamCredentialProvider(oauth_token_store=store)
+        return await provider.resolve_credentials(
+            Subject(tenant_id="", subject_id="alice"),
+            _spec(AuthorizationCodeConfig(header_name=header)),
+        )
+    endpoint = _FakeTokenEndpoint(
+        [
+            Ok(ExchangedToken(access_token="id-jag-assertion", expires_in=300)),
+            Ok(ExchangedToken(access_token="minted", expires_in=300)),
+        ]
+    )
+    config = _id_jag_config().model_copy(update={"header_name": header})
+    subject = Subject(tenant_id="acme", subject_id="alice", inbound_token=SecretStr("caller-id-token"))
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+    return await provider.resolve_credentials(subject, _spec(config))
+
+
+_MINTED_ARMS = ("client_credentials", "token_exchange", "authorization_code", "id_jag")
+
+
+@pytest.mark.parametrize("kind", _MINTED_ARMS)
+@pytest.mark.asyncio
+async def test_every_minted_arm_emits_its_configured_header(kind):
+    # One arm left on a hardcoded Authorization is a silent no-op for exactly the server that
+    # configured the knob, so this is asserted across all four rather than on the M2M arm alone.
+    result = await _resolve_with_carrier(kind, "esb-oauth")
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(result.ok)
+    assert headers["esb-oauth"] == "Bearer minted"
+    assert "authorization" not in headers
+
+
+@pytest.mark.parametrize("kind", _MINTED_ARMS)
+@pytest.mark.asyncio
+async def test_every_minted_arm_still_defaults_to_authorization(kind):
+    result = await _resolve_with_carrier(kind, "Authorization")
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(result.ok)
+    assert headers["Authorization"] == "Bearer minted"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_ignores_the_carrier_and_keeps_the_callers_slot():
+    # Passthrough mints nothing: it forwards the caller's own credential, so it has no carrier to
+    # configure and must keep using the header the caller aimed it at.
+    subject = Subject(tenant_id="", subject_id="", inbound_token=SecretStr("caller-token"))
+    result = await UpstreamCredentialProvider().resolve_credentials(subject, _spec(PassthroughConfig()))
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(result.ok)
+    assert headers["Authorization"] == "caller-token"

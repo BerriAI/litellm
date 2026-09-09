@@ -84,4 +84,63 @@ describe("UsageExportHeader", () => {
     expect(screen.getByTestId("custom-filter")).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
+
+  it("should keep the filter visible and disabled with an explanation when the caller has no options", () => {
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        entityType="tag"
+        showFilters
+        filterLabel="Filter by tag"
+        filterPlaceholder="Select tag to filter..."
+        filterOptions={[]}
+        onFiltersChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Filter by tag")).toBeInTheDocument();
+    const input = screen.getByPlaceholderText("No tags with usage in this range");
+    expect(input).toBeDisabled();
+    expect(screen.queryByPlaceholderText("Select tag to filter...")).not.toBeInTheDocument();
+  });
+
+  it("should stay usable when a carried-over selection outlives its options", async () => {
+    const user = userEvent.setup();
+    const onFiltersChange = vi.fn();
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        entityType="tag"
+        showFilters
+        filterLabel="Filter by tag"
+        filterPlaceholder="Select tag to filter..."
+        filterOptions={[]}
+        selectedFilters={["prod"]}
+        onFiltersChange={onFiltersChange}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("No tags with usage in this range")).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Clear Filter by tag" }));
+    expect(onFiltersChange).toHaveBeenCalledWith([]);
+  });
+
+  it("should leave the filter enabled with its normal placeholder when options exist", () => {
+    renderWithProviders(
+      <UsageExportHeader
+        {...defaultProps}
+        entityType="tag"
+        showFilters
+        filterLabel="Filter by tag"
+        filterPlaceholder="Select tag to filter..."
+        filterOptions={[{ label: "prod", value: "prod" }]}
+        onFiltersChange={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByPlaceholderText("Select tag to filter...");
+    expect(input).toBeEnabled();
+    expect(screen.queryByPlaceholderText("No tags with usage in this range")).not.toBeInTheDocument();
+  });
 });

@@ -47,6 +47,7 @@ from litellm.types.videos.utils import (
 )
 
 from fastapi import Response
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 # --------------------------------------------------------------------------- #
 # A real model-encoded video id: decodes (for real) to provider "azure",
@@ -448,6 +449,31 @@ async def test_edit__json_string_video_reference_from_form_field(harness):
     )
 
     assert harness.processor_data()["video_id"] == "video_plain"
+
+
+@pytest.mark.asyncio
+async def test_edit__uploaded_video_file_is_forwarded_not_dropped(harness):
+    """A multipart-uploaded source video must be converted to bytes and attached
+    under ``video`` so the provider receives the file. Before the fix the upload
+    was popped, coerced to an empty ``video_id``, and silently dropped."""
+    import io
+
+    upload = StarletteUploadFile(file=io.BytesIO(b"rawmp4"), filename="clip.mp4")
+    harness.read_body.return_value = {"prompt": "make it nighttime", "video": upload}
+
+    await endpoints.video_edit(
+        request=FakeRequest(raw_body=b"multipart"),
+        fastapi_response=Response(),
+        user_api_key_dict=_user(),
+    )
+
+    harness.batch_to_bytesio.assert_called_once_with((upload,))
+    assert harness.processor_data() == {
+        "prompt": "make it nighttime",
+        "video": b"filebytes",
+        "video_id": "",
+        "custom_llm_provider": "openai",
+    }
 
 
 # =========================================================================== #

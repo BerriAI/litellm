@@ -27,6 +27,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import SearchConnectionTest from "./SearchConnectionTest";
 import { buildSearchToolPayload } from "./searchToolPayload";
 import { AvailableSearchProvider, SearchTool } from "./types";
+import bingLogo from "../../../../../public/assets/logos/bing.png";
 import dataforseoLogo from "../../../../../public/assets/logos/dataforseo.png";
 import exaAiLogo from "../../../../../public/assets/logos/exa_ai.png";
 import googlePseLogo from "../../../../../public/assets/logos/google_pse.png";
@@ -44,6 +45,7 @@ const searchProviderLogoMap: Record<string, string> = {
   google_pse: googlePseLogo.src,
   dataforseo: dataforseoLogo.src,
   nimble: nimbleLogo.src,
+  bing_grounding: bingLogo.src,
 };
 
 interface SearchProviderLabelProps {
@@ -343,7 +345,6 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
               >
                 Close
               </Button>
-              , ]
             </DialogFooter>
           </DialogContent>
         </Dialog>

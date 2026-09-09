@@ -1,5 +1,7 @@
+from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -134,6 +136,7 @@ class SupportedGuardrailIntegrations(Enum):
     HEADROOM = "headroom"
     COMPRESR = "compresr"
     STRAIKER = "straiker"
+    ALICE = "alice"
 
 
 class Role(Enum):
@@ -392,6 +395,16 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
     )
+    presidio_analyze_chunk_size_bytes: int | None = Field(
+        default=None,
+        description=(
+            "Maximum UTF-8 bytes of text sent in a single Presidio /analyze call. "
+            "Longer texts are split into overlapping chunks of at most this size "
+            "and the merged results are remapped onto the original text. "
+            "Defaults to 500000; set it below your analyzer deployment's request "
+            "body limit, leaving headroom for the rest of the analyze payload."
+        ),
+    )
     mock_redacted_text: dict | None = Field(default=None, description="Mock redacted text for testing")
 
 
@@ -496,6 +509,9 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_role_name: str | None = Field(default=None, description="AWS role name for assuming roles")
     aws_web_identity_token: str | None = Field(default=None, description="Web identity token for AWS role assumption")
     aws_sts_endpoint: str | None = Field(default=None, description="AWS STS endpoint URL")
+    aws_external_id: str | None = Field(
+        default=None, description="External ID required by the target role's trust policy on sts:AssumeRole"
+    )
     aws_bedrock_runtime_endpoint: str | None = Field(default=None, description="AWS Bedrock runtime endpoint URL")
     checks: BedrockChecksConfigModel | None = Field(
         default=None,
@@ -537,6 +553,40 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
+class BedrockGuardrailStreamingParams(BaseModel):
+    streaming_buffer_until_moderated: bool = Field(
+        default=True,
+        description="If True (default), withhold every streamed chunk until the end-of-stream "
+        "ApplyGuardrail scan passes, so no flagged content reaches the client before a block. "
+        "If False, chunks stream through unbuffered, so flagged content can reach the client "
+        "before the scan finishes; a flagged scan still ends the stream, with a block message "
+        "when disable_exception_on_block is true and an in-stream error frame otherwise.",
+    )
+    streaming_sampling_rate: int = Field(
+        default=5,
+        ge=1,
+        description="When not buffering and not end-of-stream-only, scan the accumulated response "
+        "every Nth streamed chunk. Each sampled scan is a full ApplyGuardrail call that delays "
+        "that chunk, so lower values add latency and AWS text-unit cost.",
+    )
+    streaming_end_of_stream_only: bool = Field(
+        default=False,
+        description="When not buffering, skip per-chunk sampling and run one ApplyGuardrail scan "
+        "on the assembled response at end of stream. Combined with "
+        "streaming_buffer_until_moderated=false the full response streams live before the scan "
+        "and the scan result lands in guardrail_information; a flagged response still ends the "
+        "stream with a block message (disable_exception_on_block=true) or an error frame.",
+    )
+
+    @classmethod
+    def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
+        if not extras:
+            return cls()
+        return cls.model_validate(
+            MappingProxyType({name: extras[name] for name in cls.model_fields if extras.get(name) is not None})
+        )
+
+
 class LakeraV2GuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
 
@@ -550,9 +600,15 @@ class LakeraV2GuardrailConfigModel(BaseModel):
         default=True,
         description="Whether to include developer information in the response",
     )
-    on_flagged: Literal["block", "monitor"] | None = Field(
+    on_flagged: Literal["block", "monitor", "inject_system_message"] | None = Field(
         default="block",
-        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
+        description="Action to take when content is flagged: 'block' (raise exception), 'monitor' (log only), "
+        "or 'inject_system_message' (append an advisory system message and let the LLM decide)",
+    )
+    advisory_system_message: str | None = Field(
+        default=None,
+        description="Custom advisory message template used when on_flagged='inject_system_message'. "
+        "Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
     )
 
 
@@ -722,6 +778,9 @@ class ContentFilterConfigModel(BaseModel):
     )
 
 
+MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
+
+
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
@@ -776,6 +835,15 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    inspect_embeddings: bool | None = Field(
+        default=None,
+        description=(
+            "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as "
+            "user messages. Off by default because embedding input is documents being indexed, not a "
+            "conversation."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: LakeraCategoryThresholds | None = Field(
         default=None,
@@ -821,9 +889,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         description="For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
     )
-    on_violation: Literal["warn", "end_session"] | None = Field(
+    on_violation: Literal["warn", "end_session", "block", "alert"] | None = Field(
         default=None,
-        description="For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+        description=(
+            "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
+            "'end_session' speaks the message and closes the connection. "
+            "For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning."
+        ),
     )
     realtime_violation_message: str | None = Field(
         default=None,
@@ -842,7 +914,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=True,
         description=(
             "Whether to fail the request if the guardrail encounters an error. "
-            "Implemented by guardrail='model_armor' and 'generic_guardrail_api'. "
+            "Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. "
             "True (default) raises the error. False logs a critical error and lets the request proceed, "
             "so only a valid guardrail response can block or modify it."
         ),
@@ -938,6 +1010,17 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    scan_raw_request: bool | None = Field(
+        default=None,
+        description=(
+            "When True, this pre_call guardrail always evaluates the request as it was before any "
+            "guardrail in this hook ran, regardless of its position in the guardrails list -- so the "
+            "YAML order of guardrails can never change whether this one blocks. Use only for "
+            "block-only guardrails: any data this guardrail returns is discarded, same contract as "
+            "run_in_parallel, since an earlier guardrail's masking must not be undone by this one."
+        ),
+    )
+
     @field_validator(
         "mode",
         "default_action",
@@ -970,7 +1053,7 @@ class Mode(BaseModel):
     default: str | list[str] | None = Field(default=None, description="Default mode when no tags match")
 
 
-class LitellmParams(
+class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # on_flagged literal diverges across mixins
     CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
@@ -1016,6 +1099,15 @@ class LitellmParams(
             return float(v)
         except (TypeError, ValueError) as e:
             raise ValueError(f"timeout must be numeric, got {v!r}") from e
+
+    @model_validator(mode="after")
+    def validate_on_violation_for_guardrail(self) -> "LitellmParams":
+        if (
+            self.on_violation in MCP_SECURITY_ON_VIOLATION
+            and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
+        ):
+            raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
 
     def __init__(self, **kwargs) -> None:
         default_on: Final = kwargs.pop("default_on", None)

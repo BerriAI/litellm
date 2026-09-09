@@ -14,6 +14,7 @@ import {
   FieldSet,
   FieldTitle,
 } from "./field";
+import { ROW_LAYOUT_CLASSES, STRETCH_CHILDREN_CLASS } from "../../../tests/fieldOrientation";
 
 describe("FieldError", () => {
   it("renders nothing when there are no errors and no children", () => {
@@ -84,6 +85,20 @@ describe("Field", () => {
     render(<Field orientation="horizontal" />);
 
     expect(screen.getByRole("group")).toHaveAttribute("data-orientation", "horizontal");
+  });
+
+  it("stretches every child when vertical, which is what inputs, selects and textareas want", () => {
+    render(<Field />);
+
+    expect(screen.getByRole("group")).toHaveClass("flex-col", STRETCH_CHILDREN_CLASS);
+  });
+
+  it("lays children in a row at their own width when horizontal, so a checkbox stays square", () => {
+    render(<Field orientation="horizontal" />);
+    const field = screen.getByRole("group");
+
+    expect(field).toHaveClass(...ROW_LAYOUT_CLASSES);
+    expect(field).not.toHaveClass(STRETCH_CHILDREN_CLASS);
   });
 });
 
