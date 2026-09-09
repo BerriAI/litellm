@@ -114,7 +114,8 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
         return str(exc.detail)
     if isinstance(exc, TimeoutError):
         return (
-            f"Failed to connect to MCP server: no response from {_redact_mcp_resource_url(url) or 'the server'} "
+            "Failed to connect to MCP server: no valid MCP response received from "
+            f"{_redact_mcp_resource_url(url) or 'the server'} "
             f"within {timeout_seconds:.0f}s. Check that the LiteLLM proxy can reach this URL "
             "from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
         )
@@ -131,6 +132,11 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
         return "Failed to connect to MCP server: the connection timed out."
     if isinstance(exc, httpx.HTTPStatusError):
         return f"Failed to connect to MCP server: it returned HTTP {exc.response.status_code}."
+    if isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError, ConnectionError)):
+        return (
+            "Failed to connect to MCP server: the connection was interrupted. "
+            "Check the server and network connection, then retry."
+        )
     if isinstance(exc, ValueError) and str(exc).startswith("Unexpected content type:"):
         return (
             "Failed to connect to MCP server: the endpoint returned an unsupported content type. "
@@ -142,6 +148,11 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
             "Check the MCP endpoint URL and the server's protocol implementation."
         )
     if MCP_AVAILABLE and isinstance(exc, McpError):
+        if exc.error.code == -32000 and exc.error.message == "Connection closed":
+            return (
+                "Failed to connect to MCP server: the connection was closed before the request completed. "
+                "Check that the server stays running and returns a complete MCP response, then retry."
+            )
         if exc.error.code == 32600 and exc.error.message == "Session terminated":
             return (
                 "Failed to connect to MCP server: the MCP session was terminated. "
@@ -159,7 +170,7 @@ if MCP_AVAILABLE:
     from mcp.shared.exceptions import McpError
     from mcp.types import Tool as MCPTool
 
-    from litellm.experimental_mcp_client.client import MCPClient
+    from litellm.experimental_mcp_client.client import MCPClient, _as_read_timeout
     from litellm.llms.litellm_proxy.skills.skill_search import (
         DEFAULT_SKILL_SEARCH_TOP_K,
     )
@@ -1396,10 +1407,18 @@ if MCP_AVAILABLE:
         except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
         except BaseException as e:
+            effective_timeout: Final = (
+                min(request.timeout or MCP_CLIENT_TIMEOUT, timeout_seconds)
+                if any(
+                    isinstance(cause, McpError) and _as_read_timeout(cause) is not None
+                    for cause in iter_exception_tree(e)
+                )
+                else timeout_seconds
+            )
             return {
                 "status": "error",
                 "error": True,
-                "message": _connection_error_message(e, request.url, timeout_seconds),
+                "message": _connection_error_message(e, request.url, effective_timeout),
             }
 
     async def _preview_openapi_tools(spec_path: str) -> dict:

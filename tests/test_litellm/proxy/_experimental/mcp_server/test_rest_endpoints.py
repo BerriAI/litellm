@@ -3427,6 +3427,54 @@ class TestConnectionErrorMessage:
         message = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
         assert "503" in message
 
+    @pytest.mark.parametrize(
+        "error_type", [httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError, ConnectionResetError]
+    )
+    def test_interrupted_connection_message_is_safe(self, error_type: type[Exception]) -> None:
+        message: Final = rest_endpoints._connection_error_message(
+            error_type("secret-transport-detail"), "https://example.com/?token=secret-query", 30
+        )
+        assert "connection was interrupted" in message
+        assert "secret" not in message
+
+    def test_closed_connection_explains_incomplete_request(self) -> None:
+        from mcp import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=-32000, message="Connection closed", data="secret-data")), None, 30
+        )
+        assert "connection was closed before the request completed" in message
+        assert "secret" not in message
+
+    def test_timeout_does_not_claim_the_server_sent_nothing(self) -> None:
+        message: Final = rest_endpoints._connection_error_message(TimeoutError(), None, 30)
+        assert "no valid MCP response received" in message
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sdk_timeout", [True, False])
+    async def test_timeout_message_uses_the_deadline_that_expired(self, sdk_timeout: bool) -> None:
+        from mcp import McpError
+        from mcp.types import ErrorData
+
+        async def operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            try:
+                raise TimeoutError("secret-timeout")
+            except TimeoutError as elapsed:
+                if not sdk_timeout:
+                    raise
+                try:
+                    raise McpError(ErrorData(code=408, message="secret-sdk-timeout")) from elapsed
+                except McpError as sdk_error:
+                    raise TimeoutError() from sdk_error
+
+        payload: Final = NewMCPServerRequest(
+            server_name="timeout", url="https://example.com", auth_type=MCPAuth.none, timeout=1
+        )
+        result: Final = await rest_endpoints._execute_with_mcp_client(payload, operation, timeout_seconds=30)
+        assert ("within 1s" if sdk_timeout else "within 30s") in result["message"]
+        assert "secret" not in result["message"]
+
     def test_unknown_error_falls_back_to_generic(self):
         message = rest_endpoints._connection_error_message(RuntimeError("weird"), "https://example.com", 30.0)
         assert "weird" not in message
