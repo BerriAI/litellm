@@ -28,5 +28,5 @@ pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Re
 }
 
 #[cfg(test)]
-#[path = "../../tests/messages/tests.rs"]
+#[path = "../../tests/messages.rs"]
 mod tests;

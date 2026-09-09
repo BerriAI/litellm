@@ -131,5 +131,5 @@ pub(crate) fn prepare_ocr_call<C: OcrProviderConfig>(
 }
 
 #[cfg(test)]
-#[path = "../../tests/ocr/prepare.rs"]
+#[path = "../../tests/ocr_prepare.rs"]
 mod tests;

@@ -299,5 +299,5 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/providers/bedrock/chat_completions/tests.rs"]
+#[path = "../../../../tests/bedrock_chat_completions.rs"]
 mod tests;

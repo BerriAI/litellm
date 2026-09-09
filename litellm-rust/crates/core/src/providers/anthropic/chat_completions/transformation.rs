@@ -214,5 +214,5 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/providers/anthropic/chat_completions/tests.rs"]
+#[path = "../../../../tests/anthropic_chat_completions.rs"]
 mod tests;

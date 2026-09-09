@@ -1,6 +1,6 @@
 pub(crate) mod polling;
 #[cfg(test)]
-#[path = "../../../../../tests/providers/azure_ai/ocr/document_intelligence/tests.rs"]
+#[path = "../../../../../tests/azure_document_intelligence_ocr.rs"]
 mod tests;
 pub mod transformation;
 pub mod types;

@@ -20,5 +20,5 @@ pub async fn perform_ocr(request: OcrRequest) -> Result<OcrResponseData, crate::
 }
 
 #[cfg(test)]
-#[path = "../../tests/ocr/tests.rs"]
+#[path = "../../tests/ocr.rs"]
 pub(crate) mod tests;

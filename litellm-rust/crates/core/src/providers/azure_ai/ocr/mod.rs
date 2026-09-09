@@ -1,5 +1,5 @@
 pub mod document_intelligence;
 #[cfg(test)]
-#[path = "../../../../tests/providers/azure_ai/ocr/tests.rs"]
+#[path = "../../../../tests/azure_ai_ocr.rs"]
 mod tests;
 pub mod transformation;

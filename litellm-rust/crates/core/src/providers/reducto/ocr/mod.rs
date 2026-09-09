@@ -1,5 +1,5 @@
 #[cfg(test)]
-#[path = "../../../../tests/providers/reducto/ocr/tests.rs"]
+#[path = "../../../../tests/reducto_ocr.rs"]
 mod tests;
 pub mod transformation;
 pub mod types;
