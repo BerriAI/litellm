@@ -3507,17 +3507,12 @@ class ProxyLogging:
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,
                         )
-                        if callback_response is not None:
-                            # A text result cannot represent a structured empty-text
-                            # chunk such as a tool-call delta. Preserve the chunk
-                            # only when the callback returned its input unchanged.
-                            if _is_unchanged_structured_streaming_hook_response(
-                                callback_response=callback_response,
-                                complete_response=complete_response,
-                                response_str=response_str,
-                                response=response,
-                            ):
-                                continue
+                        if callback_response is not None and not _is_unchanged_structured_streaming_hook_response(
+                            callback_response=callback_response,
+                            complete_response=complete_response,
+                            response_str=response_str,
+                            response=response,
+                        ):
                             response = callback_response
                 except Exception as e:
                     raise e
