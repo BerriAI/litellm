@@ -2749,7 +2749,7 @@ async def increment_spend_counters(
 
     cost: Final[float] = response_cost
 
-    async def _key_scope(key_token: str) -> tuple[_PendingSpendIncrement, ...]:
+    async def _key_scope(key_token: str) -> tuple[_PendingSpendIncrement | BaseException, ...]:
         # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
         # hashes raw "sk-..." keys before they reach the callback). The
         # startswith("sk-") check is a safety net matching update_cache —
@@ -2814,10 +2814,12 @@ async def increment_spend_counters(
             key_budget_limits = json.loads(key_budget_limits)
         if not isinstance(key_budget_limits, list):
             return key_pending
-        window_pending: Final = await asyncio.gather(*(_key_window_increment(window) for window in key_budget_limits))
+        window_pending: Final = await asyncio.gather(
+            *(_key_window_increment(window) for window in key_budget_limits), return_exceptions=True
+        )
         return key_pending + tuple(item for item in window_pending if item is not None)
 
-    async def _team_scope(scope_team_id: str) -> tuple[_PendingSpendIncrement, ...]:
+    async def _team_scope(scope_team_id: str) -> tuple[_PendingSpendIncrement | BaseException, ...]:
         team_counter_key: Final = f"spend:team:{scope_team_id}"
         team_pending: Final[tuple[_PendingSpendIncrement, ...]] = (
             ()
@@ -2873,10 +2875,14 @@ async def increment_spend_counters(
             team_budget_limits = json.loads(team_budget_limits)
         if not isinstance(team_budget_limits, list):
             return team_pending
-        window_pending: Final = await asyncio.gather(*(_team_window_increment(window) for window in team_budget_limits))
+        window_pending: Final = await asyncio.gather(
+            *(_team_window_increment(window) for window in team_budget_limits), return_exceptions=True
+        )
         return team_pending + tuple(item for item in window_pending if item is not None)
 
-    async def _team_member_scope(scope_user_id: str, scope_team_id: str) -> tuple[_PendingSpendIncrement, ...]:
+    async def _team_member_scope(
+        scope_user_id: str, scope_team_id: str
+    ) -> tuple[_PendingSpendIncrement | BaseException, ...]:
         team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
         if team_member_counter_key in reserved_counter_keys:
             return ()
@@ -2888,7 +2894,7 @@ async def increment_spend_counters(
             ),
         )
 
-    async def _user_scope(scope_user_id: str) -> tuple[_PendingSpendIncrement, ...]:
+    async def _user_scope(scope_user_id: str) -> tuple[_PendingSpendIncrement | BaseException, ...]:
         user_counter_key: Final = f"spend:user:{scope_user_id}"
         if user_counter_key in reserved_counter_keys:
             return ()
@@ -2937,8 +2943,19 @@ async def increment_spend_counters(
     # as orphaned tasks that race the caller's reservation-counter invalidation;
     # all scopes settle, then the first error propagates as before.
     scope_results: Final = await asyncio.gather(*scope_coros, return_exceptions=True)
-    scope_errors: Final = [r for r in scope_results if isinstance(r, BaseException)]
-    pending: Final = tuple(item for scope in scope_results if not isinstance(scope, BaseException) for item in scope)
+    scope_errors: Final = tuple(
+        item
+        for scope in scope_results
+        for item in (scope if isinstance(scope, tuple) else (scope,))
+        if isinstance(item, BaseException)
+    )
+    pending: Final = tuple(
+        item
+        for scope in scope_results
+        if not isinstance(scope, BaseException)
+        for item in scope
+        if not isinstance(item, BaseException)
+    )
     await _apply_spend_counter_increments(pending=pending)
     if scope_errors:
         raise scope_errors[0]
@@ -2987,7 +3004,7 @@ async def _prepare_end_user_and_tag_spend_increments(
     tags: list[str] | None,
     response_cost: float,
     reserved_counter_keys: set[str],
-) -> tuple[_PendingSpendIncrement, ...]:
+) -> tuple[_PendingSpendIncrement | BaseException, ...]:
     unique_tags: Final = (
         tuple(dict.fromkeys(tag for tag in tags if tag and isinstance(tag, str))) if tags is not None else ()
     )
@@ -3014,7 +3031,8 @@ async def _prepare_end_user_and_tag_spend_increments(
                 ),
             )
             if coro is not None
-        )
+        ),
+        return_exceptions=True,
     )
     return tuple(item for item in results if item is not None)
 
@@ -3023,7 +3041,7 @@ async def _prepare_model_access_group_spend_increments(
     model_access_groups: Sequence[object],
     response_cost: float,
     reserved_counter_keys: set[str],
-) -> tuple[_PendingSpendIncrement, ...]:
+) -> tuple[_PendingSpendIncrement | BaseException, ...]:
     """Charge the model access groups that authorized this request.
 
     Without this the counter auth reads is written only by the reservation path, so
@@ -3046,7 +3064,8 @@ async def _prepare_model_access_group_spend_increments(
                 reserved_counter_keys=reserved_counter_keys,
             )
             for group in unique_groups
-        )
+        ),
+        return_exceptions=True,
     )
     return tuple(item for item in results if item is not None)
 
@@ -3332,15 +3351,27 @@ async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncreme
             )
         return
     ttl: Final = redis_cache.get_ttl()
-    increment_list: Final = [
+    increment_list: Final = [  # mutable-ok: async_increment_pipeline signature requires list[RedisPipelineIncrementOperation]
         RedisPipelineIncrementOperation(key=item.counter_key, increment_value=item.increment, ttl=ttl)
         for item in pending
     ]
     try:
         results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
     except Exception:
-        await asyncio.gather(*(_invalidate_spend_counter(counter_key=item.counter_key) for item in pending))
-        raise
+        # Degrade to the pre-pipeline per-key path: each key applies or
+        # invalidates itself, so one failure cannot drop increments that
+        # already landed on the shared counters.
+        fallback_results: Final = await asyncio.gather(
+            *(
+                _increment_spend_counter_cache(counter_key=item.counter_key, increment=item.increment)
+                for item in pending
+            ),
+            return_exceptions=True,
+        )
+        fallback_errors: Final = tuple(r for r in fallback_results if isinstance(r, BaseException))
+        if fallback_errors:
+            raise fallback_errors[0]
+        return
     for item, current_value in zip(pending, results or ()):
         spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
 
