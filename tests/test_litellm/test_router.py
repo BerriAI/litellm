@@ -14806,3 +14806,45 @@ def test_router_stays_quiet_when_a_deployment_drop_params_is_a_flag(value, caplo
         )
 
     assert "is not a flag value" not in caplog.text
+
+
+def test_get_candidate_model_ids_for_route_covers_model_name_and_pattern():
+    """
+    get_candidate_model_ids_for_route resolves a route the way the router does, so a
+    pre-call check can tell a genuine cross-group route from same-group unavailability.
+    A concrete model group returns its member ids; a wildcard/pattern deployment is
+    included for a concrete model it matches, which the bare model_name index misses.
+    Regression guard for the LIT-7195 tier-change discriminator's team/pattern gaps.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "grp",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-a", "api_base": "https://x.invalid"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "grp",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-b", "api_base": "https://x.invalid"},
+                "model_info": {"id": "dep-b"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "sk-c", "api_base": "https://x.invalid"},
+                "model_info": {"id": "dep-wild"},
+            },
+        ]
+    )
+
+    assert router.get_candidate_model_ids_for_route(model="grp") == frozenset({"dep-a", "dep-b"})
+    assert "dep-wild" in router.get_candidate_model_ids_for_route(model="openai/gpt-4o-some-new-model")
+
+
+def test_deployment_ids_stringifies_ids_and_skips_entries_without_a_model_info_id():
+    deployments = (
+        {"model_info": {"id": "a"}},
+        {"model_info": {"id": 2}},
+        {"model_info": {}},
+        {"no_model_info": True},
+    )
+    assert Router._deployment_ids(deployments) == frozenset({"a", "2"})

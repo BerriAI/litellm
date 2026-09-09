@@ -14,7 +14,7 @@ import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceC
 import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import { hydrateTierModelParams, normalizeTierModels } from "../add_model/complexity_router_tiers";
+import { hydrateTierModelParams } from "../add_model/complexity_router_tiers";
 import {
   type ActiveTierSet,
   CUSTOM_TIER_OMITTED_KEYS,
@@ -34,6 +34,7 @@ import {
   getSemanticConfigError,
   getPlanModeTierError,
   getTierLabelsError,
+  hydrateBuiltInTiers,
   hydrateCustomTierSet,
   hydratePlanModeMinTier,
   hydrateTierLabels,
@@ -93,6 +94,7 @@ interface EditAutoRouterModalProps {
  * hydrators validate themselves stay `unknown`; the ones assigned straight through carry their type. */
 export interface StoredComplexityRouterConfig {
   tiers?: Partial<Record<keyof ComplexityTiers, unknown>>;
+  enable_non_reasoning_tier?: boolean;
   tier_model_configs?: unknown;
   default_model?: string | null;
   plan_mode_min_tier?: unknown;
@@ -138,18 +140,14 @@ export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
   complexityRouterDefaultModel: string | null | undefined,
 ): ComplexityRouterConfigValue => {
-  const hydratedTiers: ComplexityTiers = {
-    SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
-    MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
-    COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
-    REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
-  };
-
+  const builtIn = hydrateBuiltInTiers(parsedConfig.tiers, parsedConfig.enable_non_reasoning_tier);
+  const { tiers: hydratedTiers, enable_non_reasoning_tier } = builtIn;
   const custom_tier_set = hydrateCustomTierSet(parsedConfig);
-  const activeTiers = { tiers: hydratedTiers, custom_tier_set };
+  const activeTiers = { ...builtIn, custom_tier_set };
 
   return {
     tiers: hydratedTiers,
+    enable_non_reasoning_tier,
     custom_tier_set,
     tier_model_params: tierParamsByRowId(
       hydrateTierModelParams(parsedConfig.tiers, parsedConfig.tier_model_configs),
@@ -238,6 +236,7 @@ export const hydrateComplexityRouterConfig = (
 
 export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
+  "enable_non_reasoning_tier",
   "tier_definitions",
   "fallback_tier",
   "tier_model_configs",
@@ -344,6 +343,7 @@ export const buildUpdatedComplexityRouterConfig = (
 
   const builderParams: BuildComplexityRouterConfigParams = {
     tiers: value.tiers,
+    enableNonReasoningTier: value.enable_non_reasoning_tier,
     customTierSet: value.custom_tier_set,
     defaultModel: value.default_model,
     planModeMinTier: value.plan_mode_min_tier,

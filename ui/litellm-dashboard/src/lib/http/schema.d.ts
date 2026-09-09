@@ -3318,11 +3318,14 @@ export interface paths {
          *     - model: Model name (e.g., "gpt-4", "claude-3-opus")
          *     - input_tokens: Expected input tokens per request
          *     - output_tokens: Expected output tokens per request
+         *     - cache_read_input_tokens: Cache-read tokens per request, counted within input_tokens (optional)
+         *     - cache_creation_input_tokens: Cache-write tokens per request, counted within input_tokens (optional)
+         *     - reasoning_tokens: Reasoning tokens per request, counted within output_tokens (optional)
          *     - num_requests_per_day: Number of requests per day (optional)
          *     - num_requests_per_month: Number of requests per month (optional)
          *
          *     Returns cost breakdown including:
-         *     - Per-request costs (input, output, margin)
+         *     - Per-request costs (input, output, margin, plus the cache-read, cache-write and reasoning shares)
          *     - Daily costs (if num_requests_per_day provided)
          *     - Monthly costs (if num_requests_per_month provided)
          *
@@ -3331,7 +3334,9 @@ export interface paths {
          *     {
          *         "model": "gpt-4",
          *         "input_tokens": 1000,
+         *         "cache_read_input_tokens": 800,
          *         "output_tokens": 500,
+         *         "reasoning_tokens": 200,
          *         "num_requests_per_day": 100,
          *         "num_requests_per_month": 3000
          *     }
@@ -8542,6 +8547,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mcp/proxy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        get: operations["proxy_mcp_route_mcp_proxy_get"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        put: operations["proxy_mcp_route_mcp_proxy_put"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        post: operations["proxy_mcp_route_mcp_proxy_post"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        delete: operations["proxy_mcp_route_mcp_proxy_delete"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        options: operations["proxy_mcp_route_mcp_proxy_options"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        head: operations["proxy_mcp_route_mcp_proxy_head"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        patch: operations["proxy_mcp_route_mcp_proxy_patch"];
+        trace?: never;
+    };
     "/memory-usage-in-mem-cache": {
         parameters: {
             query?: never;
@@ -8701,6 +8750,9 @@ export interface paths {
          *     - url: the remote URL that was attempted (null when env-forced local)
          *     - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
          *     - fallback_reason: human-readable reason why remote failed (null on success)
+         *     - loaded_at: when this pod last loaded the map
+         *     - source_revision: git blob id of the loaded file, what git rev-parse <commit>:<path> prints for it
+         *     - etag: the ETag of the remote fetch (null for the bundled backup)
          *     - model_count: number of models in the currently loaded cost map
          */
         get: operations["get_model_cost_map_source_model_cost_map_source_get"];
@@ -25579,7 +25631,7 @@ export interface components {
          * @description Complexity tiers for routing decisions.
          * @enum {string}
          */
-        ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+        ComplexityTier: "NON_REASONING" | "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
         /** ComplexityTierModel */
         ComplexityTierModel: {
             /** Litellm Params */
@@ -26422,6 +26474,18 @@ export interface components {
          */
         CostEstimateRequest: {
             /**
+             * Cache Creation Input Tokens
+             * @description Input tokens written to the prompt cache; counted within input_tokens
+             * @default 0
+             */
+            cache_creation_input_tokens: number;
+            /**
+             * Cache Read Input Tokens
+             * @description Input tokens read from the prompt cache; counted within input_tokens
+             * @default 0
+             */
+            cache_read_input_tokens: number;
+            /**
              * Input Tokens
              * @description Expected input tokens per request
              */
@@ -26446,6 +26510,12 @@ export interface components {
              * @description Expected output tokens per request
              */
             output_tokens: number;
+            /**
+             * Reasoning Tokens
+             * @description Reasoning tokens the model emits; counted within output_tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
         };
         /**
          * CostEstimateResponse
@@ -26453,10 +26523,52 @@ export interface components {
          */
         CostEstimateResponse: {
             /**
+             * Cache Creation Cost Per Request
+             * @description Cache-write share of input_cost_per_request
+             * @default 0
+             */
+            cache_creation_cost_per_request: number;
+            /**
+             * Cache Creation Input Token Cost
+             * @description Rate billed per cache-write token
+             */
+            cache_creation_input_token_cost?: number | null;
+            /**
+             * Cache Creation Input Tokens
+             * @default 0
+             */
+            cache_creation_input_tokens: number;
+            /**
+             * Cache Read Cost Per Request
+             * @description Cache-read share of input_cost_per_request
+             * @default 0
+             */
+            cache_read_cost_per_request: number;
+            /**
+             * Cache Read Input Token Cost
+             * @description Rate billed per cache-read token
+             */
+            cache_read_input_token_cost?: number | null;
+            /**
+             * Cache Read Input Tokens
+             * @default 0
+             */
+            cache_read_input_tokens: number;
+            /**
              * Cost Per Request
              * @description Total cost per request (includes margin)
              */
             cost_per_request: number;
+            /**
+             * Daily Cache Creation Cost
+             * @description Cache-write share of daily_input_cost
+             */
+            daily_cache_creation_cost?: number | null;
+            /**
+             * Daily Cache Read Cost
+             * @description Cache-read share of daily_input_cost
+             */
+            daily_cache_read_cost?: number | null;
             /**
              * Daily Cost
              * @description Total daily cost (includes margin)
@@ -26478,11 +26590,19 @@ export interface components {
              */
             daily_output_cost?: number | null;
             /**
+             * Daily Reasoning Cost
+             * @description Reasoning share of daily_output_cost
+             */
+            daily_reasoning_cost?: number | null;
+            /**
              * Input Cost Per Request
              * @description Input token cost per request (before margin)
              */
             input_cost_per_request: number;
-            /** Input Cost Per Token */
+            /**
+             * Input Cost Per Token
+             * @description Rate billed per input token
+             */
             input_cost_per_token?: number | null;
             /** Input Tokens */
             input_tokens: number;
@@ -26494,6 +26614,16 @@ export interface components {
             margin_cost_per_request: number;
             /** Model */
             model: string;
+            /**
+             * Monthly Cache Creation Cost
+             * @description Cache-write share of monthly_input_cost
+             */
+            monthly_cache_creation_cost?: number | null;
+            /**
+             * Monthly Cache Read Cost
+             * @description Cache-read share of monthly_input_cost
+             */
+            monthly_cache_read_cost?: number | null;
             /**
              * Monthly Cost
              * @description Total monthly cost (includes margin)
@@ -26514,21 +26644,45 @@ export interface components {
              * @description Monthly output token cost
              */
             monthly_output_cost?: number | null;
+            /**
+             * Monthly Reasoning Cost
+             * @description Reasoning share of monthly_output_cost
+             */
+            monthly_reasoning_cost?: number | null;
             /** Num Requests Per Day */
             num_requests_per_day?: number | null;
             /** Num Requests Per Month */
             num_requests_per_month?: number | null;
             /**
+             * Output Cost Per Reasoning Token
+             * @description Rate billed per reasoning token
+             */
+            output_cost_per_reasoning_token?: number | null;
+            /**
              * Output Cost Per Request
              * @description Output token cost per request (before margin)
              */
             output_cost_per_request: number;
-            /** Output Cost Per Token */
+            /**
+             * Output Cost Per Token
+             * @description Rate billed per output token
+             */
             output_cost_per_token?: number | null;
             /** Output Tokens */
             output_tokens: number;
             /** Provider */
             provider?: string | null;
+            /**
+             * Reasoning Cost Per Request
+             * @description Reasoning share of output_cost_per_request
+             * @default 0
+             */
+            reasoning_cost_per_request: number;
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
         };
         /** CreateCredentialItem */
         CreateCredentialItem: {
@@ -34957,6 +35111,12 @@ export interface components {
              */
             enable_context_window_escalation: boolean;
             /**
+             * Enable Non Reasoning Tier
+             * @description Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic that relays or reformats information rather than reasoning about it. Off by default: turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's rubric, and a value the classifier may return, all of which move tier decisions and spend on an already-deployed router. Requires an LLM classifier or a custom classifier plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` under the NON_REASONING key. Escalation still walks up from it, and it is never the savings baseline or a `heuristic_v2` prediction.
+             * @default false
+             */
+            enable_non_reasoning_tier: boolean;
+            /**
              * Escalation Keywords
              * @description Case-sensitive phrases a user can include to force a bump to the next-higher complexity tier when they aren't satisfied with results (they can force a stronger model, but not choose which one). Defaults to ['LITELLM ESCALATE'] when unset; set to an empty list to disable.
              */
@@ -37227,7 +37387,7 @@ export interface components {
         TierDefinition: {
             /**
              * Description
-             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which inherits the built-in criteria when omitted
+             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (NON_REASONING, SIMPLE, MEDIUM, COMPLEX, REASONING), which inherits the built-in criteria when omitted
              */
             description?: string | null;
             /**
@@ -50973,6 +51133,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
