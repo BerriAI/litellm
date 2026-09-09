@@ -39,7 +39,7 @@ class RichWebSearchInput(TypedDict, total=False):
     objective: ReadOnly[str]
     """Natural-language description of the goal behind the search."""
 
-    search_queries: ReadOnly[list[str]]
+    search_queries: ReadOnly[list[str]]  # mutable-ok: forwarded verbatim as litellm.asearch's list[str] query argument
     """Two to five short keyword queries covering different angles."""
 
 
