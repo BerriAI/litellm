@@ -283,9 +283,7 @@ class TestKeyAttribution:
     )
     def test_every_write_path_row_joins_the_key(self, client: SpendClient, driven: DrivenKey) -> None:
         assert tuple(path.name for path in driven.paths) == WRITE_PATHS
-        found: Final = tuple(
-            (path, client.proxy.poll_logs_for_request_id(path.request_id)) for path in driven.paths
-        )
+        found: Final = tuple((path, client.proxy.poll_logs_for_request_id(path.request_id)) for path in driven.paths)
         unwritten: Final = [path.name for path, rows in found if not rows]
         assert not unwritten, f"write paths that produced no spend row within the poll window: {unwritten}"
         unjoined: Final = [
@@ -379,7 +377,7 @@ class TestKeyAttribution:
         assert not rehashed, f"health-check rows keyed by something other than {HEALTH_SERVICE_ACCOUNT!r}: {rehashed}"
 
     @pytest.mark.covers(
-        "quota_management.spend_tracking.key_attribution.batch_cost_joins_key",
+        "quota_management.spend_tracking.key_attribution.retrieve_batch_cost_joins_retrieving_key",
         exercised_on=["batches"],
     )
     def test_terminal_batch_cost_row_joins_the_retrieving_key(self, client: SpendClient, driven: DrivenKey) -> None:
