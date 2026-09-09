@@ -1656,3 +1656,43 @@ async def test_model_group_encrypted_content_affinity_overrides_global_deploymen
         assert request_kwargs.get("_encrypted_content_affinity_pinned") is True
     finally:
         router.discard()
+
+
+@pytest.mark.asyncio
+async def test_encrypted_content_affinity_pins_anthropic_messages_replayed_through_the_bridge():
+    """
+    Claude Code behind /v1/messages replays the encrypted reasoning the bridge packed
+    into a thinking block's signature (or a redacted block's data). The pin has to be
+    read from those blocks because the bridge builds the Responses `input` only after
+    the router has picked a deployment.
+    """
+    check = EncryptedContentAffinityCheck()
+    deployments = [
+        {"model_info": {"id": "openai-org-a"}, "litellm_params": {"model": "openai/gpt-5.1"}},
+        {"model_info": {"id": "openai-org-b"}, "litellm_params": {"model": "openai/gpt-5.1"}},
+    ]
+    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA_turn_one", "openai-org-b")
+    request_kwargs = {
+        "messages": [
+            {"role": "user", "content": "Solve the zebra puzzle"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Anthropic minted this one", "signature": "ErcCCpIBCBEYAipA"},
+                    {"type": "redacted_thinking", "data": f"litellm_encrypted_reasoning:{wrapped}"},
+                    {"type": "text", "text": "The zebra owner lives in the green house."},
+                ],
+            },
+            {"role": "user", "content": "And who drinks water?"},
+        ],
+    }
+
+    pinned = await check.async_filter_deployments(
+        model="gpt-5.1",
+        healthy_deployments=deployments,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert [d["model_info"]["id"] for d in pinned] == ["openai-org-b"]
+    assert request_kwargs["_encrypted_content_affinity_pinned"] is True

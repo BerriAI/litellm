@@ -1873,7 +1873,7 @@ def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
             return None
 
 
-def _encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
+def encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
     return encrypted_content_from_signature(_encrypted_reasoning_field(block))
 
 
@@ -1900,7 +1900,7 @@ def _reasoning_item_from_block_group(group: tuple[Mapping[str, object], ...]) ->
         for block in group
         if (text := _readable_thinking_text(block))
     ]
-    encrypted_content: Final = _encrypted_content_of_block(group[0])
+    encrypted_content: Final = encrypted_content_of_block(group[0])
     if encrypted_content is not None:
         return ChatCompletionReasoningItem(type="reasoning", summary=summary, encrypted_content=encrypted_content)
     if not summary:

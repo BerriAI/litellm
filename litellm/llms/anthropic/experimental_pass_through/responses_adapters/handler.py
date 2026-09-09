@@ -126,7 +126,7 @@ def _build_responses_kwargs(
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = {"anthropic_messages"}
+    excluded: Final = frozenset(("anthropic_messages",))
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
@@ -146,6 +146,14 @@ def _build_responses_kwargs(
     explicit_prompt_cache_key: Final = forwarded_kwargs.get("prompt_cache_key")
     if explicit_prompt_cache_key is not None:
         responses_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
+
+    deployment_include: Final = forwarded_kwargs.get("include")
+    bridge_include: Final = responses_kwargs.get("include")
+    if isinstance(deployment_include, list) and isinstance(bridge_include, list):
+        responses_kwargs["include"] = [
+            *bridge_include,
+            *(item for item in deployment_include if item not in bridge_include),
+        ]
 
     return responses_kwargs
 
