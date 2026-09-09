@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::providers::auth::azure::AzureAuthInputs;
+use crate::auth::azure::AzureAuthInputs;
 
 #[derive(Clone, Debug, Default)]
 pub enum OcrAuthInputs {

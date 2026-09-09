@@ -3,7 +3,7 @@ use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value};
 
-use super::auth::resolve_api_key;
+use crate::providers::mistral::auth;
 
 const SUPPORTED_OCR_PARAMS: &[&str] = &[
     "pages",
@@ -131,7 +131,16 @@ impl OcrProviderConfig for MistralOcrConfig {
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        resolve_api_key(api_key, env_lookup)
+        auth::resolve_api_key(api_key, env_lookup)
+    }
+
+    fn validate_environment(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<(String, String)>, Error> {
+        auth::validate_environment(headers, api_key, env_lookup)
     }
 }
 

@@ -1,12 +1,12 @@
 use std::sync::OnceLock;
 
-use crate::error::{AuthError, Error};
-use crate::providers::auth::azure::{AzureAuthInputs, AzureAuthService};
-use crate::providers::auth::http::apply_credential;
-use crate::providers::auth::{
+use crate::auth::azure::{AzureAuthInputs, AzureAuthService};
+use crate::auth::http::apply_credential;
+use crate::auth::{
     CredentialPlacement, CredentialPlanKind, CredentialRef, CredentialRule, ExistingHeaderBehavior,
     ProviderAuthPolicy, ResolvedCredential, SecretValue,
 };
+use crate::error::{AuthError, Error};
 
 pub const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 pub const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
@@ -27,7 +27,7 @@ const AZURE_AI_AUTH_POLICY: ProviderAuthPolicy = ProviderAuthPolicy {
     rules: AZURE_AI_AUTH_RULES,
     accepted_existing_headers: &["Authorization"],
     existing_header_behavior: ExistingHeaderBehavior::Preserve,
-    scope: Some(crate::providers::auth::azure::DEFAULT_AZURE_SCOPE),
+    scope: Some(crate::auth::azure::DEFAULT_AZURE_SCOPE),
     audience: None,
 };
 const DOCUMENT_INTELLIGENCE_AUTH_RULES: &[CredentialRule] = &[
@@ -44,7 +44,7 @@ const DOCUMENT_INTELLIGENCE_AUTH_POLICY: ProviderAuthPolicy = ProviderAuthPolicy
     rules: DOCUMENT_INTELLIGENCE_AUTH_RULES,
     accepted_existing_headers: &["Authorization", "Ocp-Apim-Subscription-Key"],
     existing_header_behavior: ExistingHeaderBehavior::Preserve,
-    scope: Some(crate::providers::auth::azure::DEFAULT_AZURE_SCOPE),
+    scope: Some(crate::auth::azure::DEFAULT_AZURE_SCOPE),
     audience: None,
 };
 
@@ -208,7 +208,7 @@ async fn authenticate_with_policy(
 async fn resolve_entra_credential(
     auth_inputs: Option<&AzureAuthInputs>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Option<crate::providers::auth::ResolvedCredential>, AuthError> {
+) -> Result<Option<crate::auth::ResolvedCredential>, AuthError> {
     match auth_inputs {
         Some(inputs) => auth_service().resolve(inputs, env_lookup).await,
         None => Ok(None),
@@ -244,8 +244,8 @@ fn auth_service() -> &'static AzureAuthService {
 
 #[cfg(test)]
 mod tests {
+    use crate::auth::azure::AzureAuthInputs;
     use crate::error::{AuthError, Error};
-    use crate::providers::auth::azure::AzureAuthInputs;
     use serde_json::json;
 
     use super::{

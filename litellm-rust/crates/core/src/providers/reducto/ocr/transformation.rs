@@ -8,7 +8,7 @@ use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 
-use super::auth::resolve_api_key;
+use crate::providers::reducto::auth;
 
 pub const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
 pub const REDUCTO_ID_PREFIX: &str = "reducto://";
@@ -27,7 +27,6 @@ pub enum ReductoDocumentSource {
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReductoUploadRequest {
     pub url: String,
-    pub authorization: String,
     pub file_name: &'static str,
     pub bytes: Vec<u8>,
     pub mime_type: String,
@@ -124,7 +123,6 @@ pub fn classify_document_source(source: &str) -> Result<ReductoDocumentSource, E
 
 pub fn build_upload_request(
     source: ReductoDocumentSource,
-    authorization: &str,
     api_base: Option<&str>,
 ) -> Option<ReductoUploadRequest> {
     let ReductoDocumentSource::Upload { bytes, mime_type } = source else {
@@ -133,7 +131,6 @@ pub fn build_upload_request(
 
     Some(ReductoUploadRequest {
         url: upload_url(api_base),
-        authorization: authorization.to_string(),
         file_name: "document",
         bytes,
         mime_type,
@@ -344,7 +341,16 @@ impl OcrProviderConfig for ReductoParseV3Config {
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        resolve_api_key(api_key, env_lookup)
+        auth::resolve_api_key(api_key, env_lookup)
+    }
+
+    fn validate_environment(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<(String, String)>, Error> {
+        auth::validate_environment(headers, api_key, env_lookup)
     }
 }
 
@@ -386,6 +392,15 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        resolve_api_key(api_key, env_lookup)
+        auth::resolve_api_key(api_key, env_lookup)
+    }
+
+    fn validate_environment(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<(String, String)>, Error> {
+        auth::validate_environment(headers, api_key, env_lookup)
     }
 }

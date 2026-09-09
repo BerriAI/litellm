@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use veil::Redact;
 
-use crate::error::AuthError;
+use crate::AuthError;
 
 use super::secret::SecretValue;
 

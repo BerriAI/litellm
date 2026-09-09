@@ -1,6 +1,6 @@
 use veil::Redact;
 
-#[derive(Clone, Redact)]
+#[derive(Redact, Clone)]
 pub struct SecretValue(#[redact(with = "[REDACTED]")] String);
 
 impl SecretValue {

@@ -107,7 +107,7 @@ mod tests {
         CredentialRef, CredentialResolver, CredentialResolverHandle,
     };
     use crate::AuthError;
-    use crate::providers::auth::SecretValue;
+    use crate::auth::SecretValue;
 
     #[derive(Debug)]
     struct HostResolver;

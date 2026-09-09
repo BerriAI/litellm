@@ -1,5 +1,5 @@
-use crate::error::AuthError;
-use crate::providers::auth::{
+use crate::AuthError;
+use crate::auth::{
     CredentialFileRef, CredentialLookup, CredentialRef, ResolvedCredential, SecretValue,
     TokenCallerHandle,
 };
@@ -392,8 +392,8 @@ mod tests {
     use serde_json::json;
 
     use super::{AzureCredentialPlan, oidc_reference, resolve_reference, select_auth_plan};
-    use crate::providers::auth::azure::AzureAuthInputs;
-    use crate::providers::auth::{
+    use crate::auth::azure::AzureAuthInputs;
+    use crate::auth::{
         CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialRef,
         CredentialResolver, CredentialResolverHandle, SecretValue,
     };

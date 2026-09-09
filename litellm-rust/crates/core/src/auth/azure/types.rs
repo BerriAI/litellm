@@ -1,8 +1,8 @@
 use serde_json::{Map, Value};
 use strum::EnumString;
 
-use crate::error::AuthError;
-use crate::providers::auth::{CredentialResolverHandle, SecretValue, TokenCallerHandle};
+use crate::AuthError;
+use crate::auth::{CredentialResolverHandle, SecretValue, TokenCallerHandle};
 
 pub const DEFAULT_AZURE_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
 

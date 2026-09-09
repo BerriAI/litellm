@@ -1,4 +1,4 @@
-use crate::error::AuthError;
+use crate::AuthError;
 
 use super::http::apply_credential;
 use super::{CredentialPlacement, ResolvedCredential};
@@ -70,7 +70,7 @@ impl ProviderAuthPolicy {
 #[cfg(test)]
 mod tests {
     use super::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
-    use crate::providers::auth::{CredentialPlacement, ResolvedCredential, SecretValue};
+    use crate::auth::{CredentialPlacement, ResolvedCredential, SecretValue};
 
     const RULES: &[CredentialRule] = &[CredentialRule {
         kind: CredentialPlanKind::Static,

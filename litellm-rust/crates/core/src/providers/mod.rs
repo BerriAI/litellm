@@ -1,5 +1,4 @@
 pub mod anthropic;
-pub mod auth;
 pub mod azure_ai;
 #[cfg(feature = "bedrock-auth")]
 pub mod bedrock;

@@ -1,4 +1,4 @@
-use crate::error::AuthError;
+use crate::AuthError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialPlacement {

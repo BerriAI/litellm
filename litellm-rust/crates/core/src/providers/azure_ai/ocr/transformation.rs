@@ -1,11 +1,11 @@
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
+use crate::auth::CredentialPlacement;
+use crate::auth::azure::AzureAuthInputs;
 use crate::error::{AuthError, Error, json_type_name};
 use crate::ocr::transformation::{OcrAuthFuture, OcrProviderConfig, OcrResponseHandling};
 use crate::ocr::types::{OcrAuthInputs, OcrRequestData, OcrResponseData};
-use crate::providers::auth::CredentialPlacement;
-use crate::providers::auth::azure::AzureAuthInputs;
 use crate::providers::azure_ai::auth;
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;

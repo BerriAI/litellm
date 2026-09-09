@@ -1,4 +1,3 @@
-use litellm_core::AuthError;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
 use litellm_core::ocr::prepare::map_ocr_params;
@@ -196,16 +195,7 @@ async fn upload_reducto_document(
     upstream_headers: &[(String, String)],
 ) -> Result<Value, Error> {
     let source = extract_document_source(document)?;
-    let Some(authorization) = upstream_headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-        .map(|(_, value)| value.as_str())
-    else {
-        return Err(Error::Auth(AuthError::Message(
-            "Reducto upload requires an Authorization header".to_string(),
-        )));
-    };
-    let Some(upload) = build_upload_request(source, authorization, api_base) else {
+    let Some(upload) = build_upload_request(source, api_base) else {
         return Ok(document.clone());
     };
     let part = reqwest::multipart::Part::bytes(upload.bytes)

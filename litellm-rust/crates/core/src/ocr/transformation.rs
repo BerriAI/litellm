@@ -1,5 +1,5 @@
-use crate::providers::auth::CredentialPlacement;
-use crate::providers::auth::http::apply_credential;
+use crate::auth::CredentialPlacement;
+use crate::auth::http::apply_credential;
 use crate::{AuthError, Error};
 use serde_json::{Map, Value};
 
