@@ -32,6 +32,7 @@ CALLBACK_ATTRIBUTES: Final = (
 EXPECTED_FAILURE_REASONS: Final = {
     "ocr/test_callbacks.py": "requires the OCR callback lifecycle implementation from #40070",
     "ocr/test_dispatch.py": "requires the OCR native dispatch implementation from #40070",
+    "ocr/test_guardrails.py": "requires the OCR guardrail lifecycle implementation from #40070",
     "ocr/test_requests.py": "requires the OCR request and Azure authentication implementation from #40070",
 }
 
