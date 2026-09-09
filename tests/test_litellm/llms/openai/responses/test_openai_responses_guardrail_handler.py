@@ -10,6 +10,8 @@ from collections.abc import Callable
 from typing import Any, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
+import logging
+
 import pytest
 
 
@@ -83,6 +85,29 @@ class PersimmonMaskingGuardrail(CustomGuardrail):
             for tool_call in inputs.get("tool_calls", [])
         ]
         return {**inputs, "tool_calls": tool_calls}
+
+
+class FlatShapeGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
+        flat_tool_calls = [{"name": "exec", "input": "rm -rf /"} for _ in inputs.get("tool_calls", [])]
+        return {**inputs, "tool_calls": flat_tool_calls}
+
+
+class DroppingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "tool_calls": []}
 
 
 CUSTOM_TOOL_CALL_ITEM = {
@@ -736,6 +761,52 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert (custom_item.input if typed else custom_item["input"]) == "echo [MASKED]"
         assert (custom_item.name if typed else custom_item["name"]) == "exec"
         assert (output[0].content[0].text if typed else output[0]["content"][0]["text"]) == "running persimmon"
+
+    @staticmethod
+    def _custom_tool_call_response(item: dict) -> dict:
+        return {
+            "id": "resp_1",
+            "created_at": 1,
+            "model": "gpt-5.6",
+            "object": "response",
+            "status": "completed",
+            "output": [item],
+        }
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_ignores_tool_call_rewrites_in_another_shape(self):
+        handler = OpenAIResponsesHandler()
+        response = self._custom_tool_call_response(dict(CUSTOM_TOOL_CALL_ITEM))
+
+        result = await handler.process_output_response(response, FlatShapeGuardrail(guardrail_name="flat"))
+
+        assert result["output"][0]["input"] == "echo persimmon"
+        assert result["output"][0]["name"] == "exec"
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_warns_when_guardrail_drops_tool_calls(self, caplog):
+        handler = OpenAIResponsesHandler()
+        response = self._custom_tool_call_response(dict(CUSTOM_TOOL_CALL_ITEM))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            result = await handler.process_output_response(response, DroppingGuardrail(guardrail_name="dropper"))
+
+        assert result["output"][0]["input"] == "echo persimmon"
+        assert any(
+            "dropper" in record.getMessage() and "0 tool calls for the 1 scanned" in record.getMessage()
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_keeps_a_nameless_custom_tool_call_nameless(self):
+        handler = OpenAIResponsesHandler()
+        nameless_item = {key: value for key, value in CUSTOM_TOOL_CALL_ITEM.items() if key != "name"}
+        response = self._custom_tool_call_response(nameless_item)
+
+        result = await handler.process_output_response(response, PersimmonMaskingGuardrail(guardrail_name="mask"))
+
+        assert result["output"][0]["input"] == "echo [MASKED]"
+        assert "name" not in result["output"][0]
 
     @pytest.mark.asyncio
     async def test_process_output_response_with_tool_calls(self):
@@ -1468,6 +1539,25 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[5]["response"]["output"][0]["input"] == "echo [MASKED]"
         assert events[5]["response"]["output"][0]["name"] == "exec"
         assert "arguments" not in events[5]["response"]["output"][0]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_keep_a_nameless_custom_tool_call_nameless(self):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_custom_tool_call_stream_events()
+        items = [events[0]["item"], events[4]["item"], events[5]["response"]["output"][0]]
+        for item in items:
+            del item["name"]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=PersimmonMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert events[3]["input"] == "echo [MASKED]"
+        assert events[5]["response"]["output"][0]["input"] == "echo [MASKED]"
+        assert all("name" not in item for item in items)
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_syncs_typed_custom_tool_call_events(self):

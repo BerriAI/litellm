@@ -37,7 +37,7 @@ from itertools import accumulate, chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Union, cast
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -105,11 +105,65 @@ class _ToolCallShape(NamedTuple):
     arguments: str
 
 
+class _ToolCallFunctionFields(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str | None = None
+    arguments: str = ""
+
+
+class _ToolCallFields(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    function: _ToolCallFunctionFields
+
+
 def _tool_call_shapes(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> tuple[_ToolCallShape, ...]:
     return tuple(
         _ToolCallShape(name=tool_call["function"].get("name"), arguments=tool_call["function"].get("arguments", ""))
         for tool_call in tool_calls
     )
+
+
+def _returned_tool_call_shape(tool_call: object) -> _ToolCallShape | None:
+    payload: Final = tool_call.model_dump() if isinstance(tool_call, BaseModel) else tool_call
+    try:
+        fields: Final = _ToolCallFields.model_validate(payload)
+    except ValidationError:
+        return None
+    return _ToolCallShape(name=fields.function.name, arguments=fields.function.arguments)
+
+
+def _post_guardrail_tool_call_shapes(
+    returned_tool_calls: Sequence[object] | None,
+    pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+    guardrail_name: str | None,
+) -> tuple[_ToolCallShape, ...]:
+    if not pre_guardrail_tool_calls:
+        return pre_guardrail_tool_calls
+    if returned_tool_calls is None or len(returned_tool_calls) != len(pre_guardrail_tool_calls):
+        verbose_proxy_logger.warning(
+            "OpenAI Responses API: guardrail %s returned %s tool calls for the %d scanned, "
+            "leaving the tool call output items unchanged",
+            guardrail_name,
+            "no" if returned_tool_calls is None else len(returned_tool_calls),
+            len(pre_guardrail_tool_calls),
+        )
+        return pre_guardrail_tool_calls
+    returned_shapes: Final = tuple(_returned_tool_call_shape(tool_call) for tool_call in returned_tool_calls)
+    validated_shapes: Final = tuple(shape for shape in returned_shapes if shape is not None)
+    if len(validated_shapes) != len(returned_shapes):
+        verbose_proxy_logger.warning(
+            "OpenAI Responses API: guardrail %s returned tool calls without a function name and arguments, "
+            "leaving the tool call output items unchanged",
+            guardrail_name,
+        )
+        return pre_guardrail_tool_calls
+    return validated_shapes
+
+
+def _tool_call_rewrite(before: _ToolCallShape, after: _ToolCallShape) -> _ToolCallShape:
+    return _ToolCallShape(name=after.name if after.name != before.name else None, arguments=after.arguments)
 
 
 class ResponseOutputEnvelope(TypedDict, total=False):
@@ -698,7 +752,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-            returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
+            post_guardrail_tool_calls: Final = _post_guardrail_tool_call_shapes(
+                returned_tool_calls=guardrailed_inputs.get("tool_calls"),
+                pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                guardrail_name=guardrail_to_apply.guardrail_name,
+            )
 
             # Step 3: Map guardrail responses back to original response structure
             await self._apply_guardrail_responses_to_output(
@@ -709,11 +767,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             self._write_tool_call_rewrites_to_output(
                 tool_call_items=tuple(item for item in response_output if _is_tool_call_output_item(item)),
                 pre_guardrail_tool_calls=pre_guardrail_tool_calls,
-                post_guardrail_tool_calls=_tool_call_shapes(
-                    returned_tool_calls
-                    if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
-                    else tool_calls_to_check
-                ),
+                post_guardrail_tool_calls=post_guardrail_tool_calls,
             )
 
         verbose_proxy_logger.debug("OpenAI Responses API: Processed output response: %s", response)
@@ -811,11 +865,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
 
                 guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-                returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
-                post_guardrail_tool_calls: Final = _tool_call_shapes(
-                    returned_tool_calls
-                    if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
-                    else tool_calls_to_check
+                post_guardrail_tool_calls: Final = _post_guardrail_tool_call_shapes(
+                    returned_tool_calls=guardrailed_inputs.get("tool_calls"),
+                    pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                    guardrail_name=guardrail_to_apply.guardrail_name,
                 )
 
                 # Write guardrailed texts back into the output items in-place.
@@ -991,7 +1044,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         )
         rewrites_by_call_id: Final = MappingProxyType(
             {
-                call_id: after
+                call_id: _tool_call_rewrite(before, after)
                 for call_id, before, after in zip(call_ids, pre_guardrail_tool_calls, post_guardrail_tool_calls)
                 if after != before
             }
@@ -1050,12 +1103,12 @@ class OpenAIResponsesHandler(BaseTranslation):
     ) -> None:
         if len(tool_call_items) != len(post_guardrail_tool_calls):
             return
-        for output_item, after in (
-            (output_item, after)
+        for output_item, rewrite in (
+            (output_item, _tool_call_rewrite(before, after))
             for output_item, before, after in zip(tool_call_items, pre_guardrail_tool_calls, post_guardrail_tool_calls)
             if after != before
         ):
-            self._write_tool_call_item(output_item, after.name, after.arguments)
+            self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
 
     @staticmethod
     def _tool_call_ids_by_item_id(stream_events: Sequence[object]) -> Mapping[str, str]:
