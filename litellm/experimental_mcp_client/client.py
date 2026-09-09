@@ -451,7 +451,7 @@ class MCPClient:
             async def receive_message(
                 message: RequestResponder[ServerRequest, ClientResult] | ServerNotification | Exception,
             ) -> None:
-                if not isinstance(message, ValueError):
+                if not isinstance(message, (ValueError, httpx.RequestError, OSError)):
                     return
                 if not stream_error.done():
                     stream_error.set_result(message)
@@ -472,7 +472,7 @@ class MCPClient:
                 read_stream,
                 write_stream,
                 read_timeout_seconds=timedelta(seconds=self.timeout),
-                message_handler=receive_message if self.transport_type == MCPTransport.http else None,
+                message_handler=receive_message,
                 **session_kwargs,
             )
             session: Final = await session_ctx.__aenter__()
@@ -525,8 +525,7 @@ class MCPClient:
             read_timeout: Final = _as_read_timeout(e)
             if read_timeout is not None:
                 verbose_logger.warning(
-                    "MCP client timed out after %ss waiting for %s to answer; the server accepted the "
-                    "request and ended its response stream without a JSON-RPC reply",
+                    "MCP client timed out after %ss waiting for a valid MCP response from %s",
                     self.timeout,
                     self.server_url or "stdio",
                 )

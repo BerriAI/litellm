@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import sys
+from collections.abc import AsyncIterator
 from importlib import metadata
 from pathlib import Path
 from typing import Final
@@ -18,6 +19,7 @@ from pydantic import ValidationError
 from mcp.shared.message import SessionMessage
 from mcp.types import (
     LATEST_PROTOCOL_VERSION,
+    CallToolResult,
     ErrorData,
     Implementation,
     InitializeResult,
@@ -36,6 +38,7 @@ from litellm.experimental_mcp_client.client import (
     MCPClient,
     _as_read_timeout,
     _first_non_cancelled_cause,
+    _TransportContext,
     missing_streamable_http_client_error,
     strip_auth_scheme,
 )
@@ -1296,6 +1299,7 @@ def test_a_differently_cased_injected_header_cannot_shadow_the_slot() -> None:
     [
         ("text/html", b"<html>secret-page</html>", ValueError),
         ("application/json", b"secret-invalid-json", ValidationError),
+        ("application/json", b"", ValidationError),
         ("application/json", b'{"secret":"invalid-rpc"}', ValidationError),
         ("application/json", b'{"jsonrpc":"2.0","id":0,"result":{"secret":"invalid-schema"}}', ValidationError),
     ],
@@ -1446,3 +1450,239 @@ async def test_invalid_tool_list_schema_is_identified_as_an_upstream_response() 
     message: Final = _connection_error_message(caught.value, client.server_url, 30)
     assert "invalid MCP response" in message
     assert "secret" not in message
+
+
+class _DiagnosticSSEStream(httpx.AsyncByteStream):
+    def __init__(self, messages: asyncio.Queue[bytes | Exception | None]) -> None:
+        self.messages = messages
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"event: endpoint\ndata: /messages\n\n"
+        while True:
+            message: Final = await self.messages.get()
+            if message is None:
+                return
+            if isinstance(message, Exception):
+                raise message
+            yield b"event: message\ndata: " + message + b"\n\n"
+
+
+_DIAGNOSTIC_STDIO_SERVER: Final = """
+import json, sys
+mode, failure_method = sys.argv[1:]
+for line in sys.stdin:
+    request = json.loads(line)
+    if "method" not in request or "id" not in request:
+        continue
+    if request["method"] == failure_method:
+        if mode == "bad-json":
+            print("secret-invalid-json", flush=True)
+            continue
+        if mode == "closed":
+            sys.exit(0)
+        if mode == "silent":
+            print(json.dumps({"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": "Waiting"}}), flush=True)
+            continue
+    if request["method"] == "initialize":
+        result = {"protocolVersion": request["params"]["protocolVersion"], "capabilities": {"tools": {}, "logging": {}}, "serverInfo": {"name": "diagnostic", "version": "1"}}
+    elif request["method"] == "tools/list":
+        print(json.dumps({"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": "Listing tools"}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "id": "unmatched", "result": {}}), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "id": "server-ping", "method": "ping"}), flush=True)
+        result = {"tools": [{"name": "ping", "inputSchema": {"type": "object"}}]}
+    else:
+        result = {"content": [{"type": "text", "text": "pong"}], "isError": False}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+"""
+
+
+def _diagnostic_transport(transport: MCPTransport, mode: str, failure_method: str) -> _TransportContext:
+    from mcp import StdioServerParameters
+    from mcp.client.sse import sse_client
+    from mcp.client.stdio import stdio_client
+
+    if transport == MCPTransport.stdio:
+        return stdio_client(
+            StdioServerParameters(
+                command=sys.executable, args=["-u", "-c", _DIAGNOSTIC_STDIO_SERVER, mode, failure_method]
+            )
+        )
+    messages: Final[asyncio.Queue[bytes | Exception | None]] = asyncio.Queue()
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200, headers={"Content-Type": "text/event-stream"}, stream=_DiagnosticSSEStream(messages)
+            )
+        payload: Final = json.loads(request.content)
+        if "method" not in payload or "id" not in payload:
+            return httpx.Response(202)
+        if payload["method"] == failure_method and mode != "ok":
+            if mode == "bad-json":
+                await messages.put(b"secret-invalid-json")
+            elif mode == "io-error":
+                await messages.put(httpx.ReadError("secret-read-error"))
+            elif mode == "closed":
+                await messages.put(None)
+            elif mode == "silent":
+                await messages.put(
+                    b'{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"Waiting"}}'
+                )
+            return httpx.Response(202)
+        if payload["method"] == "tools/list":
+            for message in (
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/message",
+                    "params": {"level": "info", "data": "Listing tools"},
+                },
+                {"jsonrpc": "2.0", "id": "unmatched", "result": {}},
+                {"jsonrpc": "2.0", "id": "server-ping", "method": "ping"},
+            ):
+                await messages.put(json.dumps(message).encode())
+        result: Final = (
+            {
+                "protocolVersion": LATEST_PROTOCOL_VERSION,
+                "capabilities": {"tools": {}, "logging": {}},
+                "serverInfo": {"name": "diagnostic", "version": "1"},
+            }
+            if payload["method"] == "initialize"
+            else {"tools": [{"name": "ping", "inputSchema": {"type": "object"}}]}
+            if payload["method"] == "tools/list"
+            else {"content": [{"type": "text", "text": "pong"}], "isError": False}
+        )
+        await messages.put(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result}).encode())
+        return httpx.Response(202)
+
+    def factory(
+        headers: dict[str, str] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(respond), headers=headers, timeout=timeout, auth=auth)
+
+    return sse_client("https://example.com/sse", httpx_client_factory=factory)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", [MCPTransport.sse, MCPTransport.stdio])
+@pytest.mark.parametrize("failure_method", ["initialize", "tools/list"])
+async def test_transport_parsing_failure_is_preserved(transport: MCPTransport, failure_method: str) -> None:
+    client: Final = MCPClient(server_url="https://example.com/sse", transport_type=transport, timeout=0.2)
+    with pytest.raises(ValidationError):
+        await asyncio.wait_for(
+            client._execute_session_operation(
+                _diagnostic_transport(transport, "bad-json", failure_method), lambda session: session.list_tools()
+            ),
+            timeout=3,
+        )
+
+
+@pytest.mark.asyncio
+async def test_sse_read_failure_is_preserved() -> None:
+    client: Final = MCPClient(server_url="https://example.com/sse", transport_type=MCPTransport.sse, timeout=0.2)
+    with pytest.raises(httpx.ReadError, match="secret-read-error"):
+        await asyncio.wait_for(
+            client._execute_session_operation(
+                _diagnostic_transport(MCPTransport.sse, "io-error", "tools/list"), lambda session: session.list_tools()
+            ),
+            timeout=3,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", [MCPTransport.sse, MCPTransport.stdio])
+@pytest.mark.parametrize("mode", ["ok", "closed", "silent"])
+async def test_transport_completion_and_normal_messages(transport: MCPTransport, mode: str) -> None:
+    from mcp import ClientSession
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
+
+    logging_callback: Final = AsyncMock()
+    client: Final = MCPClient(
+        server_url="https://example.com/sse", transport_type=transport, timeout=0.2, logging_callback=logging_callback
+    )
+
+    async def operation(session: ClientSession) -> CallToolResult:
+        tools: Final = await session.list_tools()
+        assert [tool.name for tool in tools.tools] == ["ping"]
+        return await session.call_tool("ping", {})
+
+    pending: Final = client._execute_session_operation(_diagnostic_transport(transport, mode, "tools/list"), operation)
+    if mode == "ok":
+        result: Final = await asyncio.wait_for(pending, timeout=3)
+        assert result.isError is False
+        assert result.content[0].text == "pong"
+        logging_callback.assert_awaited_once_with(LoggingMessageNotificationParams(level="info", data="Listing tools"))
+    else:
+        with pytest.raises(McpError) as caught:
+            await asyncio.wait_for(pending, timeout=3)
+        if mode == "closed":
+            assert "connection was closed" in _connection_error_message(caught.value, client.server_url, 0.2)
+        else:
+            assert isinstance(_as_read_timeout(caught.value), TimeoutError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", [MCPTransport.sse, MCPTransport.stdio])
+async def test_transport_cancellation_cleans_up_a_pending_request(transport: MCPTransport) -> None:
+    ready: Final = asyncio.Event()
+
+    async def on_log(message: LoggingMessageNotificationParams) -> None:
+        if message.data == "Waiting":
+            ready.set()
+
+    client: Final = MCPClient(
+        server_url="https://example.com/sse", transport_type=transport, timeout=30, logging_callback=on_log
+    )
+    task: Final = asyncio.create_task(
+        client._execute_session_operation(
+            _diagnostic_transport(transport, "silent", "tools/list"), lambda session: session.list_tools()
+        )
+    )
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=3)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3)
+
+
+class _InterruptedHTTPBody(httpx.AsyncByteStream):
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b'{"jsonrpc":'
+        raise httpx.RemoteProtocolError("secret-incomplete-response")
+
+
+@pytest.mark.asyncio
+async def test_interrupted_http_response_preserves_the_transport_failure() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"Content-Type": "application/json"}, stream=_InterruptedHTTPBody())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+        with pytest.raises(httpx.RemoteProtocolError, match="secret-incomplete-response"):
+            await asyncio.wait_for(
+                client._execute_session_operation(
+                    streamable_http_client(client.server_url, http_client=http_client),
+                    lambda session: session.list_tools(),
+                ),
+                timeout=3,
+            )
+
+
+@pytest.mark.asyncio
+async def test_empty_http_event_stream_uses_the_existing_request_deadline() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=b"")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = MCPClient(server_url="https://example.com/mcp", timeout=0.2)
+        with pytest.raises(McpError) as caught:
+            await asyncio.wait_for(
+                client._execute_session_operation(
+                    streamable_http_client(client.server_url, http_client=http_client),
+                    lambda session: session.list_tools(),
+                ),
+                timeout=3,
+            )
+    assert isinstance(_as_read_timeout(caught.value), TimeoutError)
