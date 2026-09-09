@@ -153,20 +153,14 @@ class SpandaGuardrail(CustomGuardrail):
         return receipt_dict
 
     def _extract_context(self, data: Mapping[str, object]) -> str | None:
-        explicit_ctx: Final = (
-            data.get("context")
-            or data.get("spanda_context")
-            or data.get("grounding_context")
-        )
+        explicit_ctx: Final = data.get("context") or data.get("spanda_context") or data.get("grounding_context")
         if explicit_ctx and isinstance(explicit_ctx, str):
             return explicit_ctx
 
         metadata: Final = data.get("metadata")
         if isinstance(metadata, Mapping):
             meta_ctx: Final = (
-                metadata.get("context")
-                or metadata.get("spanda_context")
-                or metadata.get("grounding_context")
+                metadata.get("context") or metadata.get("spanda_context") or metadata.get("grounding_context")
             )
             if meta_ctx and isinstance(meta_ctx, str):
                 return meta_ctx
@@ -180,8 +174,7 @@ class SpandaGuardrail(CustomGuardrail):
                     if role == "tool" and isinstance(content, str) and content:
                         return content
                     if isinstance(content, str) and (
-                        content.lower().startswith("context:")
-                        or content.lower().startswith("reference:")
+                        content.lower().startswith("context:") or content.lower().startswith("reference:")
                     ):
                         return content
                 elif hasattr(m, "role") and hasattr(m, "content"):
@@ -190,8 +183,7 @@ class SpandaGuardrail(CustomGuardrail):
                     if role_attr == "tool" and isinstance(content_attr, str) and content_attr:
                         return content_attr
                     if isinstance(content_attr, str) and (
-                        content_attr.lower().startswith("context:")
-                        or content_attr.lower().startswith("reference:")
+                        content_attr.lower().startswith("context:") or content_attr.lower().startswith("reference:")
                     ):
                         return content_attr
         return None
@@ -243,9 +235,7 @@ class SpandaGuardrail(CustomGuardrail):
     ) -> None:
         try:
             choices_raw: Final = (
-                response.get("choices")
-                if isinstance(response, Mapping)
-                else getattr(response, "choices", None)
+                response.get("choices") if isinstance(response, Mapping) else getattr(response, "choices", None)
             )
             if not choices_raw or not isinstance(choices_raw, (list, tuple)):
                 return
