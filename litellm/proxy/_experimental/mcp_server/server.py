@@ -767,12 +767,12 @@ if MCP_AVAILABLE:
                     _stateful_auth_context_cleanup_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await _stateful_auth_context_cleanup_task
-                if _session_manager_cm:
-                    await _session_manager_cm.__aexit__(None, None, None)
-                if _session_manager_stateful_cm:
-                    await _session_manager_stateful_cm.__aexit__(None, None, None)
                 if _sse_session_manager_cm:
                     await _sse_session_manager_cm.__aexit__(None, None, None)
+                if _session_manager_stateful_cm:
+                    await _session_manager_stateful_cm.__aexit__(None, None, None)
+                if _session_manager_cm:
+                    await _session_manager_cm.__aexit__(None, None, None)
             except Exception as e:
                 verbose_logger.exception("Error during session manager shutdown: %s", e)
 
@@ -1005,6 +1005,7 @@ if MCP_AVAILABLE:
 
         if _mcp_proxy_mode.get() and name in MCP_PROXY_TOOL_NAMES:
             assert user_api_key_auth is not None
+            proxy_call_start: Final = datetime.now()  # noqa: DTZ005  # logging pipeline uses naive datetimes
             proxy_logging_obj: Final = (
                 await _build_virtual_call_logging_obj(
                     name=name,
@@ -1016,7 +1017,7 @@ if MCP_AVAILABLE:
                 if name == MCP_PROXY_CALL_TOOL_NAME
                 else None
             )
-            return await handle_mcp_proxy_tool(
+            proxy_result: Final = await handle_mcp_proxy_tool(
                 name=name,
                 arguments=arguments or {},  # mutable-ok: proxy handler payload
                 user_api_key_dict=user_api_key_auth,
@@ -1028,6 +1029,16 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 litellm_logging_obj=proxy_logging_obj,
             )
+            if proxy_logging_obj is not None:
+                return await _fire_mcp_tool_call_logging(
+                    logging_obj=proxy_logging_obj,
+                    result=proxy_result,
+                    start_time=proxy_call_start,
+                    end_time=datetime.now(),  # noqa: DTZ005  # matches the logging pipeline start time
+                    user_api_key_auth=user_api_key_auth,
+                    request_data=types.MappingProxyType({"name": name, "arguments": arguments}),
+                )
+            return proxy_result
 
         if name not in VIRTUAL_TOOL_NAMES:
             return None
@@ -3493,7 +3504,9 @@ if MCP_AVAILABLE:
         server_name: str | None,
         session_id: str | None = None,
     ) -> StandardLoggingMCPToolCall:
-        mcp_server: Final = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        mcp_server: Final = global_mcp_server_manager._get_mcp_server_from_tool_name(
+            add_server_prefix_to_name(name, server_name) if server_name else name
+        )
         namespaced_tool_name: Final = f"{server_name}/{name}" if server_name else name
         if mcp_server:
             mcp_info: Final = mcp_server.mcp_info or {}
