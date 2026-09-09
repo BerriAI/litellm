@@ -396,12 +396,13 @@ class VertexAIBatchPrediction(VertexLLM):
             "outputConfig": vertex_batch_request["outputConfig"],
             "unmanagedContainerModel": unmanaged,
             "dedicatedResources": batch_resources,
-            # keyField strips the custom_id tag from each instance before it reaches the
-            # container (vLLM rejects unknown fields) and echoes it back as `key` in the output
-            # row; it only takes effect alongside an explicit instanceType.
+            # excludedFields strips the custom_id tag from each instance before it reaches the
+            # container (vLLM rejects unknown fields) and attaches it to the output row's
+            # instance echo; keyField does NOT strip (probed live: the container still received
+            # the tag and 400'd every row).
             "instanceConfig": {
                 "instanceType": "object",
-                "keyField": VERTEX_CUSTOM_ENDPOINT_KEY_FIELD,
+                "excludedFields": [VERTEX_CUSTOM_ENDPOINT_KEY_FIELD],
             },
         }
         return resolved

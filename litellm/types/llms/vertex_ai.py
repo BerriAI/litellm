@@ -700,6 +700,7 @@ class UnmanagedContainerModel(TypedDict, total=False):
 class BatchInstanceConfig(TypedDict, total=False):
     instanceType: ReadOnly[str]
     keyField: ReadOnly[str]
+    excludedFields: ReadOnly[list[str]]
 
 
 class VertexAIBatchPredictionJob(TypedDict, total=False):

@@ -342,7 +342,7 @@ def test_create_batch_sync_custom_endpoint_builds_unmanaged_container_job():
         "startingReplicaCount": 1,
         "maxReplicaCount": 2,
     }
-    assert sent["instanceConfig"] == {"instanceType": "object", "keyField": "litellm_custom_id"}
+    assert sent["instanceConfig"] == {"instanceType": "object", "excludedFields": ["litellm_custom_id"]}
 
 
 def test_create_batch_sync_custom_endpoint_without_container_spec_raises_400():
