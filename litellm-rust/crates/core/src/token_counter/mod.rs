@@ -2,6 +2,7 @@
 //! for the shapes it can count exactly. Everything else is declined so the host
 //! keeps its own counter as the reference.
 
+mod python_json;
 mod tools;
 pub mod types;
 
@@ -13,7 +14,9 @@ use crate::constants::{
     TOOL_CHOICE_NONE_TOKENS, TOOL_DEFINITIONS_TOKENS, TOOLS_WITH_SYSTEM_MESSAGE_DISCOUNT,
 };
 use tools::format_function_definitions;
-use types::{ContentBlock, ContentItem, CountableRequest, Message, MessageContent, ToolChoice};
+use types::{
+    ContentBlock, ContentItem, CountableRequest, Message, MessageContent, TextValue, ToolChoice,
+};
 
 #[derive(Debug, ThisError, PartialEq, Eq)]
 pub enum TokenCountError {
@@ -29,7 +32,7 @@ pub enum TokenCountError {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct InputTokenCount {
-    pub model: String,
+    pub model: Option<String>,
     pub input_tokens: usize,
 }
 
@@ -56,14 +59,37 @@ impl TokenCounter {
             .map_err(|error| TokenCountError::Encode(error.to_string()))
     }
 
+    /// Mirrors the host's key precedence: `messages`, then `prompt`, then
+    /// `input`, then `query` plus `documents`.
     pub fn count_request(
         &self,
         request: &CountableRequest,
     ) -> Result<InputTokenCount, TokenCountError> {
-        let messages = request
-            .messages
-            .as_deref()
-            .ok_or_else(|| TokenCountError::Unsupported("request has no messages".to_string()))?;
+        let input_tokens = if let Some(messages) = &request.messages {
+            self.count_messages(request, messages)?
+        } else if let Some(prompt) = &request.prompt {
+            self.count_text_value(prompt)?
+        } else if let Some(input) = &request.input {
+            self.count_text_value(input)?
+        } else if request.query.is_some() || request.documents.is_some() {
+            self.count_optional_text_value(request.query.as_ref())?
+                + self.count_optional_text_value(request.documents.as_ref())?
+        } else {
+            return Err(TokenCountError::Unsupported(
+                "request has no countable input".to_string(),
+            ));
+        };
+        Ok(InputTokenCount {
+            model: request.model.clone(),
+            input_tokens,
+        })
+    }
+
+    fn count_messages(
+        &self,
+        request: &CountableRequest,
+        messages: &[Message],
+    ) -> Result<usize, TokenCountError> {
         let message_tokens = messages
             .iter()
             .map(|message| self.count_message(message))
@@ -76,10 +102,35 @@ impl TokenCounter {
             request.tool_choice.as_ref(),
             includes_system_message,
         )?;
-        Ok(InputTokenCount {
-            model: request.model.clone(),
-            input_tokens: message_tokens + extra_tokens,
-        })
+        Ok(message_tokens + extra_tokens)
+    }
+
+    fn count_optional_text_value(
+        &self,
+        value: Option<&TextValue>,
+    ) -> Result<usize, TokenCountError> {
+        value.map_or(Ok(0), |value| self.count_text_value(value))
+    }
+
+    /// `str()` for scalars, `json.dumps()` for objects, lists flattened, nulls
+    /// skipped. Floats are declined because Python's `repr` and Rust's float
+    /// formatting disagree on exponents.
+    fn count_text_value(&self, value: &TextValue) -> Result<usize, TokenCountError> {
+        match value {
+            TextValue::Null => Ok(0),
+            TextValue::Bool(true) => self.count_text("True"),
+            TextValue::Bool(false) => self.count_text("False"),
+            TextValue::Integer(number) => self.count_text(&number.to_string()),
+            TextValue::Float(_) => Err(TokenCountError::Unsupported(
+                "float text values are counted by the python path".to_string(),
+            )),
+            TextValue::Text(text) => self.count_text(text),
+            TextValue::List(items) => items
+                .iter()
+                .map(|item| self.count_text_value(item))
+                .sum::<Result<usize, _>>(),
+            TextValue::Object(_) => self.count_text(&python_json::dumps(value)?),
+        }
     }
 
     fn count_message(&self, message: &Message) -> Result<usize, TokenCountError> {

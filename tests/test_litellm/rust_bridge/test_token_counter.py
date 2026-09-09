@@ -13,6 +13,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.proxy.spend_tracking.budget_reservation import _count_input_tokens
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import token_counter as bridge
 
@@ -140,8 +141,9 @@ def test_uses_anthropic_tokenizer_mirrors_python_tokenizer_selection(model: str,
     assert bridge.uses_anthropic_tokenizer(model) is expected
 
 
-def test_uses_anthropic_tokenizer_respects_hf_download_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True)
+@pytest.mark.parametrize("flag", ("disable_hf_tokenizer_download", "disable_token_counter"))
+def test_uses_anthropic_tokenizer_respects_python_opt_outs(monkeypatch: pytest.MonkeyPatch, flag: str) -> None:
+    monkeypatch.setattr(litellm, flag, True)
 
     assert bridge.uses_anthropic_tokenizer(MODEL) is False
 
@@ -182,12 +184,27 @@ PARITY_REQUESTS: Final[tuple[dict[str, object], ...]] = (
         "model": MODEL,
         "messages": [{"role": "user", "content": "x " * 20_000}],
     },
+    {"model": MODEL, "prompt": "Write a haiku about ships.", "max_tokens": 20},
+    {"model": MODEL, "prompt": ["first prompt", "second prompt"]},
+    {
+        "model": MODEL,
+        "instructions": "be terse",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": "Summarise caf\u00e9 menus \u2014 \"ok\"?\n"}]},
+            {"role": "assistant", "content": "Sure."},
+        ],
+    },
+    {"model": MODEL, "input": "a single embedding string"},
+    {"model": MODEL, "input": [[101, 2023, 5], [7]], "encoding_format": "float"},
+    {"model": MODEL, "query": "best harbour", "documents": ["doc one", {"text": "doc two", "title": "T", "n": 3}]},
+    {"model": MODEL, "messages": None, "prompt": "messages key wins even when null"},
+    {"prompt": "model comes from the route"},
 )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("request_body", PARITY_REQUESTS)
-async def test_native_count_matches_python_token_counter(
+async def test_native_count_matches_python_budget_counter(
     monkeypatch: pytest.MonkeyPatch, request_body: dict[str, object]
 ) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
@@ -195,30 +212,31 @@ async def test_native_count_matches_python_token_counter(
     litellm.rust(True)
 
     rust_count: Final = await bridge.count_anthropic_input_tokens(json.dumps(request_body).encode())
-    python_count: Final = litellm.token_counter(
-        model=MODEL,
-        messages=request_body["messages"],
-        tools=request_body.get("tools"),
-        tool_choice=request_body.get("tool_choice"),
-    )
+    python_count: Final = _count_input_tokens(request_body=request_body, model=MODEL)
 
     assert rust_count is not None
-    assert rust_count.model == MODEL
+    assert rust_count.model == request_body.get("model")
     assert rust_count.input_tokens == python_count
 
 
+DECLINED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
+    {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}]}],
+    },
+    {"model": MODEL, "prompt": 1.5},
+    {"model": MODEL, "documents": [{"score": 0.5}]},
+    {"model": MODEL, "file": "audio.mp3"},
+)
+
+
 @pytest.mark.asyncio
-async def test_native_declines_image_content(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("request_body", DECLINED_REQUESTS)
+async def test_native_declines_shapes_python_prices_differently(
+    monkeypatch: pytest.MonkeyPatch, request_body: dict[str, object]
+) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     litellm.rust(True)
-    body: Final = json.dumps(
-        {
-            "model": MODEL,
-            "messages": [
-                {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}]}
-            ],
-        }
-    ).encode()
 
-    assert await bridge.count_anthropic_input_tokens(body) is None
+    assert await bridge.count_anthropic_input_tokens(json.dumps(request_body).encode()) is None

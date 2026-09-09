@@ -45,20 +45,66 @@ const TOOLS_ANTHROPIC_SYSTEM: &str = r#"{"model":"claude-sonnet-4-5",
     "type":"object","properties":{"location":{"type":["string","null"]}},"required":["location"]}}],
   "tool_choice":"none"}"#;
 
+const COMPLETIONS_PROMPT: &str =
+    r#"{"model":"claude-sonnet-4-5","prompt":"Write a haiku about ships."}"#;
+
+const COMPLETIONS_PROMPT_LIST: &str =
+    r#"{"model":"claude-sonnet-4-5","prompt":["first prompt","second prompt"]}"#;
+
+const RESPONSES_INPUT: &str = r#"{"model":"claude-sonnet-4-5","input":[
+  {"role":"user","content":[{"type":"input_text","text":"Summarise caf\u00e9 menus, na\u00efve \u2014 ok? \"quoted\"\n"}]},
+  {"role":"assistant","content":"Sure."}],"instructions":"be terse"}"#;
+
+const EMBEDDINGS_TOKEN_IDS: &str =
+    r#"{"model":"claude-sonnet-4-5","input":[[101,2023,5],[7]],"encoding_format":"float"}"#;
+
+const RERANK: &str = r#"{"model":"claude-sonnet-4-5","query":"best harbour",
+  "documents":["doc one",{"text":"doc two","title":"T","n":3,"ok":true,"none":null,"tags":["a","b"]}]}"#;
+
+/// Expected counts are pinned from
+/// `litellm.proxy.spend_tracking.budget_reservation._count_input_tokens(body, "claude-sonnet-4-5")`.
 #[rstest]
 #[case::text_only(SIMPLE, 14)]
 #[case::content_blocks_name_and_system(BLOCKS_AND_SYSTEM, 45)]
 #[case::openai_tools_named_choice(TOOLS_OPENAI, 123)]
 #[case::anthropic_tools_system_discount_choice_none(TOOLS_ANTHROPIC_SYSTEM, 53)]
+#[case::completions_prompt(COMPLETIONS_PROMPT, 7)]
+#[case::completions_prompt_list(COMPLETIONS_PROMPT_LIST, 4)]
+#[case::responses_input_items(RESPONSES_INPUT, 62)]
+#[case::embeddings_token_ids(EMBEDDINGS_TOKEN_IDS, 5)]
+#[case::rerank_query_and_documents(RERANK, 41)]
 fn count_request_matches_python_token_counter(#[case] body: &str, #[case] expected: usize) {
     let request = CountableRequest::parse(body.as_bytes()).expect("fixture parses");
     let count = counter().count_request(&request).expect("fixture counts");
     assert_eq!(
         count,
         InputTokenCount {
-            model: "claude-sonnet-4-5".to_string(),
+            model: Some("claude-sonnet-4-5".to_string()),
             input_tokens: expected,
         }
+    );
+}
+
+#[rstest]
+#[case::null_messages_win_over_prompt(r#"{"model":"m","messages":null,"prompt":"ignored"}"#, 3)]
+#[case::model_from_route(r#"{"prompt":"hi"}"#, 1)]
+#[case::bools_and_ints_use_python_str(r#"{"model":"m","prompt":[true,false,42]}"#, 3)]
+#[case::null_prompt_counts_zero(r#"{"model":"m","prompt":null}"#, 0)]
+fn key_presence_follows_python(#[case] body: &str, #[case] expected: usize) {
+    let request = CountableRequest::parse(body.as_bytes()).expect("fixture parses");
+    let count = counter().count_request(&request).expect("fixture counts");
+    assert_eq!(count.input_tokens, expected);
+}
+
+#[test]
+fn objects_dump_like_python_json_dumps() {
+    let body = r#"{"model":"m","input":{"text":"caf\u00e9 \u2014 \ud83d\ude00 \"q\" \\ \n\t\u0001\u007f ~","n":-3,"ok":true,"no":false,"none":null,"list":[1,"a",{"z":[]}],"empty":{}}}"#;
+    let request = CountableRequest::parse(body.as_bytes()).expect("fixture parses");
+    let dumped = python_json::dumps(request.input.as_ref().expect("input is present"))
+        .expect("fixture dumps");
+    assert_eq!(
+        dumped,
+        r#"{"text": "caf\u00e9 \u2014 \ud83d\ude00 \"q\" \\ \n\t\u0001\u007f ~", "n": -3, "ok": true, "no": false, "none": null, "list": [1, "a", {"z": []}], "empty": {}}"#
     );
 }
 
@@ -85,7 +131,6 @@ fn union_types_and_anthropic_schema_render_like_python() {
 
 #[rstest]
 #[case::not_json(b"not json" as &[u8])]
-#[case::missing_model(br#"{"messages":[]}"#)]
 #[case::messages_not_a_list(br#"{"model":"m","messages":"hi"}"#)]
 #[case::message_with_tool_calls(
     br#"{"model":"m","messages":[{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":"{}"}}]}]}"#
@@ -107,7 +152,9 @@ fn shapes_outside_the_mirror_are_declined_at_parse(#[case] body: &[u8]) {
 }
 
 #[rstest]
-#[case::no_messages(br#"{"model":"m"}"# as &[u8])]
+#[case::no_countable_input(br#"{"model":"m","instructions":"hi"}"# as &[u8])]
+#[case::float_prompt(br#"{"model":"m","prompt":1.5}"#)]
+#[case::float_inside_document(br#"{"model":"m","documents":[{"score":0.5}]}"#)]
 #[case::image_block(
     br#"{"model":"m","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]}"#
 )]

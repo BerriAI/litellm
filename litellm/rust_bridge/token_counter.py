@@ -28,7 +28,7 @@ class RustTokenCounterFactory(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class InputTokenCount:
-    model: str
+    model: str | None
     input_tokens: int
 
 
@@ -49,7 +49,7 @@ TOKEN_COUNTER: Final = NativeBinding("TokenCounter", validate=_as_factory)
 
 
 def uses_anthropic_tokenizer(model: str) -> bool:
-    if litellm.disable_hf_tokenizer_download is True:
+    if litellm.disable_token_counter is True or litellm.disable_hf_tokenizer_download is True:
         return False
     return model in litellm.anthropic_models and "claude-3" not in model
 

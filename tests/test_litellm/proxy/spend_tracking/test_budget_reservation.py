@@ -199,13 +199,26 @@ def rust_counter(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_rust_count_replaces_python_tokenizing_for_anthropic_models(rust_counter: None) -> None:
+@pytest.mark.parametrize(
+    ("route", "request_body"),
+    (
+        ("/v1/messages", RUST_COUNTED_BODY),
+        ("/v1/chat/completions", {"model": ANTHROPIC_TOKENIZER_MODEL, "messages": ANTHROPIC_MESSAGES}),
+        ("/v1/completions", {"model": ANTHROPIC_TOKENIZER_MODEL, "prompt": "hi"}),
+        ("/v1/responses", {"model": ANTHROPIC_TOKENIZER_MODEL, "input": "hi"}),
+        ("/v1/embeddings", {"model": ANTHROPIC_TOKENIZER_MODEL, "input": ["hi"]}),
+        ("/v1/rerank", {"model": ANTHROPIC_TOKENIZER_MODEL, "query": "hi", "documents": ["a"]}),
+    ),
+)
+async def test_rust_count_replaces_python_tokenizing_on_every_llm_route(
+    rust_counter: None, route: str, request_body: dict
+) -> None:
     litellm.rust(True)
     rust_token_counter.TOKEN_COUNTER.override(_RecordingCounter)
-    raw_body: Final = json.dumps(RUST_COUNTED_BODY).encode()
+    raw_body: Final = json.dumps(request_body).encode()
 
     counts: Final = await count_request_input_tokens(
-        request_body=RUST_COUNTED_BODY, route="/v1/messages", llm_router=None, raw_body=raw_body
+        request_body=request_body, route=route, llm_router=None, raw_body=raw_body
     )
 
     assert dict(counts) == {ANTHROPIC_TOKENIZER_MODEL: RUST_INPUT_TOKENS}

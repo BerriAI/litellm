@@ -1,17 +1,30 @@
 use indexmap::IndexMap;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use super::TokenCountError;
 
-/// The parts of a request body `litellm.token_counter` reads when a host counts
-/// input tokens for budget checks. Anything outside this shape is declined so
-/// the host can fall back to its own counter instead of silently miscounting.
+/// The parts of a request body the host's budget counter reads. Chat and
+/// Anthropic Messages bodies carry `messages`; completions carry `prompt`;
+/// Responses and embeddings carry `input`; rerank carries `query` and
+/// `documents`. The host checks key presence, not nullness, so an explicit
+/// `null` is kept distinct from an absent key. Anything outside this shape is
+/// declined so the host can fall back to its own counter instead of silently
+/// miscounting.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct CountableRequest {
-    pub model: String,
+    pub model: Option<String>,
+    #[serde(default, deserialize_with = "present_messages")]
     pub messages: Option<Vec<Message>>,
     pub tools: Option<Vec<ToolDefinition>>,
     pub tool_choice: Option<ToolChoice>,
+    #[serde(default, deserialize_with = "present_text")]
+    pub prompt: Option<TextValue>,
+    #[serde(default, deserialize_with = "present_text")]
+    pub input: Option<TextValue>,
+    #[serde(default, deserialize_with = "present_text")]
+    pub query: Option<TextValue>,
+    #[serde(default, deserialize_with = "present_text")]
+    pub documents: Option<TextValue>,
 }
 
 impl CountableRequest {
@@ -19,6 +32,32 @@ impl CountableRequest {
         serde_json::from_slice(body)
             .map_err(|error| TokenCountError::Unsupported(error.to_string()))
     }
+}
+
+fn present_messages<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<Message>>, D::Error> {
+    Option::<Vec<Message>>::deserialize(deserializer)
+        .map(|messages| Some(messages.unwrap_or_default()))
+}
+
+fn present_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<TextValue>, D::Error> {
+    TextValue::deserialize(deserializer).map(Some)
+}
+
+/// Free-form JSON the host counts as text: strings and integers via `str()`,
+/// objects via `json.dumps()`, lists flattened. Objects keep document order so
+/// the dumped text matches Python byte for byte.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum TextValue {
+    Null,
+    Bool(bool),
+    Integer(i64),
+    Float(f64),
+    Text(String),
+    List(Vec<TextValue>),
+    Object(IndexMap<String, TextValue>),
 }
 
 /// Python counts every string-valued key of a message, so any key beyond these
