@@ -3,6 +3,7 @@ import re
 from collections.abc import Callable
 from functools import cache
 from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -27,6 +28,28 @@ AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
 AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 
 AZURE_CONTENT_SAFETY_ENTRA_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
+
+AZURE_CONTENT_SAFETY_ENTRA_HOST_SUFFIXES: Final = (
+    ".cognitiveservices.azure.com",
+    ".cognitiveservices.azure.us",
+    ".cognitiveservices.azure.cn",
+    ".services.ai.azure.com",
+)
+
+
+def _assert_entra_destination_is_azure(api_base: str) -> None:
+    """An Entra token is scoped to every Cognitive Services resource the identity can reach,
+    not to one resource, so it is only ever sent to an Azure endpoint over TLS. Entra also
+    requires the resource's custom subdomain, so any other host is not a valid destination."""
+    parsed: Final = urlparse(api_base)
+    host: Final = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" and host.endswith(AZURE_CONTENT_SAFETY_ENTRA_HOST_SUFFIXES):
+        return
+    raise ValueError(
+        f"Azure Content Safety: refusing to send a Microsoft Entra token to api_base {api_base!r}. "
+        "Entra authentication needs the resource's HTTPS custom subdomain endpoint, for example "
+        "https://your-resource.cognitiveservices.azure.com. Set api_key to reach any other host"
+    )
 
 
 @cache
@@ -66,6 +89,8 @@ class AzureGuardrailBase:
         self.api_key = api_key
         self.api_base = api_base
         self.api_version: str = kwargs.get("api_version") or "2024-09-01"
+        if not api_key:
+            _assert_entra_destination_is_azure(api_base)
         self._entra_token_provider: Final = entra_token_provider or (
             None if api_key else _default_entra_token_provider()
         )
@@ -79,6 +104,7 @@ class AzureGuardrailBase:
         if self.api_key:
             return ("Ocp-Apim-Subscription-Key", self.api_key)
 
+        _assert_entra_destination_is_azure(self.api_base)
         minter: Final = self._entra_token_provider or _default_entra_token_provider()
         try:
             token: Final = await asyncio.to_thread(minter)

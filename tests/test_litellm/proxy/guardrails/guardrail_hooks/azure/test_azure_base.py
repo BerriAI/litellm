@@ -186,3 +186,77 @@ async def test_api_key_guardrail_never_reaches_azure_identity(api_base, capturin
     await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
     assert sent[0].headers["Ocp-Apim-Subscription-Key"] == "secret-key"
+
+
+@pytest.mark.parametrize(
+    "bad_api_base",
+    [
+        "http://contoso.cognitiveservices.azure.com",
+        "https://contoso.cognitiveservices.azure.com.attacker.example",
+        "https://attacker.example",
+        "https://australiaeast.api.cognitive.microsoft.com",
+    ],
+)
+def test_keyless_guardrail_refuses_a_non_azure_destination(bad_api_base):
+    """The Entra token covers every Cognitive Services resource the identity can reach, so a
+    typo or a hijacked host would receive far more than one resource's key would give away."""
+    with pytest.raises(ValueError, match="refusing to send a Microsoft Entra token") as exc_info:
+        AzureContentSafetyPromptShieldGuardrail(guardrail_name="azure-guard", api_base=bad_api_base)
+
+    assert "api_key" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "good_api_base",
+    [
+        "https://contoso.cognitiveservices.azure.com",
+        "https://contoso.privatelink.cognitiveservices.azure.com",
+        "https://contoso.services.ai.azure.com",
+        "https://contoso.cognitiveservices.azure.us",
+    ],
+)
+def test_keyless_guardrail_accepts_azure_content_safety_endpoints(good_api_base):
+    guardrail: Final = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="azure-guard",
+        api_base=good_api_base,
+        entra_token_provider=lambda: "entra-token",
+    )
+
+    assert guardrail.api_base == good_api_base
+
+
+@pytest.mark.asyncio
+async def test_api_key_guardrail_may_use_any_destination(capturing_handler):
+    """A key is scoped to one resource, so gateways and test doubles stay reachable with one."""
+    handler, sent = capturing_handler
+
+    guardrail: Final = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="azure-guard",
+        api_base="https://gateway.internal.example",
+        api_key="secret-key",
+    )
+    guardrail.async_handler = handler
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent[0].headers["Ocp-Apim-Subscription-Key"] == "secret-key"
+
+
+@pytest.mark.asyncio
+async def test_clearing_api_key_cannot_send_a_token_to_a_non_azure_destination(capturing_handler):
+    """A guardrail admitted on its api_key must not start minting tokens for that same host."""
+    handler, sent = capturing_handler
+
+    guardrail: Final = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="azure-guard",
+        api_base="https://gateway.internal.example",
+        api_key="secret-key",
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+    guardrail.update_in_memory_litellm_params({"api_key": None})
+
+    with pytest.raises(ValueError, match="refusing to send a Microsoft Entra token"):
+        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent == []
