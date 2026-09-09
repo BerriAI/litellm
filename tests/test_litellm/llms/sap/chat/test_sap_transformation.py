@@ -1,4 +1,5 @@
 import warnings
+
 import pytest
 from pydantic import ValidationError
 
@@ -639,3 +640,75 @@ class TestSAPTransformationIntegration:
                 config["config"]["modules"][1]["translation"]["input"]["type"]
                 == "sap_document_translation"
             )
+
+
+class TestNormalizeReasoningContent:
+    """Unit tests for GenAIHubOrchestrationConfig._normalize_reasoning_content."""
+
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+    _normalize = staticmethod(GenAIHubOrchestrationConfig._normalize_reasoning_content)
+
+    def test_list_reasoning_content_mapped_to_thinking_blocks(self):
+        """List-shaped reasoning_content is converted to thinking_blocks."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "Latin.",
+                    "reasoning_content": [
+                        {"content": "Romans spoke Latin.", "signature": "sig1"},
+                        {"content": "That is well known.", "signature": "sig2"},
+                    ],
+                }
+            }]
+        }
+        out = self._normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["thinking_blocks"] == [
+            {"type": "thinking", "thinking": "Romans spoke Latin.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "That is well known.", "signature": "sig2"},
+        ]
+        assert msg["reasoning_content"] == "Romans spoke Latin.\nThat is well known."
+
+    def test_string_reasoning_content_unchanged(self):
+        """String reasoning_content is left as-is (already the right type)."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "42",
+                    "reasoning_content": "I thought about it.",
+                }
+            }]
+        }
+        out = self._normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["reasoning_content"] == "I thought about it."
+        assert "thinking_blocks" not in msg
+
+    def test_no_reasoning_content_unchanged(self):
+        """A message without reasoning_content is not modified."""
+        raw = {"choices": [{"message": {"role": "assistant", "content": "Hi."}}]}
+        out = self._normalize(raw)
+        assert out == raw
+
+    def test_empty_list_reasoning_content_sets_none(self):
+        """An empty list produces None for reasoning_content and empty thinking_blocks."""
+        raw = {"choices": [{"message": {"reasoning_content": []}}]}
+        out = self._normalize(raw)
+        msg = out["choices"][0]["message"]
+        assert msg["thinking_blocks"] == []
+        assert msg["reasoning_content"] is None
+
+    def test_multiple_choices_all_normalized(self):
+        """All choices in the response are normalized."""
+        raw = {
+            "choices": [
+                {"message": {"reasoning_content": [{"content": "thought A", "signature": None}]}},
+                {"message": {"reasoning_content": [{"content": "thought B", "signature": "s"}]}},
+            ]
+        }
+        out = self._normalize(raw)
+        assert out["choices"][0]["message"]["reasoning_content"] == "thought A"
+        assert out["choices"][1]["message"]["reasoning_content"] == "thought B"
