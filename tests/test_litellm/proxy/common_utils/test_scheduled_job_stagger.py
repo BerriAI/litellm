@@ -23,7 +23,7 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
 )
 
 OPERATOR_CRON_JOB_ID = "spend_log_cleanup_job"
-SHARED_INTERVAL_JOB_IDS = ("periodic_reload_job", "get_credentials_job", "add_deployment_job")
+SHARED_INTERVAL_JOB_IDS = ("periodic_reload_job", "add_deployment_job")
 
 
 async def _noop() -> None: ...

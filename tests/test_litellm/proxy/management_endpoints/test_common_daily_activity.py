@@ -492,7 +492,7 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
 
 @pytest.mark.asyncio
 async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_spend_logs():
-    """A dirty key no table can explain costs two digest lookups, never a token page walk or a SpendLogs scan."""
+    """Without a spend-log window a dirty key no table can explain costs two digest lookups and never a token page walk."""
     from litellm.proxy.utils import hash_token
 
     double_hashed = hash_token("b" * 64)
@@ -516,6 +516,93 @@ async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_s
         + mock_prisma.db.litellm_deletedverificationtoken.find_many.call_args_list
     )
     assert all("take" not in call.kwargs and "skip" not in call.kwargs for call in token_lookups)
+
+
+def _spend_log_transaction(mock_prisma: MagicMock, rows: list[dict[str, str | None]]) -> AsyncMock:
+    transaction = MagicMock()
+    transaction.execute_raw = AsyncMock(return_value=0)
+    transaction.query_raw = AsyncMock(return_value=rows)
+    mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
+    return transaction.query_raw
+
+
+def _spend_log_row(digest: str, key_alias: str, user_id: str) -> dict[str, str | None]:
+    return {
+        "digest": digest,
+        "first_alias": key_alias,
+        "last_alias": key_alias,
+        "first_team": None,
+        "last_team": None,
+        "first_owner": user_id,
+        "last_owner": user_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_permanent_miss_with_a_window_reads_spend_logs_once_within_it():
+    from litellm.proxy.utils import hash_token
+
+    double_hashed = hash_token("permanent-miss-with-window-6852")
+    window = (datetime(2024, 1, 1), datetime(2024, 1, 4))
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    spend_log_query_raw = _spend_log_transaction(mock_prisma, [])
+
+    result = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={double_hashed}, spend_logs_window=window)
+
+    assert double_hashed not in result
+    assert mock_prisma.db.query_raw.await_count == 2
+    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
+    assert digests == [double_hashed]
+    assert (start, end) == window
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_recovers_a_session_key_alias_from_spend_logs_around_the_page_dates():
+    from litellm.proxy.utils import hash_token
+
+    session_digest = hash_token("cli-session-daily-activity-6852")
+    records = [_daily_user_spend_record(user_id="session-user", api_key=session_digest, spend=1.5)]
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=len(records))
+    mock_table.find_many = AsyncMock(return_value=records)
+    mock_prisma.db.litellm_dailyuserspend = mock_table
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="session-user", user_email="session@example.com")]
+    )
+
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    spend_log_query_raw = _spend_log_transaction(
+        mock_prisma, [_spend_log_row(session_digest, "cli-session-alias", "session-user")]
+    )
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+    )
+
+    key_metadata = result.results[0].breakdown.api_keys[session_digest].metadata
+    assert key_metadata.key_alias == "cli-session-alias"
+    assert key_metadata.user_email == "session@example.com"
+    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
+    assert digests == [session_digest]
+    assert (start, end) == (datetime(2023, 12, 31), datetime(2024, 1, 3))
 
 
 def test_key_metadata_includes_recovered_user_email():
@@ -2105,3 +2192,48 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
     # Rollups with the entity bit set must still land in their usual buckets
     assert daily.breakdown.models["gpt-4o"].metrics.spend == 18.0
     assert daily.breakdown.api_keys["key-1"].metrics.spend == 12.0
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
+    from litellm.proxy.utils import hash_token
+
+    session_digest = hash_token("cli-session-user-42")
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="user-42", user_email="user42@example.com")]
+    )
+
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    spend_log_query_raw = _spend_log_transaction(
+        mock_prisma, [_spend_log_row(session_digest, "cli-session-user-42", "user-42")]
+    )
+
+    result = await get_api_key_metadata(
+        prisma_client=mock_prisma,
+        api_keys={session_digest},
+        spend_logs_window=(datetime(2026, 9, 7), datetime(2026, 9, 10)),
+    )
+
+    assert result[session_digest]["key_alias"] == "cli-session-user-42"
+    assert result[session_digest]["user_id"] == "user-42"
+    assert result[session_digest]["user_email"] == "user42@example.com"
+    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
+    assert digests == [session_digest]
+    assert (start, end) == (datetime(2026, 9, 7), datetime(2026, 9, 10))
+
+
+def test_spend_logs_window_pads_min_minus_one_day_and_max_plus_two_days():
+    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+
+    window = _spend_logs_window({"2026-09-08", "2026-09-05", "not-a-date"})
+
+    assert window == (datetime(2026, 9, 4), datetime(2026, 9, 10))
+
+
+def test_spend_logs_window_is_none_when_no_date_parses():
+    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+
+    assert _spend_logs_window({"garbage", ""}) is None

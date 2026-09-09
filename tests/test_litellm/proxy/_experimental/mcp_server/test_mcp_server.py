@@ -7639,6 +7639,75 @@ class TestMCPMetaTraceCarrier:
 
 
 @pytest.mark.asyncio
+async def test_stateful_mcp_tool_call_uses_current_requests_otel_destinations() -> None:
+    from types import SimpleNamespace
+
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+
+    from litellm.integrations.otel.model.destination import OtelDestination
+    from litellm.integrations.otel.plumbing.context import (
+        request_destinations,
+        reset_request_destinations,
+        set_request_destinations,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.server import (
+        _MCP_DESTINATIONS_SCOPE_KEY,
+        mcp_server_tool_call,
+        set_auth_context,
+    )
+    from litellm.proxy._experimental.mcp_server.tool_registry import (
+        global_mcp_tool_registry,
+    )
+
+    initialized_destination = OtelDestination(endpoint="https://initialize.example", callback_name="langfuse_otel")
+    current_destination = OtelDestination(endpoint="https://current.example", callback_name="arize")
+    server = MCPServer(
+        server_id="otel-context-test",
+        name="otelcontext",
+        transport=MCPTransport.http,
+        allow_all_keys=True,
+    )
+
+    async def observe_destinations() -> str:
+        assert request_destinations() == (current_destination,)
+        return "ok"
+
+    global_mcp_server_manager.registry[server.server_id] = server
+    global_mcp_server_manager.tool_name_to_mcp_server_name_mapping["otelcontext-observe"] = server.name
+    global_mcp_tool_registry.register_tool(
+        name="otelcontext-observe",
+        description="Observe request destinations",
+        input_schema={"type": "object"},
+        handler=observe_destinations,
+    )
+    set_auth_context(None, raw_headers={})
+    destinations_token = set_request_destinations((initialized_destination,))
+    scope = {_MCP_DESTINATIONS_SCOPE_KEY: (current_destination,)}
+    current_request_context = RequestContext(
+        request_id=1,
+        meta=None,
+        session=SimpleNamespace(),
+        lifespan_context=None,
+        request=SimpleNamespace(scope=scope),
+    )
+    request_token = request_ctx.set(current_request_context)
+    try:
+        result = await mcp_server_tool_call("otelcontext-observe", {})
+        assert result.isError is False
+        assert request_destinations() == (initialized_destination,)
+    finally:
+        request_ctx.reset(request_token)
+        reset_request_destinations(destinations_token)
+        global_mcp_tool_registry.tools.pop("otelcontext-observe", None)
+        global_mcp_server_manager.registry.pop(server.server_id, None)
+        global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.pop("otelcontext-observe", None)
+
+
+@pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_includes_active_servers_submitted_by_user():
     """BYOM submitters can see approved servers they submitted without allow_all_keys."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
