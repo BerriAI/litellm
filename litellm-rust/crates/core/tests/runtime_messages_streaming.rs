@@ -255,6 +255,53 @@ fn response(stream: litellm_core::lifecycle::BytesStream) -> HttpStreamResponse 
     }
 }
 
+#[rstest::rstest]
+#[case::network("network")]
+#[case::truncated("truncated")]
+#[case::cancelled("cancelled")]
+#[tokio::test]
+async fn established_stream_failure_notifies_deployment_before_terminal(#[case] ending: &str) {
+    let tracking = Tracking::new();
+    let source: litellm_core::lifecycle::BytesStream = match ending {
+        "network" => Box::pin(stream::iter([Err(Error::Network("stream failed".into()))])),
+        "truncated" => Box::pin(stream::empty()),
+        "cancelled" => Box::pin(stream::pending()),
+        _ => unreachable!(),
+    };
+    let client = client(Ok(response(source)), tracking.clone());
+    let call = client
+        .messages_stream_with(request(), Options::default(), context(), 1)
+        .await
+        .unwrap();
+    let completion = call.completion.register();
+    if ending == "cancelled" {
+        drop(call.stream);
+    } else {
+        assert!(
+            call.stream
+                .collect::<Vec<_>>()
+                .await
+                .iter()
+                .any(Result::is_err)
+        );
+    }
+    let terminal = completion.await.unwrap();
+    let expected = match ending {
+        "network" => "NetworkError",
+        "truncated" => "InvalidResponse",
+        "cancelled" => "Cancelled",
+        _ => unreachable!(),
+    };
+    assert!(
+        matches!(terminal.classification, TerminalClassification::Failure { kind, .. } if kind == expected)
+    );
+    assert_eq!(tracking.terminals.lock().unwrap().len(), 1);
+    assert_eq!(
+        *tracking.deployment_events.lock().unwrap(),
+        ["pre", "failure", "terminal"]
+    );
+}
+
 #[tokio::test]
 async fn deployment_pre_replacement_reaches_stream_transport() {
     let tracking = Tracking::new();

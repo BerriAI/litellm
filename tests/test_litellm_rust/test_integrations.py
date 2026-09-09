@@ -1,16 +1,21 @@
 import json
+import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
 import pytest
 from opentelemetry.trace import StatusCode
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.proxy.guardrails.guardrail_registry import guardrail_initializer_registry
 from litellm.rust_bridge.provenance import has_rust_response_marker
 from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.callback_recorder import (
     LiveReferenceLogger,
     RecordingLogger,
@@ -253,3 +258,114 @@ async def test_interrupted_stream_emits_terminal_only_when_consumer_closes(backe
             await drain_logging()
             assert first_chunk is not None
             assert len(otel.spans()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ("python", "rust"))
+@pytest.mark.parametrize(
+    ("route", "phase"),
+    (
+        (OCR_ASYNC, "pre"),
+        (MESSAGES_ROUTE, "pre"),
+        (MESSAGES_STREAM, "pre"),
+        (OCR_ASYNC, "success"),
+        (MESSAGES_ROUTE, "success"),
+    ),
+    ids=("ocr-pre", "messages-pre", "messages-stream-pre", "ocr-success", "messages-success"),
+)
+async def test_deployment_rejection_notifies_failure_before_terminal(
+    backend: Backend, route: Route, phase: str
+) -> None:
+    class Reject(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object]:
+            if phase == "pre":
+                raise litellm.BadRequestError("deployment rejected", "test-provider", route.provider_model)
+            return kwargs
+
+        async def async_post_call_success_deployment_hook(
+            self, request_data: Mapping[str, object], response: object, call_type: CallTypes | None
+        ) -> object:
+            raise litellm.BadRequestError("deployment rejected", "test-provider", route.provider_model)
+
+    async with isolated_backend(backend):
+        with recording_service() as provider:
+            provider.expected_requests = 0 if phase == "pre" else 1
+            provider.default_response = provider_response(route)
+            recorder: Final = RecordingLogger()
+            litellm.callbacks.extend((Reject(), recorder))
+
+            with pytest.raises(litellm.BadRequestError, match="deployment rejected"):
+                await route.invoke(provider)
+            await recorder.wait_for_async("async_log_failure_event")
+
+            assert len(provider.requests) == provider.expected_requests
+            assert "async_log_success_event" not in recorder.names
+            assert recorder.names.count("async_post_call_failure_deployment_hook") == 1
+            assert recorder.names.index("async_post_call_failure_deployment_hook") < recorder.names.index(
+                "async_log_failure_event"
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ("python", "rust"))
+@pytest.mark.parametrize("ending", ("provider_error", "truncated", "close"))
+async def test_established_stream_failure_notifies_deployment_once(backend: Backend, ending: str) -> None:
+    async with isolated_backend(backend):
+        with recording_service() as provider:
+            provider.default_response = ResponseSpec(
+                body=None,
+                events=(
+                    (
+                        *MESSAGES_EVENTS[:1],
+                        (
+                            "error",
+                            {"type": "error", "error": {"type": "overloaded_error", "message": "upstream overloaded"}},
+                        ),
+                    )
+                    if ending == "provider_error"
+                    else MESSAGES_EVENTS[:-1]
+                    if ending == "truncated"
+                    else MESSAGES_EVENTS
+                ),
+            )
+            release: Final = threading.Event()
+            if ending == "close":
+                provider.enqueue(
+                    ResponseSpec(
+                        body=None,
+                        chunks=tuple(
+                            f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in MESSAGES_EVENTS
+                        ),
+                        release=release,
+                    )
+                )
+            recorder: Final = RecordingLogger()
+            litellm.callbacks.append(recorder)
+            try:
+                stream: Final = await MESSAGES_STREAM.open_stream(provider)
+                assert has_rust_response_marker(stream) is (backend == "rust")
+                assert recorder.names.count("async_pre_call_deployment_hook") == 1
+                assert "async_post_call_failure_deployment_hook" not in recorder.names
+
+                if ending == "close":
+                    assert await anext(stream)
+                    await stream.aclose()
+                else:
+                    try:
+                        async for _ in stream:
+                            pass
+                    except litellm.APIError:
+                        pass
+                await drain_logging()
+            finally:
+                release.set()
+
+            assert len(provider.requests) == 1
+            assert recorder.names.count("async_log_failure_event") == 1, recorder.names
+            assert "async_log_success_event" not in recorder.names
+            assert recorder.names.count("async_post_call_failure_deployment_hook") == 1
+            assert recorder.names.index("async_post_call_failure_deployment_hook") < recorder.names.index(
+                "async_log_failure_event"
+            )

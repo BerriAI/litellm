@@ -197,11 +197,81 @@ pub(crate) async fn send(request: SettledOcrRequest) -> Result<OcrResponseData, 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpListener;
 
     use super::*;
     use crate::lifecycle::{AuthorizedBody, WireBody};
+
+    #[derive(Default)]
+    struct FailureObserver(Mutex<Vec<&'static str>>);
+
+    impl Clock for FailureObserver {
+        fn now(&self) -> f64 {
+            1.0
+        }
+    }
+
+    impl crate::lifecycle::DeploymentFailureHooks for FailureObserver {
+        fn async_post_call_failure_deployment_hook<'a>(
+            &'a self,
+            _: &'a CallLifecycleContext,
+            _: &'a Error,
+        ) -> crate::lifecycle::CallbackFuture<'a, Result<(), Error>> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push("deployment_failure");
+                Err(Error::InvalidRequest("observer failed".into()))
+            })
+        }
+    }
+
+    impl TerminalDispatcher for FailureObserver {
+        fn dispatch<'a>(
+            &'a self,
+            _: &'a crate::lifecycle::TerminalRecord,
+        ) -> crate::integrations::custom_logger::LogFuture<'a> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push("terminal");
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn validation_failure_notifies_supplied_deployment_hook() {
+        let services = FailureObserver::default();
+        let request = SettledOcrRequest {
+            endpoint: OcrEndpoint {
+                model: "mistral-ocr-latest".into(),
+                custom_llm_provider: "mistral".into(),
+                url: "http://127.0.0.1:1".into(),
+                timeout_seconds: 1.0,
+            },
+            http: AuthorizedBody::new(
+                WireBody::from_serialized("{\"stream\":true,\"document\":{\"type\":\"document_url\",\"document_url\":\"data:application/pdf;base64,cGRm\"}}".into()),
+                vec![],
+            ).settle(),
+        };
+        let result = ocr(
+            &services,
+            request,
+            Default::default(),
+            CallLifecycleContext::new("ocr", "mistral-ocr-latest", "mistral", "contract-call"),
+        )
+        .await
+        .into_result();
+
+        assert!(matches!(
+            result,
+            Err(Error::Unsupported("OCR streaming response handling"))
+        ));
+        assert_eq!(
+            *services.0.lock().unwrap(),
+            ["deployment_failure", "terminal"]
+        );
+    }
 
     #[tokio::test]
     async fn validation_does_not_reserialize_settled_bytes() {
