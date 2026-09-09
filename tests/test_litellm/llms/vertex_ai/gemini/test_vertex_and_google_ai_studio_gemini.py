@@ -5826,7 +5826,12 @@ def test_vertex_ai_malformed_function_call_candidate_keeps_the_provider_reason()
 
 
 def test_vertex_ai_content_less_candidate_at_max_tokens_maps_to_length():
-    """A thinking model that spends its whole budget reports truncation, not an empty response."""
+    """A truncated candidate reports truncation rather than an empty response.
+
+    Note that a Gemini AI Studio thinking model that spends its whole budget currently answers with
+    `"content": {}` (the key present but empty), which already produced a choice; this covers the
+    variant that omits the key entirely.
+    """
     result = _transform_gemini_response([{"finishReason": "MAX_TOKENS", "index": 0}])
 
     assert len(result.choices) == 1
