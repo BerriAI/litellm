@@ -1,7 +1,7 @@
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
@@ -1701,7 +1701,7 @@ describe("classifier vision settings", () => {
     classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
   };
 
-  const VisionFixture = ({ onChange = vi.fn() }: { onChange?: ReturnType<typeof vi.fn> }) => {
+  const VisionFixture = ({ onChange = vi.fn() }: { onChange?: Mock }) => {
     const [value, setValue] = React.useState(llmValue);
     return (
       <ComplexityRouterConfig
