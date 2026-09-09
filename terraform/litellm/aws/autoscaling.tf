@@ -52,6 +52,97 @@ resource "aws_appautoscaling_policy" "gateway_memory" {
   }
 }
 
+resource "aws_appautoscaling_policy" "gateway_requests" {
+  count              = var.gateway_autoscaling_enabled && var.gateway_requests_per_target > 0 ? 1 : 0
+  name               = "${local.name}-gateway-requests"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.gateway[0].service_namespace
+  resource_id        = aws_appautoscaling_target.gateway[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.gateway[0].scalable_dimension
+
+  target_tracking_scaling_policy_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+      resource_label         = "${aws_lb.this.arn_suffix}/${aws_lb_target_group.gateway.arn_suffix}"
+    }
+    target_value = var.gateway_requests_per_target
+  }
+}
+
+resource "aws_appautoscaling_policy" "gateway_tokens" {
+  count              = var.gateway_autoscaling_enabled && var.gateway_tokens_per_target > 0 ? 1 : 0
+  name               = "${local.name}-gateway-tokens"
+  policy_type        = "TargetTrackingScaling"
+  service_namespace  = aws_appautoscaling_target.gateway[0].service_namespace
+  resource_id        = aws_appautoscaling_target.gateway[0].resource_id
+  scalable_dimension = aws_appautoscaling_target.gateway[0].scalable_dimension
+
+  lifecycle {
+    precondition {
+      condition     = var.gateway_tokens_metric != null
+      error_message = "gateway_tokens_metric is required when gateway_tokens_per_target > 0."
+    }
+  }
+
+  target_tracking_scaling_policy_configuration {
+    target_value = var.gateway_tokens_per_target
+
+    customized_metric_specification {
+      metrics {
+        id          = "tokens_per_minute"
+        return_data = false
+
+        metric_stat {
+          stat = "Sum"
+
+          metric {
+            namespace   = var.gateway_tokens_metric.namespace
+            metric_name = var.gateway_tokens_metric.name
+
+            dynamic "dimensions" {
+              for_each = var.gateway_tokens_metric.dimensions
+              content {
+                name  = dimensions.key
+                value = dimensions.value
+              }
+            }
+          }
+        }
+      }
+
+      metrics {
+        id          = "running_tasks"
+        return_data = false
+
+        metric_stat {
+          stat = "Average"
+
+          metric {
+            namespace   = "ECS/ContainerInsights"
+            metric_name = "RunningTaskCount"
+
+            dimensions {
+              name  = "ClusterName"
+              value = aws_ecs_cluster.this.name
+            }
+            dimensions {
+              name  = "ServiceName"
+              value = aws_ecs_service.gateway.name
+            }
+          }
+        }
+      }
+
+      metrics {
+        id          = "tokens_per_minute_per_task"
+        expression  = "tokens_per_minute / running_tasks"
+        label       = "Tokens per minute per gateway task"
+        return_data = true
+      }
+    }
+  }
+}
+
 # ---------- Backend ----------
 resource "aws_appautoscaling_target" "backend" {
   count              = var.backend_autoscaling_enabled ? 1 : 0

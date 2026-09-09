@@ -258,6 +258,47 @@ gateway_metrics_port         = 4001
 gateway_metrics_scrape_cidrs = ["10.0.0.0/16"]
 ```
 
+### Scaling the gateway on requests and tokens
+
+By default the gateway service target-tracks CPU (`gateway_cpu_target`) and
+memory (`gateway_memory_target`). Two more targets add workload signals next
+to them. Application Auto Scaling evaluates every attached policy and follows
+the one asking for the most tasks, so the resource policies keep working as a
+floor while requests or tokens drive scale-out
+
+`gateway_requests_per_target` adds an `ALBRequestCountPerTarget` policy on
+the gateway target group. The ALB counts requests per minute per registered
+task, so a value of 600 means "keep each task at about 10 requests per
+second". No agent or sidecar is needed
+
+`gateway_tokens_per_target` adds a metric-math policy that divides a
+CloudWatch metric of the gateway's `litellm_total_tokens_metric_total`
+counter by the service's `RunningTaskCount` from Container Insights. Nothing
+native to ECS carries token throughput, so you publish that metric yourself
+with the CloudWatch agent's Prometheus scraper pointed at the metrics sidecar
+above. The agent emits the delta of a counter between scrapes, so `Sum` over a
+minute is tokens per minute. Tokens are counted when a response completes, so
+long streams show up late in this signal. `gateway_tokens_metric` tells the
+policy where the agent publishes: the namespace, the metric name (defaults to
+the counter name) and the dimensions from your `metric_declaration`
+
+```hcl
+gateway_metrics_port        = 4001
+gateway_requests_per_target = 600
+gateway_tokens_per_target   = 400000
+gateway_tokens_metric = {
+  namespace  = "LiteLLM/Prometheus"
+  dimensions = { ClusterName = "acme-litellm-prod", TaskDefinitionFamily = "acme-litellm-prod-gateway" }
+}
+```
+
+Worked example for the token policy: three tasks handle 1,800,000 tokens in a
+minute, so `tokens_per_minute / running_tasks` is 600,000 against a target of
+400,000. Target tracking sizes the service to `ceil(3 * 600000 / 400000) = 5`
+tasks. The request policy does the same arithmetic with the ALB's per-target
+count. Container Insights must be enabled on the cluster for `RunningTaskCount`
+to exist
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or

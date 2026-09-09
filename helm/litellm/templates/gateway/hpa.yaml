@@ -30,6 +30,24 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.gateway.hpa.targetMemoryUtilizationPercentage }}
     {{- end }}
+    {{- with .Values.gateway.hpa.targetRequestsPerMinute }}
+    - type: Pods
+      pods:
+        metric:
+          name: litellm_requests_per_minute
+        target:
+          type: AverageValue
+          averageValue: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.gateway.hpa.targetTokensPerMinute }}
+    - type: Pods
+      pods:
+        metric:
+          name: litellm_tokens_per_minute
+        target:
+          type: AverageValue
+          averageValue: {{ . | quote }}
+    {{- end }}
   {{- with .Values.gateway.hpa.behavior }}
   behavior:
     {{- toYaml . | nindent 4 }}
