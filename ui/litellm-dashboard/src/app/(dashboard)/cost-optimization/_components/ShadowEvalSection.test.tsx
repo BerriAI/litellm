@@ -75,6 +75,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
       { model_name: "gpt-auto", litellm_params: { model: "auto_router/gpt-auto" } },
     ],
   })),
+  usePlainChatModelGroups: vi.fn(() => new Set(["prod-claude", "anthropic/claude-sonnet-5"])),
   usePlainModelGroups: vi.fn(() => new Set(["prod-claude", "anthropic/claude-sonnet-5"])),
 }));
 

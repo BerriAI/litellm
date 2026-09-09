@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isAutoRouterDeployment,
   selectAutoRouterModelGroups,
+  selectPlainChatModelGroups,
   selectPlainModelGroups,
   useAllProxyModels,
   useAutoRouterModelGroups,
@@ -1007,6 +1008,25 @@ describe("selectPlainModelGroups", () => {
 
   it("drops deployments that have no public model_name", () => {
     expect(selectPlainModelGroups([{ model_name: "", litellm_params: { model: "openai/gpt-4o" } }])).toEqual(new Set());
+  });
+
+  it("keeps only configured chat model groups for Shadow Eval choices", () => {
+    const deployments: AutoRouterCandidateDeployment[] = [
+      { model_name: "chat-model", litellm_params: { model: "openai/gpt-4o" }, model_info: { mode: "chat" } },
+      {
+        model_name: "embedding-model",
+        litellm_params: { model: "openai/text-embedding-3-large" },
+        model_info: { mode: "embedding" },
+      },
+      { model_name: "unknown-mode", litellm_params: { model: "openai/gpt-4o" }, model_info: { mode: null } },
+      {
+        model_name: "router",
+        litellm_params: { model: "auto_router/complexity_router" },
+        model_info: { mode: "chat" },
+      },
+    ];
+
+    expect(selectPlainChatModelGroups(deployments)).toEqual(new Set(["chat-model"]));
   });
 });
 

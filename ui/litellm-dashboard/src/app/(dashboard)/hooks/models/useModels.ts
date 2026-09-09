@@ -91,6 +91,7 @@ const NO_AUTO_ROUTERS: ReadonlySet<string> = new Set<string>();
 export interface AutoRouterCandidateDeployment {
   model_name?: string | null;
   litellm_params?: { model?: string | null } | null;
+  model_info?: { mode?: string | null } | null;
 }
 
 export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
@@ -136,6 +137,17 @@ export const selectPlainModelGroups = (deployments: AutoRouterCandidateDeploymen
   const autoRouterGroups = selectAutoRouterModelGroups(deployments);
   return new Set(
     deployments
+      .map((deployment) => deployment.model_name)
+      .filter((modelName): modelName is string => Boolean(modelName))
+      .filter((modelName) => !autoRouterGroups.has(modelName)),
+  );
+};
+
+export const selectPlainChatModelGroups = (deployments: AutoRouterCandidateDeployment[]): ReadonlySet<string> => {
+  const autoRouterGroups = selectAutoRouterModelGroups(deployments);
+  return new Set(
+    deployments
+      .filter((deployment) => deployment.model_info?.mode === "chat")
       .map((deployment) => deployment.model_name)
       .filter((modelName): modelName is string => Boolean(modelName))
       .filter((modelName) => !autoRouterGroups.has(modelName)),
@@ -198,6 +210,17 @@ export const usePlainModelGroups = (): ReadonlySet<string> => {
     queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
     enabled: Boolean(accessToken && userId && userRole),
     select: selectPlainModelGroups,
+  });
+  return data ?? NO_AUTO_ROUTERS;
+};
+
+export const usePlainChatModelGroups = (): ReadonlySet<string> => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  const { data } = useQuery<AutoRouterDeployment[], Error, ReadonlySet<string>>({
+    queryKey: autoRouterListKey(userId, userRole),
+    queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
+    enabled: Boolean(accessToken && userId && userRole),
+    select: selectPlainChatModelGroups,
   });
   return data ?? NO_AUTO_ROUTERS;
 };

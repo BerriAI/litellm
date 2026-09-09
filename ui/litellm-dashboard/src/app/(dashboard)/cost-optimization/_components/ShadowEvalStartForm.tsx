@@ -5,7 +5,7 @@ import React, { useMemo, useState } from "react";
 import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useAutoRouters, usePlainModelGroups } from "@/app/(dashboard)/hooks/models/useModels";
+import { useAutoRouters, usePlainChatModelGroups } from "@/app/(dashboard)/hooks/models/useModels";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { PaginatedMultiSelect } from "@/components/shared/PaginatedMultiSelect";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
@@ -25,7 +25,7 @@ const MAX_ROUTERS = 4;
 const MAX_MODELS = 100;
 
 const useConfiguredModelOptions = (): SearchSelectOption[] => {
-  const configuredGroups = usePlainModelGroups();
+  const configuredGroups = usePlainChatModelGroups();
   return useMemo(
     () =>
       [...configuredGroups]
