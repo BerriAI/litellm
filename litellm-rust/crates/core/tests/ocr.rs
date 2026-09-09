@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use super::backends::OcrBackend;
+use super::backends::{MappedParams, OcrIntegration};
 use super::formats::OcrFormat;
-use super::registry::OcrIntegration;
+
 use super::types::OcrConnection;
 use super::wire::{OcrWireRequest, decode_request, decode_response};
 use super::{OcrClient, OcrRequest};
@@ -25,55 +25,51 @@ pub(crate) async fn perform_ocr(
     ocr_client().perform(request).await
 }
 
-pub(crate) fn params<F, B>(integration: &OcrIntegration<F, B>, value: Value) -> F::MappedParams
+pub(crate) fn params<I>(integration: &I, value: Value) -> MappedParams<I>
 where
-    F: OcrFormat,
-    B: OcrBackend<F>,
+    I: OcrIntegration,
 {
     integration
-        .format
+        .format()
         .map_ocr_params(serde_json::from_value(value).unwrap())
         .unwrap()
 }
-pub(crate) fn transform<F, B>(
-    integration: &OcrIntegration<F, B>,
+pub(crate) fn transform<I>(
+    integration: &I,
     model: &str,
     value: Value,
     options: Value,
 ) -> Result<Value, OcrError>
 where
-    F: OcrFormat,
-    B: OcrBackend<F>,
+    I: OcrIntegration,
 {
     let params = integration
-        .format
+        .format()
         .map_ocr_params(serde_json::from_value(options).unwrap())?;
     let decoded = decode_response(
         &serde_json::to_vec(&value).unwrap(),
-        integration.backend.preserve_native_response(&params),
+        integration.preserve_native_response(&params),
     )?;
     let mut response = integration
-        .format
+        .format()
         .transform_ocr_response(model, decoded.data, &params)?;
     response.provider_native_response = decoded.native;
     Ok(response.into_json())
 }
-pub(crate) async fn body<F, B>(
-    integration: &OcrIntegration<F, B>,
+pub(crate) async fn body<I>(
+    integration: &I,
     model: &str,
     document: Value,
     options: Value,
 ) -> Result<Value, OcrError>
 where
-    F: OcrFormat,
-    B: OcrBackend<F>,
+    I: OcrIntegration,
 {
     let params = integration
-        .format
+        .format()
         .map_ocr_params(serde_json::from_value(options).unwrap())?;
     let client = ocr_client();
     let document = integration
-        .backend
         .prepare_document(
             &client,
             serde_json::from_value(document).unwrap(),
@@ -81,12 +77,14 @@ where
             &[],
         )
         .await?;
-    Ok(serde_json::to_value(
-        integration
-            .format
-            .transform_ocr_request(model, document, &params)?,
+    Ok(
+        serde_json::to_value(integration.format().transform_ocr_request(
+            model,
+            document.into(),
+            &params,
+        )?)
+        .unwrap(),
     )
-    .unwrap())
 }
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> OcrRequest {
     decode_request(OcrWireRequest {
@@ -342,4 +340,46 @@ fn typed_response_rejects_malformed_pages_with_field_path() {
     .unwrap_err();
     assert!(error.to_string().contains("pages[0].markdown"));
     assert!(!error.to_string().contains("42"));
+}
+
+#[rstest::rstest]
+#[case("mistral/model", json!({"model":"model","document":42}), "guardrail.body.document")]
+#[case("azure_ai/model", json!({"model":"model","document":{"type":"document_url","document_url":"https://example.com/doc.pdf"}}), "data URI")]
+#[case("vertex_ai/model", json!({"model":"model","document":{"type":"document_url","document_url":"data:application/pdf;base64,INVALID!"}}), "data URI")]
+#[tokio::test]
+async fn rejects_invalid_guardrail_body_before_sending(
+    #[case] model: &str,
+    #[case] body: Value,
+    #[case] expected: &str,
+) {
+    use crate::ocr::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks};
+
+    struct Rewrite(Value);
+    impl OcrHooks for Rewrite {
+        fn has_guardrails(&self) -> bool {
+            true
+        }
+
+        fn during_call(
+            &self,
+            request: OcrDuringCallRequest,
+        ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
+            Box::pin(async move {
+                Ok(OcrDuringCallRequest {
+                    body: self.0.clone(),
+                    ..request
+                })
+            })
+        }
+    }
+
+    let mut request = wire_request(
+        model,
+        "http://127.0.0.1:1",
+        json!({"vertex_project":"test-project"}),
+    );
+    request.hooks = Arc::new(Rewrite(body));
+    let error = perform_ocr(request).await.unwrap_err();
+    assert_eq!(error.kind(), crate::error::ErrorKind::InvalidRequest);
+    assert!(error.to_string().contains(expected), "{error}");
 }

@@ -1,5 +1,5 @@
 use crate::constants::{REDUCTO_ID_PREFIX, REDUCTO_OCR_API_BASE};
-use crate::ocr::backends::{OcrBackend, PreparedOcrBackend};
+use crate::ocr::backends::{HostConfig, OcrHost, OcrIntegration, PreparedOcrBackend};
 use crate::ocr::document::InlineDocument;
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::formats::reducto::{
@@ -9,7 +9,13 @@ use crate::ocr::formats::reducto::{
 use crate::ocr::types::{OcrConnection, OcrDocument};
 use crate::providers::reducto::auth;
 
-pub struct ReductoOcrBackend;
+#[derive(Clone, Debug)]
+pub struct ReductoHost;
+
+impl OcrHost for ReductoHost {
+    type Config = ();
+    const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::Reducto;
+}
 
 pub fn normalize_api_base(api_base: Option<&str>) -> &str {
     api_base
@@ -67,18 +73,20 @@ async fn prepare_reducto_document(
 }
 
 macro_rules! impl_reducto_backend {
-    ($format:ty, $params:ty) => {
-        impl OcrBackend<$format> for ReductoOcrBackend {
-            type Config = ();
+    ($integration:ident, $format:ident, $params:ty) => {
+        #[derive(Clone, Debug)]
+        pub struct $integration;
 
-            fn provider_name(&self) -> &'static str {
-                "reducto"
-            }
+        impl OcrIntegration for $integration {
+            type Host = ReductoHost;
+            type Format = $format;
+            type PreparedDocument = ReductoFileId;
+            const FORMAT: Self::Format = $format;
 
             async fn prepare(
                 &self,
                 connection: &OcrConnection,
-                _config: &Self::Config,
+                _config: &HostConfig<Self>,
                 _model: &str,
                 _params: &$params,
                 env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -118,5 +126,5 @@ macro_rules! impl_reducto_backend {
     };
 }
 
-impl_reducto_backend!(ReductoParseV3Format, ReductoV3Params);
-impl_reducto_backend!(ReductoParseLegacyFormat, ReductoLegacyParams);
+impl_reducto_backend!(ReductoV3, ReductoParseV3Format, ReductoV3Params);
+impl_reducto_backend!(ReductoLegacy, ReductoParseLegacyFormat, ReductoLegacyParams);

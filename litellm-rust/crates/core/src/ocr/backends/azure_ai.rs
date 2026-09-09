@@ -1,6 +1,6 @@
 use crate::auth::azure::AzureAuthInputs;
 use crate::constants::{AZURE_AI_OCR_PATH, AZURE_DI_API_VERSION};
-use crate::ocr::backends::{OcrBackend, PreparedOcrBackend};
+use crate::ocr::backends::{HostConfig, OcrHost, OcrIntegration, PreparedOcrBackend};
 use crate::ocr::error::{OcrError, OcrRequestError};
 use crate::ocr::formats::document_intelligence::{
     AzureDocumentIntelligenceOcrFormat,
@@ -25,20 +25,20 @@ fn encode_model_id(model: &str) -> Result<String, OcrRequestError> {
     Ok(utf8_percent_encode(model, PATH_SEGMENT).to_string())
 }
 
-pub struct AzureMistralOcrBackend;
+#[derive(Clone, Debug)]
+pub struct AzureMistral;
 
-impl OcrBackend<MistralOcrFormat> for AzureMistralOcrBackend {
-    type Config = AzureAuthInputs;
-
-    fn provider_name(&self) -> &'static str {
-        "azure_ai"
-    }
+impl OcrIntegration for AzureMistral {
+    type Host = AzureHost;
+    type Format = MistralOcrFormat;
+    type PreparedDocument = crate::ocr::document::InlineOcrDocument;
+    const FORMAT: Self::Format = MistralOcrFormat;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     async fn prepare(
         &self,
         connection: &OcrConnection,
-        config: &Self::Config,
+        config: &HostConfig<Self>,
         _model: &str,
         _params: &MistralOcrParams,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -57,13 +57,21 @@ impl OcrBackend<MistralOcrFormat> for AzureMistralOcrBackend {
         })
     }
 
+    fn validate_request_body(
+        &self,
+        body: &crate::ocr::formats::mistral::types::MistralOcrRequest,
+    ) -> Result<(), crate::ocr::error::OcrRequestError> {
+        crate::ocr::document::InlineOcrDocument::try_from(body.document.clone())?;
+        Ok(())
+    }
+
     async fn prepare_document(
         &self,
         client: &crate::ocr::OcrClient,
         document: OcrDocument,
         connection: &OcrConnection,
         _headers: &[(String, String)],
-    ) -> Result<OcrDocument, OcrError> {
+    ) -> Result<Self::PreparedDocument, OcrError> {
         crate::ocr::document::inline_remote_document(
             client.document_fetcher(),
             document,
@@ -73,19 +81,19 @@ impl OcrBackend<MistralOcrFormat> for AzureMistralOcrBackend {
     }
 }
 
-pub struct AzureDocumentIntelligenceOcrBackend;
+#[derive(Clone, Debug)]
+pub struct AzureDocumentIntelligence;
 
-impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenceOcrBackend {
-    type Config = AzureAuthInputs;
-
-    fn provider_name(&self) -> &'static str {
-        "azure_ai"
-    }
+impl OcrIntegration for AzureDocumentIntelligence {
+    type Host = AzureHost;
+    type Format = AzureDocumentIntelligenceOcrFormat;
+    type PreparedDocument = OcrDocument;
+    const FORMAT: Self::Format = AzureDocumentIntelligenceOcrFormat;
 
     async fn prepare(
         &self,
         connection: &OcrConnection,
-        config: &Self::Config,
+        config: &HostConfig<Self>,
         model: &str,
         params: &DocumentIntelligenceParams,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -124,7 +132,7 @@ impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenc
         document: OcrDocument,
         _connection: &OcrConnection,
         _headers: &[(String, String)],
-    ) -> Result<OcrDocument, OcrError> {
+    ) -> Result<Self::PreparedDocument, OcrError> {
         Ok(document)
     }
 
@@ -155,4 +163,12 @@ impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenc
         )
         .await
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct AzureHost;
+
+impl OcrHost for AzureHost {
+    type Config = AzureAuthInputs;
+    const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::AzureAi;
 }

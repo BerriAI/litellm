@@ -41,14 +41,34 @@ impl<'a> InlineDocument<'a> {
     }
 }
 
+#[derive(Debug)]
+pub struct InlineOcrDocument(OcrDocument);
+
+impl TryFrom<OcrDocument> for InlineOcrDocument {
+    type Error = OcrRequestError;
+
+    fn try_from(document: OcrDocument) -> Result<Self, Self::Error> {
+        let inline =
+            InlineDocument::parse(document.source())?.ok_or(OcrRequestError::InvalidDataUri)?;
+        inline.decode(crate::constants::OCR_INLINE_MAX_BYTES)?;
+        Ok(Self(document))
+    }
+}
+
+impl From<InlineOcrDocument> for OcrDocument {
+    fn from(document: InlineOcrDocument) -> Self {
+        document.0
+    }
+}
+
 pub(crate) async fn inline_remote_document(
     fetcher: &MediaFetcher,
     document: OcrDocument,
     connection: &OcrConnection,
-) -> Result<OcrDocument, OcrError> {
+) -> Result<InlineOcrDocument, OcrError> {
     let source = document.source();
     if !source.starts_with("http://") && !source.starts_with("https://") {
-        return Ok(document);
+        return Ok(InlineOcrDocument::try_from(document)?);
     }
     let url = Url::parse(source).map_err(|_| OcrRequestError::RequestField {
         path: "document URL".into(),
@@ -64,11 +84,11 @@ pub(crate) async fn inline_remote_document(
         )
         .await
         .map_err(map_media_error)?;
-    Ok(document.with_source(format!(
+    Ok(InlineOcrDocument::try_from(document.with_source(format!(
         "data:{};base64,{}",
         downloaded.content_type,
         STANDARD.encode(downloaded.bytes)
-    )))
+    )))?)
 }
 
 fn map_media_error(error: MediaError) -> OcrError {
@@ -117,6 +137,27 @@ mod tests {
                 Err(OcrRequestError::InlineDocumentTooLarge)
             );
         }
+    }
+
+    #[rstest]
+    #[case("https://example.com/document.pdf")]
+    #[case("reducto://document")]
+    #[case("data:application/pdf;base64,INVALID!")]
+    #[case("")]
+    fn inline_document_rejects_unprepared_sources(#[case] source: &str) {
+        let document = OcrDocument::DocumentUrl {
+            document_url: source.into(),
+        };
+        assert!(super::InlineOcrDocument::try_from(document).is_err());
+    }
+
+    #[test]
+    fn inline_document_preserves_valid_image_source() {
+        let document = OcrDocument::ImageUrl {
+            image_url: "data:image/png;base64,YWJj".into(),
+        };
+        let prepared = super::InlineOcrDocument::try_from(document.clone()).unwrap();
+        assert_eq!(OcrDocument::from(prepared), document);
     }
 
     #[test]
@@ -216,7 +257,7 @@ mod tests {
         let request = server.await.expect("server completes");
 
         assert_eq!(
-            prepared.source(),
+            OcrDocument::from(prepared).source(),
             "data:application/pdf;base64,YWJj"
         );
         assert!(!request.to_ascii_lowercase().contains("authorization"));

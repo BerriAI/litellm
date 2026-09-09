@@ -1,4 +1,4 @@
-use crate::ocr::backends::OcrBackend;
+use crate::ocr::backends::OcrIntegration;
 use crate::ocr::registry::{AZURE_MISTRAL, MISTRAL};
 use crate::ocr::tests::body;
 use crate::ocr::types::OcrConnection;
@@ -23,7 +23,6 @@ async fn azure_ai_mistral_ocr_uses_generic_api_base() {
         ..Default::default()
     };
     let prepared = AZURE_MISTRAL
-        .backend
         .prepare(
             &connection,
             &Default::default(),

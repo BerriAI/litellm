@@ -1,6 +1,6 @@
-use super::backends::OcrBackend;
+use super::backends::{HostConfig, InputParams, MappedParams, OcrIntegration};
 use super::formats::OcrFormat;
-use super::registry::OcrIntegration;
+
 use super::types::{OcrConnection, OcrDocument};
 use crate::Error;
 
@@ -8,34 +8,32 @@ pub use super::registry::{
     OcrIntegrationKind, OcrIntegrationRequest, OcrModel, OcrProvider, resolve_ocr_integration,
 };
 
-pub(crate) struct PreparedOcrRequest<F, B>
+pub(crate) struct MappedOcrRequest<I>
 where
-    F: OcrFormat,
-    B: OcrBackend<F>,
+    I: OcrIntegration,
 {
-    pub integration: OcrIntegration<F, B>,
+    pub integration: I,
     pub model: String,
     pub document: OcrDocument,
-    pub params: F::MappedParams,
-    pub backend_config: B::Config,
+    pub params: MappedParams<I>,
+    pub backend_config: HostConfig<I>,
     pub connection: OcrConnection,
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(crate) fn prepare_ocr_call<F, B>(
-    integration: OcrIntegration<F, B>,
+pub(crate) fn prepare_ocr_call<I>(
+    integration: I,
     model: String,
     document: OcrDocument,
-    params: F::InputParams,
-    backend_config: B::Config,
+    params: InputParams<I>,
+    backend_config: HostConfig<I>,
     connection: OcrConnection,
-) -> Result<PreparedOcrRequest<F, B>, Error>
+) -> Result<MappedOcrRequest<I>, Error>
 where
-    F: OcrFormat,
-    B: OcrBackend<F>,
+    I: OcrIntegration,
 {
-    let params = integration.format.map_ocr_params(params)?;
-    Ok(PreparedOcrRequest {
+    let params = integration.format().map_ocr_params(params)?;
+    Ok(MappedOcrRequest {
         integration,
         model,
         document,

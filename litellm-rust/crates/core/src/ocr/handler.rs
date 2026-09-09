@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use super::OcrClient;
-use super::backends::OcrBackend;
+use super::backends::{MappedParams, OcrIntegration};
 use super::formats::{OcrFormat, request_error};
 use super::hooks::{OcrDuringCallRequest, OcrHooks, OcrLifecycleHooks};
-use super::prepare::{PreparedOcrRequest, prepare_ocr_call};
+use super::prepare::{MappedOcrRequest, prepare_ocr_call};
 use super::registry::{
     AZURE_DOCUMENT_INTELLIGENCE, AZURE_MISTRAL, MISTRAL, OcrIntegrationInput,
     OcrIntegrationRequest, REDUCTO_LEGACY, REDUCTO_V3, VERTEX_DEEPSEEK, VERTEX_MISTRAL,
@@ -56,14 +56,13 @@ pub(crate) async fn perform_ocr_request(
 }
 
 impl OcrExecution<'_> {
-    async fn run<F, B>(
+    async fn run<I>(
         self,
-        integration: super::registry::OcrIntegration<F, B>,
-        input: OcrIntegrationInput<F::InputParams, B::Config>,
+        integration: I,
+        input: OcrIntegrationInput<I>,
     ) -> Result<OcrResponseData, Error>
     where
-        F: OcrFormat,
-        B: OcrBackend<F>,
+        I: OcrIntegration,
     {
         let Self {
             client,
@@ -100,18 +99,17 @@ impl OcrExecution<'_> {
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-async fn execute_ocr_provider_call<F, B>(
+async fn execute_ocr_provider_call<I>(
     client: &OcrClient,
-    request: PreparedOcrRequest<F, B>,
+    request: MappedOcrRequest<I>,
     hooks: &dyn OcrHooks,
     provider_name: &str,
 ) -> Result<OcrResponseData, Error>
 where
-    F: OcrFormat,
-    B: OcrBackend<F>,
+    I: OcrIntegration,
 {
-    let backend = &request.integration.backend;
-    let format = &request.integration.format;
+    let backend = &request.integration;
+    let format = &request.integration.format();
     let prepared_backend = backend
         .prepare(
             &request.connection,
@@ -140,30 +138,94 @@ where
     let document = backend
         .prepare_document(client, document, &request.connection, &headers)
         .await?;
-    let body = serde_json::to_value(format.transform_ocr_request(
-        &request.model,
-        document,
-        &request.params,
-    )?)
-    .map_err(|_| request_error("body"))?;
+    let body = format.transform_ocr_request(&request.model, document.into(), &request.params)?;
     let body = if !backend.guard_document_before_preparation() && hooks.has_guardrails() {
         let guarded = hooks
             .during_call(OcrDuringCallRequest {
                 model: request.model.clone(),
                 custom_llm_provider: provider_name.into(),
                 url: url.clone(),
-                body,
+                body: serde_json::to_value(body).map_err(|_| request_error("body"))?,
             })
             .await?;
-        guarded.body
-    } else {
+        let body: OcrWireBody<<I::Format as OcrFormat>::RequestBody> =
+            OcrWireBody::decode(guarded.body)?;
+        backend.validate_request_body(&body.body)?;
         body
+    } else {
+        OcrWireBody {
+            body,
+            extra: serde_json::Map::new(),
+        }
     };
+    send_ocr_call(
+        client,
+        ReadyOcrCall {
+            integration: request.integration,
+            model: request.model,
+            params: request.params,
+            connection: request.connection,
+            url,
+            headers,
+            body,
+        },
+    )
+    .await
+}
+
+#[derive(serde::Serialize)]
+struct OcrWireBody<B> {
+    #[serde(flatten)]
+    body: B,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl<B: serde::Serialize + serde::de::DeserializeOwned> OcrWireBody<B> {
+    fn decode(value: serde_json::Value) -> Result<Self, Error> {
+        let body: B = super::wire::decode_request_value(value.clone(), "guardrail.body")?;
+        let serde_json::Value::Object(fields) = value else {
+            return Err(request_error("guardrail.body"));
+        };
+        let known = serde_json::to_value(&body).map_err(|_| request_error("guardrail.body"))?;
+        let extra = fields
+            .into_iter()
+            .filter(|(key, _)| known.get(key).is_none())
+            .collect();
+        Ok(Self { body, extra })
+    }
+}
+
+struct ReadyOcrCall<I: OcrIntegration> {
+    integration: I,
+    model: String,
+    params: MappedParams<I>,
+    connection: OcrConnection,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: OcrWireBody<<I::Format as OcrFormat>::RequestBody>,
+}
+
+async fn send_ocr_call<I: OcrIntegration>(
+    client: &OcrClient,
+    request: ReadyOcrCall<I>,
+) -> Result<OcrResponseData, Error> {
+    let ReadyOcrCall {
+        integration,
+        model,
+        params,
+        connection,
+        url,
+        headers,
+        body,
+    } = request;
+    let backend = &integration;
+    let format = integration.format();
     let mut builder = client
         .provider_http()
         .post(&url)
         .json(&body)
-        .timeout(request.connection.timeout);
+        .timeout(connection.timeout);
     for (name, value) in &headers {
         builder = builder.header(name, value);
     }
@@ -171,16 +233,9 @@ where
         .await
         .map_err(crate::error::TransportError::from)?;
     let decoded = backend
-        .read_response(
-            client,
-            response,
-            &url,
-            &headers,
-            &request.connection,
-            &request.params,
-        )
+        .read_response(client, response, &url, &headers, &connection, &params)
         .await?;
-    let response = format.transform_ocr_response(&request.model, decoded.data, &request.params)?;
+    let response = format.transform_ocr_response(&model, decoded.data, &params)?;
     Ok(OcrResponseData {
         provider_native_response: decoded.native,
         ..response

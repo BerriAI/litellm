@@ -6,57 +6,15 @@ use crate::auth::azure::AzureAuthInputs;
 use crate::providers::vertex_ai::auth::VertexAuthInputs;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
-use super::backends::OcrBackend;
-use super::backends::azure_ai::{AzureDocumentIntelligenceOcrBackend, AzureMistralOcrBackend};
-use super::backends::mistral::MistralOcrBackend;
-use super::backends::reducto::ReductoOcrBackend;
-use super::backends::vertex_ai::VertexAiOcrBackend;
-use super::formats::OcrFormat;
-use super::formats::deepseek::{DeepSeekOcrFormat, types::DeepSeekOcrParams};
-use super::formats::document_intelligence::{
-    AzureDocumentIntelligenceOcrFormat, types::DocumentIntelligenceInputParams,
-};
-use super::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
-use super::formats::reducto::{
-    ReductoParseLegacyFormat, ReductoParseV3Format,
-    types::{ReductoLegacyParams, ReductoV3Params},
-};
+pub use super::backends::azure_ai::{AzureDocumentIntelligence, AzureMistral};
+pub use super::backends::mistral::MistralDirect;
+pub use super::backends::reducto::{ReductoLegacy, ReductoV3};
+pub use super::backends::vertex_ai::{VertexDeepSeek, VertexMistral};
+use super::backends::{HostConfig, InputParams};
+pub use super::backends::{OcrHost, OcrIntegration};
 use super::types::OcrRequestFormat;
 
-pub(crate) struct OcrIntegration<F, B>
-where
-    F: OcrFormat,
-    B: OcrBackend<F>,
-{
-    pub(crate) format: F,
-    pub(crate) backend: B,
-}
-
-impl<F, B> OcrIntegration<F, B>
-where
-    F: OcrFormat,
-    B: OcrBackend<F>,
-{
-    const fn new(format: F, backend: B) -> Self {
-        Self { format, backend }
-    }
-
-    pub(crate) fn decode_input_params(
-        &self,
-        params: Map<String, Value>,
-        prefix: &str,
-    ) -> Result<F::InputParams, super::error::OcrRequestError> {
-        validate_request_format(
-            &params,
-            self.backend.supports_native_request_format(),
-            self.backend.provider_name(),
-        )?;
-        F::validate_input_params(&params)?;
-        super::wire::decode_request_value(Value::Object(params), prefix)
-    }
-}
-
-fn validate_request_format(
+pub(crate) fn validate_request_format(
     params: &Map<String, Value>,
     supports_native: bool,
     provider: &'static str,
@@ -72,43 +30,55 @@ fn validate_request_format(
     Ok(())
 }
 
-pub(crate) const MISTRAL: OcrIntegration<MistralOcrFormat, MistralOcrBackend> =
-    OcrIntegration::new(MistralOcrFormat, MistralOcrBackend);
-pub(crate) const AZURE_MISTRAL: OcrIntegration<MistralOcrFormat, AzureMistralOcrBackend> =
-    OcrIntegration::new(MistralOcrFormat, AzureMistralOcrBackend);
-pub(crate) const AZURE_DOCUMENT_INTELLIGENCE: OcrIntegration<
-    AzureDocumentIntelligenceOcrFormat,
-    AzureDocumentIntelligenceOcrBackend,
-> = OcrIntegration::new(
-    AzureDocumentIntelligenceOcrFormat,
-    AzureDocumentIntelligenceOcrBackend,
-);
-pub(crate) const VERTEX_MISTRAL: OcrIntegration<MistralOcrFormat, VertexAiOcrBackend> =
-    OcrIntegration::new(MistralOcrFormat, VertexAiOcrBackend);
-pub(crate) const VERTEX_DEEPSEEK: OcrIntegration<DeepSeekOcrFormat, VertexAiOcrBackend> =
-    OcrIntegration::new(DeepSeekOcrFormat, VertexAiOcrBackend);
-pub(crate) const REDUCTO_V3: OcrIntegration<ReductoParseV3Format, ReductoOcrBackend> =
-    OcrIntegration::new(ReductoParseV3Format, ReductoOcrBackend);
-pub(crate) const REDUCTO_LEGACY: OcrIntegration<ReductoParseLegacyFormat, ReductoOcrBackend> =
-    OcrIntegration::new(ReductoParseLegacyFormat, ReductoOcrBackend);
+pub(crate) const MISTRAL: MistralDirect = MistralDirect;
+pub(crate) const AZURE_MISTRAL: AzureMistral = AzureMistral;
+pub(crate) const AZURE_DOCUMENT_INTELLIGENCE: AzureDocumentIntelligence = AzureDocumentIntelligence;
+pub(crate) const VERTEX_MISTRAL: VertexMistral = VertexMistral;
+pub(crate) const VERTEX_DEEPSEEK: VertexDeepSeek = VertexDeepSeek;
+pub(crate) const REDUCTO_V3: ReductoV3 = ReductoV3;
+pub(crate) const REDUCTO_LEGACY: ReductoLegacy = ReductoLegacy;
 
+/// ```
+/// use litellm_core::ocr::registry::{MistralDirect, OcrIntegrationInput};
+/// use litellm_core::ocr::formats::mistral::types::MistralOcrParams;
+/// let input = OcrIntegrationInput::<MistralDirect> {
+///     params: MistralOcrParams::default(),
+///     backend_config: (),
+/// };
+/// ```
+///
+/// ```compile_fail
+/// use litellm_core::ocr::registry::{MistralDirect, OcrIntegrationInput};
+/// use litellm_core::ocr::formats::deepseek::types::DeepSeekOcrParams;
+/// let input = OcrIntegrationInput::<MistralDirect> {
+///     params: DeepSeekOcrParams::default(),
+///     backend_config: (),
+/// };
+/// ```
+///
+/// ```compile_fail
+/// use litellm_core::ocr::registry::{VertexMistral, OcrIntegrationInput};
+/// use litellm_core::ocr::formats::mistral::types::MistralOcrParams;
+/// let input = OcrIntegrationInput::<VertexMistral> {
+///     params: MistralOcrParams::default(),
+///     backend_config: (),
+/// };
+/// ```
 #[derive(Clone, Debug)]
-pub struct OcrIntegrationInput<P, C> {
-    pub params: P,
-    pub backend_config: C,
+pub struct OcrIntegrationInput<I: OcrIntegration> {
+    pub params: InputParams<I>,
+    pub backend_config: HostConfig<I>,
 }
 
 #[derive(Clone, Debug)]
 pub enum OcrIntegrationRequest {
-    Mistral(OcrIntegrationInput<MistralOcrParams, ()>),
-    AzureMistral(OcrIntegrationInput<MistralOcrParams, AzureAuthInputs>),
-    AzureDocumentIntelligence(
-        OcrIntegrationInput<DocumentIntelligenceInputParams, AzureAuthInputs>,
-    ),
-    VertexMistral(OcrIntegrationInput<MistralOcrParams, VertexAuthInputs>),
-    VertexDeepSeek(OcrIntegrationInput<DeepSeekOcrParams, VertexAuthInputs>),
-    ReductoV3(OcrIntegrationInput<ReductoV3Params, ()>),
-    ReductoLegacy(OcrIntegrationInput<ReductoLegacyParams, ()>),
+    Mistral(OcrIntegrationInput<MistralDirect>),
+    AzureMistral(OcrIntegrationInput<AzureMistral>),
+    AzureDocumentIntelligence(OcrIntegrationInput<AzureDocumentIntelligence>),
+    VertexMistral(OcrIntegrationInput<VertexMistral>),
+    VertexDeepSeek(OcrIntegrationInput<VertexDeepSeek>),
+    ReductoV3(OcrIntegrationInput<ReductoV3>),
+    ReductoLegacy(OcrIntegrationInput<ReductoLegacy>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,4 +1,4 @@
-use crate::ocr::backends::OcrBackend;
+use crate::ocr::backends::OcrIntegration;
 use crate::ocr::formats::OcrFormat;
 use crate::ocr::prepare::OcrIntegrationKind;
 use crate::ocr::registry::{AZURE_DOCUMENT_INTELLIGENCE, decode_integration_request};
@@ -26,7 +26,6 @@ async fn prepared_url(
     params: &<crate::ocr::formats::document_intelligence::AzureDocumentIntelligenceOcrFormat as OcrFormat>::MappedParams,
 ) -> Result<String, crate::ocr::error::OcrError> {
     AZURE_DOCUMENT_INTELLIGENCE
-        .backend
         .prepare(&connection(), &Default::default(), model, params, &|_| None)
         .await
         .map(|prepared| prepared.url)
@@ -69,7 +68,7 @@ fn invalid_page_values_never_panic(#[case] pages: Value) {
     let input = serde_json::from_value(json!({"pages":pages})).unwrap();
     assert!(
         AZURE_DOCUMENT_INTELLIGENCE
-            .format
+            .format()
             .map_ocr_params(input)
             .is_err()
     );
@@ -107,7 +106,7 @@ async fn document_intelligence_maps_features(#[case] features: Value, #[case] ex
 fn document_intelligence_rejects_invalid_features(#[case] features: Value) {
     assert!(
         AZURE_DOCUMENT_INTELLIGENCE
-            .format
+            .format()
             .map_ocr_params(serde_json::from_value(json!({"features":features})).unwrap())
             .is_err()
     );

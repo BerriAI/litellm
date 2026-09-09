@@ -12,7 +12,7 @@ pub mod mistral;
 pub mod reducto;
 
 pub trait OcrFormat: Send + Sync + Sized + 'static {
-    type InputParams: Clone + Serialize + DeserializeOwned + Send + Sync;
+    type InputParams: std::fmt::Debug + Clone + Serialize + DeserializeOwned + Send + Sync;
     type MappedParams: Clone + Serialize + Send + Sync + Into<Self::InputParams>;
     type PreparedDocument: Send;
     type RequestBody: Serialize + DeserializeOwned + Send + Sync;

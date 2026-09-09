@@ -1,5 +1,4 @@
-use crate::ocr::backends::OcrBackend;
-use crate::ocr::formats::mistral::MistralOcrFormat;
+use crate::ocr::backends::OcrIntegration;
 use crate::ocr::registry::{MISTRAL, VERTEX_MISTRAL};
 use crate::ocr::tests::body;
 use crate::ocr::types::OcrConnection;
@@ -35,8 +34,8 @@ async fn vertex_mistral_url_uses_project_location_and_model() {
             .unwrap(),
     )
     .unwrap();
-    let prepared = OcrBackend::<MistralOcrFormat>::prepare(
-        &VERTEX_MISTRAL.backend,
+    let prepared = OcrIntegration::prepare(
+        &VERTEX_MISTRAL,
         &connection,
         &config,
         "mistral-ocr-maas",
@@ -57,8 +56,8 @@ async fn vertex_mistral_resolves_provider_environment_in_the_backend() {
         api_key: Some("token".into()),
         ..Default::default()
     };
-    let prepared = OcrBackend::<MistralOcrFormat>::prepare(
-        &VERTEX_MISTRAL.backend,
+    let prepared = OcrIntegration::prepare(
+        &VERTEX_MISTRAL,
         &connection,
         &Default::default(),
         "model",

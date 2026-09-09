@@ -17,17 +17,40 @@ pub struct PreparedOcrBackend {
     pub headers: Vec<(String, String)>,
 }
 
-pub trait OcrBackend<F: OcrFormat>: Send + Sync + Sized + 'static {
-    type Config: Clone + Send + Sync + 'static;
+pub trait OcrIntegration: Send + Sync + Sized + 'static {
+    type Host: OcrHost;
+    type Format: OcrFormat;
+    type PreparedDocument: Into<<Self::Format as OcrFormat>::PreparedDocument> + Send;
+    const FORMAT: Self::Format;
 
-    fn provider_name(&self) -> &'static str;
+    fn provider_name(&self) -> &'static str {
+        Self::Host::PROVIDER.as_str()
+    }
+
+    fn format(&self) -> Self::Format {
+        Self::FORMAT
+    }
+
+    fn decode_input_params(
+        &self,
+        params: serde_json::Map<String, serde_json::Value>,
+        prefix: &str,
+    ) -> Result<InputParams<Self>, super::error::OcrRequestError> {
+        super::registry::validate_request_format(
+            &params,
+            self.supports_native_request_format(),
+            self.provider_name(),
+        )?;
+        Self::Format::validate_input_params(&params)?;
+        super::wire::decode_request_value(serde_json::Value::Object(params), prefix)
+    }
 
     fn prepare(
         &self,
         connection: &OcrConnection,
-        config: &Self::Config,
+        config: &HostConfig<Self>,
         model: &str,
-        params: &F::MappedParams,
+        params: &MappedParams<Self>,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> impl Future<Output = Result<PreparedOcrBackend, OcrError>> + Send;
 
@@ -37,9 +60,16 @@ pub trait OcrBackend<F: OcrFormat>: Send + Sync + Sized + 'static {
         document: OcrDocument,
         connection: &OcrConnection,
         headers: &[(String, String)],
-    ) -> impl Future<Output = Result<F::PreparedDocument, OcrError>> + Send;
+    ) -> impl Future<Output = Result<Self::PreparedDocument, OcrError>> + Send;
 
-    fn preserve_native_response(&self, _params: &F::MappedParams) -> bool {
+    fn validate_request_body(
+        &self,
+        _body: &<Self::Format as OcrFormat>::RequestBody,
+    ) -> Result<(), super::error::OcrRequestError> {
+        Ok(())
+    }
+
+    fn preserve_native_response(&self, _params: &MappedParams<Self>) -> bool {
         false
     }
 
@@ -54,8 +84,10 @@ pub trait OcrBackend<F: OcrFormat>: Send + Sync + Sized + 'static {
         _url: &str,
         _headers: &[(String, String)],
         _connection: &OcrConnection,
-        params: &F::MappedParams,
-    ) -> impl Future<Output = Result<DecodedOcrResponse<F::ResponseBody>, OcrError>> + Send {
+        params: &MappedParams<Self>,
+    ) -> impl Future<
+        Output = Result<DecodedOcrResponse<<Self::Format as OcrFormat>::ResponseBody>, OcrError>,
+    > + Send {
         super::client::read_json_response(response, self.preserve_native_response(params))
     }
 
@@ -63,3 +95,12 @@ pub trait OcrBackend<F: OcrFormat>: Send + Sync + Sized + 'static {
         false
     }
 }
+
+pub trait OcrHost: Send + Sync + 'static {
+    type Config: Clone + std::fmt::Debug + Send + Sync + 'static;
+    const PROVIDER: super::registry::OcrProvider;
+}
+
+pub type InputParams<I> = <<I as OcrIntegration>::Format as OcrFormat>::InputParams;
+pub type MappedParams<I> = <<I as OcrIntegration>::Format as OcrFormat>::MappedParams;
+pub type HostConfig<I> = <<I as OcrIntegration>::Host as OcrHost>::Config;
