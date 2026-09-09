@@ -1032,8 +1032,8 @@ class TestPasswordResetRequiredSessionMinting:
         row = _db_user_row(password="Str0ng!Passw0rd", password_reset_required=None)
         result, key_kwargs = await self._login(_prisma_with_user(row))
 
-        assert "allowed_routes" not in key_kwargs
-        assert "metadata" not in key_kwargs
+        assert key_kwargs["allowed_routes"] is None
+        assert not key_kwargs["metadata"]
         assert result.password_reset_required is False
 
     async def _login_with_screen_result(self, mock_prisma_client, breached: bool) -> tuple[LoginResult, dict, dict]:

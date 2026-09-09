@@ -10,7 +10,7 @@ import secrets
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import jwt
 from fastapi import HTTPException
@@ -47,6 +47,9 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
+if TYPE_CHECKING:
+    from prisma import types as prisma_types
+
 BREACH_RECHECK_INTERVAL: Final = timedelta(hours=24)
 PASSWORD_RESET_ALLOWED_ROUTES: Final = ("/user/password/change",)
 
@@ -80,12 +83,15 @@ async def screen_login_password_for_breach(
     if not _breach_recheck_due(last_breach_check_at):
         return False
     breached: Final = await is_password_breached(password, general_settings, client)
-    update_data: Final = {
-        "last_breach_check_at": datetime.now(timezone.utc),
-        **({"password_reset_required": True} if breached else {}),
-    }
+    checked_at: Final = datetime.now(timezone.utc)
+    update_data: Final[prisma_types.LiteLLM_UserTableUpdateInput] = (
+        {"last_breach_check_at": checked_at, "password_reset_required": True}
+        if breached
+        else {"last_breach_check_at": checked_at}
+    )
+    find_user: Final[prisma_types.LiteLLM_UserTableWhereInput] = {"user_id": user_id}
     try:
-        await UserRepository(prisma_client).table.update(where={"user_id": user_id}, data=update_data)
+        await UserRepository(prisma_client).table.update(where=find_user, data=update_data)
     except Exception as e:  # noqa: BLE001  # a failed stamp must never surface into the login
         verbose_proxy_logger.warning("Login-time breach screening could not update user %s: %s", user_id, e)
     return breached
@@ -382,25 +388,14 @@ async def authenticate_user(
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
-                    **{
-                        "user_role": user_role,
-                        "duration": LITELLM_UI_SESSION_DURATION,
-                        "key_max_budget": litellm.max_ui_session_budget,
-                        "models": [],
-                        "aliases": {},
-                        "config": {},
-                        "spend": 0,
-                        "user_id": user_id,
-                        "team_id": "litellm-dashboard",
-                        **(
-                            {
-                                "allowed_routes": list(PASSWORD_RESET_ALLOWED_ROUTES),
-                                "metadata": {"password_reset_required": True},
-                            }
-                            if password_reset_required
-                            else {}
-                        ),
-                    },
+                    user_role=user_role,
+                    duration=LITELLM_UI_SESSION_DURATION,
+                    key_max_budget=litellm.max_ui_session_budget,
+                    spend=0,
+                    user_id=user_id,
+                    team_id="litellm-dashboard",
+                    allowed_routes=list(PASSWORD_RESET_ALLOWED_ROUTES) if password_reset_required else None,
+                    metadata={"password_reset_required": True} if password_reset_required else {},
                 )
             else:
                 raise ProxyException(
