@@ -71,9 +71,7 @@ class TestRichInputExtraction:
         }
 
     def test_returns_none_when_only_query_present(self):
-        assert (
-            WebSearchInterceptionLogger._rich_search_input({"query": "plain"}) is None
-        )
+        assert WebSearchInterceptionLogger._rich_search_input({"query": "plain"}) is None
 
     def test_returns_none_for_non_mapping_input(self):
         assert WebSearchInterceptionLogger._rich_search_input(None) is None
@@ -90,12 +88,7 @@ class TestRichInputExtraction:
 
     def test_ignores_string_valued_search_queries(self):
         # A string is a Sequence; it must not be treated as a list of queries.
-        assert (
-            WebSearchInterceptionLogger._rich_search_input(
-                {"query": "q", "search_queries": "not a list"}
-            )
-            is None
-        )
+        assert WebSearchInterceptionLogger._rich_search_input({"query": "q", "search_queries": "not a list"}) is None
 
 
 class TestProviderSupport:
@@ -107,10 +100,7 @@ class TestProviderSupport:
 
     def test_unknown_provider_is_unsupported(self):
         assert WebSearchInterceptionLogger._provider_supports_rich_search(None) is False
-        assert (
-            WebSearchInterceptionLogger._provider_supports_rich_search("not_a_provider")
-            is False
-        )
+        assert WebSearchInterceptionLogger._provider_supports_rich_search("not_a_provider") is False
 
 
 class TestExecuteSearchShape:
@@ -202,9 +192,7 @@ class TestCallSiteWiring:
         monkeypatch.setattr(proxy_server, "llm_router", _mock_router("parallel_ai"))
         monkeypatch.setattr(litellm, "asearch", mock_asearch)
 
-        tool_calls = [
-            {"id": "toolu_1", "name": "litellm_web_search", "input": dict(RICH_INPUT)}
-        ]
+        tool_calls = [{"id": "toolu_1", "name": "litellm_web_search", "input": dict(RICH_INPUT)}]
         await logger._build_anthropic_request_patch(
             model="claude",
             messages=[{"role": "user", "content": "hi"}],
