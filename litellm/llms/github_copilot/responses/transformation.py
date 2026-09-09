@@ -8,10 +8,11 @@ Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
 
+import copy
 import os
 import re
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -90,62 +91,78 @@ def _is_valid_regex(pattern: object) -> bool:
         return False
     try:
         re.compile(pattern)
-        return True
     except (re.error, OverflowError, ValueError):
         return False
+    else:
+        return True
+
+
+def _clean_schema_dict(current: dict[str, object], stack: list[object]) -> None:
+    """Sanitize regexes in a single JSON schema dict and push child schemas to stack."""
+    if "pattern" in current:
+        pattern_val = current["pattern"]
+        if not _is_valid_regex(pattern_val):
+            verbose_logger.debug(
+                "GitHub Copilot Responses API: Stripping incompatible tool schema regex pattern: %r",
+                pattern_val,
+            )
+            del current["pattern"]
+
+    if "patternProperties" in current and isinstance(current["patternProperties"], dict):
+        pp = current["patternProperties"]
+        invalid_keys = [pk for pk in pp if not _is_valid_regex(pk)]
+        for ik in invalid_keys:
+            verbose_logger.debug(
+                "GitHub Copilot Responses API: Stripping incompatible patternProperties regex key: %r",
+                ik,
+            )
+            del pp[ik]
+        stack.extend(sub for sub in pp.values() if isinstance(sub, (dict, list)))
+
+    for kw in ("properties", "$defs", "definitions", "dependentSchemas"):
+        mapping = current.get(kw)
+        if isinstance(mapping, dict):
+            stack.extend(sub for sub in mapping.values() if isinstance(sub, (dict, list)))
+
+    for key, val in current.items():
+        if key not in (
+            "properties",
+            "$defs",
+            "definitions",
+            "dependentSchemas",
+            "patternProperties",
+            "pattern",
+        ) and isinstance(val, (dict, list)):
+            stack.append(val)
 
 
 def _sanitize_json_schema_regex_patterns(schema: object) -> object:
-    """Recursively traverse a JSON schema and remove incompatible regex patterns.
+    """Iteratively traverse a JSON schema and remove incompatible regex patterns.
 
     Differentiates between schema keywords (e.g., 'pattern', 'patternProperties')
     and user-defined identifier mappings (e.g., 'properties', '$defs', 'definitions',
     'dependentSchemas') so that parameters named 'pattern' are not stripped.
     """
-    if isinstance(schema, dict):
-        cleaned: dict[str, object] = {}
-        for key, value in schema.items():
-            if key in ("properties", "$defs", "definitions", "dependentSchemas") and isinstance(value, dict):
-                # Mapping of property/type names -> subschemas. Keys are arbitrary user-defined names.
-                cleaned[key] = {
-                    prop_name: _sanitize_json_schema_regex_patterns(prop_schema)
-                    for prop_name, prop_schema in value.items()
-                }
-            elif key == "patternProperties" and isinstance(value, dict):
-                # Mapping of regex patterns -> subschemas. Keys are regex patterns.
-                cleaned_pp: dict[str, object] = {}
-                for pattern_key, pattern_schema in value.items():
-                    if _is_valid_regex(pattern_key):
-                        cleaned_pp[pattern_key] = _sanitize_json_schema_regex_patterns(pattern_schema)
-                    else:
-                        verbose_logger.debug(
-                            "GitHub Copilot Responses API: Stripping incompatible patternProperties regex key: %r",
-                            pattern_key,
-                        )
-                cleaned[key] = cleaned_pp
-            elif key == "pattern":
-                if _is_valid_regex(value):
-                    cleaned[key] = value
-                else:
-                    verbose_logger.debug(
-                        "GitHub Copilot Responses API: Stripping incompatible tool schema regex pattern: %r",
-                        value,
-                    )
-            elif isinstance(value, dict):
-                cleaned[key] = _sanitize_json_schema_regex_patterns(value)
-            elif isinstance(value, list):
-                cleaned[key] = [
-                    _sanitize_json_schema_regex_patterns(item) if isinstance(item, (dict, list)) else item
-                    for item in value
-                ]
-            else:
-                cleaned[key] = value
-        return cleaned
-    elif isinstance(schema, list):
-        return [
-            _sanitize_json_schema_regex_patterns(item) if isinstance(item, (dict, list)) else item for item in schema
-        ]
-    return schema
+    if not isinstance(schema, (dict, list)):
+        return schema
+
+    cleaned_schema = copy.deepcopy(schema)
+    stack: list[object] = [cleaned_schema]
+    seen_ids: set[int] = set()
+
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in seen_ids:
+            continue
+        seen_ids.add(current_id)
+
+        if isinstance(current, dict):
+            _clean_schema_dict(current, stack)
+        elif isinstance(current, list):
+            stack.extend(item for item in current if isinstance(item, (dict, list)))
+
+    return cleaned_schema
 
 
 class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -408,7 +425,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if tools is None:
             return None
-        cleaned_tools: list[object] = []
+        cleaned_tools: list[ALL_RESPONSES_API_TOOL_PARAMS] = []
         for tool in tools:
             if isinstance(tool, dict):
                 cleaned_tool = dict(tool)
@@ -425,10 +442,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     cleaned_tool["tools"] = GithubCopilotResponsesAPIConfig._sanitize_tool_regex_patterns(
                         cleaned_tool["tools"]
                     )
-                cleaned_tools.append(cleaned_tool)
+                cleaned_tools.append(cleaned_tool)  # pyright: ignore[reportArgumentType]  # cloned dict conforms to ALL_RESPONSES_API_TOOL_PARAMS
             else:
                 cleaned_tools.append(tool)
-        return cast(Sequence[ALL_RESPONSES_API_TOOL_PARAMS], cleaned_tools)
+        return cleaned_tools
 
     # ==================== Helper Methods ====================
 
