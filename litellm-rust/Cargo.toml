@@ -1,6 +1,9 @@
 [workspace]
 members = [
     "crates/core",
+    "crates/auth",
+    "crates/auth-python",
+    "crates/auth-aws",
     "crates/config",
     "crates/ai-gateway",
     "crates/python-interop",
@@ -15,6 +18,9 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
+litellm-auth = { path = "crates/auth", version = "0.1.0" }
+litellm-auth-python = { path = "crates/auth-python", version = "0.1.0" }
+litellm-auth-aws = { path = "crates/auth-aws", version = "0.1.0" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 litellm-core = { path = "crates/core" }

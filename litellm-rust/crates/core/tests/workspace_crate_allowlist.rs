@@ -1,6 +1,7 @@
-//! Enforcement: the litellm-rust workspace has exactly five crates.
+//! Enforcement: the litellm-rust workspace has exactly eight crates.
 //!
-//! `core` (the Rust SDK), `config` (the config-loading boundary),
+//! `core` (the Rust SDK), `auth` (shared auth contracts), `auth-python`
+//! (Python auth bindings), `auth-aws` (AWS auth mechanics), `config` (the config-loading boundary),
 //! `ai-gateway` (the HTTP/WebSocket host),
 //! `python-interop` (domain-neutral PyO3 primitives), and `python-bridge` (the
 //! PyO3 cdylib). Adding or removing a crate must be a
@@ -20,6 +21,9 @@ use std::path::{Path, PathBuf};
 /// workspace legitimately gains or loses a crate.
 const EXPECTED_MEMBERS: &[&str] = &[
     "crates/core",
+    "crates/auth",
+    "crates/auth-python",
+    "crates/auth-aws",
     "crates/config",
     "crates/ai-gateway",
     "crates/python-interop",
@@ -29,6 +33,9 @@ const EXPECTED_MEMBERS: &[&str] = &[
 /// The crate subdirectory names that must exist under `crates/`.
 const EXPECTED_CRATE_DIRS: &[&str] = &[
     "core",
+    "auth",
+    "auth-python",
+    "auth-aws",
     "config",
     "ai-gateway",
     "python-interop",

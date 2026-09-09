@@ -561,9 +561,16 @@ fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
         "aws_session_token": "hosttoken"
     }));
     let credentials = host_supplied_credentials(&supplied).expect("host credentials");
-    assert_eq!(credentials.access_key_id(), "AKIAHOST");
-    assert_eq!(credentials.secret_access_key(), "hostsecret");
-    assert_eq!(credentials.session_token(), Some("hosttoken"));
+    assert_eq!(
+        credentials,
+        litellm_auth_aws::Credentials::new(
+            "AKIAHOST",
+            "hostsecret",
+            Some("hosttoken".to_string()),
+            None,
+            "expected",
+        )
+    );
 
     // Without a full static pair there is nothing to honor, so the core falls
     // back to deriving credentials itself.
