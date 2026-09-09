@@ -13100,109 +13100,89 @@ class Router:
         )
         return registered_model_name
 
+    def _encrypted_affinity_allowed_deployment_ids(self, strategy: PreRoutingStrategy) -> frozenset[str]:
+        """The deployment ids `strategy` is itself configured to route to.
+
+        An `encrypted_content` marker arrives in the request body, so it is client
+        controlled. Honoring one that names a deployment outside the strategy's own
+        tiers would let a caller pin any deployment on the router and bypass the tier
+        configuration entirely, so the pin is confined to the tier models (a tier maps
+        to one model or a pool) plus the configured default model.
+
+        Only complexity routers reclassify a follow-up into a different model group,
+        which is the case #40237 is about; every other strategy yields no ids, so the
+        caller leaves the request alone.
+        """
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            ComplexityRouter,
+        )
+
+        if not isinstance(strategy, ComplexityRouter):
+            return frozenset()
+        tier_models: Final = frozenset(
+            model_name
+            for tier_value in strategy.config.tiers.values()
+            for model_name in ((tier_value,) if isinstance(tier_value, str) else tuple(tier_value))
+        )
+        default_model: Final = strategy.config.default_model
+        allowed_models: Final = tier_models | (frozenset((default_model,)) if default_model else frozenset())
+        return frozenset(
+            deployment_id
+            for model_name in allowed_models
+            for deployment_id in self.get_model_ids(model_name=model_name)
+        )
+
     def _resolve_encrypted_content_affinity_hook(
         self,
-        selected_strategy: Any,
-        request_kwargs: dict,
+        selected_strategy: "TaggedPreRoutingStrategy[PreRoutingStrategy]",
+        request_kwargs: Mapping[str, object],
         messages: list[dict[str, Any]] | None = None,
         input: str | list | None = None,
     ) -> Optional["PreRoutingHookResponse"]:
-        configured_callbacks: list[Any] = []
-        if hasattr(self, "optional_callbacks") and isinstance(
-            self.optional_callbacks, list
-        ):  # guard-ok: type discipline
-            configured_callbacks.extend(self.optional_callbacks)
-        if hasattr(self, "callbacks") and isinstance(self.callbacks, list):  # guard-ok: type discipline
-            configured_callbacks.extend(self.callbacks)
-        if hasattr(self, "pre_call_checks") and isinstance(self.pre_call_checks, list):  # guard-ok: type discipline
-            configured_callbacks.extend(self.pre_call_checks)
+        """Keep a follow-up carrying encrypted reasoning on the deployment that produced it.
 
-        affinity_enabled = (
-            "encrypted_content_affinity" in configured_callbacks
-            or bool(getattr(self, "enable_encrypted_content_affinity", False))  # guard-ok: boolean flag fallback
-            or any(
-                c.__class__.__name__ == "EncryptedContentAffinityCheck"
-                for c in configured_callbacks
-                if hasattr(c, "__class__")  # guard-ok: class inspection
-            )
-        )
-        if not affinity_enabled:
-            return None
+        A complexity router classifies every turn independently, so a follow-up whose
+        prompt reads as a different tier is sent to another model group. That crosses the
+        encryption boundary the `encrypted_content` is bound to, and the provider rejects
+        it with `invalid_encrypted_content` (or `EncryptedContentAffinityCheck` raises 503
+        first, when no deployment shares the boundary). Returning the originating
+        deployment's model group as the pre-routing decision skips the reclassification.
 
+        Returns None for anything that is not such a follow-up, leaving tier
+        classification untouched: no affinity callback registered, no marker in the
+        input, an originating deployment the router no longer knows, or one outside the
+        strategy's own tiers. See #40237.
+        """
         from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
             EncryptedContentAffinityCheck,
         )
+        from litellm.types.router import PreRoutingHookResponse
 
-        raw_input = (
-            input
-            if input is not None
-            else (messages if messages is not None else (request_kwargs.get("input") or request_kwargs.get("messages")))
+        affinity_registered: Final = any(
+            isinstance(callback, EncryptedContentAffinityCheck) for callback in (self.optional_callbacks or [])
         )
-        extracted_model_id = EncryptedContentAffinityCheck._extract_model_id_from_input(raw_input)
-        if not extracted_model_id:
+        if not affinity_registered:
             return None
 
-        strategy_params = getattr(selected_strategy, "litellm_params", None)  # guard-ok: type discipline
-        allowed_models: set[str] = set()
-        if isinstance(strategy_params, dict):
-            cfg_dict = strategy_params.get("complexity_router_config")
-            if isinstance(cfg_dict, dict):
-                tiers_dict = cfg_dict.get("tiers")
-                if isinstance(tiers_dict, dict):
-                    allowed_models.update(str(v) for v in tiers_dict.values() if v)
-            def_model = strategy_params.get("complexity_router_default_model")
-            if isinstance(def_model, str) and def_model:
-                allowed_models.add(def_model)
-        elif strategy_params is not None:
-            cfg_obj = getattr(strategy_params, "complexity_router_config", None)  # guard-ok: type discipline
-            if isinstance(cfg_obj, dict):
-                tiers_dict = cfg_obj.get("tiers")
-                if isinstance(tiers_dict, dict):
-                    allowed_models.update(str(v) for v in tiers_dict.values() if v)
-            def_model_obj = getattr(
-                strategy_params, "complexity_router_default_model", None
-            )  # guard-ok: type discipline
-            if isinstance(def_model_obj, str) and def_model_obj:
-                allowed_models.add(def_model_obj)
-
-        originating_deployment = self.get_deployment(model_id=extracted_model_id)
-        if not originating_deployment:
+        request_input: Final = input if input is not None else request_kwargs.get("input")
+        originating_model_id: Final = EncryptedContentAffinityCheck._extract_model_id_from_input(request_input)
+        if not originating_model_id:
             return None
 
-        dep_model_name = getattr(originating_deployment, "model_name", None)  # guard-ok: type discipline
-        is_authorized = False
+        originating_deployment: Final = self.get_deployment(model_id=originating_model_id)
+        if originating_deployment is None:
+            return None
 
-        if dep_model_name in allowed_models:
-            is_authorized = True
-        else:
-            for allowed_model in allowed_models:
-                candidates = self.get_deployments(model_name=allowed_model) or []
-                if any(
-                    (
-                        getattr(c, "litellm_params", {}).get("model_id") == extracted_model_id
-                        if isinstance(getattr(c, "litellm_params", None), dict)  # guard-ok: type discipline
-                        else getattr(getattr(c, "litellm_params", None), "model_id", None)
-                        == extracted_model_id  # guard-ok: type discipline
-                    )
-                    or (
-                        getattr(c, "model_info", {}).get("id") == extracted_model_id
-                        if isinstance(getattr(c, "model_info", None), dict)  # guard-ok: type discipline
-                        else getattr(getattr(c, "model_info", None), "id", None)
-                        == extracted_model_id  # guard-ok: type discipline
-                    )
-                    for c in candidates
-                ):
-                    is_authorized = True
-                    break
+        allowed_deployment_ids: Final = self._encrypted_affinity_allowed_deployment_ids(selected_strategy.strategy)
+        if originating_model_id not in allowed_deployment_ids:
+            return None
 
-        if is_authorized and dep_model_name:
-            from litellm.types.router import PreRoutingHookResponse
-
-            return PreRoutingHookResponse(
-                model=dep_model_name,
-                messages=messages if isinstance(messages, list) else None,
-            )
-        return None
+        verbose_router_logger.debug(
+            "encrypted content affinity: pinning to model_group=%s (deployment %s) instead of reclassifying",
+            originating_deployment.model_name,
+            originating_model_id,
+        )
+        return PreRoutingHookResponse(model=originating_deployment.model_name, messages=messages)
 
     async def async_pre_routing_hook(
         self,
