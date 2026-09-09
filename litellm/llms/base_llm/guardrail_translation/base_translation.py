@@ -52,13 +52,14 @@ class StreamingScanKey:
 
 
 class BaseTranslation(ABC):
-    delivers_ended_stream_text_rewrites: ClassVar[bool] = False
+    delivers_ended_stream_rewrites: ClassVar[bool] = False
     """Whether ``process_output_streaming_response`` accepts
     ``deliver_ended_stream_rewrites=True`` and, on an ended (fully buffered)
-    stream, writes guardrail text rewrites back across ``responses_so_far`` so
-    a buffered pipeline can release rewritten chunks. Tool-call rewrites, and
-    text rewrites on every other translation, are undeliverable: the pipeline
-    executor discards them and releases the original chunks."""
+    stream, writes guardrail text and tool-call rewrites back across
+    ``responses_so_far`` so a buffered pipeline can release rewritten chunks,
+    raising ``UndeliverableStreamRewrite`` for a shape it cannot place. Rewrites
+    on every other translation are undeliverable: the pipeline executor
+    discards them and releases the original chunks."""
 
     assembles_streamed_response: ClassVar[bool] = False
     """Whether ``process_output_streaming_response`` stores the assembled response of an
@@ -189,9 +190,9 @@ class BaseTranslation(ABC):
         transformations (see ``StreamTransformSink``); base handlers ignore it.
         ``deliver_ended_stream_rewrites`` is passed True only when the caller
         holds the whole buffered stream and the subclass declares
-        ``delivers_ended_stream_text_rewrites``: the handler then writes
-        guardrail text rewrites back across ``responses_so_far`` instead of
-        discarding them.
+        ``delivers_ended_stream_rewrites``: the handler then writes
+        guardrail text and tool-call rewrites back across ``responses_so_far``
+        instead of discarding them.
         """
         return responses_so_far
 
