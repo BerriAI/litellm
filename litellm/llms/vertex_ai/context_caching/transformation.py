@@ -4,6 +4,7 @@ Transformation logic for context caching.
 Why separate file? Make it easy to see how transformation works
 """
 
+import hashlib
 import re
 from collections.abc import Sequence
 from typing import Final, Literal
@@ -117,6 +118,19 @@ def _is_valid_ttl_format(ttl: str) -> bool:
         return numeric_part > 0
     except ValueError:
         return False
+
+
+def scope_cache_key_to_encryption_key(cache_key: str, kms_key_name: str | None) -> str:
+    """
+    Namespace the cache's displayName by the CMEK key, since displayName is the only thing
+    check_cache can match on and `encryptionSpec` is input-only, so Google never tells us
+    which key an existing cache uses. Without this, content already cached under a
+    Google-managed key (or a different CMEK key) would be reused for a request that asked
+    for a specific key, silently escaping the caller's encryption policy.
+    """
+    if kms_key_name is None:
+        return cache_key
+    return f"{cache_key}-cmek-{hashlib.sha256(kms_key_name.encode()).hexdigest()[:16]}"
 
 
 def separate_cached_messages(

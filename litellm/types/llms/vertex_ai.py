@@ -350,7 +350,7 @@ class RequestBody(TypedDict, total=False):
 
 
 class EncryptionSpec(TypedDict):
-    kmsKeyName: ReadOnly[str]  # Format: projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}
+    kmsKeyName: ReadOnly[str]
 
 
 class CachedContentRequestBody(TypedDict, total=False):
