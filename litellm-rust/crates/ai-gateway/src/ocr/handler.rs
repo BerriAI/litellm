@@ -14,10 +14,10 @@ pub(crate) async fn execute_ocr_provider_call(
     hooks: &OcrLifecycleHooks,
 ) -> Result<Value, Error> {
     let request = hooks.prepare_provider_request(request).await?;
-    let mut request_builder = http_client().post(&request.url).json(&request.body);
-    for (key, value) in &request.upstream_headers {
-        request_builder = request_builder.header(key, value);
-    }
+    let mut request_builder = http_client()
+        .post(&request.url)
+        .headers(request.upstream_headers.clone())
+        .json(&request.body);
     if let Some(duration) = request.timeout {
         request_builder = request_builder.timeout(duration);
     }

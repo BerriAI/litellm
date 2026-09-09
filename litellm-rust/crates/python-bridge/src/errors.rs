@@ -21,6 +21,9 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
         Error::Auth(message) => PyValueError::new_err(message.to_string()),
         Error::InvalidProvider(_)
         | Error::InvalidRequest(_)
+        | Error::InvalidHeaderType { .. }
+        | Error::InvalidHeaderName
+        | Error::InvalidHeaderValue { .. }
         | Error::InvalidType { .. }
         | Error::MissingField(_) => PyValueError::new_err(err.to_string()),
         other => PyRuntimeError::new_err(other.to_string()),
@@ -39,6 +42,8 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
         | Error::Auth(_)
         | Error::InvalidProvider(_)
         | Error::InvalidRequest(_)
+        | Error::InvalidHeaderType { .. } | Error::InvalidHeaderName
+        | Error::InvalidHeaderValue { .. }
         | Error::InvalidType { .. }
         | Error::MissingField(_)
         | Error::Routing(_)
@@ -82,6 +87,22 @@ mod ocr_error_tests {
                 let mapped = ocr_error_to_pyerr(Error::MissingField(field));
                 assert!(mapped.is_instance_of::<PyValueError>(py));
                 assert_eq!(mapped.value(py).to_string(), "Document URL is required");
+            }
+            for error in [
+                Error::Auth(litellm_core::AuthError::EmptyCredential),
+                Error::Auth(litellm_core::AuthError::InvalidCredentialHeaderValue),
+                Error::InvalidHeaderName,
+                Error::InvalidHeaderValue {
+                    name: "authorization".into(),
+                },
+                Error::InvalidHeaderType {
+                    context: "OCR",
+                    name: "authorization".into(),
+                    actual: "number",
+                },
+            ] {
+                let mapped = ocr_error_to_pyerr(error);
+                assert!(mapped.is_instance_of::<PyValueError>(py));
             }
             let mapped = ocr_error_to_pyerr(Error::Http {
                 status: 429,

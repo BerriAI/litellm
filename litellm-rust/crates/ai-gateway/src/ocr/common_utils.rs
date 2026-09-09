@@ -1,6 +1,8 @@
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
+use reqwest::header::HeaderMap;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use litellm_core::error::Error;
@@ -24,22 +26,8 @@ pub(super) fn truncate_error_body(body: &str) -> String {
 
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
-) -> Result<Vec<(String, String)>, Error> {
-    extra_headers
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(key, value)| {
-            value
-                .as_str()
-                .map(|value| (key.clone(), value.to_string()))
-                .ok_or_else(|| {
-                    Error::InvalidRequest(format!(
-                        "OCR extra_headers.{key} must be a string, got {}",
-                        litellm_core::error::json_type_name(&value)
-                    ))
-                })
-        })
-        .collect()
+) -> Result<HeaderMap, Error> {
+    litellm_core::http_utils::header_map("OCR", extra_headers)
 }
 
 fn document_url_field(document: &Value) -> Result<Option<(&str, &str)>, Error> {
@@ -306,7 +294,7 @@ fn operation_status(response_json: &Value) -> Result<&str, Error> {
 pub(super) async fn poll_document_intelligence(
     operation_url: &str,
     original_url: &str,
-    headers: &[(String, String)],
+    headers: &HeaderMap,
     timeout: Option<Duration>,
 ) -> Result<Value, Error> {
     if !same_origin(operation_url, original_url) {
@@ -328,10 +316,8 @@ pub(super) async fn poll_document_intelligence(
         }
 
         let mut request_builder = http_client().get(operation_url);
-        for (key, value) in headers {
-            if key.eq_ignore_ascii_case("ocp-apim-subscription-key") {
-                request_builder = request_builder.header(key, value);
-            }
+        if let Some(value) = headers.get("ocp-apim-subscription-key") {
+            request_builder = request_builder.header("ocp-apim-subscription-key", value);
         }
         let response = request_builder
             .send()
@@ -446,8 +432,8 @@ mod tests {
         .clone();
 
         assert_eq!(
-            string_headers(Some(headers)).expect("string headers accepted"),
-            vec![("x-trace-id".to_string(), "trace-1".to_string())]
+            string_headers(Some(headers)).expect("string headers accepted")["x-trace-id"],
+            "trace-1"
         );
     }
 
@@ -463,9 +449,11 @@ mod tests {
         let err = string_headers(Some(headers)).expect_err("non-string header rejected");
         assert_eq!(
             err,
-            Error::InvalidRequest(
-                "OCR extra_headers.x-retry-count must be a string, got number".to_string()
-            )
+            Error::InvalidHeaderType {
+                context: "OCR",
+                name: "x-retry-count".into(),
+                actual: "number"
+            }
         );
     }
 }

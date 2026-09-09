@@ -1,23 +1,24 @@
-use crate::auth::CredentialPlacement;
-use crate::auth::http::apply_credential;
-use crate::{AuthError, Error};
-use serde_json::{Map, Value};
-
 use std::future::Future;
 use std::pin::Pin;
 
+use reqwest::header::HeaderMap;
+use serde_json::{Map, Value};
+
+use crate::auth::CredentialPlacement;
+use crate::auth::http::apply_credential;
+use crate::{AuthError, Error};
+
 use super::types::{OcrAuthInputs, OcrRequestData, OcrResponseData};
 
-pub type OcrAuthFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<(String, String)>, Error>> + Send + 'a>>;
+pub type OcrAuthFuture<'a> = Pin<Box<dyn Future<Output = Result<HeaderMap, Error>> + Send + 'a>>;
 pub type OcrRequestSetupFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<(String, Vec<(String, String)>), Error>> + Send + 'a>>;
+    Pin<Box<dyn Future<Output = Result<(String, HeaderMap), Error>> + Send + 'a>>;
 
 pub struct OcrRequestSetup<'a> {
     pub api_base: Option<&'a str>,
     pub model: &'a str,
     pub optional_params: &'a Map<String, Value>,
-    pub headers: Vec<(String, String)>,
+    pub headers: HeaderMap,
     pub api_key: Option<&'a str>,
     pub auth_inputs: &'a OcrAuthInputs,
     pub env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
@@ -89,12 +90,12 @@ pub trait OcrProviderConfig: Sync {
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn validate_environment(
         &self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<Vec<(String, String)>, Error> {
+    ) -> Result<HeaderMap, Error> {
         let placement = self.credential_placement();
-        if crate::http_utils::has_header(&headers, placement.header_name()) {
+        if headers.contains_key(placement.header_name()) {
             return Ok(headers);
         }
         let api_key = self.resolve_api_key(api_key, env_lookup)?;
@@ -103,7 +104,7 @@ pub trait OcrProviderConfig: Sync {
 
     fn authenticate<'a>(
         &'a self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&'a str>,
         auth_inputs: &'a OcrAuthInputs,
         env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),

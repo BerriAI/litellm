@@ -115,8 +115,9 @@ mod tests {
 
         let prepared = prepare_ocr_call(request);
 
-        assert!(
-            matches!(prepared.request.config, Err(Error::Auth(AuthError::InvalidConfiguration(message))) if message.contains("tenant_id"))
-        );
+        assert!(matches!(
+            prepared.request.config,
+            Err(Error::Auth(AuthError::InvalidAzureConfigType { name })) if name == "tenant_id"
+        ));
     }
 }

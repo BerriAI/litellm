@@ -1,3 +1,5 @@
+use reqwest::header::HeaderMap;
+
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
 use litellm_core::ocr::prepare::map_ocr_params;
@@ -192,7 +194,7 @@ async fn upload_reducto_document(
     document: &Value,
     api_base: Option<&str>,
     timeout: Option<std::time::Duration>,
-    upstream_headers: &[(String, String)],
+    upstream_headers: &HeaderMap,
 ) -> Result<Value, Error> {
     let source = extract_document_source(document)?;
     let Some(upload) = build_upload_request(source, api_base) else {
@@ -203,14 +205,13 @@ async fn upload_reducto_document(
         .mime_str(&upload.mime_type)
         .map_err(|error| Error::InvalidRequest(error.to_string()))?;
     let form = reqwest::multipart::Form::new().part("file", part);
-    let mut request_builder = http_client().post(upload.url).multipart(form);
-    for (name, value) in upstream_headers {
-        if !name.eq_ignore_ascii_case("content-type")
-            && !name.eq_ignore_ascii_case("content-length")
-        {
-            request_builder = request_builder.header(name, value);
-        }
-    }
+    let mut headers = upstream_headers.clone();
+    headers.remove(reqwest::header::CONTENT_TYPE);
+    headers.remove(reqwest::header::CONTENT_LENGTH);
+    let mut request_builder = http_client()
+        .post(upload.url)
+        .headers(headers)
+        .multipart(form);
     if let Some(timeout) = timeout {
         request_builder = request_builder.timeout(timeout);
     }
@@ -381,7 +382,10 @@ fn core_error_kind(error: &Error) -> &'static str {
     match error {
         Error::Auth(_) => "AuthError",
         Error::InvalidProvider(_) => "InvalidProvider",
-        Error::InvalidRequest(_) => "InvalidRequest",
+        Error::InvalidRequest(_)
+        | Error::InvalidHeaderType { .. }
+        | Error::InvalidHeaderName
+        | Error::InvalidHeaderValue { .. } => "InvalidRequest",
         Error::InvalidType { .. } => "InvalidType",
         Error::MissingField(_) => "MissingField",
         Error::Http { .. } => "HttpError",

@@ -1,3 +1,5 @@
+use reqwest::header::HeaderMap;
+
 use crate::AuthError;
 
 use super::http::apply_credential;
@@ -32,37 +34,29 @@ pub struct ProviderAuthPolicy {
 }
 
 impl ProviderAuthPolicy {
-    pub fn has_existing_credential(&self, headers: &[(String, String)]) -> bool {
-        headers.iter().any(|(name, _)| {
-            self.accepted_existing_headers
-                .iter()
-                .any(|accepted| name.eq_ignore_ascii_case(accepted))
-        })
+    pub fn has_existing_credential(&self, headers: &HeaderMap) -> bool {
+        self.accepted_existing_headers
+            .iter()
+            .any(|name| headers.contains_key(*name))
     }
 
     pub fn apply(
         &self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         kind: CredentialPlanKind,
         credential: &ResolvedCredential,
-    ) -> Result<Vec<(String, String)>, AuthError> {
+    ) -> Result<HeaderMap, AuthError> {
         if self.has_existing_credential(&headers) {
             return match self.existing_header_behavior {
                 ExistingHeaderBehavior::Preserve => Ok(headers),
-                ExistingHeaderBehavior::Reject => Err(AuthError::InvalidConfiguration(
-                    "credential header already exists".to_string(),
-                )),
+                ExistingHeaderBehavior::Reject => Err(AuthError::ExistingCredentialHeader),
             };
         }
         let rule = self
             .rules
             .iter()
             .find(|rule| rule.kind == kind)
-            .ok_or_else(|| {
-                AuthError::InvalidConfiguration(
-                    "credential plan is not allowed by the provider auth policy".to_string(),
-                )
-            })?;
+            .ok_or(AuthError::CredentialPlanNotAllowed)?;
         apply_credential(headers, credential.secret().expose(), rule.placement)
     }
 }
@@ -71,6 +65,7 @@ impl ProviderAuthPolicy {
 mod tests {
     use super::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
     use crate::auth::{CredentialPlacement, ResolvedCredential, SecretValue};
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
     const RULES: &[CredentialRule] = &[CredentialRule {
         kind: CredentialPlanKind::Static,
@@ -85,10 +80,33 @@ mod tests {
     };
 
     #[test]
+    fn existing_credential_policy_preserves_or_rejects_caller_auth() {
+        let headers = HeaderMap::from_iter([(
+            HeaderName::from_static("x-api-key"),
+            HeaderValue::from_static("caller"),
+        )]);
+        let credential = ResolvedCredential::Static(SecretValue::new("configured"));
+        assert_eq!(
+            POLICY
+                .apply(headers.clone(), CredentialPlanKind::Static, &credential)
+                .unwrap()["x-api-key"],
+            "caller"
+        );
+        let rejecting = ProviderAuthPolicy {
+            existing_header_behavior: ExistingHeaderBehavior::Reject,
+            ..POLICY
+        };
+        assert_eq!(
+            rejecting.apply(headers, CredentialPlanKind::Static, &credential),
+            Err(crate::AuthError::ExistingCredentialHeader)
+        );
+    }
+
+    #[test]
     fn rules_define_allowed_plans_and_credential_placement() {
         let headers = POLICY
             .apply(
-                Vec::new(),
+                HeaderMap::new(),
                 CredentialPlanKind::Static,
                 &ResolvedCredential::Static(SecretValue::new("secret")),
             )
@@ -96,7 +114,10 @@ mod tests {
 
         assert_eq!(
             headers,
-            vec![("x-api-key".to_string(), "secret".to_string())]
+            HeaderMap::from_iter([(
+                HeaderName::from_static("x-api-key"),
+                HeaderValue::from_static("secret")
+            )])
         );
     }
 
@@ -104,12 +125,12 @@ mod tests {
     fn unsupported_plan_is_rejected() {
         let error = POLICY
             .apply(
-                Vec::new(),
+                HeaderMap::new(),
                 CredentialPlanKind::Entra,
                 &ResolvedCredential::Static(SecretValue::new("secret")),
             )
             .unwrap_err();
 
-        assert!(error.to_string().contains("not allowed"));
+        assert_eq!(error, crate::AuthError::CredentialPlanNotAllowed);
     }
 }

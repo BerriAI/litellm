@@ -1,5 +1,7 @@
 use std::sync::OnceLock;
 
+use reqwest::header::HeaderMap;
+
 use crate::auth::azure::{AzureAuthInputs, AzureAuthService};
 use crate::auth::http::apply_credential;
 use crate::auth::{
@@ -121,14 +123,11 @@ pub fn resolve_document_intelligence_endpoint(
 }
 
 pub fn validate_environment(
-    headers: Vec<(String, String)>,
+    headers: HeaderMap,
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Error> {
-    if headers
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("Authorization"))
-    {
+) -> Result<HeaderMap, Error> {
+    if headers.contains_key("Authorization") {
         return Ok(headers);
     }
     let api_key = resolve_api_key(api_key, env_lookup)?;
@@ -136,11 +135,11 @@ pub fn validate_environment(
 }
 
 pub async fn authenticate(
-    headers: Vec<(String, String)>,
+    headers: HeaderMap,
     api_key: Option<&str>,
     auth_inputs: Option<&AzureAuthInputs>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<HeaderMap, Error> {
     authenticate_with_policy(
         headers,
         api_key,
@@ -148,17 +147,17 @@ pub async fn authenticate(
         auth_inputs,
         env_lookup,
         &AZURE_AI_AUTH_POLICY,
-        "Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID",
+        AuthError::MissingAzureAiCredentials,
     )
     .await
 }
 
 pub async fn authenticate_document_intelligence(
-    headers: Vec<(String, String)>,
+    headers: HeaderMap,
     api_key: Option<&str>,
     auth_inputs: Option<&AzureAuthInputs>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<HeaderMap, Error> {
     authenticate_with_policy(
         headers,
         api_key,
@@ -166,20 +165,20 @@ pub async fn authenticate_document_intelligence(
         auth_inputs,
         env_lookup,
         &DOCUMENT_INTELLIGENCE_AUTH_POLICY,
-        "Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID",
+        AuthError::MissingAzureDocumentIntelligenceCredentials,
     )
     .await
 }
 
 async fn authenticate_with_policy(
-    headers: Vec<(String, String)>,
+    headers: HeaderMap,
     api_key: Option<&str>,
     api_key_env: &str,
     auth_inputs: Option<&AzureAuthInputs>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     policy: &ProviderAuthPolicy,
-    missing_message: &'static str,
-) -> Result<Vec<(String, String)>, Error> {
+    missing_error: AuthError,
+) -> Result<HeaderMap, Error> {
     if policy.has_existing_credential(&headers) {
         return Ok(headers);
     }
@@ -190,10 +189,7 @@ async fn authenticate_with_policy(
             }
             CredentialPlanKind::Entra => resolve_entra_credential(auth_inputs, env_lookup).await?,
             CredentialPlanKind::Caller => {
-                return Err(AuthError::InvalidConfiguration(
-                    "caller credential plan requires provider-specific inputs".to_string(),
-                )
-                .into());
+                return Err(AuthError::CallerPlanRequiresProviderInputs.into());
             }
         };
         if let Some(credential) = credential {
@@ -202,7 +198,7 @@ async fn authenticate_with_policy(
                 .map_err(Error::from);
         }
     }
-    Err(AuthError::InvalidConfiguration(missing_message.to_string()).into())
+    Err(missing_error.into())
 }
 
 async fn resolve_entra_credential(
@@ -246,6 +242,7 @@ fn auth_service() -> &'static AzureAuthService {
 mod tests {
     use crate::auth::azure::AzureAuthInputs;
     use crate::error::{AuthError, Error};
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
     use serde_json::json;
 
     use super::{
@@ -258,11 +255,8 @@ mod tests {
             .expect("valid Azure auth inputs")
     }
 
-    fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-        headers
-            .iter()
-            .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
+    fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+        headers.get(name).and_then(|value| value.to_str().ok())
     }
 
     #[test]
@@ -288,22 +282,25 @@ mod tests {
 
     #[test]
     fn api_key_is_sent_as_bearer() {
-        let headers = validate_environment(Vec::new(), Some("key"), &|_| None)
+        let headers = validate_environment(HeaderMap::new(), Some("key"), &|_| None)
             .expect("api key authenticates");
 
         assert_eq!(
             headers,
-            vec![("Authorization".to_string(), "Bearer key".to_string())]
+            HeaderMap::from_iter([(
+                HeaderName::from_static("authorization"),
+                HeaderValue::from_static("Bearer key")
+            )])
         );
     }
 
     #[test]
     fn caller_bearer_token_wins_over_environment_key() {
         let headers = validate_environment(
-            vec![(
-                "authorization".to_string(),
-                "Bearer caller-token".to_string(),
-            )],
+            HeaderMap::from_iter([(
+                HeaderName::from_static("authorization"),
+                HeaderValue::from_static("Bearer caller-token"),
+            )]),
             None,
             &|name| (name == AZURE_AI_API_KEY_ENV).then(|| "environment-key".to_string()),
         )
@@ -311,17 +308,17 @@ mod tests {
 
         assert_eq!(
             headers,
-            vec![(
-                "authorization".to_string(),
-                "Bearer caller-token".to_string()
-            )]
+            HeaderMap::from_iter([(
+                HeaderName::from_static("authorization"),
+                HeaderValue::from_static("Bearer caller-token")
+            )])
         );
     }
 
     #[tokio::test]
     async fn azure_ai_uses_supplied_entra_token() {
         let inputs = azure_inputs(json!({"azure_ad_token": "entra-token"}));
-        let headers = authenticate(Vec::new(), None, Some(&inputs), &|_| None)
+        let headers = authenticate(HeaderMap::new(), None, Some(&inputs), &|_| None)
             .await
             .expect("Entra token authenticates");
 
@@ -334,7 +331,7 @@ mod tests {
     #[tokio::test]
     async fn document_intelligence_api_key_uses_subscription_header() {
         let headers =
-            authenticate_document_intelligence(Vec::new(), Some("my-key"), None, &|_| None)
+            authenticate_document_intelligence(HeaderMap::new(), Some("my-key"), None, &|_| None)
                 .await
                 .expect("API key authenticates");
 
@@ -349,7 +346,7 @@ mod tests {
     async fn document_intelligence_falls_back_to_entra_token() {
         let inputs = azure_inputs(json!({"azure_ad_token": "entra-token"}));
         let headers =
-            authenticate_document_intelligence(Vec::new(), None, Some(&inputs), &|_| None)
+            authenticate_document_intelligence(HeaderMap::new(), None, Some(&inputs), &|_| None)
                 .await
                 .expect("Entra token authenticates");
 
@@ -363,12 +360,14 @@ mod tests {
     #[tokio::test]
     async fn document_intelligence_api_key_precedes_entra_token() {
         let inputs = azure_inputs(json!({"azure_ad_token": "entra-token"}));
-        let headers =
-            authenticate_document_intelligence(Vec::new(), Some("api-key"), Some(&inputs), &|_| {
-                None
-            })
-            .await
-            .expect("API key authenticates");
+        let headers = authenticate_document_intelligence(
+            HeaderMap::new(),
+            Some("api-key"),
+            Some(&inputs),
+            &|_| None,
+        )
+        .await
+        .expect("API key authenticates");
 
         assert_eq!(
             header_value(&headers, "Ocp-Apim-Subscription-Key"),

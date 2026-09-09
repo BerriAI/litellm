@@ -76,9 +76,9 @@ fn string_config(
         None => Ok(ConfigValue::Absent),
         Some(Value::Null) => Ok(ConfigValue::ExplicitNone),
         Some(Value::String(value)) => Ok(ConfigValue::Value(value.clone())),
-        Some(_) => Err(AuthError::InvalidConfiguration(format!(
-            "{name} must be a string or null"
-        ))),
+        Some(_) => Err(AuthError::InvalidAzureConfigType {
+            name: name.to_string(),
+        }),
     }
 }
 

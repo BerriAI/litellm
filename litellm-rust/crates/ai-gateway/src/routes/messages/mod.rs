@@ -113,6 +113,9 @@ impl IntoResponse for MessagesRouteError {
             | Error::Network(_)
             | Error::Connect(_)
             | Error::InvalidResponse(_)
+            | Error::InvalidHeaderType { .. }
+            | Error::InvalidHeaderName
+            | Error::InvalidHeaderValue { .. }
             | Error::InvalidType { .. }
             | Error::MissingField(_) => (
                 StatusCode::BAD_GATEWAY,

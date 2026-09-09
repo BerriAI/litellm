@@ -1,3 +1,5 @@
+use reqwest::header::HeaderMap;
+
 use crate::auth::{
     CredentialPlacement, CredentialPlanKind, CredentialRule, ExistingHeaderBehavior,
     ProviderAuthPolicy, ResolvedCredential, SecretValue,
@@ -33,10 +35,10 @@ pub fn resolve_api_key(
 }
 
 pub fn validate_environment(
-    headers: Vec<(String, String)>,
+    headers: HeaderMap,
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<HeaderMap, Error> {
     if AUTH_POLICY.has_existing_credential(&headers) {
         return Ok(headers);
     }
@@ -50,6 +52,7 @@ pub fn validate_environment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
     #[test]
     fn explicit_key_precedes_environment_key() {
@@ -82,17 +85,23 @@ mod tests {
 
     #[test]
     fn static_key_is_applied_as_bearer() {
-        let headers = validate_environment(Vec::new(), Some("sk-param"), &|_| None).unwrap();
+        let headers = validate_environment(HeaderMap::new(), Some("sk-param"), &|_| None).unwrap();
 
         assert_eq!(
             headers,
-            vec![("Authorization".to_string(), "Bearer sk-param".to_string())]
+            HeaderMap::from_iter([(
+                HeaderName::from_static("authorization"),
+                HeaderValue::from_static("Bearer sk-param")
+            )])
         );
     }
 
     #[test]
     fn existing_authorization_is_preserved_without_key_lookup() {
-        let headers = vec![("authorization".to_string(), "Bearer existing".to_string())];
+        let headers = HeaderMap::from_iter([(
+            HeaderName::from_static("authorization"),
+            HeaderValue::from_static("Bearer existing"),
+        )]);
 
         assert_eq!(
             validate_environment(headers.clone(), None, &|_| None).unwrap(),

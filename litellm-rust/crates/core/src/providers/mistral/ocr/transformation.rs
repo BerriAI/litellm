@@ -1,3 +1,5 @@
+use reqwest::header::HeaderMap;
+
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
@@ -136,10 +138,10 @@ impl OcrProviderConfig for MistralOcrConfig {
 
     fn validate_environment(
         &self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<Vec<(String, String)>, Error> {
+    ) -> Result<HeaderMap, Error> {
         auth::validate_environment(headers, api_key, env_lookup)
     }
 }

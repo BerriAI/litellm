@@ -326,22 +326,20 @@ mod tests {
             assert!(sync_ocr_error.to_string().contains("invalid OCR request"));
             assert_eq!(async_ocr_error.to_string(), sync_ocr_error.to_string());
 
-            for (sync_name, async_name) in [("transcription", "atranscription")] {
-                let sync_error = module
-                    .getattr(sync_name)
-                    .and_then(|function| function.call(("model", &document), Some(&kwargs)))
-                    .expect_err("sync route should reject non-dict extra_headers");
-                let async_error = module
-                    .getattr(async_name)
-                    .and_then(|function| function.call(("model", &document), Some(&kwargs)))
-                    .expect_err("async route should reject non-dict extra_headers");
+            let sync_error = module
+                .getattr("transcription")
+                .and_then(|function| function.call(("model", &document), Some(&kwargs)))
+                .expect_err("sync route should reject non-dict extra_headers");
+            let async_error = module
+                .getattr("atranscription")
+                .and_then(|function| function.call(("model", &document), Some(&kwargs)))
+                .expect_err("async route should reject non-dict extra_headers");
 
-                assert_eq!(
-                    sync_error.to_string(),
-                    "ValueError: extra_headers must be a dict"
-                );
-                assert_eq!(async_error.to_string(), sync_error.to_string());
-            }
+            assert_eq!(
+                sync_error.to_string(),
+                "ValueError: extra_headers must be a dict"
+            );
+            assert_eq!(async_error.to_string(), sync_error.to_string());
         });
     }
 

@@ -1,3 +1,5 @@
+use reqwest::header::HeaderMap;
+
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
@@ -442,7 +444,7 @@ impl OcrProviderConfig for AzureAiOcrConfig {
 
     fn authenticate<'a>(
         &'a self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&'a str>,
         auth_inputs: &'a OcrAuthInputs,
         env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
@@ -560,7 +562,7 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
 
     fn authenticate<'a>(
         &'a self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&'a str>,
         auth_inputs: &'a OcrAuthInputs,
         env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),

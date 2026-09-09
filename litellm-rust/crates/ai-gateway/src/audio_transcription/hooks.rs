@@ -271,7 +271,10 @@ fn core_error_kind(error: &Error) -> &'static str {
     match error {
         Error::Auth(_) => "AuthError",
         Error::InvalidProvider(_) => "InvalidProvider",
-        Error::InvalidRequest(_) => "InvalidRequest",
+        Error::InvalidRequest(_)
+        | Error::InvalidHeaderType { .. }
+        | Error::InvalidHeaderName
+        | Error::InvalidHeaderValue { .. } => "InvalidRequest",
         Error::InvalidType { .. } => "InvalidType",
         Error::MissingField(_) => "MissingField",
         Error::Http { .. } => "HttpError",

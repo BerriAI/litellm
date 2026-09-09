@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::header::HeaderMap;
+
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use litellm_core::ocr::transformation::OcrProviderConfig;
 use litellm_core::ocr::types::OcrAuthInputs;
@@ -56,6 +58,6 @@ pub(crate) struct ProviderOcrRequest {
     pub(crate) url: String,
     pub(crate) body: Value,
     pub(crate) optional_params: Map<String, Value>,
-    pub(crate) upstream_headers: Vec<(String, String)>,
+    pub(crate) upstream_headers: HeaderMap,
     pub(crate) timeout: Option<Duration>,
 }

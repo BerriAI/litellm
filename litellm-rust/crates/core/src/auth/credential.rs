@@ -88,9 +88,7 @@ impl CredentialPlan {
             Self::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(AuthError::Caller(
-                        "credential caller returned an empty credential".to_string(),
-                    ));
+                    return Err(AuthError::EmptyCallerCredential);
                 }
                 Ok(CredentialPlanResolution::Resolved(credential))
             }

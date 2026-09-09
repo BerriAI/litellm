@@ -2,8 +2,75 @@ use thiserror::Error as ThisError;
 
 #[derive(Clone, Debug, ThisError, PartialEq, Eq)]
 pub enum AuthError {
+    #[error("invalid authentication configuration: credential cannot be empty")]
+    EmptyCredential,
+    #[error("invalid authentication configuration: credential is not a valid HTTP header value")]
+    InvalidCredentialHeaderValue,
+    #[error("invalid authentication configuration: invalid credential header name: {name}")]
+    InvalidCredentialHeaderName { name: &'static str },
+    #[error("invalid authentication configuration: credential header {name} already exists")]
+    CredentialHeaderAlreadyExists { name: &'static str },
+    #[error("invalid authentication configuration: credential header already exists")]
+    ExistingCredentialHeader,
+    #[error(
+        "invalid authentication configuration: credential plan is not allowed by the provider auth policy"
+    )]
+    CredentialPlanNotAllowed,
+    #[error(
+        "invalid authentication configuration: caller credential plan requires provider-specific inputs"
+    )]
+    CallerPlanRequiresProviderInputs,
+    #[error("credential caller failed: credential caller returned an empty credential")]
+    EmptyCallerCredential,
+    #[error("credential caller failed: Azure AD token provider returned an empty token")]
+    EmptyAzureAdToken,
+    #[error("credential acquisition failed: Azure OIDC reference did not resolve to a value")]
+    UnresolvedOidcReference,
+    #[error("invalid authentication configuration: invalid Azure credential selector")]
+    InvalidAzureCredentialSelector,
+    #[error(
+        "invalid authentication configuration: ClientSecretCredential requires tenant_id, client_id, and client_secret"
+    )]
+    MissingClientSecretFields,
+    #[error("invalid authentication configuration: WorkloadIdentityCredential requires tenant_id")]
+    MissingWorkloadTenantId,
+    #[error("invalid authentication configuration: WorkloadIdentityCredential requires client_id")]
+    MissingWorkloadClientId,
+    #[error(
+        "invalid authentication configuration: WorkloadIdentityCredential requires azure_federated_token_file"
+    )]
+    MissingWorkloadTokenFile,
+    #[error(
+        "invalid authentication configuration: credential reference requires a host credential resolver"
+    )]
+    MissingCredentialResolver,
+    #[error("invalid authentication configuration: unsupported OIDC reference")]
+    UnsupportedOidcReference,
+    #[error("invalid authentication configuration: OIDC environment reference cannot be empty")]
+    EmptyOidcEnvironmentReference,
+    #[error(
+        "invalid authentication configuration: OIDC environment path reference cannot be empty"
+    )]
+    EmptyOidcEnvironmentPathReference,
+    #[error("invalid authentication configuration: OIDC file reference cannot be empty")]
+    EmptyOidcFileReference,
+    #[error("invalid authentication configuration: {name} must be a string or null")]
+    InvalidAzureConfigType { name: String },
+    #[error(
+        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
+    )]
+    MissingAzureAiCredentials,
+    #[error(
+        "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
+    )]
+    MissingAzureDocumentIntelligenceCredentials,
+    #[error(
+        "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
+    )]
+    MissingReductoApiKey,
+
     #[error("invalid authentication configuration: {0}")]
-    InvalidConfiguration(String),
+    AzureCredentialConfiguration(String),
     #[error("credential acquisition failed: {0}")]
     Acquisition(String),
     #[error("credential caller failed: {0}")]
@@ -25,6 +92,16 @@ pub enum AuthError {
 
 #[derive(Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
+    #[error("{context} extra_headers.{name} must be a string, got {actual}")]
+    InvalidHeaderType {
+        context: &'static str,
+        name: String,
+        actual: &'static str,
+    },
+    #[error("invalid HTTP header name")]
+    InvalidHeaderName,
+    #[error("invalid value for HTTP header {name}")]
+    InvalidHeaderValue { name: String },
     #[error("expected {expected}, got {actual}")]
     InvalidType {
         expected: &'static str,

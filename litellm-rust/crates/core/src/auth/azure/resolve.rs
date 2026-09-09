@@ -48,9 +48,7 @@ impl AzureAuthService {
             AzureCredentialPlan::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(AuthError::Caller(
-                        "Azure AD token provider returned an empty token".to_string(),
-                    ));
+                    return Err(AuthError::EmptyAzureAdToken);
                 }
                 Ok(Some(credential))
             }
@@ -63,11 +61,7 @@ impl AzureAuthService {
             } => {
                 let assertion = resolve_reference(inputs, env_lookup, &reference)
                     .await?
-                    .ok_or_else(|| {
-                        AuthError::Acquisition(
-                            "Azure OIDC reference did not resolve to a value".to_string(),
-                        )
-                    })?;
+                    .ok_or(AuthError::UnresolvedOidcReference)?;
                 self.native
                     .acquire(NativeAzureRequest::ClientAssertion {
                         tenant_id,
@@ -115,9 +109,7 @@ pub(crate) fn select_auth_plan(
     let selector = configured_string(&inputs.azure_credential, AZURE_CREDENTIAL_ENV, env_lookup)
         .map(|value| value.parse::<AzureCredentialType>())
         .transpose()
-        .map_err(|_| {
-            AuthError::InvalidConfiguration("invalid Azure credential selector".to_string())
-        })?;
+        .map_err(|_| AuthError::InvalidAzureCredentialSelector)?;
     let federated_token_file = configured_string(
         &inputs.federated_token_file,
         AZURE_FEDERATED_TOKEN_FILE_ENV,
@@ -199,9 +191,7 @@ fn select_native_plan(
     });
 
     match selected {
-        AzureCredentialType::ClientSecretCredential => Err(AuthError::InvalidConfiguration(
-            "ClientSecretCredential requires tenant_id, client_id, and client_secret".to_string(),
-        )),
+        AzureCredentialType::ClientSecretCredential => Err(AuthError::MissingClientSecretFields),
         AzureCredentialType::WorkloadIdentityCredential => Ok(AzureCredentialPlan::Native(
             workload_request(tenant_id, client_id, federated_token_file, scope, authority)?,
         )),
@@ -273,21 +263,9 @@ fn workload_request(
     authority: Option<String>,
 ) -> Result<NativeAzureRequest, AuthError> {
     Ok(NativeAzureRequest::WorkloadIdentity {
-        tenant_id: tenant_id.ok_or_else(|| {
-            AuthError::InvalidConfiguration(
-                "WorkloadIdentityCredential requires tenant_id".to_string(),
-            )
-        })?,
-        client_id: client_id.ok_or_else(|| {
-            AuthError::InvalidConfiguration(
-                "WorkloadIdentityCredential requires client_id".to_string(),
-            )
-        })?,
-        token_file_path: token_file_path.ok_or_else(|| {
-            AuthError::InvalidConfiguration(
-                "WorkloadIdentityCredential requires azure_federated_token_file".to_string(),
-            )
-        })?,
+        tenant_id: tenant_id.ok_or(AuthError::MissingWorkloadTenantId)?,
+        client_id: client_id.ok_or(AuthError::MissingWorkloadClientId)?,
+        token_file_path: token_file_path.ok_or(AuthError::MissingWorkloadTokenFile)?,
         scope,
         authority,
     })
@@ -334,11 +312,10 @@ async fn resolve_reference(
             .map_or(CredentialLookup::Missing, CredentialLookup::Found),
         CredentialRef::None => return Ok(None),
         CredentialRef::File(_) | CredentialRef::Request(_) | CredentialRef::Host(_) => {
-            let resolver = inputs.credential_resolver.as_ref().ok_or_else(|| {
-                AuthError::InvalidConfiguration(
-                    "credential reference requires a host credential resolver".to_string(),
-                )
-            })?;
+            let resolver = inputs
+                .credential_resolver
+                .as_ref()
+                .ok_or(AuthError::MissingCredentialResolver)?;
             resolver.resolve(reference).await?
         }
     };
@@ -353,34 +330,30 @@ fn oidc_reference(token: &Option<SecretValue>) -> Result<Option<CredentialRef>, 
         return Ok(None);
     };
     if let Some(name) = value.strip_prefix("oidc/env/") {
-        return non_empty_reference(name, "OIDC environment reference")
+        return non_empty_reference(name, AuthError::EmptyOidcEnvironmentReference)
             .map(CredentialRef::Env)
             .map(Some);
     }
     if let Some(name) = value.strip_prefix("oidc/env_path/") {
-        return non_empty_reference(name, "OIDC environment path reference")
+        return non_empty_reference(name, AuthError::EmptyOidcEnvironmentPathReference)
             .map(|name| CredentialRef::File(CredentialFileRef::EnvironmentVariable(name)))
             .map(Some);
     }
     if let Some(path) = value.strip_prefix("oidc/file/") {
-        let path = non_empty_reference(path, "OIDC file reference")?;
+        let path = non_empty_reference(path, AuthError::EmptyOidcFileReference)?;
         return Ok(Some(CredentialRef::File(CredentialFileRef::Path(
             path.into(),
         ))));
     }
     if value.starts_with("oidc/") {
-        return Err(AuthError::InvalidConfiguration(format!(
-            "unsupported OIDC reference: {value}"
-        )));
+        return Err(AuthError::UnsupportedOidcReference);
     }
     Ok(None)
 }
 
-fn non_empty_reference(value: &str, kind: &str) -> Result<String, AuthError> {
+fn non_empty_reference(value: &str, error: AuthError) -> Result<String, AuthError> {
     if value.is_empty() {
-        return Err(AuthError::InvalidConfiguration(format!(
-            "{kind} cannot be empty"
-        )));
+        return Err(error);
     }
     Ok(value.to_string())
 }
@@ -475,7 +448,7 @@ mod tests {
         let error = oidc_reference(&Some(SecretValue::new("oidc/vault/assertion")))
             .expect_err("unsupported backend must fail validation");
 
-        assert!(error.to_string().contains("unsupported OIDC reference"));
+        assert_eq!(error, crate::AuthError::UnsupportedOidcReference);
     }
 
     #[tokio::test]

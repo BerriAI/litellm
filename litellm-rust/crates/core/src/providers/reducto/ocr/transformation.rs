@@ -1,3 +1,5 @@
+use reqwest::header::HeaderMap;
+
 use std::collections::BTreeMap;
 
 use base64::Engine;
@@ -346,10 +348,10 @@ impl OcrProviderConfig for ReductoParseV3Config {
 
     fn validate_environment(
         &self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<Vec<(String, String)>, Error> {
+    ) -> Result<HeaderMap, Error> {
         auth::validate_environment(headers, api_key, env_lookup)
     }
 }
@@ -397,10 +399,10 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
 
     fn validate_environment(
         &self,
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<Vec<(String, String)>, Error> {
+    ) -> Result<HeaderMap, Error> {
         auth::validate_environment(headers, api_key, env_lookup)
     }
 }
