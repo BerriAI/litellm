@@ -4819,3 +4819,62 @@ def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_rout
     error = response.json()["error"]
     assert error["message"].startswith("Storage backend error")
     assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "file_id", "400")
+
+
+def test_get_file_model_routed_id_forwards_deployment_provider(mocker: MockerFixture, monkeypatch):
+    """
+    Regression: a file id encoded with a non-OpenAI deployment (here Mistral) must be
+    retrieved from that deployment's provider. Before the fix the retrieve path only
+    forwarded the credentials and let ``custom_llm_provider`` default to openai, so a
+    Mistral file id was sent to api.openai.com with the Mistral key and 401'd.
+    """
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "mistral-ocr",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "mistral-key"},
+                "model_info": {"id": "mistral-ocr-id"},
+            }
+        ]
+    )
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_retrieve(**kwargs):
+        captured_kwargs.update(kwargs)
+        return OpenAIFileObject(
+            id="7a13fa8e-fcf8-42c5-aa61-c93c10e2c7df",
+            object="file",
+            bytes=2,
+            created_at=1234567890,
+            filename="batch.jsonl",
+            purpose="batch",
+            status="uploaded",
+        )
+
+    monkeypatch.setattr(litellm, "afile_retrieve", _mock_afile_retrieve)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    encoded_id = encode_file_id_with_model("7a13fa8e-fcf8-42c5-aa61-c93c10e2c7df", "mistral-ocr")
+
+    try:
+        response = client.get(f"/v1/files/{encoded_id}", headers={"Authorization": "Bearer test-key"})
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs["custom_llm_provider"] == "mistral"
+    assert captured_kwargs["api_key"] == "mistral-key"
+    assert captured_kwargs["file_id"] == "7a13fa8e-fcf8-42c5-aa61-c93c10e2c7df"
+    assert response.json()["id"] == encoded_id
