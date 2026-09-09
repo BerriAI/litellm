@@ -1523,7 +1523,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         objective = tool_input.get("objective")
         valid_objective = objective if isinstance(objective, str) and objective.strip() else None
         raw_queries = tool_input.get("search_queries")
-        valid_queries: list[str] | None = None
+        valid_queries: list[str] | None = None  # mutable-ok: matches litellm.asearch's list[str] query parameter
         if isinstance(raw_queries, Sequence) and not isinstance(raw_queries, str):
             queries = [q for q in raw_queries if isinstance(q, str) and q.strip()]
             if queries:
@@ -1619,7 +1619,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             # Forward the model's richer shape (objective + keyword queries)
             # only to providers whose search API takes it natively; everyone
             # else keeps the single query string the model also provided.
-            query_arg: str | list[str] = query
+            query_arg: str | list[str] = query  # mutable-ok: litellm.asearch declares query as str | list[str]
             if rich and self._provider_supports_rich_search(search_provider):
                 rich_queries = rich.get("search_queries")
                 if rich_queries:
@@ -1847,7 +1847,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         for tool_call in tool_calls:
             # Handle both Anthropic-style input and OpenAI-style function.arguments
             query = None
-            tool_args: dict | None = None
+            tool_args: dict | None = None  # mutable-ok: the tool call's own arguments dict
             if "input" in tool_call and isinstance(tool_call["input"], dict):
                 tool_args = tool_call["input"]
                 query = tool_args.get("query")

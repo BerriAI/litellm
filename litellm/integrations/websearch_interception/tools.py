@@ -17,7 +17,7 @@ _WEB_SEARCH_TOOL_DESCRIPTION: Final = (
 )
 
 
-def _web_search_input_schema() -> dict[str, object]:
+def _web_search_input_schema() -> dict[str, object]:  # mutable-ok: plain-dict tool shape, as the get_* builders
     """
     JSON schema for the web search tool's input, shared by every tool format.
 
