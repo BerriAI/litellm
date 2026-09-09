@@ -108,7 +108,7 @@ def test_convert_empty_choices_response() -> None:
         convert_to_streaming_response,
     )
 
-    resp = {
+    resp: Final = {
         "id": "x",
         "created": 1,
         "model": "gemini-3.5-flash",
@@ -117,7 +117,7 @@ def test_convert_empty_choices_response() -> None:
         "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10},
         "vertex_ai_safety_results": ["blocked"],
     }
-    result = convert_to_model_response_object(
+    result: Final = convert_to_model_response_object(
         response_object=resp,
         model_response_object=ModelResponse(),
         response_type="completion",
@@ -125,8 +125,7 @@ def test_convert_empty_choices_response() -> None:
     assert result.choices == []
     assert getattr(result, "vertex_ai_safety_results") == ["blocked"]
 
-    # Test sync streaming generator handles empty choices
-    sync_stream = list(convert_to_streaming_response(response_object=resp))
+    sync_stream: Final = list(convert_to_streaming_response(response_object=resp))
     assert len(sync_stream) == 1
     assert sync_stream[0].choices == []
 
@@ -137,7 +136,7 @@ async def test_convert_empty_choices_response_async() -> None:
         convert_to_streaming_response_async,
     )
 
-    resp = {
+    resp: Final = {
         "id": "x",
         "created": 1,
         "model": "gemini-3.5-flash",
@@ -145,9 +144,7 @@ async def test_convert_empty_choices_response_async() -> None:
         "choices": [],
         "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10},
     }
-    async_chunks = []
-    async for chunk in convert_to_streaming_response_async(response_object=resp):
-        async_chunks.append(chunk)
+    async_chunks: Final = [chunk async for chunk in convert_to_streaming_response_async(response_object=resp)]
     assert len(async_chunks) == 1
     assert async_chunks[0].choices == []
 
@@ -155,7 +152,7 @@ async def test_convert_empty_choices_response_async() -> None:
 def test_convert_missing_choices_raises_api_error() -> None:
     from litellm.exceptions import APIError
 
-    resp = {
+    resp: Final = {
         "id": "x",
         "created": 1,
         "model": "gemini-3.5-flash",
