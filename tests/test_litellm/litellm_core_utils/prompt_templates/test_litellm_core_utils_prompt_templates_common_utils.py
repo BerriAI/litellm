@@ -7,6 +7,7 @@ import pytest
 
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
@@ -1610,6 +1611,8 @@ class TestEncryptedReasoningReplay:
         [
             ({"type": "thinking", "thinking": "x", "signature": encrypted_reasoning_signature("g")}, True),
             ({"type": "redacted_thinking", "data": encrypted_reasoning_signature("g")}, True),
+            ({"type": "thinking", "thinking": "x", "signature": ENCRYPTED_REASONING_SIGNATURE_PREFIX}, True),
+            ({"type": "redacted_thinking", "data": ENCRYPTED_REASONING_SIGNATURE_PREFIX}, True),
             ({"type": "thinking", "thinking": "x", "signature": "ErcBCkgIValid"}, False),
             ({"type": "redacted_thinking", "data": "EmwKAhgBEgy"}, False),
             ({"type": "text", "text": encrypted_reasoning_signature("g")}, False),

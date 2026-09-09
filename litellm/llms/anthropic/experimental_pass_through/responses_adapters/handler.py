@@ -19,6 +19,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.utils import ProviderConfigManager
 
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
@@ -32,6 +33,15 @@ _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
     """The litellm-specific kwargs forwarded verbatim onto the Responses API request."""
     return extra_kwargs or {}
+
+
+def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: object) -> bool:
+    provider: Final = (
+        custom_llm_provider if isinstance(custom_llm_provider, str) else litellm.get_llm_provider(model=model)[1]
+    )
+    provider_model: Final = local_model_name(model, provider)
+    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(provider, provider_model)
+    return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
 
 
 def _build_responses_kwargs(
@@ -85,8 +95,13 @@ def _build_responses_kwargs(
         request_data["output_format"] = output_format
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
-    responses_kwargs: Final = _ADAPTER.translate_request(anthropic_request)
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    responses_kwargs: Final = _ADAPTER.translate_request(
+        anthropic_request,
+        include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
+            model, forwarded_kwargs.get("custom_llm_provider")
+        ),
+    )
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)

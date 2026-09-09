@@ -1600,6 +1600,15 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert len(msgs[1]["content"]) == 2
         assert len(msgs[2]["content"]) == 4
 
+    def test_strip_encrypted_reasoning_leaves_malformed_messages_for_the_provider_to_reject(self):
+        """A bare string in messages must reach Anthropic as a 400, not die in the stripper as a 500."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
+        )
+
+        msgs = ["hi", {"role": "user", "content": "hello"}]
+        assert strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs) == msgs
+
     def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
             strip_empty_content_blocks_from_anthropic_messages,
