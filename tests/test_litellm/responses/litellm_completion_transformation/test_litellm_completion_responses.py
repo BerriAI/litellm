@@ -653,6 +653,25 @@ class TestFunctionCallTransformation:
             regular_message
         )
 
+        tool_call_output_object = SimpleNamespace(
+            type="web_search_call",
+            call_id="ws_call_1",
+            output="ok",
+        )
+        function_call_object = SimpleNamespace(
+            type="function_call",
+            name="get_weather",
+            arguments='{"location": "test"}',
+            call_id="test_id_obj",
+        )
+
+        assert LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
+            tool_call_output_object
+        )
+        assert LiteLLMCompletionResponsesConfig._is_input_item_function_call(
+            function_call_object
+        )
+
     def test_function_call_transformation(self):
         """Test that function_call items are correctly transformed to assistant messages with tool calls"""
         function_call_item = {
@@ -738,6 +757,42 @@ class TestFunctionCallTransformation:
         assert (
             tool_msg.get("tool_call_id") == "call_1fe70e2a-a596-45ef-b72c-9b8567c460e5"
         )
+
+    def test_complete_input_transformation_with_function_call_object(self):
+        test_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "call tool",
+            },
+            SimpleNamespace(
+                type="function_call",
+                arguments='{"location": "Paris"}',
+                call_id="call_obj_1",
+                name="get_weather",
+                id="call_obj_1",
+                status="completed",
+            ),
+            {
+                "type": "function_call_output",
+                "call_id": "call_obj_1",
+                "output": "Sunny",
+            },
+        ]
+
+        messages = LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
+            input=test_input
+        )
+
+        assert len(messages) == 3
+        assistant_msg = messages[1]
+        assert assistant_msg.get("role") == "assistant"
+        tool_calls = assistant_msg.get("tool_calls", [])
+        assert len(tool_calls) == 1
+        assert tool_calls[0].get("id") == "call_obj_1"
+        tool_msg = messages[2]
+        assert tool_msg.get("role") == "tool"
+        assert tool_msg.get("tool_call_id") == "call_obj_1"
 
     def test_complete_request_transformation_with_function_calls(self):
         """Test the complete request transformation that would be used by the responses API"""
@@ -2941,6 +2996,19 @@ class TestCacheControlPreservation:
         )
         assert isinstance(msg_content, list)
         assert msg_content[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_input_item_object_transformation_for_web_search_call(self):
+        input_item = SimpleNamespace(
+            type="web_search_call",
+            call_id="ws_call_2",
+            output="search complete",
+        )
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item
+        )
+        assert len(messages) == 1
+        assert messages[0].get("role") == "tool"
+        assert messages[0].get("tool_call_id") == "ws_call_2"
 
     def test_cache_control_preserved_for_input_file_block(self):
         content = [

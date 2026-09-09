@@ -403,7 +403,9 @@ class LiteLLMCompletionResponsesConfig:
                 )
 
                 if LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item=_input):
-                    call_id_raw = _input.get("call_id") or _input.get("id") or ""
+                    call_id_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                        _input, "call_id"
+                    ) or LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(_input, "id") or ""
                     if call_id_raw:
                         existing_tool_call_ids.add(str(call_id_raw))
 
@@ -879,27 +881,38 @@ class LiteLLMCompletionResponsesConfig:
         - ResponseReasoningItemParam
         - ItemReference
         """
-        if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):
+        normalized_input_item: dict[str, Any]
+        if isinstance(input_item, dict):
+            normalized_input_item = input_item
+        elif hasattr(input_item, "model_dump") and callable(getattr(input_item, "model_dump")):
+            dumped_item = input_item.model_dump(exclude_none=True)
+            normalized_input_item = cast(dict[str, Any], dumped_item) if isinstance(dumped_item, dict) else {}
+        elif hasattr(input_item, "__dict__"):
+            normalized_input_item = {k: v for k, v in vars(input_item).items() if v is not None}
+        else:
+            normalized_input_item = {}
+
+        if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(normalized_input_item):
             # handle executed tool call results
             return (
                 LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
-                    tool_call_output=input_item
+                    tool_call_output=normalized_input_item
                 )
             )
-        elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
+        elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(normalized_input_item):
             # handle function call input items
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
-                function_call=input_item
+                function_call=normalized_input_item
             )
         else:
-            content = input_item.get("content")
+            content = normalized_input_item.get("content")
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
             return [
                 GenericChatCompletionMessage(
-                    role=input_item.get("role") or "user",
+                    role=normalized_input_item.get("role") or "user",
                     content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
                         content
                     ),
@@ -911,7 +924,8 @@ class LiteLLMCompletionResponsesConfig:
         """
         Check if the input item is a tool call output
         """
-        return input_item.get("type") in [
+        item_type = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(input_item, "type")
+        return item_type in [
             "function_call_output",
             "custom_tool_call_output",
             "web_search_call",
@@ -926,7 +940,8 @@ class LiteLLMCompletionResponsesConfig:
         Both need to be reconstructed as assistant tool_calls for Chat
         Completions providers.
         """
-        return input_item.get("type") in ("function_call", "custom_tool_call")
+        item_type = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(input_item, "type")
+        return item_type in ("function_call", "custom_tool_call")
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(
