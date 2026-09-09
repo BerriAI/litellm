@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     ChangePasswordRequest,
     ChangePasswordResponse,
     CommonProxyErrors,
+    HTTPExceptionErrorDetail,
     LitellmTableNames,
     UserAPIKeyAuth,
 )
@@ -29,12 +30,18 @@ from litellm.repositories.user_repository import UserRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
+    from prisma import types as prisma_types
 
     from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
 _PASSWORD_CHANGED_AUDIT_VALUES: Final = '{"fields_changed": ["password"]}'
+
+
+def _error_detail(message: str) -> HTTPExceptionErrorDetail:
+    detail: Final[HTTPExceptionErrorDetail] = {"error": message}
+    return detail
 
 
 def _user_table(
@@ -46,7 +53,7 @@ def _user_table(
 
 @router.post(
     "/user/password/change",
-    tags=["Internal User management"],
+    tags=("Internal User management",),
     dependencies=(Depends(user_api_key_auth),),
 )
 async def change_password(
@@ -70,39 +77,36 @@ async def change_password(
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            detail=_error_detail(CommonProxyErrors.db_not_connected_error.value),
         )
 
     user_id: Final = user_api_key_dict.user_id
     if user_id is None:
         raise HTTPException(
             status_code=400,
-            detail={"error": "No user is associated with this session, so there is no password to change."},
+            detail=_error_detail("No user is associated with this session, so there is no password to change."),
         )
 
-    user_row: Final = await _user_table(prisma_client).find_first(where={"user_id": user_id})
+    find_user: Final[prisma_types.LiteLLM_UserTableWhereInput] = {"user_id": user_id}
+    user_row: Final = await _user_table(prisma_client).find_first(where=find_user)
     stored_password: Final = user_row.password if user_row is not None else None
     if stored_password is None:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": (
-                    "This account has no password set, so there is no password to change. "
-                    "Passwords are set through an invitation link (POST /invitation/new)."
-                )
-            },
+            detail=_error_detail(
+                "This account has no password set, so there is no password to change. "
+                "Passwords are set through an invitation link (POST /invitation/new)."
+            ),
         )
 
     if not verify_password(data.current_password, stored_password):
-        raise HTTPException(status_code=400, detail={"error": "Current password is incorrect."})
+        raise HTTPException(status_code=400, detail=_error_detail("Current password is incorrect."))
 
     validate_password_policy(data.new_password, general_settings)
     await validate_password_not_breached(data.new_password, general_settings)
 
-    await _user_table(prisma_client).update(
-        where={"user_id": user_id},
-        data={"password": hash_password(data.new_password)},
-    )
+    password_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {"password": hash_password(data.new_password)}
+    await _user_table(prisma_client).update(where=find_user, data=password_update)
 
     verbose_proxy_logger.info("Password changed via /user/password/change for user_id=%s", user_id)
     await create_object_audit_log(
