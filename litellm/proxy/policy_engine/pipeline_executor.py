@@ -556,12 +556,14 @@ class PipelineExecutor:
     @staticmethod
     def supports_streaming_execution(callback: CustomGuardrail) -> bool:
         """Whether a streaming pipeline step can run this guardrail against the buffered
-        stream: through the unified path, or through its own post-call hook on the
-        assembled response. A guardrail with neither (one that only rewrites the stream
-        through its iterator hook) has to keep running on its own."""
-        return (
-            PipelineExecutor.supports_unified_execution(callback)
-            or type(callback).async_post_call_success_hook is not CustomLogger.async_post_call_success_hook
+        stream: through the unified path, or through its post-call hook on the assembled
+        response when that hook is its only streaming path. A guardrail with its own
+        streaming iterator hook, or with neither hook, keeps running on its own."""
+        callback_type: Final = type(callback)
+        return PipelineExecutor.supports_unified_execution(callback) or (
+            callback_type.async_post_call_success_hook is not CustomLogger.async_post_call_success_hook
+            and callback_type.async_post_call_streaming_iterator_hook
+            is CustomLogger.async_post_call_streaming_iterator_hook
         )
 
     @staticmethod
