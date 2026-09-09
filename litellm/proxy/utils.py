@@ -197,6 +197,7 @@ if TYPE_CHECKING:
     from prisma.types import HttpConfig
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
@@ -674,7 +675,7 @@ def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> 
 
 
 def _route_supports_streaming_pipelines(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    return not user_api_key_dict.request_route or resolve_endpoint_translation(user_api_key_dict, None) is not None
+    return resolve_endpoint_translation(user_api_key_dict, None) is not None
 
 
 def _stream_gated_guardrail_names(
@@ -3564,12 +3565,16 @@ class ProxyLogging:
                     ),
                 )
 
-        if post_call_pipelines:
+        pipeline_translation: Final = (
+            resolve_endpoint_translation(user_api_key_dict, None) if post_call_pipelines else None
+        )
+        if pipeline_translation is not None:
             current_response = self._pipeline_gated_stream(
                 response=current_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
                 pipelines=post_call_pipelines,
+                translation=pipeline_translation,
             )
 
         try:
@@ -3593,6 +3598,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
+        translation: "tuple[str, BaseTranslation]",
     ) -> "AsyncGenerator[Any, None]":
         """
         Execute post_call policy pipelines against a streamed response.
@@ -3602,14 +3608,13 @@ class ProxyLogging:
         assembled output through the endpoint guardrail translation, the same
         machinery flat post_call guardrails use at end of stream. An allow
         releases the buffered chunks: verbatim when no guardrail rewrote the
-        output, rewritten in place when one rewrote text and the translation
-        delivers ended-stream rewrites (later steps then re-scan the rewritten
-        chunks, so rewrites chain). A rewrite the translation cannot deliver
-        yet (a tool-call rewrite, or a text rewrite on a route without
-        write-back) is discarded by the executor and the original chunks are
-        released, as is a buffered shape no translation resolves; a block or
-        modify_response terminates with the translation's block chunks or the
-        raised error.
+        output, rewritten in place when one rewrote text or a tool call and the
+        translation delivers ended-stream rewrites (later steps then re-scan the
+        rewritten chunks, so rewrites chain). A rewrite the translation cannot
+        deliver yet (one on a route without write-back, or a shape the route
+        refuses) is discarded by the executor and the original chunks are
+        released; a block or modify_response terminates with the translation's
+        block chunks or the raised error.
         """
         buffered: Final[list[object]] = []  # mutable-ok: accumulates the stream before the pipeline verdict
         async for item in response:
@@ -3617,17 +3622,7 @@ class ProxyLogging:
         if not buffered:
             return
 
-        resolved: Final = resolve_endpoint_translation(user_api_key_dict, buffered[0])
-        if resolved is None:
-            verbose_proxy_logger.warning(
-                "Policies with post_call guardrail pipelines cannot scan this streaming response shape yet; "
-                "the stream is released ungoverned by them: %s",
-                ", ".join(policy_name for policy_name, _pipeline in pipelines),
-            )
-            for buffered_item in buffered:
-                yield buffered_item
-            return
-        call_type, endpoint_translation = resolved
+        call_type, endpoint_translation = translation
 
         for policy_name, pipeline in pipelines:
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
