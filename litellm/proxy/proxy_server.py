@@ -11598,7 +11598,7 @@ async def codex_live_sideband_endpoint(
     call_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ) -> None:
-    from litellm.proxy.realtime_endpoints.codex import codex_realtime_sideband
+    from litellm.llms.chatgpt.codex import codex_realtime_sideband
 
     await codex_realtime_sideband(websocket, call_id, user_api_key_dict)
 
@@ -11619,8 +11619,8 @@ async def realtime_websocket_endpoint(
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
-    if call_id is not None and call_id.startswith("rtc_litellm_"):
-        from litellm.proxy.realtime_endpoints.codex import codex_realtime_sideband
+    if call_id is not None:
+        from litellm.llms.chatgpt.codex import codex_realtime_sideband
 
         await codex_realtime_sideband(websocket, call_id, user_api_key_dict)
         return

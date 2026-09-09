@@ -104,3 +104,15 @@ async def test_async_codex_edit_without_multipart_image(chatgpt_tokens):
     assert str(requests[0].url).endswith("/codex/images/edits")
     assert requests[0].headers["content-type"] == "application/json"
     await client.client.aclose()
+
+
+@pytest.mark.parametrize("as_tuple", [False, True])
+def test_edit_accepts_filesystem_path(tmp_path, as_tuple):
+    image = tmp_path / "reference.png"
+    image.write_bytes(b"reference image bytes")
+    data, files = ChatGPTImageEditConfig().transform_image_edit_request(
+        "gpt-image-2", "edit", ("reference.png", image, "image/png") if as_tuple else image,
+        {}, GenericLiteLLMParams(), {}
+    )
+    assert not files
+    assert data["images"] == ({"image_url": "data:image/png;base64," + base64.b64encode(image.read_bytes()).decode()},)

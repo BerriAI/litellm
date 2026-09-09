@@ -61,7 +61,7 @@ def _run_client_secret(session, model, monkeypatch):
         captured.update(kwargs)
         return object()
 
-    def mock_get_llm_provider(model, api_base, api_key, litellm_params=None):
+    def mock_get_llm_provider(model, api_base, api_key):
         return model, "openai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
@@ -161,7 +161,7 @@ async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkey
     async def hanging_token_refresh(**kwargs):
         await asyncio.sleep(30)
 
-    def mock_get_llm_provider(model, api_base, api_key, litellm_params=None):
+    def mock_get_llm_provider(model, api_base, api_key):
         return model, "vertex_ai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)

@@ -1,5 +1,7 @@
 import base64
+import os
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
@@ -7,6 +9,7 @@ from httpx._types import FileTypes as HTTPFileTypes
 from httpx._types import RequestFiles
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.llms.openai.image_generation.gpt_transformation import GPTImageGenerationConfig
 from litellm.types.llms.openai import AllMessageValues, FileTypes
@@ -21,14 +24,26 @@ class ReferenceImage(BaseModel):
     image_url: str = Field(pattern=r"^(data:image/(png|jpeg|webp);base64,|https://)")
 
 
-def encode_reference(file: HTTPFileTypes) -> dict[str, str]:  # mutable-ok: image handler requires dictionaries
+def encode_reference(
+    file: HTTPFileTypes | FileTypes,
+) -> dict[str, str]:  # mutable-ok: image handler requires dictionaries
     content: Final = file[1] if isinstance(file, tuple) else file
-    content_type: Final = file[2] if isinstance(file, tuple) and len(file) >= 3 else "image/png"
+    raw: Final = (
+        Path(os.fsdecode(content)).read_bytes()
+        if isinstance(content, os.PathLike)
+        else content.encode()
+        if isinstance(content, str)
+        else content
+        if isinstance(content, bytes)
+        else content.read()
+    )
+    content_type: Final = (
+        file[2]
+        if isinstance(file, tuple) and len(file) >= 3 and file[2]
+        else ImageEditRequestUtils.get_image_content_type(raw)
+    )
     if content_type not in ("image/png", "image/jpeg", "image/webp"):
         raise ValueError("Reference images must be PNG, JPEG, or WEBP")
-    raw: Final = (
-        content.encode() if isinstance(content, str) else content if isinstance(content, bytes) else content.read()
-    )
     return {  # mutable-ok: JSON request serialization
         "image_url": f"data:{content_type};base64," + base64.b64encode(raw).decode("ascii")
     }
@@ -101,7 +116,7 @@ class ChatGPTImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, object],
@@ -122,16 +137,13 @@ class ChatGPTImageEditConfig(OpenAIImageEditConfig):
                 "images": tuple(item.model_dump() for item in validated),
             }, ()
 
-        data, files = super().transform_image_edit_request(
-            model,
-            prompt,
-            image,
-            dict(image_edit_optional_request_params),  # mutable-ok: parent edit adapter requires dictionaries
-            litellm_params,
-            dict(headers),  # mutable-ok: parent edit adapter requires dictionaries
-        )
-        parts: Final = files.items() if isinstance(files, Mapping) else files
-        encoded: Final = tuple(encode_reference(file) for field, file in parts if field == "image[]")
+        inputs: Final = tuple(image) if isinstance(image, list) else (image,) if image is not None else ()
+        encoded: Final = tuple(encode_reference(file) for file in inputs)
         if not 1 <= len(encoded) <= 5:
             raise ValueError("images must contain between 1 and 5 reference images")
-        return {**data, "images": encoded}, ()  # mutable-ok: JSON request serialization
+        return {  # mutable-ok: JSON request serialization
+            "model": model,
+            "prompt": prompt,
+            **image_edit_optional_request_params,
+            "images": encoded,
+        }, ()

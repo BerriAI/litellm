@@ -141,7 +141,6 @@ async def acreate_realtime_client_secret(
         model=model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
-        litellm_params=litellm_params,
     )
     (
         provider_config,
@@ -210,7 +209,6 @@ async def acreate_realtime_transcription_session(
         model=model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
-        litellm_params=litellm_params,
     )
     (
         provider_config,
@@ -272,7 +270,6 @@ async def arealtime_calls(
         model=model_name,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
-        litellm_params=litellm_params,
     )
     provider_config, resolved_api_base, _ = _get_realtime_http_provider_config(
         custom_llm_provider=custom_llm_provider,
@@ -380,7 +377,6 @@ async def _arealtime(
         model=model,
         api_base=api_base,
         api_key=api_key,
-        litellm_params=litellm_params,
     )
 
     # If the client supplied `model` in the URL, ensure it uses the normalized

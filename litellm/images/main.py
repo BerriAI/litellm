@@ -102,9 +102,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None), litellm_params=GenericLiteLLMParams(**kwargs)
-        )
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
@@ -229,7 +227,6 @@ def image_generation(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
-                litellm_params=GenericLiteLLMParams(**kwargs),
             )
         else:
             model = "dall-e-2"
@@ -789,7 +786,6 @@ def image_edit(
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
         )
 
         # Check for custom provider
@@ -1007,7 +1003,7 @@ async def aimage_edit(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None), litellm_params=GenericLiteLLMParams(**kwargs)
+                model=model, api_base=local_vars.get("base_url", None)
             )
 
         func: Final = partial(
