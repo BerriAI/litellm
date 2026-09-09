@@ -33,7 +33,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     PromptTokensDetailsResult,
     TokenRates,
-    TokenTypeCostBreakdown,
     _calculate_input_cost,
     _get_token_base_cost,
     _is_off_peak,
@@ -4023,6 +4022,49 @@ def test_a_pinned_billing_time_prices_the_totals_and_the_reported_rates_at_one_m
     assert peak_completion_cost == pytest.approx(500 * peak_rates.output_cost_per_token)
 
 
+def test_the_token_type_breakdown_carries_the_rates_it_billed_at(monkeypatch):
+    """Callers that report both the lines and the rates read the rates off the breakdown rather than
+    resolving them a second time, so the breakdown has to hand back exactly what it billed at."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "xai/tiered-model",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "input_cost_per_token_above_200k_tokens": 6e-6,
+            "output_cost_per_token_above_200k_tokens": 3e-5,
+            "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+            "litellm_provider": "xai",
+            "mode": "chat",
+        },
+    )
+    usage = Usage(
+        prompt_tokens=200_000,
+        completion_tokens=1_000,
+        total_tokens=201_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+    )
+
+    breakdown = get_token_type_cost_breakdown(model="xai/tiered-model", custom_llm_provider="xai", usage=usage)
+
+    assert breakdown.rates == get_billed_token_rates(
+        model="xai/tiered-model", custom_llm_provider="xai", usage=usage
+    )
+    assert breakdown.rates.cache_read_input_token_cost == pytest.approx(6e-7)
+    assert breakdown.cache_read_cost == pytest.approx(100_000 * breakdown.rates.cache_read_input_token_cost)
+
+
+def test_the_token_type_breakdown_reports_no_rates_for_an_unpriced_model():
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    breakdown = get_token_type_cost_breakdown(
+        model="no-such-model-anywhere", custom_llm_provider="openai", usage=usage
+    )
+
+    assert breakdown.rates is None
+
+
 def test_billed_token_rates_are_none_for_an_unpriced_model():
     usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
 
@@ -4036,9 +4078,7 @@ def test_token_type_cost_breakdown_zero_without_special_tokens(_local_model_cost
         model="gpt-4o", custom_llm_provider="openai", usage=usage
     )
 
-    assert breakdown == TokenTypeCostBreakdown(
-        reasoning_cost=0.0, cache_read_cost=0.0, cache_creation_cost=0.0
-    )
+    assert (breakdown.reasoning_cost, breakdown.cache_read_cost, breakdown.cache_creation_cost) == (0.0, 0.0, 0.0)
 
 
 @pytest.mark.parametrize(
@@ -4110,9 +4150,7 @@ def test_token_type_cost_breakdown_handles_unknown_model_gracefully():
             completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=5),
         ),
     )
-    assert breakdown == TokenTypeCostBreakdown(
-        reasoning_cost=0.0, cache_read_cost=0.0, cache_creation_cost=0.0
-    )
+    assert (breakdown.reasoning_cost, breakdown.cache_read_cost, breakdown.cache_creation_cost) == (0.0, 0.0, 0.0)
 
 
 def test_token_type_cost_breakdown_applies_regional_uplift(_local_model_cost_map):

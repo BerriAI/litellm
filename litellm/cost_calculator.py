@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    BilledTokenRates,
     CostCalculatorUtils,
     _generic_cost_per_character,
     _get_regional_uplift_multiplier,
@@ -1122,6 +1123,7 @@ def _store_cost_breakdown_in_logging_obj(
     service_tier: str | None = None,
     data_residency: str | None = None,
     vertex_location: str | None = None,
+    billed_token_rates: BilledTokenRates | None = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1166,6 +1168,7 @@ def _store_cost_breakdown_in_logging_obj(
             service_tier=service_tier,
             data_residency=data_residency,
             vertex_location=vertex_location,
+            billed_token_rates=billed_token_rates,
         )
 
     except Exception as breakdown_error:
@@ -1735,6 +1738,7 @@ def completion_cost(
                     _reasoning_cost: float | None = None
                     _cache_read_cost: float | None = None
                     _cache_creation_cost: float | None = None
+                    _billed_token_rates: BilledTokenRates | None = None
                     if cost_per_token_usage_object is not None and model:
                         _breakdown_provider: str | None = (
                             custom_llm_provider if isinstance(custom_llm_provider, str) else None
@@ -1751,6 +1755,7 @@ def completion_cost(
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
                         _cache_read_cost = _token_type_breakdown.cache_read_cost
                         _cache_creation_cost = _token_type_breakdown.cache_creation_cost
+                        _billed_token_rates = _token_type_breakdown.rates
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
                         prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
@@ -1770,6 +1775,7 @@ def completion_cost(
                         service_tier=service_tier,
                         data_residency=data_residency,
                         vertex_location=vertex_location,
+                        billed_token_rates=_billed_token_rates,
                     )
 
                 return _final_cost
