@@ -49,6 +49,12 @@ def encode_reference(
     }
 
 
+def without_image_identity_headers(headers: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: value for key, value in headers.items() if key.lower() not in ("authorization", "chatgpt-account-id")}
+    )
+
+
 def image_headers(
     headers: Mapping[str, object], model: str, params: Mapping[str, object]
 ) -> dict[str, object]:  # mutable-ok: image handler requires dictionaries
@@ -57,7 +63,11 @@ def image_headers(
         model=model,
         litellm_params=GenericLiteLLMParams.model_validate(params),
     )
-    return {**headers, **auth_headers, "accept": "application/json"}  # mutable-ok: JSON request serialization
+    return {  # mutable-ok: image handler requires dictionaries
+        **without_image_identity_headers(headers),
+        **auth_headers,
+        "accept": "application/json",
+    }
 
 
 class ChatGPTImageGenerationConfig(GPTImageGenerationConfig):

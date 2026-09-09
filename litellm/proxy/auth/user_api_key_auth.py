@@ -302,7 +302,7 @@ async def _check_key_model_budget_with_fallback(
             model=model_name,
         )
     except litellm.BudgetExceededError as e:
-        if request_data.get("model") != model_name:
+        if request_data.get("model") != model_name or request.scope.get("litellm_pinned_realtime_model") == model_name:
             raise e
         fallback_model: Final = await model_max_budget_limiter.get_fallback_model_within_budget(
             user_api_key_dict=valid_token,
@@ -542,6 +542,8 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
             if call_token is not None
             else websocket.query_params.get("model")
         )
+        if call_token is not None:
+            request.scope["litellm_pinned_realtime_model"] = model
 
         async def return_body():
             return _realtime_request_body(model)

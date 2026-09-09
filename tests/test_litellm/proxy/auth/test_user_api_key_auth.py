@@ -7290,3 +7290,49 @@ async def test_jwt_builder_returns_every_team_grant_the_key_path_gets(is_proxy_a
     assert token.team_member == Member(user_id="jwt-user", role="admin")
     assert token.team_member_spend == 1.5
     assert token.jwt_claims == {"sub": "jwt-user"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attachment", ["path", "query"])
+async def test_sideband_rejects_budget_fallback_before_rerouting(monkeypatch, attachment):
+    import hashlib
+    import importlib
+    import time
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from fastapi import HTTPException, WebSocket
+    from litellm.llms.chatgpt.codex import CodexRealtimeCall
+    from litellm.proxy.realtime_endpoints.call_sessions import encode_call
+
+    auth_module = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-sideband-budget-salt")
+    token = encode_call(CodexRealtimeCall(
+        call_id="rtc_test", model="gpt-live-1-codex", alias="budgeted-voice",
+        owner=hashlib.sha256(b"Bearer owner").hexdigest(), expires_at=time.time() + 300,
+    ))
+    limiter = SimpleNamespace(
+        is_key_within_model_budget=AsyncMock(side_effect=litellm.BudgetExceededError(current_cost=2, max_budget=1)),
+        get_fallback_model_within_budget=AsyncMock(return_value="cheap-voice"),
+    )
+    auth = UserAPIKeyAuth(models=["budgeted-voice", "cheap-voice"])
+
+    async def authenticate(request, api_key):
+        data = await request.json()
+        await auth_module._check_key_model_budget_with_fallback(auth, limiter, data["model"], data, request)
+        return auth
+
+    monkeypatch.setattr(auth_module, "user_api_key_auth", authenticate)
+    monkeypatch.setattr(auth_module, "can_key_call_model", AsyncMock())
+    send = AsyncMock()
+    websocket = WebSocket({
+        "type": "websocket", "scheme": "ws", "server": ("localhost", 4000),
+        "path": "/v1/live/" + token if attachment == "path" else "/v1/realtime",
+        "path_params": {"call_id": token} if attachment == "path" else {},
+        "query_string": b"call_id=" + token.encode() if attachment == "query" else b"",
+        "headers": [(b"authorization", b"Bearer owner")],
+    }, AsyncMock(), send)
+    with pytest.raises(HTTPException) as error:
+        await auth_module.user_api_key_auth_websocket(websocket)
+    assert error.value.status_code == 403
+    limiter.get_fallback_model_within_budget.assert_not_awaited()
+    send.assert_awaited_once_with({"type": "websocket.close", "code": 1008, "reason": ""})
