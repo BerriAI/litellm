@@ -24,6 +24,27 @@ spec:
 {{- with .Values.keda.triggers }}
   {{- toYaml . | nindent 2 }}
 {{- end }}
+{{- $prom := .Values.keda.prometheus }}
+{{- if or $prom.requestsPerMinute $prom.tokensPerMinute }}
+{{- if not $prom.serverAddress }}
+{{- fail "keda.prometheus.serverAddress is required when keda.prometheus.requestsPerMinute or tokensPerMinute is set" }}
+{{- end }}
+{{- $selector := printf "namespace=%q,job=%q" .Release.Namespace (printf "%s%s" (include "litellm.fullname" .) (ternary "-metrics" "" .Values.metricsServer.enabled)) }}
+{{- with $prom.requestsPerMinute }}
+  - type: prometheus
+    metadata:
+      serverAddress: {{ $prom.serverAddress | quote }}
+      threshold: {{ . | quote }}
+      query: {{ printf "sum(rate(litellm_proxy_total_requests_metric_total{%s}[1m])) * 60" $selector | quote }}
+{{- end }}
+{{- with $prom.tokensPerMinute }}
+  - type: prometheus
+    metadata:
+      serverAddress: {{ $prom.serverAddress | quote }}
+      threshold: {{ . | quote }}
+      query: {{ printf "sum(rate(litellm_total_tokens_metric_total{%s}[1m])) * 60" $selector | quote }}
+{{- end }}
+{{- end }}
   advanced:
     restoreToOriginalReplicaCount: {{ .Values.keda.restoreToOriginalReplicaCount }}
 {{- if .Values.keda.behavior }}

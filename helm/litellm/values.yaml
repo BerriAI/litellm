@@ -284,6 +284,16 @@ gateway:
         memory: 128Mi
       limits:
         memory: 512Mi
+  # Prometheus Operator ServiceMonitor for the gateway pods. Scrapes the
+  # `<gateway>-metrics` Service, so it requires metricsServer above (the http
+  # port serves /metrics/ behind virtual-key auth). Every pod is its own scrape
+  # target, so the samples carry the `pod` label the per-pod autoscaling
+  # queries below group by.
+  serviceMonitor:
+    enabled: false
+    labels: {}
+    interval: 15s
+    scrapeTimeout: 10s
   image:
     repository: ghcr.io/berriai/litellm-gateway
     tag: ""              # defaults to .Chart.AppVersion
@@ -340,6 +350,17 @@ gateway:
     #     policies:
     #       - { type: Percent, value: 100, periodSeconds: 30 }
     behavior: {}
+    # Opt-in per-pod workload targets, rendered as autoscaling/v2 `Pods` metrics
+    # named `litellm_requests_per_minute` and `litellm_tokens_per_minute` with an
+    # AverageValue target. They coexist with the CPU/memory targets above: the
+    # HPA scales on whichever metric asks for the most replicas. Kubernetes has
+    # no idea what a token is, so a Prometheus Adapter must serve those two
+    # names on custom.metrics.k8s.io from the proxy's request and token
+    # counters; the adapter rules and the replica arithmetic are documented at
+    # https://docs.litellm.ai/docs/proxy/deploy#scale-on-requests-and-tokens-per-pod
+    # Tokens are counted when a response completes, so TPM trails long streams.
+    targetRequestsPerMinute: ""
+    targetTokensPerMinute: ""
   # PodDisruptionBudget for the gateway pods. Set exactly one of
   # `minAvailable` / `maxUnavailable` (minAvailable wins if both are set;
   # enabling without either falls back to `maxUnavailable: 1`). Disabled by

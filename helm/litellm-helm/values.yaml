@@ -222,6 +222,18 @@ autoscaling:
   # Memory is a floor to provision under 'resources', not a signal to scale on.
   # targetMemoryUtilizationPercentage: 80
   # behavior: {}
+  # Opt-in per-pod workload targets, rendered as autoscaling/v2 `Pods` metrics
+  # named `litellm_requests_per_minute` and `litellm_tokens_per_minute` with an
+  # AverageValue target, alongside whichever resource targets are set (the HPA
+  # follows the metric asking for the most replicas). A Prometheus Adapter must
+  # serve those two names on custom.metrics.k8s.io from the proxy's request and
+  # token counters, grouped by the scrape target's `pod` label; enable
+  # serviceMonitor below so every pod is scraped on its own. Adapter rules and
+  # the replica arithmetic:
+  # https://docs.litellm.ai/docs/proxy/deploy#scale-on-requests-and-tokens-per-pod
+  # Tokens are counted when a response completes, so TPM trails long streams.
+  targetRequestsPerMinute: ""
+  targetTokensPerMinute: ""
 
 # Autoscaling with keda is mutually exclusive with hpa
 keda:
@@ -243,6 +255,19 @@ keda:
   #     metricName: http_requests_total
   #     threshold: '100'
   #     query: sum(rate(http_requests_total{deployment="my-deployment"}[2m]))
+  # First-class Prometheus triggers on the proxy's own request and token
+  # counters, appended to `triggers`. Each target is the load one replica should
+  # carry: KEDA divides the release-wide rate by it to pick the replica count.
+  # The queries select samples by the release namespace and the `job` label the
+  # chart's ServiceMonitor produces (the metrics Service name), so enable
+  # serviceMonitor below together with metricsServer: the http port serves
+  # /metrics/ behind virtual-key auth and answers an unauthenticated scrape
+  # with 401. Tokens are counted at completion, so TPM trails long streams.
+  # serverAddress is required once either target is set.
+  prometheus:
+    serverAddress: ""
+    requestsPerMinute: ""
+    tokensPerMinute: ""
   behavior: {}
   # scaleDown:
   #   stabilizationWindowSeconds: 300

@@ -61,6 +61,74 @@ tests:
       - equal: { path: "spec.metrics[1].resource.name", value: memory }
       - equal: { path: "spec.metrics[1].resource.target.averageUtilization", value: 80 }
 
+  - it: "renders no workload metrics by default"
+    set:
+      autoscaling.enabled: true
+      autoscaling.targetMemoryUtilizationPercentage: 80
+    asserts:
+      - lengthEqual: { path: spec.metrics, count: 2 }
+      - notContains: { path: spec.metrics, content: { type: Pods }, any: true }
+
+  - it: "adds a requests-per-minute Pods metric after the cpu metric"
+    set:
+      autoscaling.enabled: true
+      autoscaling.targetRequestsPerMinute: 600
+    asserts:
+      - lengthEqual: { path: spec.metrics, count: 2 }
+      - equal: { path: "spec.metrics[0].resource.name", value: cpu }
+      - equal:
+          path: "spec.metrics[1]"
+          value:
+            type: Pods
+            pods:
+              metric: { name: litellm_requests_per_minute }
+              target: { type: AverageValue, averageValue: "600" }
+
+  - it: "adds a tokens-per-minute Pods metric on its own"
+    set:
+      autoscaling.enabled: true
+      autoscaling.targetTokensPerMinute: 400k
+    asserts:
+      - lengthEqual: { path: spec.metrics, count: 2 }
+      - equal:
+          path: "spec.metrics[1]"
+          value:
+            type: Pods
+            pods:
+              metric: { name: litellm_tokens_per_minute }
+              target: { type: AverageValue, averageValue: "400k" }
+      - notContains:
+          path: spec.metrics
+          content: { type: Pods, pods: { metric: { name: litellm_requests_per_minute } } }
+          any: true
+
+  - it: "renders requests, tokens, cpu and memory metrics together"
+    set:
+      autoscaling.enabled: true
+      autoscaling.targetMemoryUtilizationPercentage: 80
+      autoscaling.targetRequestsPerMinute: 600
+      autoscaling.targetTokensPerMinute: 400000
+    asserts:
+      - lengthEqual: { path: spec.metrics, count: 4 }
+      - equal: { path: "spec.metrics[0].resource.name", value: cpu }
+      - equal: { path: "spec.metrics[1].resource.name", value: memory }
+      - equal: { path: "spec.metrics[2].pods.metric.name", value: litellm_requests_per_minute }
+      - equal: { path: "spec.metrics[2].pods.target.averageValue", value: "600" }
+      - equal: { path: "spec.metrics[3].pods.metric.name", value: litellm_tokens_per_minute }
+      - equal: { path: "spec.metrics[3].pods.target.averageValue", value: "400000" }
+
+  - it: "scales on workload metrics alone when the cpu target is cleared"
+    set:
+      autoscaling.enabled: true
+      autoscaling.targetCPUUtilizationPercentage: null
+      autoscaling.targetRequestsPerMinute: 600
+      autoscaling.targetTokensPerMinute: 400000
+    asserts:
+      - lengthEqual: { path: spec.metrics, count: 2 }
+      - notContains: { path: spec.metrics, content: { type: Resource }, any: true }
+      - equal: { path: "spec.metrics[0].pods.metric.name", value: litellm_requests_per_minute }
+      - equal: { path: "spec.metrics[1].pods.metric.name", value: litellm_tokens_per_minute }
+
   - it: "renders no hpa when autoscaling is disabled"
     asserts:
       - hasDocuments: { count: 0 }
