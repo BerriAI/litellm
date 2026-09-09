@@ -1408,7 +1408,7 @@ if MCP_AVAILABLE:
             raise
         except BaseException as e:
             effective_timeout: Final = (
-                min(request.timeout or MCP_CLIENT_TIMEOUT, timeout_seconds)
+                min(request.timeout if request.timeout is not None else MCP_CLIENT_TIMEOUT, timeout_seconds)
                 if any(
                     isinstance(cause, McpError) and _as_read_timeout(cause) is not None
                     for cause in iter_exception_tree(e)
