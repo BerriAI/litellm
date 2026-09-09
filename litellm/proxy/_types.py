@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 import httpx
@@ -1293,6 +1294,13 @@ class UpdateKeyRequest(KeyRequestBase):
     auto_rotate: bool | None = None
     rotation_interval: str | None = None
     organization_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_blank_team_id(cls, values: object) -> object:
+        if isinstance(values, Mapping) and values.get("team_id") == "":
+            return MappingProxyType({k: v for k, v in values.items() if k != "team_id"})
+        return values
 
     @field_validator("organization_id", mode="before")
     @classmethod
