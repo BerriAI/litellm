@@ -12,6 +12,7 @@ is logged the first time such a deployment is seen.
 
 import contextlib
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -45,6 +46,9 @@ else:
 
 class RoutingArgs:
     ttl: int = 60  # 1min (RPM/TPM expire key)
+
+
+_NO_LITELLM_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
 class ModelRateLimitingCheck(CustomLogger):
@@ -314,7 +318,7 @@ class ModelRateLimitingCheck(CustomLogger):
         ``model_info`` in, so ``model_id`` comes back as "". The router does
         stamp ``kwargs["model_info"]``, so prefer that before giving up.
         """
-        litellm_params: Final = kwargs.get("litellm_params") or {}
+        litellm_params: Final = kwargs.get("litellm_params") or _NO_LITELLM_PARAMS
         for source in (kwargs.get("model_info"), litellm_params.get("model_info")):
             if isinstance(source, Mapping):
                 candidate = source.get("id")
