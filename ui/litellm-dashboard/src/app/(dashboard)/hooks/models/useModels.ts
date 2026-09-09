@@ -91,7 +91,16 @@ const NO_AUTO_ROUTERS: ReadonlySet<string> = new Set<string>();
 export interface AutoRouterCandidateDeployment {
   model_name?: string | null;
   litellm_params?: { model?: string | null } | null;
-  model_info?: { mode?: string | null } | null;
+  model_info?: {
+    mode?: string | null;
+    id?: string | null;
+    db_model?: boolean | null;
+    base_model?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    team_id?: string | null;
+    created_by?: string | null;
+  } | null;
 }
 
 export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
