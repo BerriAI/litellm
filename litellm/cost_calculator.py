@@ -341,7 +341,7 @@ def cost_per_token(
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
     ### DEPLOYMENT-SPECIFIC PRICING ###
-    custom_model_info: ModelInfo | None = None,  # deployment model_info, for non-token custom pricing
+    custom_model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -1429,20 +1429,7 @@ def completion_cost(
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
-                    # Extract custom model_info for deployment-specific pricing
-                    _video_model_info: ModelInfo | None = None
-                    if custom_pricing and litellm_logging_obj is not None:
-                        _litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
-                        if _litellm_params is not None:
-                            _video_model_info = next(
-                                (
-                                    model_info
-                                    for _metadata_key in ("metadata", "litellm_metadata")
-                                    if (model_info := (_litellm_params.get(_metadata_key) or {}).get("model_info"))
-                                    is not None
-                                ),
-                                None,
-                            )
+                    _video_model_info: ModelInfo | None = _deployment_model_info(litellm_logging_obj, custom_pricing)
 
                     usage_obj = getattr(completion_response, "usage", None)
                     duration_seconds: float | None = None
@@ -1638,24 +1625,6 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
-                # Deployment-specific model_info, for modalities whose pricing is
-                # not token-based and so cannot travel via custom_cost_per_token
-                # (e.g. OCR per-page pricing). Same extraction as the video path
-                # above, minus its `or {}` default: truthiness on the value adds
-                # no mutable-collection construction (LIT002) and reads the same.
-                # Checked under both keys: router calls that go through
-                # `_ageneric_api_call_with_fallbacks` (OCR included) store the
-                # deployment's model_info under `litellm_metadata`, not `metadata`.
-                _custom_model_info: ModelInfo | None = None
-                if custom_pricing and litellm_logging_obj is not None:
-                    _cm_litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
-                    if _cm_litellm_params is not None:
-                        for _cm_metadata_key in ("metadata", "litellm_metadata"):
-                            _cm_metadata = _cm_litellm_params.get(_cm_metadata_key)
-                            if _cm_metadata and _cm_metadata.get("model_info") is not None:
-                                _custom_model_info = _cm_metadata.get("model_info")
-                                break
-
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
@@ -1681,7 +1650,7 @@ def completion_cost(
                     vertex_location=vertex_location,
                     response=completion_response,
                     request_model=request_model_for_cost,
-                    custom_model_info=_custom_model_info,
+                    custom_model_info=_deployment_model_info(litellm_logging_obj, custom_pricing),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
@@ -1911,6 +1880,32 @@ def response_cost_calculator(
         raise e
 
 
+def _deployment_model_info(
+    litellm_logging_obj: LitellmLoggingObject | None,
+    custom_pricing: bool | None,
+) -> ModelInfo | None:
+    if not custom_pricing or litellm_logging_obj is None:
+        return None
+    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
+    if litellm_params is None:
+        return None
+    return next(
+        (
+            model_info
+            for metadata_key in ("metadata", "litellm_metadata")
+            if (metadata := litellm_params.get(metadata_key)) and (model_info := metadata.get("model_info")) is not None
+        ),
+        None,
+    )
+
+
+def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
+    try:
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return None
+
+
 def ocr_cost(
     model: str,
     custom_llm_provider: str | None,
@@ -1922,9 +1917,8 @@ def ocr_cost(
         model: str - model name
         custom_llm_provider: Optional[str] - custom LLM provider
         response: Optional[Any] - response object
-        model_info: Optional[ModelInfo] - deployment-specific model info, used for
-            custom pricing. Takes precedence over the model cost map, mirroring
-            the video generation cost path.
+        model_info: Optional[ModelInfo] - deployment-specific model info; its OCR pricing
+            takes precedence over the model cost map
 
     Returns:
         Tuple[float, float]: cost of OCR processing
@@ -1942,34 +1936,18 @@ def ocr_cost(
     if response.usage_info is None:
         raise ValueError("OCR response usage_info is None")
 
-    #########################################################
-    # Deployment-specific pricing wins over the cost map.
-    #
-    # Custom pricing set on a deployment is registered under the router's
-    # deployment id, while the shared "{provider}/{model}" key has its pricing
-    # fields stripped (see _register_custom_pricing_for_request). A cost map
-    # lookup therefore cannot see it, so an OCR model that is not in the map
-    # bills $0 no matter how it is priced in config. Prefer the caller-supplied
-    # model_info when it carries OCR pricing.
-    #########################################################
-    has_custom_ocr_pricing: Final[bool] = model_info is not None and (
+    has_custom_ocr_pricing: Final = model_info is not None and (
         model_info.get("ocr_cost_per_page") is not None or model_info.get("ocr_cost_per_credit") is not None
     )
-    if not has_custom_ocr_pricing:
-        try:
-            model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-        except Exception:
-            model_info = None
+    pricing: Final = model_info if has_custom_ocr_pricing else _cost_map_model_info(model, custom_llm_provider)
 
     credits: Final = getattr(response.usage_info, "credits", None)
-    cost_per_credit = None
-    if model_info is not None:
-        cost_per_credit = model_info.get("ocr_cost_per_credit")
+    cost_per_credit: Final = pricing.get("ocr_cost_per_credit") if pricing is not None else None
     if credits is not None and cost_per_credit is not None:
         return cost_per_credit * credits, 0.0
 
-    ocr_cost_per_page: Final = model_info.get("ocr_cost_per_page") if model_info is not None else None
-    annotation_cost_per_page: Final = model_info.get("annotation_cost_per_page") if model_info is not None else None
+    ocr_cost_per_page: Final = pricing.get("ocr_cost_per_page") if pricing is not None else None
+    annotation_cost_per_page: Final = pricing.get("annotation_cost_per_page") if pricing is not None else None
     annotation_rate: Final = annotation_cost_per_page if annotation_cost_per_page is not None else ocr_cost_per_page
 
     pages_processed: Final = response.usage_info.pages_processed
