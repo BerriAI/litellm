@@ -4,6 +4,12 @@ import type { TierModelParams, TierModelParamsByTier } from "./complexity_router
 
 export const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
+export const ALL_BUILT_IN_TIERS: ComplexityTier[] = ["NON_REASONING", ...TIER_ORDER];
+
+/** The ladder one router renders, ascending; NON_REASONING appears only when enabled. */
+export const tierOrderFor = (enableNonReasoningTier: boolean | undefined): ComplexityTier[] =>
+  enableNonReasoningTier ? ALL_BUILT_IN_TIERS : TIER_ORDER;
+
 export interface TierRow {
   id: string;
   name: string;
@@ -27,6 +33,7 @@ export const MAX_TIER_DEFINITION_CHARS = 500;
 
 export interface ActiveTierSet {
   tiers: ComplexityTiers;
+  enable_non_reasoning_tier?: boolean;
   custom_tier_set?: CustomTierSet;
   tier_model_params?: TierModelParamsByTier;
 }
@@ -39,7 +46,8 @@ export const activeTierName = (row: TierRow): string => row.name.trim();
 export const sameTierIdentity = (left: string, right: string): boolean =>
   left.trim().toLowerCase() === right.trim().toLowerCase();
 
-export const isBuiltInTierName = (name: string): boolean => TIER_ORDER.some((tier) => sameTierIdentity(tier, name));
+export const isBuiltInTierName = (name: string): boolean =>
+  ALL_BUILT_IN_TIERS.some((tier) => sameTierIdentity(tier, name));
 
 const builtInRow = (tier: keyof ComplexityTiers, tiers: ComplexityTiers): TierRow => ({
   id: tier,
@@ -51,7 +59,9 @@ const builtInRow = (tier: keyof ComplexityTiers, tiers: ComplexityTiers): TierRo
 // The only reader of the tier set. Built-in rows carry the canonical tier key as their id, so every
 // pointer into the set is a row id in both modes and nothing downstream branches on the mode.
 export const activeTierRows = (value: ActiveTierSet): ActiveTierRow[] => {
-  const rows = value.custom_tier_set?.tiers ?? TIER_ORDER.map((tier) => builtInRow(tier, value.tiers));
+  const rows =
+    value.custom_tier_set?.tiers ??
+    tierOrderFor(value.enable_non_reasoning_tier).map((tier) => builtInRow(tier, value.tiers));
   return rows.map((row) => ({ ...row, params: value.tier_model_params?.[row.id] ?? {} }));
 };
 
