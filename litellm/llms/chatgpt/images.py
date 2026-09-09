@@ -15,7 +15,7 @@ from litellm.llms.openai.image_generation.gpt_transformation import GPTImageGene
 from litellm.types.llms.openai import AllMessageValues, FileTypes
 from litellm.types.router import GenericLiteLLMParams
 
-from .common_utils import CHATGPT_API_BASE
+from .authenticator import Authenticator
 from .responses.transformation import ChatGPTResponsesAPIConfig
 
 
@@ -82,7 +82,7 @@ class ChatGPTImageGenerationConfig(GPTImageGenerationConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        return f"{(api_base or CHATGPT_API_BASE).rstrip('/')}/images/generations"
+        return f"{(api_base or Authenticator().get_api_base()).rstrip('/')}/images/generations"
 
     def transform_image_generation_request(
         self,
@@ -107,7 +107,7 @@ class ChatGPTImageEditConfig(OpenAIImageEditConfig):
         return image_headers(headers, model, litellm_params or MappingProxyType({}))
 
     def get_complete_url(self, model: str, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
-        return f"{(api_base or CHATGPT_API_BASE).rstrip('/')}/images/edits"
+        return f"{(api_base or Authenticator().get_api_base()).rstrip('/')}/images/edits"
 
     def use_multipart_form_data(self) -> bool:
         return False

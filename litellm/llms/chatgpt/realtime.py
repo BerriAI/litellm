@@ -11,7 +11,7 @@ from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import get_model_info
 
-from .common_utils import CHATGPT_API_BASE
+from .authenticator import Authenticator
 from .responses.transformation import ChatGPTResponsesAPIConfig
 
 
@@ -44,6 +44,10 @@ def realtime_endpoint(model: str) -> str:
 
 
 class ChatGPTRealtime(OpenAIRealtime):
+    @staticmethod
+    def get_api_base(api_base: str | None = None) -> str:
+        return api_base or Authenticator().get_api_base(default_base="https://api.openai.com/v1")
+
     def __init__(self, params: GenericLiteLLMParams, headers: Mapping[str, str]) -> None:
         super().__init__()
         self._profile_headers = realtime_headers(params, headers)
@@ -90,7 +94,7 @@ class ChatGPTRealtimeHTTPConfig(OpenAIRealtimeHTTPConfig):
         api_base: str | None,
         **kwargs: object,  # kwargs-ok: provider interface accepts optional credentials
     ) -> str:
-        return api_base or CHATGPT_API_BASE
+        return api_base or Authenticator().get_api_base()
 
     def get_api_key(
         self,

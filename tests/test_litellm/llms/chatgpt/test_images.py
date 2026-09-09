@@ -116,3 +116,16 @@ def test_edit_accepts_filesystem_path(tmp_path, as_tuple):
     )
     assert not files
     assert data["images"] == ({"image_url": "data:image/png;base64," + base64.b64encode(image.read_bytes()).decode()},)
+
+
+@pytest.mark.parametrize("env_name", ["CHATGPT_API_BASE", "OPENAI_CHATGPT_API_BASE"])
+@pytest.mark.parametrize("api_base", [None, "https://deployment.example/codex"])
+def test_image_routes_use_configured_gateway(monkeypatch, env_name, api_base):
+    monkeypatch.delenv("CHATGPT_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_CHATGPT_API_BASE", raising=False)
+    monkeypatch.setenv(env_name, "https://gateway.example/codex/")
+    expected = api_base or "https://gateway.example/codex"
+    assert ChatGPTImageGenerationConfig().get_complete_url(api_base, None, "gpt-image-2", {}, {}) == (
+        expected + "/images/generations"
+    )
+    assert ChatGPTImageEditConfig().get_complete_url("gpt-image-2", api_base, {}) == expected + "/images/edits"

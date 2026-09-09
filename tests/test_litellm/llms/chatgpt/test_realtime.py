@@ -30,7 +30,7 @@ async def test_chatgpt_call_keeps_oauth_and_frameless_session(chatgpt_tokens, ap
         extra_headers={"openai-alpha": "quicksilver=v2"},
         client=client,
     )
-    assert response.extensions["chatgpt_realtime"]["api_base"] == api_base
+    assert response.extensions["chatgpt_realtime"]["api_base"] == (api_base or "https://api.openai.com/v1")
     assert requests[0].url.host == ("voice.example" if api_base else "chatgpt.com")
     assert response.status_code == 201
     assert requests[0].url.path == "/backend-api/codex/realtime/calls"
@@ -81,4 +81,21 @@ def test_realtime_unknown_model_keeps_standard_endpoint(chatgpt_tokens, local_mo
     handler = ChatGPTRealtime(GenericLiteLLMParams(), {})
     assert handler._construct_url("https://api.openai.com/v1", {"model": "unknown-voice-model"}) == (
         "wss://api.openai.com/v1/realtime?model=unknown-voice-model"
+    )
+
+
+@pytest.mark.parametrize("env_name", ["CHATGPT_API_BASE", "OPENAI_CHATGPT_API_BASE"])
+@pytest.mark.parametrize("api_base", [None, "https://deployment.example/codex"])
+def test_realtime_routes_use_configured_gateway(monkeypatch, env_name, api_base, chatgpt_tokens):
+    from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
+
+    monkeypatch.delenv("CHATGPT_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_CHATGPT_API_BASE", raising=False)
+    monkeypatch.setenv(env_name, "https://gateway.example/codex/")
+    expected = api_base or "https://gateway.example/codex"
+    config = ChatGPTRealtimeHTTPConfig(GenericLiteLLMParams())
+    assert config.get_realtime_calls_url(api_base, "gpt-live-1-codex") == expected + "/realtime/calls"
+    handler = ChatGPTRealtime(GenericLiteLLMParams(), {})
+    assert handler._construct_url(handler.get_api_base(api_base), {"model": "gpt-realtime-1.5"}) == (
+        expected.replace("https://", "wss://") + "/realtime?model=gpt-realtime-1.5"
     )
