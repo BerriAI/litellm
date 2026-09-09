@@ -118,7 +118,7 @@ async fn safe_get_document_url(
             .headers()
             .get(reqwest::header::LOCATION)
             .and_then(|value| value.to_str().ok())
-            .ok_or_else(|| OcrResponseError::MissingRedirectLocation)?;
+            .ok_or(OcrResponseError::MissingRedirectLocation)?;
         url = url
             .join(location)
             .map_err(|_| OcrResponseError::InvalidRedirect)?;

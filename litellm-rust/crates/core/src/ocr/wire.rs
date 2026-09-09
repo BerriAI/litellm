@@ -4,7 +4,7 @@ use crate::ocr::error::OcrResponseError;
 use crate::ocr::error::PagesError;
 use std::time::Duration;
 
-use super::hooks::{OcrDuringCallRequest, OcrPreCallRequest, OcrRequestBody};
+use super::hooks::{OcrDuringCallRequest, OcrPreCallRequest};
 use super::prepare::{OcrProviderKind, OcrProviderRequest, ocr_provider_config};
 use super::types::{OcrConnection, OcrDocument, OcrRequest, OcrRequestFormat, VertexOcrSettings};
 use crate::Error;
@@ -173,17 +173,17 @@ pub fn decode_params(
             return Err(OcrRequestError::NativeUnsupported(kind.provider_name()));
         }
     }
-    if kind == OcrProviderKind::AzureDocumentIntelligence {
-        if let Some(Value::Array(pages)) = params.get("pages") {
-            if pages.iter().any(Value::is_boolean) {
-                return Err(PagesError::BooleanIndex.into());
-            }
-            if pages.iter().any(|p| p.is_number() && p.as_i64().is_none()) {
-                return Err(PagesError::IndexOutOfRange.into());
-            }
-            if !pages.iter().all(Value::is_i64) && !pages.iter().all(Value::is_string) {
-                return Err(PagesError::MixedElementTypes.into());
-            }
+    if kind == OcrProviderKind::AzureDocumentIntelligence
+        && let Some(Value::Array(pages)) = params.get("pages")
+    {
+        if pages.iter().any(Value::is_boolean) {
+            return Err(PagesError::BooleanIndex.into());
+        }
+        if pages.iter().any(|p| p.is_number() && p.as_i64().is_none()) {
+            return Err(PagesError::IndexOutOfRange.into());
+        }
+        if !pages.iter().all(Value::is_i64) && !pages.iter().all(Value::is_string) {
+            return Err(PagesError::MixedElementTypes.into());
         }
     }
     let value = Value::Object(params);
@@ -285,7 +285,7 @@ pub fn decode_pre_call_result(
     let changed: Changed = decode_request_value(value, "guardrail")?;
     Ok(OcrPreCallRequest {
         document: changed.document,
-        optional_params: decode_params(original.optional_params.kind(), changed.optional_params)?,
+        optional_params: Value::Object(changed.optional_params),
         ..original
     })
 }
@@ -299,27 +299,10 @@ pub fn decode_during_call_result(
         body: Value,
     }
     let changed: Changed = decode_request_value(value, "guardrail")?;
-    let body = match original.body {
-        OcrRequestBody::Document(_) => {
-            OcrRequestBody::Document(decode_request_value(changed.body, "guardrail.body")?)
-        }
-        OcrRequestBody::Mistral(_) => {
-            OcrRequestBody::Mistral(decode_request_value(changed.body, "guardrail.body")?)
-        }
-        OcrRequestBody::DocumentIntelligence(_) => OcrRequestBody::DocumentIntelligence(
-            decode_request_value(changed.body, "guardrail.body")?,
-        ),
-        OcrRequestBody::DeepSeek(_) => {
-            OcrRequestBody::DeepSeek(decode_request_value(changed.body, "guardrail.body")?)
-        }
-        OcrRequestBody::ReductoV3(_) => {
-            OcrRequestBody::ReductoV3(decode_request_value(changed.body, "guardrail.body")?)
-        }
-        OcrRequestBody::ReductoLegacy(_) => {
-            OcrRequestBody::ReductoLegacy(decode_request_value(changed.body, "guardrail.body")?)
-        }
-    };
-    Ok(OcrDuringCallRequest { body, ..original })
+    Ok(OcrDuringCallRequest {
+        body: changed.body,
+        ..original
+    })
 }
 
 pub(crate) fn encode_model_id(model: &str) -> Result<String, OcrRequestError> {

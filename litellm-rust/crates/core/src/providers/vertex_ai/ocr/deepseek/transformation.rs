@@ -17,8 +17,6 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
     type PreparedDocument = OcrDocument;
     type RequestBody = DeepSeekOcrRequest;
     type ResponseBody = DeepSeekOcrResponse;
-    crate::ocr_provider_hooks!(VertexAiDeepSeek, DeepSeek);
-
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_ocr_params(
         &self,

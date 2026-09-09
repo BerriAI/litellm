@@ -156,7 +156,6 @@ impl OcrProviderConfig for ReductoParseV3Config {
     type PreparedDocument = ReductoFileId;
     type RequestBody = ReductoV3Request;
     type ResponseBody = ReductoResponse;
-    crate::ocr_provider_hooks!(ReductoV3, ReductoV3);
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_ocr_params(
@@ -222,11 +221,11 @@ impl OcrProviderConfig for ReductoParseV3Config {
         &self,
         connection: &OcrConnection,
     ) -> Result<Vec<(String, String)>, AuthError> {
-        Ok(auth::validate_environment(
+        auth::validate_environment(
             connection.extra_headers.clone(),
             connection.api_key.as_deref(),
             &|name| std::env::var(name).ok(),
-        )?)
+        )
     }
 }
 
@@ -236,7 +235,6 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
     type PreparedDocument = ReductoFileId;
     type RequestBody = ReductoLegacyRequest;
     type ResponseBody = ReductoResponse;
-    crate::ocr_provider_hooks!(ReductoLegacy, ReductoLegacy);
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_ocr_params(
@@ -302,10 +300,10 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
         &self,
         connection: &OcrConnection,
     ) -> Result<Vec<(String, String)>, AuthError> {
-        Ok(auth::validate_environment(
+        auth::validate_environment(
             connection.extra_headers.clone(),
             connection.api_key.as_deref(),
             &|name| std::env::var(name).ok(),
-        )?)
+        )
     }
 }

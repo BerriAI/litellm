@@ -4,8 +4,6 @@ use crate::ocr::error::OcrRequestError;
 use crate::ocr::error::OcrResponseError;
 use std::future::Future;
 
-use super::hooks::OcrRequestBody;
-use super::prepare::OcrProviderRequest;
 use super::types::{OcrConnection, OcrDocument, OcrResponseData};
 use super::wire::DecodedOcrResponse;
 use crate::Error;
@@ -50,14 +48,6 @@ pub trait OcrProviderConfig: Send + Sync + Sized + 'static {
         connection: &OcrConnection,
         headers: &[(String, String)],
     ) -> impl Future<Output = Result<Self::PreparedDocument, OcrError>> + Send;
-    fn params_for_hook(&self, params: Self::MappedParams) -> OcrProviderRequest;
-    fn params_from_hook(
-        &self,
-        params: OcrProviderRequest,
-    ) -> Result<Self::MappedParams, OcrRequestError>;
-    fn body_for_hook(&self, body: Self::RequestBody) -> OcrRequestBody;
-    fn body_from_hook(&self, body: OcrRequestBody) -> Result<Self::RequestBody, OcrRequestError>;
-    fn provider_name(&self) -> &'static str;
     fn preserve_native_response(&self, _params: &Self::MappedParams) -> bool {
         false
     }
@@ -75,48 +65,6 @@ pub trait OcrProviderConfig: Send + Sync + Sized + 'static {
     ) -> impl Future<Output = Result<DecodedOcrResponse<Self::ResponseBody>, OcrError>> + Send {
         super::wire::read_json_response(response, self.preserve_native_response(params))
     }
-}
-
-#[macro_export]
-macro_rules! ocr_provider_hooks {
-    ($provider:ident, $body:ident) => {
-        fn params_for_hook(
-            &self,
-            params: Self::MappedParams,
-        ) -> $crate::ocr::prepare::OcrProviderRequest {
-            $crate::ocr::prepare::OcrProviderRequest::$provider(params.into())
-        }
-        fn params_from_hook(
-            &self,
-            params: $crate::ocr::prepare::OcrProviderRequest,
-        ) -> Result<Self::MappedParams, $crate::ocr::error::OcrRequestError> {
-            match params {
-                $crate::ocr::prepare::OcrProviderRequest::$provider(params) => {
-                    self.map_ocr_params(params)
-                }
-                _ => Err($crate::ocr::error::OcrRequestError::RequestField {
-                    path: "guardrail.optional_params.provider".into(),
-                }),
-            }
-        }
-        fn body_for_hook(&self, body: Self::RequestBody) -> $crate::ocr::hooks::OcrRequestBody {
-            $crate::ocr::hooks::OcrRequestBody::$body(body)
-        }
-        fn body_from_hook(
-            &self,
-            body: $crate::ocr::hooks::OcrRequestBody,
-        ) -> Result<Self::RequestBody, $crate::ocr::error::OcrRequestError> {
-            match body {
-                $crate::ocr::hooks::OcrRequestBody::$body(body) => Ok(body),
-                _ => Err($crate::ocr::error::OcrRequestError::RequestField {
-                    path: "guardrail.body".into(),
-                }),
-            }
-        }
-        fn provider_name(&self) -> &'static str {
-            $crate::ocr::prepare::OcrProviderKind::$provider.provider_name()
-        }
-    };
 }
 
 pub(crate) fn request_error(path: &str) -> Error {

@@ -194,7 +194,7 @@ impl CustomGuardrail for RecordingOcrGuardrail {
                     "blocked before provider",
                 )));
             }
-            request.data["document"]["guarded_pre"] = json!(true);
+            request.data["optional_params"]["include_image_base64"] = json!(true);
             Ok(GuardrailDecision::Mask(request))
         })
     }
@@ -380,7 +380,10 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
     );
 
     let request = server.await.expect("server task completes");
-    assert!(request.contains(r#""guarded_pre":true"#), "{request}");
+    assert!(
+        request.contains(r#""include_image_base64":true"#),
+        "{request}"
+    );
     assert!(request.contains(r#""guarded_during":true"#), "{request}");
 }
 

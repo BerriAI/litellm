@@ -31,8 +31,6 @@ impl OcrProviderConfig for MistralOcrConfig {
     type RequestBody = MistralOcrRequest;
     type ResponseBody = MistralOcrResponse;
 
-    crate::ocr_provider_hooks!(Mistral, Mistral);
-
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_ocr_params(
         &self,
@@ -95,10 +93,10 @@ impl OcrProviderConfig for MistralOcrConfig {
         &self,
         connection: &OcrConnection,
     ) -> Result<Vec<(String, String)>, AuthError> {
-        Ok(auth::validate_environment(
+        auth::validate_environment(
             connection.extra_headers.clone(),
             connection.api_key.as_deref(),
             &|name| std::env::var(name).ok(),
-        )?)
+        )
     }
 }

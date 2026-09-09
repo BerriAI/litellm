@@ -2,16 +2,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use super::prepare::{OcrProviderRequest, PreparedOcrRequest};
+use super::prepare::PreparedOcrRequest;
 use super::transformation::OcrProviderConfig;
 use super::types::{OcrDocument, OcrResponseData};
 use crate::Error;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use crate::providers::azure_ai::ocr::document_intelligence::types::DocumentIntelligenceRequest;
-use crate::providers::mistral::ocr::types::MistralOcrRequest;
-use crate::providers::reducto::ocr::types::{ReductoLegacyRequest, ReductoV3Request};
-use crate::providers::vertex_ai::ocr::deepseek::types::DeepSeekOcrRequest;
 use serde::Serialize;
+use serde_json::Value;
 
 pub type OcrHookFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 pub type OcrLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
@@ -21,18 +18,7 @@ pub struct OcrPreCallRequest {
     pub model: String,
     pub custom_llm_provider: String,
     pub document: OcrDocument,
-    pub optional_params: OcrProviderRequest,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(untagged)]
-pub enum OcrRequestBody {
-    Document(OcrDocument),
-    Mistral(MistralOcrRequest),
-    DocumentIntelligence(DocumentIntelligenceRequest),
-    DeepSeek(DeepSeekOcrRequest),
-    ReductoV3(ReductoV3Request),
-    ReductoLegacy(ReductoLegacyRequest),
+    pub optional_params: Value,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -40,7 +26,7 @@ pub struct OcrDuringCallRequest {
     pub model: String,
     pub custom_llm_provider: String,
     pub url: String,
-    pub body: OcrRequestBody,
+    pub body: Value,
 }
 
 pub trait OcrHooks: Send + Sync {
@@ -77,13 +63,15 @@ pub trait OcrHooks: Send + Sync {
 pub struct NoopOcrHooks;
 impl OcrHooks for NoopOcrHooks {}
 
-pub(crate) struct OcrLifecycleHooks {
+pub(crate) struct OcrLifecycleHooks<C: OcrProviderConfig> {
     pub hooks: Arc<dyn OcrHooks>,
+    pub provider_name: String,
+    pub marker: std::marker::PhantomData<C>,
 }
 
 impl<C: OcrProviderConfig>
     CallLifecycleHooks<Result<PreparedOcrRequest<C>, Error>, PreparedOcrRequest<C>, OcrResponseData>
-    for OcrLifecycleHooks
+    for OcrLifecycleHooks<C>
 {
     type PreCallFuture<'a> = OcrHookFuture<'a, Result<PreparedOcrRequest<C>, Error>>;
     type DuringCallFuture<'a> = OcrHookFuture<'a, PreparedOcrRequest<C>>;
@@ -104,12 +92,21 @@ impl<C: OcrProviderConfig>
                 .hooks
                 .pre_call(OcrPreCallRequest {
                     model: request.model.clone(),
-                    custom_llm_provider: request.config.provider_name().into(),
+                    custom_llm_provider: self.provider_name.clone(),
                     document: request.document,
-                    optional_params: request.config.params_for_hook(request.params),
+                    optional_params: serde_json::to_value(request.params).map_err(|_| {
+                        super::error::OcrRequestError::RequestField {
+                            path: "guardrail.optional_params".into(),
+                        }
+                    })?,
                 })
                 .await?;
-            let params = request.config.params_from_hook(changed.optional_params)?;
+            let params = request
+                .config
+                .map_ocr_params(super::wire::decode_request_value(
+                    changed.optional_params,
+                    "guardrail.optional_params",
+                )?)?;
             Ok(Ok(PreparedOcrRequest {
                 document: changed.document,
                 params,

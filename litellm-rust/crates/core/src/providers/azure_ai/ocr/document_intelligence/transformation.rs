@@ -72,7 +72,7 @@ fn normalize_pages_param(pages: PagesInput) -> Result<Option<NormalizedPages>, P
             .join(","),
     };
     if !normalized.split(',').all(pages_token_is_valid) {
-        return Err(PagesError::InvalidNativeRange.into());
+        return Err(PagesError::InvalidNativeRange);
     }
     Ok(Some(NormalizedPages(normalized)))
 }
@@ -167,8 +167,6 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
     type PreparedDocument = OcrDocument;
     type RequestBody = DocumentIntelligenceRequest;
     type ResponseBody = AzureDocumentIntelligenceOperation;
-
-    crate::ocr_provider_hooks!(AzureDocumentIntelligence, DocumentIntelligence);
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_ocr_params(
@@ -306,12 +304,12 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
         &self,
         connection: &OcrConnection,
     ) -> Result<Vec<(String, String)>, AuthError> {
-        Ok(auth::authenticate_document_intelligence(
+        auth::authenticate_document_intelligence(
             connection.extra_headers.clone(),
             connection.api_key.as_deref(),
             connection.azure_auth.as_ref(),
             &|name| std::env::var(name).ok(),
         )
-        .await?)
+        .await
     }
 }

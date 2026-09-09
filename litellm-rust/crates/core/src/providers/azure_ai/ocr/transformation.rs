@@ -20,8 +20,6 @@ impl OcrProviderConfig for AzureAiOcrConfig {
     type PreparedDocument = OcrDocument;
     type RequestBody = MistralOcrRequest;
     type ResponseBody = MistralOcrResponse;
-    crate::ocr_provider_hooks!(AzureAi, Mistral);
-
     fn map_ocr_params(
         &self,
         params: MistralOcrParams,
@@ -74,12 +72,12 @@ impl OcrProviderConfig for AzureAiOcrConfig {
         &self,
         connection: &OcrConnection,
     ) -> Result<Vec<(String, String)>, AuthError> {
-        Ok(auth::authenticate(
+        auth::authenticate(
             connection.extra_headers.clone(),
             connection.api_key.as_deref(),
             connection.azure_auth.as_ref(),
             &|name| std::env::var(name).ok(),
         )
-        .await?)
+        .await
     }
 }

@@ -19,7 +19,7 @@ pub(super) fn project(connection: &OcrConnection) -> Result<&str, OcrRequestErro
         .vertex
         .project
         .as_deref()
-        .ok_or_else(|| OcrRequestError::MissingField("vertex_project"))
+        .ok_or(OcrRequestError::MissingField("vertex_project"))
 }
 pub(super) fn location(connection: &OcrConnection) -> &str {
     connection
@@ -38,14 +38,14 @@ pub(super) async fn authenticate_vertex(
     let key = connection
         .api_key
         .as_deref()
-        .ok_or_else(|| crate::AuthError::MissingApiKey {
+        .ok_or(crate::AuthError::MissingApiKey {
             provider: "Vertex AI",
         })?;
-    Ok(apply_credential(
+    apply_credential(
         connection.extra_headers.clone(),
         key,
         CredentialPlacement::Bearer,
-    )?)
+    )
 }
 
 impl OcrProviderConfig for VertexAiOcrConfig {
@@ -54,8 +54,6 @@ impl OcrProviderConfig for VertexAiOcrConfig {
     type PreparedDocument = OcrDocument;
     type RequestBody = MistralOcrRequest;
     type ResponseBody = MistralOcrResponse;
-    crate::ocr_provider_hooks!(VertexAi, Mistral);
-
     fn map_ocr_params(
         &self,
         params: MistralOcrParams,
