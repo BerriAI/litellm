@@ -10,6 +10,7 @@ from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils import litellm_logging
 from tests._prometheus_helpers import isolated_prometheus_registry
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.support.provenance import has_rust_response_marker
 from tests.test_litellm_rust.support.requests import MESSAGES_EVENTS
 from tests.test_litellm_rust.integrations import (
     ALL_ROUTES,
@@ -33,6 +34,16 @@ pytestmark = pytest.mark.requires_rust_extension
 FAILURE_RESPONSE: Final = ResponseSpec(body={"message": "provider unavailable"}, status=500)
 
 
+async def invoke_native(route: Route, provider: RecordingServer, **kwargs: object) -> object:
+    if route.name == "messages-stream":
+        stream: Final = await route.open_stream(provider, **kwargs)
+        assert has_rust_response_marker(stream)
+        return [chunk async for chunk in stream]
+    response: Final = await route.invoke(provider, **kwargs)
+    assert has_rust_response_marker(response)
+    return response
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ASYNC_ROUTES, ids=route_id)
 async def test_generic_api_logger_exports_success_over_http(
@@ -41,7 +52,7 @@ async def test_generic_api_logger_exports_success_over_http(
     generic_api_export: GenericAPIExportHarness,
 ) -> None:
     recorder: Final = RecordingLogger()
-    await route.invoke(provider, callbacks=[generic_api_export.logger, recorder])
+    await invoke_native(route, provider, callbacks=[generic_api_export.logger, recorder])
     await wait_for_callback(route, recorder)
 
     assert len(generic_api_export.exports) == 1
@@ -104,7 +115,7 @@ def test_prometheus_registry_restores_collectors_after_failure() -> None:
 async def test_otel_emits_one_request_span_on_success(
     route: Route, provider: RecordingServer, otel: OtelHarness
 ) -> None:
-    await route.invoke(provider, callbacks=[otel.logger])
+    await invoke_native(route, provider, callbacks=[otel.logger])
     spans: Final = await otel.wait_for_spans()
     assert len(spans) == 1
     span: Final = spans[0]
@@ -128,6 +139,25 @@ async def test_otel_stream_span_appears_only_after_exhaustion(
 
 
 @pytest.mark.asyncio
+async def test_otel_stream_span_appears_after_an_interrupted_consumer_closes(
+    otel: OtelHarness, recording_server: RecordingServer
+) -> None:
+    recording_server.default_response = ResponseSpec(body=None, events=MESSAGES_EVENTS)
+    stream: Final = await MESSAGES_STREAM.open_stream(recording_server, callbacks=[otel.logger])
+    first_chunk: Final = await anext(stream)
+    await drain_logging()
+
+    assert otel.spans() == ()
+    assert has_rust_response_marker(stream)
+
+    await stream.aclose()
+    await drain_logging()
+
+    assert first_chunk is not None
+    assert len(otel.spans()) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("route", (OCR_SYNC, OCR_ASYNC), ids=route_id)
 async def test_otel_emits_one_error_span_on_provider_failure(
     route: Route, provider: RecordingServer, otel: OtelHarness
@@ -146,11 +176,11 @@ async def test_otel_emits_one_error_span_on_provider_failure(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ALL_ROUTES, ids=route_id)
-async def test_otel_and_custom_logger_observe_same_standard_logging_object(
+async def test_otel_and_custom_logger_export_matching_standard_logging_values(
     route: Route, provider: RecordingServer, otel: OtelHarness
 ) -> None:
     recorder: Final = RecordingLogger()
-    await route.invoke(provider, callbacks=[otel.logger, recorder])
+    await invoke_native(route, provider, callbacks=[otel.logger, recorder])
     payload: Final = (await wait_for_callback(route, recorder))[0].kwargs["standard_logging_object"]
     span: Final = (await otel.wait_for_spans())[0]
     assert payload["call_type"] == route.call_type
@@ -167,7 +197,7 @@ async def test_prometheus_counts_one_successful_request(
 ) -> None:
     before: Final = metric_value("litellm_requests_metric_total", model=route.provider_model)
     recorder: Final = RecordingLogger()
-    await route.invoke(provider, callbacks=[prometheus, recorder])
+    await invoke_native(route, provider, callbacks=[prometheus, recorder])
     await wait_for_callback(route, recorder)
     assert metric_value("litellm_requests_metric_total", model=route.provider_model) == before + 1
     assert metric_value("litellm_llm_api_failed_requests_metric_total", model=route.provider_model) == 0
@@ -179,7 +209,7 @@ async def test_prometheus_counts_tokens_from_messages_usage(
 ) -> None:
     recording_server.default_response = ResponseSpec(body=MESSAGES_ROUTE.provider_response)
     recorder: Final = RecordingLogger()
-    await MESSAGES_ROUTE.invoke(recording_server, callbacks=[prometheus, recorder])
+    await invoke_native(MESSAGES_ROUTE, recording_server, callbacks=[prometheus, recorder])
     await wait_for_callback(MESSAGES_ROUTE, recorder)
     assert metric_value("litellm_input_tokens_metric_total", model=MESSAGES_ROUTE.provider_model) == 5
     assert metric_value("litellm_output_tokens_metric_total", model=MESSAGES_ROUTE.provider_model) == 4
@@ -203,8 +233,8 @@ async def test_prometheus_by_string_name_is_initialized_once(route: Route, provi
     provider.expected_requests = 2
     litellm.success_callback = ["prometheus"]  # test-quality-ok: public registration; fixture restores globals
     recorder: Final = RecordingLogger()
-    await route.invoke(provider, callbacks=[recorder])
-    await route.invoke(provider, callbacks=[recorder])
+    await invoke_native(route, provider, callbacks=[recorder])
+    await invoke_native(route, provider, callbacks=[recorder])
     await wait_for_callback(route, recorder, count=2)
     instances: Final = [cb for cb in litellm_logging._in_memory_loggers if isinstance(cb, PrometheusLogger)]  # pyright: ignore[reportPrivateUsage]  # string-name cache has no public accessor
     assert len(instances) == 1
@@ -218,6 +248,6 @@ async def test_sync_ocr_reaches_sync_hooks_only(
     recording_server: RecordingServer, otel: OtelHarness, prometheus: PrometheusLogger
 ) -> None:
     recording_server.default_response = ResponseSpec(body=OCR_SYNC.provider_response)
-    await OCR_SYNC.invoke(recording_server, callbacks=[otel.logger, prometheus])
+    await invoke_native(OCR_SYNC, recording_server, callbacks=[otel.logger, prometheus])
     assert len(await otel.wait_for_spans()) == 1
     assert metric_value("litellm_requests_metric_total", model=OCR_SYNC.provider_model) == 0

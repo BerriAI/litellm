@@ -98,8 +98,8 @@ def test_pre_call_header_edits_reach_later_callbacks_and_provider(ocr_server: Re
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rust_enabled", [False, True])
-@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("rust_enabled", [False, True], ids=["python", "rust"])
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 async def test_pre_call_nested_mutation_updates_retained_references(
     ocr_server: RecordingServer, rust_enabled: bool, asynchronous: bool
 ) -> None:
@@ -107,10 +107,11 @@ async def test_pre_call_nested_mutation_updates_retained_references(
     original: Final = dict(OCR_DOCUMENT)
     replacement_url: Final = "data:application/pdf;base64,ZGVm"
     retained: Final = []
+    aliases: Final = []
 
     class Retain(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
-            assert request_body(kwargs)["document"] is original
+            aliases.append(request_body(kwargs)["document"] is original)
             retained.append(request_body(kwargs)["document"])
 
     class Edit(CustomLogger):
@@ -126,6 +127,7 @@ async def test_pre_call_nested_mutation_updates_retained_references(
     }
     response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
 
+    assert aliases == [True]
     assert retained[0]["document_url"] == replacement_url
     assert original["document_url"] == replacement_url
     assert ocr_server.requests[0].body["document"]["document_url"] == replacement_url
