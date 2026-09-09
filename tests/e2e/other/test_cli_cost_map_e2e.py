@@ -37,6 +37,16 @@ def _start_cost_map_server(request_log: Path) -> tuple[ThreadingHTTPServer, thre
     return server, thread
 
 
+def _lite_env(server: ThreadingHTTPServer, api_key: str | None) -> dict[str, str]:
+    base_env: Final = {key: value for key, value in os.environ.items() if key != "LITELLM_LOCAL_MODEL_COST_MAP"}
+    return {
+        **base_env,
+        "LITELLM_MODEL_COST_MAP_URL": f"http://127.0.0.1:{server.server_port}/map.json",
+        "LITELLM_PROXY_URL": PROXY_BASE_URL,
+        **({"LITELLM_PROXY_API_KEY": api_key} if api_key is not None else {}),
+    }
+
+
 def _run_lite(
     args: tuple[str, ...],
     server: ThreadingHTTPServer,
@@ -66,14 +76,7 @@ class TestLiteCliCostMapFetch:
     def test_lite_version_makes_no_cost_map_request(self, tmp_path: Path) -> None:
         request_log: Final = tmp_path / "requests.log"
         server, thread = _start_cost_map_server(request_log)
-        source_root: Final = str(Path(__file__).resolve().parents[3])
-        pythonpath: Final = os.pathsep.join(filter(None, (source_root, os.environ.get("PYTHONPATH"))))
-        env: Final = {
-            **{key: value for key, value in os.environ.items() if key != "LITELLM_LOCAL_MODEL_COST_MAP"},
-            "PYTHONPATH": pythonpath,
-            "LITELLM_MODEL_COST_MAP_URL": f"http://127.0.0.1:{server.server_port}/map.json",
-            "LITELLM_PROXY_URL": PROXY_BASE_URL,
-        }
+        env: Final = _lite_env(server, None)
         try:
             result: Final = _run_lite(("--version",), server, env)
         finally:
@@ -89,15 +92,7 @@ class TestLiteCliCostMapFetch:
         assert model_names
         request_log: Final = tmp_path / "requests.log"
         server, thread = _start_cost_map_server(request_log)
-        source_root: Final = str(Path(__file__).resolve().parents[3])
-        pythonpath: Final = os.pathsep.join(filter(None, (source_root, os.environ.get("PYTHONPATH"))))
-        env: Final = {
-            **{key: value for key, value in os.environ.items() if key != "LITELLM_LOCAL_MODEL_COST_MAP"},
-            "PYTHONPATH": pythonpath,
-            "LITELLM_MODEL_COST_MAP_URL": f"http://127.0.0.1:{server.server_port}/map.json",
-            "LITELLM_PROXY_URL": PROXY_BASE_URL,
-            "LITELLM_PROXY_API_KEY": MASTER_KEY,
-        }
+        env: Final = _lite_env(server, MASTER_KEY)
         try:
             result: Final = _run_lite(("models", "list"), server, env)
         finally:
