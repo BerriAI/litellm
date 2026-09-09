@@ -252,3 +252,33 @@ impl AudioTranscriptionResponseData {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{AudioFormat, AudioInput};
+
+    #[test]
+    fn audio_input_accepts_every_supported_format() {
+        for (format, expected) in [
+            (AudioFormat::Wav, "wav"),
+            (AudioFormat::Mp3, "mp3"),
+            (AudioFormat::Flac, "flac"),
+            (AudioFormat::Ogg, "ogg"),
+        ] {
+            let input = AudioInput {
+                data: "AQI=".to_string(),
+                format,
+                filename: None,
+            };
+            assert_eq!(serde_json::to_value(input).unwrap()["format"], expected);
+        }
+    }
+
+    #[test]
+    fn audio_input_requires_data() {
+        let result = serde_json::from_value::<AudioInput>(json!({"format": "wav"}));
+        assert!(result.is_err());
+    }
+}
