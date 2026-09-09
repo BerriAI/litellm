@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from botocore.credentials import RefreshableCredentials
 
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -14,7 +15,10 @@ class _ProbedCountTokensHandler(BedrockCountTokensHandler):
         super().__init__()
         self._probe = probe
 
-    def get_credentials(self, **kwargs):
+    def get_credentials(
+        self,
+        **kwargs: object,  # kwargs-ok: mirrors the base resolver's keyword contract, which the probe ignores
+    ) -> RefreshableCredentials:
         return self._probe.credentials()
 
 
