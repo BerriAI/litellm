@@ -8,7 +8,7 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -58,6 +58,11 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+    from litellm.router import Router
+    from litellm.types.router import Deployment
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
@@ -1961,24 +1966,36 @@ async def health_liveliness_options():
     return Response(headers=response_headers, status_code=200)
 
 
+# What a caller admitted through the non-admin path gets to see of the probe:
+# the model and the outcome, none of the deployment's routing configuration.
+_NON_ADMIN_TEST_CONNECTION_RESULT_KEYS: Final[frozenset[str]] = frozenset(("model", "error", "mode_error"))
+
+
 async def _authorize_test_connection(
     *,
-    model_params: Any,
+    model_params: "Deployment",
     user_api_key_dict: UserAPIKeyAuth,
-    prisma_client: Any,
+    prisma_client: "PrismaClient",
     premium_user: bool,
-    llm_router: Any,
+    llm_router: "Router | None",
     configured_model_name: str | None,
+    configured_litellm_params: Mapping[str, object],
     request_litellm_params: Mapping[str, object],
-) -> None:
+) -> bool:
     """Decide whether the caller may probe this model.
 
     Proxy admins and team admins may probe any model they manage, as before.
-    Any other user may probe a configured model they are allowed to call, but
-    only as configured: a request that sets its own connection fields describes
-    a different endpoint, and probing that stays a management operation.
+    Any other user may probe a configured deployment that has no team, exactly
+    as configured, when their key and user are allowed to call its model:
+    a request value that differs from the configuration (model, provider,
+    endpoint, credentials, ...) describes a different probe, and that stays a
+    management operation. Team deployments keep their team-admin policy.
+
+    Returns True when the caller was admitted through that non-admin path, so
+    the response can be limited to the outcome of the probe.
     """
     from litellm.proxy.auth.auth_checks import (
+        UserNotFoundError,
         can_key_call_model,
         can_user_call_model,
         get_user_object,
@@ -1995,11 +2012,16 @@ async def _authorize_test_connection(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
-        return
+        return False
     except HTTPException as management_denial:
         if management_denial.status_code != 403:
             raise
-        if configured_model_name is None or any(field in request_litellm_params for field in _CONFIG_CONNECTION_FIELDS):
+        if configured_model_name is None or getattr(model_params.model_info, "team_id", None) is not None:
+            raise
+        if any(
+            key != "mode" and configured_litellm_params.get(key) != value
+            for key, value in request_litellm_params.items()
+        ):
             raise
 
     try:
@@ -2009,12 +2031,15 @@ async def _authorize_test_connection(
             valid_token=user_api_key_dict,
             llm_router=llm_router,
         )
-        user_object = await get_user_object(
-            user_id=user_api_key_dict.user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-        )
+        try:
+            user_object = await get_user_object(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+            )
+        except UserNotFoundError:
+            user_object = None
         await can_user_call_model(
             model=configured_model_name,
             llm_router=llm_router,
@@ -2022,6 +2047,7 @@ async def _authorize_test_connection(
         )
     except ProxyException as e:
         raise HTTPException(status_code=403, detail={"error": str(e.message)}) from e
+    return True
 
 
 @router.post(
@@ -2205,7 +2231,7 @@ async def test_model_connection(
         )
 
         ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
-        await _authorize_test_connection(
+        admitted_as_caller: Final = await _authorize_test_connection(
             model_params=Deployment(
                 model_name="test_model",
                 litellm_params=LiteLLM_Params(**litellm_params),
@@ -2216,6 +2242,7 @@ async def test_model_connection(
             premium_user=premium_user,
             llm_router=llm_router,
             configured_model_name=configured_model_name,
+            configured_litellm_params=config_litellm_params,
             request_litellm_params=request_litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
@@ -2231,7 +2258,9 @@ async def test_model_connection(
         )
 
         # Clean the result for display
-        cleaned_result: Final = _clean_endpoint_data({**litellm_params, **result}, details=True)
+        cleaned_result = _clean_endpoint_data({**litellm_params, **result}, details=True)
+        if admitted_as_caller:
+            cleaned_result = {k: v for k, v in cleaned_result.items() if k in _NON_ADMIN_TEST_CONNECTION_RESULT_KEYS}
 
         return {
             "status": "error" if "error" in result else "success",

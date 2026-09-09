@@ -3271,6 +3271,9 @@ async def test_test_model_connection_allows_internal_user_to_probe_configured_mo
     assert key_check.await_args.kwargs["model"] == "gpt-4o"
     assert user_check.await_args.kwargs["model"] == "gpt-4o"
     assert health_check.await_args.kwargs["model_params"]["api_key"] == "CONFIGURED-API-KEY"
+    # the caller learns the outcome, not the deployment's routing configuration
+    assert "api_base" not in result["result"]
+    assert "api_key" not in result["result"]
 
 
 @pytest.mark.asyncio
@@ -3343,3 +3346,116 @@ async def test_test_model_connection_keeps_connection_overrides_admin_only():
     assert exc_info.value.status_code == 403
     key_check.assert_not_awaited()
     health_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_keeps_model_overrides_admin_only():
+    """
+    The probe runs whatever `litellm_params.model` the request sends, so a
+    non-admin may only send the configured deployment's own model: the access
+    check and the probe must target the same model.
+    """
+    from fastapi import HTTPException
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = _configured_non_team_deployment()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", AsyncMock(return_value=True)) as key_check,
+        patch("litellm.ahealth_check", AsyncMock()) as health_check,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "openai/gpt-4o-mini"},
+            model_info={"id": "non-team-deployment-id"},
+            user_api_key_dict=_internal_user(),
+        )
+
+    assert exc_info.value.status_code == 403
+    key_check.assert_not_awaited()
+    health_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_keeps_team_deployments_admin_only_for_non_admins():
+    """
+    A team deployment keeps its team-admin policy: a non-admin whose key can
+    call the same model name must not reach the non-admin path with the
+    team's configured credentials.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    team_deployment = Deployment(
+        model_name="gpt-4o",
+        litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="TEAM-A-API-KEY"),
+        model_info=ModelInfo(id="team-a-deployment-id", team_id="team-a"),
+    )
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = team_deployment
+    team_row = SimpleNamespace(
+        model_dump=lambda: LiteLLM_TeamTable(team_id="team-a", members_with_roles=[]).model_dump()
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository") as MockTeamRepo,
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", AsyncMock(return_value=True)) as key_check,
+        patch("litellm.ahealth_check", AsyncMock()) as health_check,
+    ):
+        repo = MagicMock()
+        repo.table.find_unique = AsyncMock(return_value=team_row)
+        MockTeamRepo.return_value = repo
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=MagicMock(),
+                mode="chat",
+                litellm_params={"model": "openai/gpt-4o"},
+                model_info={"id": "team-a-deployment-id"},
+                user_api_key_dict=_internal_user(),
+            )
+
+    assert exc_info.value.status_code == 403
+    key_check.assert_not_awaited()
+    health_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_tolerates_missing_user_record_for_non_admin():
+    """A key whose user record is gone is judged on the key's own model access."""
+    from litellm.proxy.auth.auth_checks import UserNotFoundError
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = _configured_non_team_deployment()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", AsyncMock(return_value=True)),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            AsyncMock(side_effect=UserNotFoundError("gone")),
+        ),
+        patch("litellm.proxy.auth.auth_checks.can_user_call_model", AsyncMock(return_value=True)) as user_check,
+        patch("litellm.ahealth_check", AsyncMock(return_value={"status": "healthy"})),
+    ):
+        result = await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"id": "non-team-deployment-id"},
+            user_api_key_dict=_internal_user(),
+        )
+
+    assert result["status"] == "success"
+    assert user_check.await_args.kwargs["user_object"] is None
