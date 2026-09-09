@@ -79,8 +79,8 @@ class SpandaGuardrail(CustomGuardrail):
     def __init__(
         self,
         api_base: str | None = None,
-        uncertainty_threshold: float = 0.35,
-        grounding_threshold: float = 0.15,
+        uncertainty_threshold: float | None = 0.35,
+        grounding_threshold: float | None = 0.15,
         block_mode: bool = False,
         guardrail_name: str = "spanda",
         event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | str | None = None,
