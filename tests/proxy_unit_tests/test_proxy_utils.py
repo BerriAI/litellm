@@ -1318,11 +1318,6 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
 
 
 def test_default_team_settings_bool_turn_off_message_logging_redacts():
-    """`turn_off_message_logging: true` in default_team_settings is a YAML bool.
-
-    It used to fail TeamCallbackMetadata's str-only callback_vars validation and
-    500 the request before any callback ran. It must validate and redact.
-    """
     from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_logging_from_dynamic_params
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
     from litellm.proxy.proxy_server import ProxyConfig
