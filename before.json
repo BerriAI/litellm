@@ -1,0 +1,222 @@
+{
+  "commit": "47b15ffb677902fc4550a4471b82e09f77ec77d7",
+  "cases": [
+    {
+      "case": "session",
+      "payload": {
+        "server_name": "diagnostic-session",
+        "url": "https://learn.microsoft.com/api/mcp/does-not-exist",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.58,
+      "message": "Failed to connect to MCP server. Check proxy logs for details.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "unreachable",
+      "payload": {
+        "server_name": "diagnostic-unreachable",
+        "url": "http://127.0.0.1:9999/mcp",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.35,
+      "message": "Failed to connect to MCP server: the server is unreachable. Check the URL and that the server is running.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "http401",
+      "payload": {
+        "server_name": "diagnostic-http401",
+        "url": "http://mcp-diagnostics:8080/status/401",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.32,
+      "message": "Failed to connect to MCP server: it returned HTTP 401.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "http403",
+      "payload": {
+        "server_name": "diagnostic-http403",
+        "url": "http://mcp-diagnostics:8080/status/403",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.31,
+      "message": "Failed to connect to MCP server: it returned HTTP 403.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "http429",
+      "payload": {
+        "server_name": "diagnostic-http429",
+        "url": "http://mcp-diagnostics:8080/status/429",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.33,
+      "message": "Failed to connect to MCP server: it returned HTTP 429.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "http503",
+      "payload": {
+        "server_name": "diagnostic-http503",
+        "url": "http://mcp-diagnostics:8080/status/503",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.33,
+      "message": "Failed to connect to MCP server: it returned HTTP 503.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "html",
+      "payload": {
+        "server_name": "diagnostic-html",
+        "url": "http://mcp-diagnostics:8080/html",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 30.02,
+      "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/html within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "bad-json",
+      "payload": {
+        "server_name": "diagnostic-bad-json",
+        "url": "http://mcp-diagnostics:8080/bad-json",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 30.03,
+      "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/bad-json within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "bad-rpc",
+      "payload": {
+        "server_name": "diagnostic-bad-rpc",
+        "url": "http://mcp-diagnostics:8080/bad-rpc",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 30.02,
+      "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/bad-rpc within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "bad-schema",
+      "payload": {
+        "server_name": "diagnostic-bad-schema",
+        "url": "http://mcp-diagnostics:8080/bad-schema",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.07,
+      "message": "Failed to connect to MCP server. Check proxy logs for details.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "rpc-error",
+      "payload": {
+        "server_name": "diagnostic-rpc-error",
+        "url": "http://mcp-diagnostics:8080/rpc-error",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.06,
+      "message": "Failed to connect to MCP server. Check proxy logs for details.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "unknown",
+      "payload": {
+        "server_name": "diagnostic-unknown",
+        "url": "http://mcp-diagnostics:8080/unknown",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.02,
+      "message": "Failed to connect to MCP server. Check proxy logs for details.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "timeout",
+      "payload": {
+        "server_name": "diagnostic-timeout",
+        "url": "http://mcp-diagnostics:8080/slow",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 30.02,
+      "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/slow within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests.",
+      "error": true,
+      "tools": []
+    },
+    {
+      "case": "happy",
+      "payload": {
+        "server_name": "diagnostic-happy",
+        "url": "https://learn.microsoft.com/api/mcp",
+        "transport": "http",
+        "auth_type": "none"
+      },
+      "http_status": 200,
+      "seconds": 0.63,
+      "message": "Successfully retrieved tools",
+      "error": null,
+      "tools": [
+        "microsoft_docs_search",
+        "microsoft_code_sample_search",
+        "microsoft_docs_fetch"
+      ]
+    },
+    {
+      "case": "malformed-header",
+      "payload": {
+        "server_name": "diagnostic-malformed-header",
+        "url": "http://mcp-diagnostics:8080/ok",
+        "transport": "http",
+        "auth_type": "none",
+        "static_headers": {
+          "X-Diagnostic": "bad\nvalue"
+        }
+      },
+      "http_status": 200,
+      "seconds": 0.01,
+      "message": "Failed to connect to MCP server: a request header is malformed. Check static headers for leading/trailing spaces or illegal characters.",
+      "error": true,
+      "tools": []
+    }
+  ]
+}

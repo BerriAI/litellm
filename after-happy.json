@@ -1,0 +1,21 @@
+{
+  "commit": "a1588c260232dd6ed22605fdd4db24983bb1fcee",
+  "http_status": 200,
+  "payload": {
+    "server_id": "3123db92-a374-4156-b4ed-980fe588c6e0",
+    "name": "microsoft_docs_search",
+    "arguments": {
+      "query": "Azure Blob Storage overview"
+    }
+  },
+  "tools": [
+    "microsoft_docs_search",
+    "microsoft_code_sample_search",
+    "microsoft_docs_fetch"
+  ],
+  "isError": false,
+  "firstResult": {
+    "title": "Azure Blob Storage lifecycle management overview",
+    "contentUrl": "https://learn.microsoft.com/azure/storage/blobs/lifecycle-management-overview"
+  }
+}

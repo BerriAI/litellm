@@ -1,0 +1,341 @@
+{
+  "commit": "a1588c260232dd6ed22605fdd4db24983bb1fcee",
+  "cases": [
+    {
+      "case": "sse-ok-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/ok/tools"
+      },
+      "http_status": 200,
+      "seconds": 0.07,
+      "result": {
+        "tools": [
+          {
+            "name": "ping",
+            "title": null,
+            "description": null,
+            "inputSchema": {
+              "type": "object"
+            },
+            "outputSchema": null,
+            "icons": null,
+            "annotations": null,
+            "meta": null,
+            "execution": null
+          }
+        ],
+        "error": null,
+        "message": "Successfully retrieved tools"
+      }
+    },
+    {
+      "case": "sse-bad-json-initialize",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/bad-json/initialize"
+      },
+      "http_status": 200,
+      "seconds": 0.06,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. Check the MCP endpoint URL and the server's protocol implementation."
+      }
+    },
+    {
+      "case": "sse-bad-json-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/bad-json/tools"
+      },
+      "http_status": 200,
+      "seconds": 0.04,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. Check the MCP endpoint URL and the server's protocol implementation."
+      }
+    },
+    {
+      "case": "sse-closed-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/closed/tools"
+      },
+      "http_status": 200,
+      "seconds": 0.02,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: the connection was closed before the request completed. Check that the server stays running and returns a complete MCP response, then retry."
+      }
+    },
+    {
+      "case": "sse-silent-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/silent/tools"
+      },
+      "http_status": 200,
+      "seconds": 1.02,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no valid MCP response received from http://mcp-diagnostics:8080 within 1s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "sse-unknown-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/unknown/tools"
+      },
+      "http_status": 200,
+      "seconds": 0.01,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "An unexpected error occurred while testing the MCP connection. Retry; if it persists, share reference c30a890df860443dbec103c27bd6de00 with your gateway administrator."
+      }
+    },
+    {
+      "case": "sse-io-error-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/io-error/tools"
+      },
+      "http_status": 200,
+      "seconds": 0.03,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: the connection was interrupted. Check the server and network connection, then retry."
+      }
+    },
+    {
+      "case": "stdio-ok-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "ok",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 0.03,
+      "result": {
+        "tools": [
+          {
+            "name": "ping",
+            "title": null,
+            "description": null,
+            "inputSchema": {
+              "type": "object"
+            },
+            "outputSchema": null,
+            "icons": null,
+            "annotations": null,
+            "meta": null,
+            "execution": null
+          }
+        ],
+        "error": null,
+        "message": "Successfully retrieved tools"
+      }
+    },
+    {
+      "case": "stdio-bad-json-initialize",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "bad-json",
+          "initialize"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 0.02,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. Check the MCP endpoint URL and the server's protocol implementation."
+      }
+    },
+    {
+      "case": "stdio-bad-json-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "bad-json",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 0.04,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. Check the MCP endpoint URL and the server's protocol implementation."
+      }
+    },
+    {
+      "case": "stdio-closed-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "closed",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 0.03,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: the connection was closed before the request completed. Check that the server stays running and returns a complete MCP response, then retry."
+      }
+    },
+    {
+      "case": "stdio-silent-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "silent",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 1.04,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no valid MCP response received from the server within 1s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "stdio-unknown-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "unknown",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 0.02,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "An unexpected error occurred while testing the MCP connection. Retry; if it persists, share reference ccaef5f6898b4d0a8839024b3171be5e with your gateway administrator."
+      }
+    },
+    {
+      "case": "http-empty-json",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "http",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/empty-json"
+      },
+      "http_status": 200,
+      "seconds": 0.01,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. Check the MCP endpoint URL and the server's protocol implementation."
+      }
+    },
+    {
+      "case": "http-empty-stream",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "http",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/empty-stream"
+      },
+      "http_status": 200,
+      "seconds": 1.01,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no valid MCP response received from http://mcp-diagnostics:8080 within 1s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "http-io-error",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "http",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/io-error"
+      },
+      "http_status": 200,
+      "seconds": 0.02,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: the connection was interrupted. Check the server and network connection, then retry."
+      }
+    }
+  ]
+}

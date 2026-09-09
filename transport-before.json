@@ -1,0 +1,341 @@
+{
+  "commit": "47b15ffb677902fc4550a4471b82e09f77ec77d7",
+  "cases": [
+    {
+      "case": "sse-ok-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/ok/tools"
+      },
+      "http_status": 200,
+      "seconds": 0.02,
+      "result": {
+        "tools": [
+          {
+            "name": "ping",
+            "title": null,
+            "description": null,
+            "inputSchema": {
+              "type": "object"
+            },
+            "outputSchema": null,
+            "icons": null,
+            "annotations": null,
+            "meta": null,
+            "execution": null
+          }
+        ],
+        "error": null,
+        "message": "Successfully retrieved tools"
+      }
+    },
+    {
+      "case": "sse-bad-json-initialize",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/bad-json/initialize"
+      },
+      "http_status": 200,
+      "seconds": 1.02,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/sse/bad-json/initialize within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "sse-bad-json-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/bad-json/tools"
+      },
+      "http_status": 200,
+      "seconds": 1.03,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/sse/bad-json/tools within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "sse-closed-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/closed/tools"
+      },
+      "http_status": 200,
+      "seconds": 0.01,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server. Check proxy logs for details."
+      }
+    },
+    {
+      "case": "sse-silent-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/silent/tools"
+      },
+      "http_status": 200,
+      "seconds": 1.01,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/sse/silent/tools within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "sse-unknown-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/unknown/tools"
+      },
+      "http_status": 200,
+      "seconds": 0.01,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server. Check proxy logs for details."
+      }
+    },
+    {
+      "case": "sse-io-error-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/sse/io-error/tools"
+      },
+      "http_status": 200,
+      "seconds": 0.04,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server. Check proxy logs for details."
+      }
+    },
+    {
+      "case": "stdio-ok-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "ok",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 0.04,
+      "result": {
+        "tools": [
+          {
+            "name": "ping",
+            "title": null,
+            "description": null,
+            "inputSchema": {
+              "type": "object"
+            },
+            "outputSchema": null,
+            "icons": null,
+            "annotations": null,
+            "meta": null,
+            "execution": null
+          }
+        ],
+        "error": null,
+        "message": "Successfully retrieved tools"
+      }
+    },
+    {
+      "case": "stdio-bad-json-initialize",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "bad-json",
+          "initialize"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 1.03,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no response from the server within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "stdio-bad-json-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "bad-json",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 1.03,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no response from the server within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "stdio-closed-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "closed",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 0.02,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server. Check proxy logs for details."
+      }
+    },
+    {
+      "case": "stdio-silent-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "silent",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 1.03,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no response from the server within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "stdio-unknown-tools-list",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 1,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "unknown",
+          "tools/list"
+        ]
+      },
+      "http_status": 200,
+      "seconds": 0.03,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server. Check proxy logs for details."
+      }
+    },
+    {
+      "case": "http-empty-json",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "http",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/empty-json"
+      },
+      "http_status": 200,
+      "seconds": 1.02,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/empty-json within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "http-empty-stream",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "http",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/empty-stream"
+      },
+      "http_status": 200,
+      "seconds": 1.01,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/empty-stream within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    },
+    {
+      "case": "http-io-error",
+      "payload": {
+        "server_name": "diagnostic",
+        "transport": "http",
+        "auth_type": "none",
+        "timeout": 1,
+        "url": "http://mcp-diagnostics:8080/io-error"
+      },
+      "http_status": 200,
+      "seconds": 1.01,
+      "result": {
+        "status": "error",
+        "error": true,
+        "message": "Failed to connect to MCP server: no response from http://mcp-diagnostics:8080/io-error within 30s. Check that the LiteLLM proxy can reach this URL from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
+      }
+    }
+  ]
+}

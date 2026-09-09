@@ -1,0 +1,65 @@
+name: litellm-local
+services:
+  litellm:
+    image: litellm-local:a1588c260232
+    pull_policy: never
+    ports:
+      - "127.0.0.1:4000:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Set LITELLM_SALT_KEY in .env}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+    volumes:
+      - ./diagnostics:/diagnostics:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5)"]
+      interval: 10s
+      timeout: 8s
+      retries: 18
+      start_period: 120s
+  litellm-before:
+    image: litellm-local:47b15ffb6779
+    pull_policy: never
+    ports:
+      - "127.0.0.1:4001:4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Set LITELLM_SALT_KEY in .env}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+    volumes:
+      - ./diagnostics:/diagnostics:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=5)"]
+      interval: 10s
+      timeout: 8s
+      retries: 18
+      start_period: 120s
+  mcp-diagnostics:
+    image: litellm-local:a1588c260232
+    pull_policy: never
+    entrypoint: ["python", "/diagnostics/server.py"]
+    volumes:
+      - ./diagnostics/server.py:/diagnostics/server.py:ro
+  db:
+    image: postgres@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+volumes:
+  postgres_data:

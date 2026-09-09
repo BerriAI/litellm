@@ -1,0 +1,81 @@
+{
+  "commit": "a1588c260232dd6ed22605fdd4db24983bb1fcee",
+  "cases": [
+    {
+      "transport": "sse",
+      "config": {
+        "server_id": "diag-31318-after-sse",
+        "server_name": "diagaftersse",
+        "alias": "diagaftersse",
+        "transport": "sse",
+        "auth_type": "none",
+        "timeout": 5,
+        "url": "http://mcp-diagnostics:8080/sse/ok/tools"
+      },
+      "list_status": 200,
+      "tools": [
+        "ping"
+      ],
+      "call_payload": {
+        "server_id": "diag-31318-after-sse",
+        "name": "ping",
+        "arguments": {}
+      },
+      "call_status": 200,
+      "result": {
+        "_meta": null,
+        "content": [
+          {
+            "type": "text",
+            "text": "pong",
+            "annotations": null,
+            "_meta": null
+          }
+        ],
+        "structuredContent": null,
+        "isError": false
+      }
+    },
+    {
+      "transport": "stdio",
+      "config": {
+        "server_id": "diag-31318-after-stdio",
+        "server_name": "diagafterstdio",
+        "alias": "diagafterstdio",
+        "transport": "stdio",
+        "auth_type": "none",
+        "timeout": 5,
+        "command": "python",
+        "args": [
+          "-u",
+          "/diagnostics/stdio_server.py",
+          "ok",
+          "tools/list"
+        ]
+      },
+      "list_status": 200,
+      "tools": [
+        "ping"
+      ],
+      "call_payload": {
+        "server_id": "diag-31318-after-stdio",
+        "name": "ping",
+        "arguments": {}
+      },
+      "call_status": 200,
+      "result": {
+        "_meta": null,
+        "content": [
+          {
+            "type": "text",
+            "text": "pong",
+            "annotations": null,
+            "_meta": null
+          }
+        ],
+        "structuredContent": null,
+        "isError": false
+      }
+    }
+  ]
+}
