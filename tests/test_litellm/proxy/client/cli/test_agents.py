@@ -481,6 +481,13 @@ class TestCodexModelSync:
         assert isinstance(result, ModelSyncSkipped)
         assert "could not write" in result.reason
 
+    def test_failed_replace_is_reported_and_leaves_no_temp_file(self, tmp_path):
+        (tmp_path / "litellm-models.json").mkdir()
+        _, result = self._sync(self._listing(self._row("m")), tmp_path)
+        assert isinstance(result, ModelSyncSkipped)
+        assert "could not write" in result.reason
+        assert [p.name for p in tmp_path.iterdir()] == ["litellm-models.json"]
+
     def test_unreachable_proxy_is_reported_not_raised(self, tmp_path):
         def boom(*a, **k):
             raise requests.ConnectionError("refused")
