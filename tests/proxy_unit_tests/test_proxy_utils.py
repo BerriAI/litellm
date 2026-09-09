@@ -1317,6 +1317,46 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
 
 
+def test_default_team_settings_bool_turn_off_message_logging_redacts():
+    """`turn_off_message_logging: true` in default_team_settings is a YAML bool.
+
+    It used to fail TeamCallbackMetadata's str-only callback_vars validation and
+    500 the request before any callback ran. It must validate and redact.
+    """
+    from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_logging_from_dynamic_params
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    pc = ProxyConfig()
+    pc.config = {
+        "litellm_settings": {
+            "default_team_settings": [
+                {
+                    "team_id": "team-redact",
+                    "success_callback": ["gcs_bucket"],
+                    "failure_callback": ["gcs_bucket"],
+                    "turn_off_message_logging": True,
+                }
+            ]
+        }
+    }
+
+    callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+        team_id="team-redact",
+        proxy_config=pc,
+    )
+
+    assert callback_metadata is not None
+    assert callback_metadata.success_callback == ["gcs_bucket"]
+    assert callback_metadata.callback_vars == {"turn_off_message_logging": "True"}
+    assert (
+        _get_turn_off_message_logging_from_dynamic_params(
+            {"standard_callback_dynamic_params": dict(callback_metadata.callback_vars)}
+        )
+        is True
+    )
+
+
 @pytest.mark.asyncio
 async def test_default_team_settings_newrelic_resolves_traces_and_metrics():
     """Static `default_team_settings` is the config-file twin of POST /team/callback.
