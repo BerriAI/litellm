@@ -5,7 +5,10 @@ import litellm
 from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
 from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.secret_managers.main import get_secret
-from litellm.types.completion import _CompletionDispatchContext, _CompletionDispatchResult
+from litellm.types.completion import (
+    _CompletionDispatchContext,  # pyright: ignore[reportPrivateUsage]  # dispatch contract type shared with main.py
+    _CompletionDispatchResult,  # pyright: ignore[reportPrivateUsage]  # dispatch contract type shared with main.py
+)
 
 _OLLAMA_CHAT_PROVIDER: Final = "ollama_chat"
 _DEFAULT_OLLAMA_API_BASE: Final = "http://localhost:11434"
@@ -121,7 +124,10 @@ def _python_completion(
     api_key: str | None,
     skip_pre_call_logging: bool = False,
 ) -> _CompletionDispatchResult:
-    from litellm.main import _get_encoding, base_llm_http_handler
+    from litellm.main import (
+        _get_encoding,  # pyright: ignore[reportPrivateUsage]  # shared internal helper
+        base_llm_http_handler,
+    )
 
     return base_llm_http_handler.completion(
         model=ctx.model,
