@@ -1,4 +1,5 @@
 use crate::chat_completions::types::ChatAuthorizationContext;
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::chat_completions::conversation::{Conversation, TurnRole, build_conversation};
@@ -56,7 +57,39 @@ pub struct BedrockChatCompletionsConfig;
 pub const BEDROCK_CHAT_COMPLETIONS_CONFIG: BedrockChatCompletionsConfig =
     BedrockChatCompletionsConfig;
 
-fn converse_body(conversation: &Conversation, params: &Map<String, Value>) -> Value {
+#[derive(Deserialize)]
+struct ConverseResponse {
+    output: ConverseOutput,
+    usage: ConverseUsage,
+    #[serde(rename = "stopReason")]
+    stop_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ConverseOutput {
+    message: ConverseMessage,
+}
+
+#[derive(Deserialize)]
+struct ConverseMessage {
+    content: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct ConverseUsage {
+    #[serde(default, rename = "inputTokens")]
+    input_tokens: u64,
+    #[serde(default, rename = "outputTokens")]
+    output_tokens: u64,
+    #[serde(default, rename = "cacheReadInputTokens")]
+    cache_read_input_tokens: u64,
+    #[serde(default, rename = "cacheWriteInputTokens")]
+    cache_write_input_tokens: u64,
+    #[serde(rename = "totalTokens")]
+    total_tokens: Option<u64>,
+}
+
+fn converse_body(conversation: &Conversation, params: &Map<String, Value>) -> Map<String, Value> {
     let messages: Vec<Value> = conversation
         .turns
         .iter()
@@ -80,7 +113,7 @@ fn converse_body(conversation: &Conversation, params: &Map<String, Value>) -> Va
         .map(|text| json!({"text": text}))
         .collect();
 
-    Value::Object(Map::from_iter(
+    Map::from_iter(
         [
             (
                 "inferenceConfig".to_string(),
@@ -90,7 +123,7 @@ fn converse_body(conversation: &Conversation, params: &Map<String, Value>) -> Va
         ]
         .into_iter()
         .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system)))),
-    ))
+    )
 }
 
 fn has_blank_text(message: &ChatMessage) -> bool {
@@ -239,17 +272,25 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let body = response
+        let raw_body = response
             .body
             .as_object()
             .ok_or_else(|| Error::InvalidResponse("converse response is not an object".into()))?;
-
-        let content = body
+        if raw_body
             .get("output")
             .and_then(|output| output.get("message"))
             .and_then(|message| message.get("content"))
             .and_then(Value::as_array)
-            .ok_or(Error::MissingField("output.message.content"))?;
+            .is_none()
+        {
+            return Err(Error::MissingField("output.message.content"));
+        }
+        if raw_body.get("usage").and_then(Value::as_object).is_none() {
+            return Err(Error::MissingField("usage"));
+        }
+        let body: ConverseResponse = serde_json::from_value(response.body)
+            .map_err(|error| Error::InvalidResponse(error.to_string()))?;
+        let content = body.output.message.content;
         // The route declines tool requests, so anything other than a text block
         // is something this path never asked for. Decline; the host falls back.
         if content.iter().any(|block| {
@@ -264,16 +305,11 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
             .filter_map(|block| block.get("text").and_then(Value::as_str))
             .collect();
 
-        let usage = body
-            .get("usage")
-            .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
-        let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
         let computed = usage_from_parts(
-            field("inputTokens"),
-            field("outputTokens"),
-            field("cacheReadInputTokens"),
-            field("cacheWriteInputTokens"),
+            body.usage.input_tokens,
+            body.usage.output_tokens,
+            body.usage.cache_read_input_tokens,
+            body.usage.cache_write_input_tokens,
         );
         // Converse reports `totalTokens` and Python passes it straight through,
         // where Anthropic has no such field and Python adds the two counts
@@ -282,10 +318,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         // raises there rather than reporting a zero; fall back to the computed
         // total, which is the closest thing to that without failing the call.
         let usage = ChatCompletionsUsage {
-            total_tokens: usage
-                .get("totalTokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(computed.total_tokens),
+            total_tokens: body.usage.total_tokens.unwrap_or(computed.total_tokens),
             ..computed
         };
 
@@ -303,10 +336,8 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
                     // on this path alone.
                     content: Some(text),
                 },
-                finish_reason: finish_reason_for(
-                    body.get("stopReason").and_then(Value::as_str).unwrap_or(""),
-                )
-                .to_string(),
+                finish_reason: finish_reason_for(body.stop_reason.as_deref().unwrap_or(""))
+                    .to_string(),
             }],
             usage,
         })

@@ -187,7 +187,9 @@ def restore_correlation_context(logger: object | None) -> None:
 
 
 def _invoke_sync(host: LifecycleHost) -> None:
-    host.invoke()
+    awaiting, _ = host.invoke()
+    if awaiting:
+        raise RuntimeError("synchronous lifecycle selected an awaited operation")
 
 
 async def _invoke_async(host: LifecycleHost) -> None:

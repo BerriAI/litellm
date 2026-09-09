@@ -3,7 +3,8 @@ use crate::lifecycle::{AuthorizedBody, RequestBodyPolicy, WireBody};
 use serde_json::{Map, Value};
 
 use super::types::{
-    AudioAuthorizationContext, AudioTranscriptionRequestData, AudioTranscriptionResponseData,
+    AudioAuthorizationContext, AudioInput, AudioTranscriptionRequestData,
+    AudioTranscriptionResponseData,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,7 +55,7 @@ pub trait AudioTranscriptionProviderConfig: Sync {
     fn transform_transcription_request(
         &self,
         model: &str,
-        audio: Value,
+        audio: AudioInput,
         optional_params: Map<String, Value>,
     ) -> Result<AudioTranscriptionRequestData, Error>;
 

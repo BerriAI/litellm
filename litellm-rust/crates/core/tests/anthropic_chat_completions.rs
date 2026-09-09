@@ -20,10 +20,12 @@ fn params(value: Value) -> Map<String, Value> {
 }
 
 fn transform(model: &str, msgs: Value, opts: Value) -> Value {
-    ANTHROPIC_CHAT_COMPLETIONS_CONFIG
-        .transform_request(model, messages(msgs), params(opts))
-        .expect("request transforms")
-        .body
+    Value::Object(
+        ANTHROPIC_CHAT_COMPLETIONS_CONFIG
+            .transform_request(model, messages(msgs), params(opts))
+            .expect("request transforms")
+            .body,
+    )
 }
 
 fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {

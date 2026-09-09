@@ -92,9 +92,9 @@ where
         },
     );
     Ok(realtime(
-        &GatewayRealtimeServices {
+        Arc::new(GatewayRealtimeServices {
             runner: CustomLoggerRunner::new(loggers.as_ref().clone()),
-        },
+        }),
         RealtimeRequest {
             model: params.model.clone(),
             api_key: params.api_key.clone(),

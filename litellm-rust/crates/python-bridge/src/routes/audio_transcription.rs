@@ -2,7 +2,7 @@ use litellm_core::Error;
 use std::future::Future;
 
 use litellm_core::audio_transcription::{
-    AudioTranscriptionRequest, DefaultAudioServices, audio_transcription_with_services,
+    AudioInput, AudioTranscriptionRequest, DefaultAudioServices, audio_transcription_with_services,
 };
 use pyo3::prelude::*;
 use serde_json::Value;
@@ -12,7 +12,7 @@ use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 struct AudioTranscriptionInputs {
     model: String,
-    audio: Value,
+    audio: AudioInput,
     api_key: Option<String>,
     api_base: Option<String>,
     custom_llm_provider: Option<String>,
@@ -72,7 +72,7 @@ fn prepare_transcription(
 fn transcription(
     py: Python<'_>,
     model: String,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: Value,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: AudioInput,
     api_key: Option<String>,
     api_base: Option<String>,
     custom_llm_provider: Option<String>,
@@ -99,7 +99,7 @@ fn transcription(
 fn atranscription(
     py: Python<'_>,
     model: String,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: Value,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: AudioInput,
     api_key: Option<String>,
     api_base: Option<String>,
     custom_llm_provider: Option<String>,
@@ -127,6 +127,7 @@ pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(feature = "trace-parity")]
 mod trace {
+    use litellm_core::audio_transcription::AudioInput;
     use pyo3::prelude::*;
     use serde_json::Value;
 
@@ -138,7 +139,7 @@ mod trace {
     fn transcription(
         py: Python<'_>,
         model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: Value,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: AudioInput,
         api_key: Option<String>,
         api_base: Option<String>,
         custom_llm_provider: Option<String>,
@@ -169,7 +170,7 @@ mod trace {
     fn atranscription(
         py: Python<'_>,
         model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: Value,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)] audio: AudioInput,
         api_key: Option<String>,
         api_base: Option<String>,
         custom_llm_provider: Option<String>,

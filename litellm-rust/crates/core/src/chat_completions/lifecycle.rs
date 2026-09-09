@@ -1,7 +1,7 @@
 use crate::Error;
 use crate::integrations::custom_logger::{LogError, LogFuture};
 use crate::integrations::types::Usage;
-use crate::lifecycle::program::{CallProgram, ProgramOptions, actions_for};
+use crate::lifecycle::program::{ProgramOptions, actions_for};
 use crate::lifecycle::{
     ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock,
     DeploymentFailureHooks, DeploymentPreHooks, DeploymentSuccessHooks, ExecutedCall, Lifecycle,
@@ -24,7 +24,7 @@ pub use crate::lifecycle::program::{Observations, Operation, Transition};
 #[derive(Clone, Debug)]
 pub struct Admission {
     pub model: String,
-    pub messages: Value,
+    pub messages: Vec<super::types::ChatMessage>,
     pub optional_params: Map<String, Value>,
     pub custom_llm_provider: Option<String>,
 }
@@ -46,7 +46,7 @@ impl Decline {
 
 #[derive(Debug)]
 pub struct ChatCompletionsState {
-    program: CallProgram,
+    program: CallLifecycle,
 }
 
 #[derive(Debug)]
@@ -71,13 +71,13 @@ impl LifecycleRoute for ChatCompletionsRoute {
         if let Some(reason) = chat_completions_decline_reason(
             &admission.model,
             admission.custom_llm_provider.as_deref(),
-            admission.messages.clone(),
+            &admission.messages,
             &admission.optional_params,
         ) {
             return Ok(Err(Decline(reason)));
         }
         Ok(Ok(ChatCompletionsState {
-            program: CallProgram::new(ProgramOptions {
+            program: CallLifecycle::planned(ProgramOptions {
                 asynchronous: options.asynchronous,
                 internal_call: options.internal_call,
             }),
@@ -154,7 +154,7 @@ where
     T: crate::runtime::HttpTransport,
     A: crate::providers::auth::ChatAuthorizationServices,
 {
-    CallLifecycle
+    CallLifecycle::default()
         .run_prepared_with_usage(
             (context, request),
             session,
@@ -227,7 +227,7 @@ pub(crate) async fn execute_settled(
     request: SettledChatRequest,
     context: CallLifecycleContext,
 ) -> ExecutedCall<ChatCompletionsResponse, Error> {
-    CallLifecycle
+    CallLifecycle::default()
         .run_with_usage(
             (context, request),
             &UndispatchedSession,
@@ -246,7 +246,10 @@ mod tests {
     fn admission() -> Admission {
         Admission {
             model: "claude-sonnet-4-5".into(),
-            messages: serde_json::json!([{"role": "user", "content": "hi"}]),
+            messages: serde_json::from_value(serde_json::json!([
+                {"role": "user", "content": "hi"}
+            ]))
+            .expect("messages"),
             optional_params: Map::from_iter([("max_tokens".into(), Value::from(16))]),
             custom_llm_provider: Some("anthropic".into()),
         }
@@ -255,7 +258,7 @@ mod tests {
     #[test]
     fn admission_declines_before_the_lifecycle_starts() {
         let mut unsupported = admission();
-        unsupported.messages = serde_json::json!([]);
+        unsupported.messages = Vec::new();
         assert!(matches!(
             machine(&unsupported, Options::default()),
             Ok(Err(_))

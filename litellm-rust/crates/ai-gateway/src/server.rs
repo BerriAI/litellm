@@ -2,12 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use litellm_core::integrations::custom_logger::CustomLogger;
-use litellm_core::integrations::litellm_python_proxy_api::{
-    LiteLLMPythonProxyAPILogger, LogEgressConfig,
-};
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 
 use crate::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
+use crate::proxy_logger::{LiteLLMPythonProxyAPILogger, LogEgressConfig};
 use crate::routes;
 use crate::state::{AppState, GatewayMessagesServices};
 

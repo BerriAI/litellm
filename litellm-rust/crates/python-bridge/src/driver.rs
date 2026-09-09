@@ -12,7 +12,6 @@ pub(crate) const INPUT: &str = "input";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OperationBinding {
     method: &'static str,
-    awaiting: bool,
 }
 
 fn operation_binding(
@@ -21,62 +20,40 @@ fn operation_binding(
     route: &str,
 ) -> PyResult<OperationBinding> {
     let binding = match operation {
-        Operation::Setup => OperationBinding {
-            method: "setup",
-            awaiting: false,
-        },
+        Operation::Setup => OperationBinding { method: "setup" },
         Operation::DeploymentPre => OperationBinding {
             method: "deployment_pre",
-            awaiting: true,
         },
         Operation::BuildRequest => OperationBinding {
             method: "build_request",
-            awaiting: false,
         },
-        Operation::PreCall => OperationBinding {
-            method: "pre_call",
-            awaiting: false,
-        },
-        Operation::Send if asynchronous => OperationBinding {
-            method: "send",
-            awaiting: true,
-        },
+        Operation::PreCall => OperationBinding { method: "pre_call" },
+        Operation::Send if asynchronous => OperationBinding { method: "send" },
         Operation::Send => OperationBinding {
             method: "send_sync",
-            awaiting: false,
         },
         Operation::DeploymentSuccess => OperationBinding {
             method: "deployment_success",
-            awaiting: true,
         },
         Operation::DeploymentFailure => OperationBinding {
             method: "deployment_failure",
-            awaiting: true,
         },
         Operation::SyncSuccess => OperationBinding {
             method: "sync_success",
-            awaiting: false,
         },
         Operation::AsyncSuccess => OperationBinding {
             method: "async_success",
-            awaiting: false,
         },
         Operation::SyncSuccessIfNeeded => OperationBinding {
             method: "sync_success_if_needed",
-            awaiting: false,
         },
         Operation::SyncFailure => OperationBinding {
             method: "sync_failure",
-            awaiting: false,
         },
         Operation::AsyncFailure => OperationBinding {
             method: "async_failure",
-            awaiting: true,
         },
-        Operation::Restore => OperationBinding {
-            method: "restore",
-            awaiting: false,
-        },
+        Operation::Restore => OperationBinding { method: "restore" },
         Operation::Complete(_) => {
             return Err(PyRuntimeError::new_err(format!(
                 "{route} lifecycle is complete"
@@ -95,7 +72,7 @@ pub(crate) fn invoke(
 ) -> PyResult<(bool, Py<PyAny>)> {
     let binding = operation_binding(operation, asynchronous, route)?;
     Ok((
-        binding.awaiting,
+        operation.is_awaited(asynchronous),
         host.getattr(py, binding.method)?.call0(py)?,
     ))
 }
@@ -144,8 +121,9 @@ mod tests {
             for (operation, asynchronous, method, awaiting) in cases {
                 assert_eq!(
                     operation_binding(operation, asynchronous, "test").unwrap(),
-                    OperationBinding { method, awaiting },
+                    OperationBinding { method }
                 );
+                assert_eq!(operation.is_awaited(asynchronous), awaiting);
             }
         });
     }

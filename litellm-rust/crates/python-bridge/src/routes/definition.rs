@@ -237,6 +237,8 @@ mod tests {
                 .set_item("extra_headers", &invalid_headers)
                 .expect("kwargs should accept extra_headers");
             let document = PyDict::new(py);
+            document.set_item("data", "AQI=").unwrap();
+            document.set_item("format", "wav").unwrap();
 
             {
                 let (sync_name, async_name) = ("transcription", "atranscription");

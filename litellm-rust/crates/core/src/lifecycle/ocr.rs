@@ -1,8 +1,8 @@
 use crate::Error;
 use crate::ocr::{OcrAdmissionRequest, request};
 
-use super::program::{CallProgram, ProgramOptions, actions_for};
-use super::{ActionBinding, LifecycleRoute, Outcome};
+use super::program::{ProgramOptions, actions_for};
+use super::{ActionBinding, CallLifecycle, LifecycleRoute, Outcome};
 
 pub use super::program::{Observations, Operation, Transition};
 
@@ -47,7 +47,7 @@ pub struct Identity {
 
 #[derive(Debug)]
 pub struct OcrState {
-    program: CallProgram,
+    program: CallLifecycle,
     identity: Identity,
 }
 
@@ -107,7 +107,7 @@ impl LifecycleRoute for OcrRoute {
         let generated_call_id = options.call_id.is_none();
         let call_id = options.call_id.unwrap_or_else(generate_call_id);
         Ok(Ok(OcrState {
-            program: CallProgram::new(ProgramOptions {
+            program: CallLifecycle::planned(ProgramOptions {
                 asynchronous: options.asynchronous,
                 internal_call: options.internal_call,
             }),

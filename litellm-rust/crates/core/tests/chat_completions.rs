@@ -2,11 +2,17 @@ use serde_json::{Map, Value, json};
 
 use litellm_core::error::Error;
 
-use litellm_core::chat_completions::request::{build_provider_request, resolve_request};
+use litellm_core::chat_completions::request::{
+    build_provider_request, parse_messages, resolve_request,
+};
 use litellm_core::chat_completions::transformation::ChatCompletionsAuth;
 use litellm_core::chat_completions::types::{
-    ChatCompletionsRequest, ProviderChatCompletionsRequest,
+    ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
 };
+
+fn chat_messages(value: Value) -> Vec<ChatMessage> {
+    serde_json::from_value(value).expect("messages")
+}
 
 fn build_chat_completions_request(
     request: ChatCompletionsRequest<'_>,
@@ -22,7 +28,7 @@ fn request<'a>(
 ) -> ChatCompletionsRequest<'a> {
     ChatCompletionsRequest {
         model,
-        messages,
+        messages: chat_messages(messages),
         optional_params: match optional_params {
             Value::Object(map) => map,
             other => panic!("params must be an object, got {other}"),
@@ -249,13 +255,8 @@ fn rejects_an_empty_or_malformed_message_list() {
         Error::InvalidRequest("chat completions requires at least one message".to_string())
     );
     assert!(matches!(
-        decline(request(
-            "anthropic/claude-sonnet-4-5",
-            None,
-            json!("not a list"),
-            json!({}),
-        )),
-        Error::InvalidRequest(_)
+        parse_messages(json!("not a list")),
+        Err(Error::InvalidRequest(_))
     ));
 }
 
@@ -494,12 +495,15 @@ fn decline_reason(
     messages: Value,
     params: Value,
 ) -> Option<&'static str> {
+    let Ok(messages) = parse_messages(messages) else {
+        return Some("unreadable message list");
+    };
     let params = match params {
         Value::Object(map) => map,
         other => panic!("params must be an object, got {other}"),
     };
     litellm_core::chat_completions::chat_completions_decline_reason(
-        model, provider, messages, &params,
+        model, provider, &messages, &params,
     )
 }
 
@@ -669,7 +673,7 @@ mod round_trip {
     fn call(api_base: &str, messages: Value, params: Value) -> ChatCompletionsRequest<'_> {
         ChatCompletionsRequest {
             model: "anthropic/claude-sonnet-4-5",
-            messages,
+            messages: chat_messages(messages),
             optional_params: match params {
                 Value::Object(map) => map,
                 other => panic!("params must be an object, got {other}"),

@@ -7,9 +7,140 @@ use crate::integrations::types::RequestMetadata;
 
 use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioFormat {
+    Wav,
+    Mp3,
+    Flac,
+    Ogg,
+}
+
+impl AsRef<str> for AudioFormat {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Wav => "wav",
+            Self::Mp3 => "mp3",
+            Self::Flac => "flac",
+            Self::Ogg => "ogg",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioInput {
+    pub data: String,
+    pub format: AudioFormat,
+    #[serde(default)]
+    pub filename: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioPreCallGuardrailRequest {
+    model: String,
+    custom_llm_provider: String,
+    audio: AudioInput,
+    optional_params: Map<String, Value>,
+}
+
+impl AudioPreCallGuardrailRequest {
+    pub(crate) fn new(
+        model: String,
+        custom_llm_provider: String,
+        audio: AudioInput,
+        optional_params: Map<String, Value>,
+    ) -> Self {
+        Self {
+            model,
+            custom_llm_provider,
+            audio,
+            optional_params,
+        }
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    pub fn custom_llm_provider(&self) -> &str {
+        &self.custom_llm_provider
+    }
+
+    pub fn audio(&self) -> &AudioInput {
+        &self.audio
+    }
+
+    pub fn optional_params(&self) -> &Map<String, Value> {
+        &self.optional_params
+    }
+
+    pub fn with_audio(self, audio: AudioInput) -> Self {
+        Self { audio, ..self }
+    }
+
+    pub fn with_optional_params(self, optional_params: Map<String, Value>) -> Self {
+        Self {
+            optional_params,
+            ..self
+        }
+    }
+
+    pub(crate) fn into_payload(self) -> (AudioInput, Map<String, Value>) {
+        (self.audio, self.optional_params)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioDuringCallGuardrailRequest {
+    model: String,
+    custom_llm_provider: String,
+    url: String,
+    body: Map<String, Value>,
+}
+
+impl AudioDuringCallGuardrailRequest {
+    pub(crate) fn new(
+        model: String,
+        custom_llm_provider: String,
+        url: String,
+        body: Map<String, Value>,
+    ) -> Self {
+        Self {
+            model,
+            custom_llm_provider,
+            url,
+            body,
+        }
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    pub fn custom_llm_provider(&self) -> &str {
+        &self.custom_llm_provider
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn body(&self) -> &Map<String, Value> {
+        &self.body
+    }
+
+    pub fn with_body(self, body: Map<String, Value>) -> Self {
+        Self { body, ..self }
+    }
+
+    pub(crate) fn into_body(self) -> Map<String, Value> {
+        self.body
+    }
+}
+
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,
-    pub audio: Value,
+    pub audio: AudioInput,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
@@ -20,7 +151,7 @@ pub struct AudioTranscriptionRequest<'a> {
 
 pub struct AudioRouteRequest<'a> {
     pub model: &'a str,
-    pub audio: Value,
+    pub audio: AudioInput,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
@@ -37,7 +168,7 @@ pub struct ProviderAudioTranscriptionRequest {
     pub(crate) custom_llm_provider: String,
     pub(crate) config: &'static dyn AudioTranscriptionProviderConfig,
     pub(crate) url: String,
-    pub(crate) body: Value,
+    pub(crate) body: Map<String, Value>,
     pub(crate) upstream_headers: Vec<(String, String)>,
     pub(crate) auth: AudioTranscriptionAuth,
     #[cfg(feature = "bedrock-auth")]
@@ -95,18 +226,18 @@ impl ProviderAudioTranscriptionRequest {
         &self.url
     }
 
-    pub fn body(&self) -> &Value {
+    pub fn body(&self) -> &Map<String, Value> {
         &self.body
     }
 
-    pub fn with_body(self, body: Value) -> Self {
+    pub fn with_body(self, body: Map<String, Value>) -> Self {
         Self { body, ..self }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioTranscriptionRequestData {
-    pub body: Value,
+    pub body: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

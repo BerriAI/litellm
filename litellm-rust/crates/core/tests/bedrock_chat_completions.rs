@@ -22,14 +22,16 @@ fn params(value: Value) -> Map<String, Value> {
 }
 
 fn transform(msgs: Value, opts: Value) -> Value {
-    BEDROCK_CHAT_COMPLETIONS_CONFIG
-        .transform_request(
-            "anthropic.claude-sonnet-4-5-v1:0",
-            messages(msgs),
-            params(opts),
-        )
-        .expect("request transforms")
-        .body
+    Value::Object(
+        BEDROCK_CHAT_COMPLETIONS_CONFIG
+            .transform_request(
+                "anthropic.claude-sonnet-4-5-v1:0",
+                messages(msgs),
+                params(opts),
+            )
+            .expect("request transforms")
+            .body,
+    )
 }
 
 fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {

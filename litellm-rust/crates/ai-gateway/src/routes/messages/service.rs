@@ -48,15 +48,10 @@ pub async fn run(
         Some(ANTHROPIC_MESSAGES_PROVIDER)
     };
     let stream = body.stream == Some(true);
-    let body = serde_json::to_value(AnthropicMessagesRequest {
+    let body = AnthropicMessagesRequest {
         model: upstream_model.to_string(),
         ..body
-    })
-    .map_err(|error| {
-        Error::InvalidRequest(format!(
-            "failed to serialize Anthropic messages request: {error}"
-        ))
-    })?;
+    };
 
     let request = MessagesRequest {
         model: provider_model.to_string(),

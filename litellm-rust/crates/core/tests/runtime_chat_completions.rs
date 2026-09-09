@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use litellm_core::Error;
-use litellm_core::chat_completions::types::ChatCompletionsRequest;
+use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatMessage};
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
     ActionResult, CallLifecycleContext, CallbackFuture, Clock, DeploymentFailureHooks,
@@ -20,6 +20,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 const RESPONSE: &str = r#"{"model":"claude-sonnet-4-5","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}"#;
+
+fn chat_messages(value: Value) -> Vec<ChatMessage> {
+    serde_json::from_value(value).expect("messages")
+}
 
 #[derive(Clone)]
 struct RecordingTransport {
@@ -142,7 +146,7 @@ impl<'request>
         Box::pin(async move {
             if let Some(message) = self.replacement_message {
                 ActionResult::Replace(ChatCompletionsRequest {
-                    messages: json!([{"role": "user", "content": message}]),
+                    messages: chat_messages(json!([{"role": "user", "content": message}])),
                     ..request
                 })
             } else {
@@ -259,7 +263,7 @@ async fn bedrock_client_signs_the_exact_body_given_to_the_transport() {
     let client = LiteLlm::from_services(services);
     let call = ChatCompletionsRequest {
         model: "bedrock/us-east-1/anthropic.claude-v2",
-        messages: json!([{"role": "user", "content": "signed"}]),
+        messages: chat_messages(json!([{"role": "user", "content": "signed"}])),
         optional_params: Map::from_iter([
             ("maxTokens".into(), json!(16)),
             ("aws_access_key_id".into(), json!("test-access")),
@@ -299,7 +303,7 @@ async fn bedrock_client_signs_the_exact_body_given_to_the_transport() {
 fn request(message: &str, optional_params: Map<String, Value>) -> ChatCompletionsRequest<'_> {
     ChatCompletionsRequest {
         model: "anthropic/claude-sonnet-4-5",
-        messages: json!([{"role": "user", "content": message}]),
+        messages: chat_messages(json!([{"role": "user", "content": message}])),
         optional_params,
         api_key: Some("sk-test"),
         api_base: Some("https://recording.invalid/v1/messages"),

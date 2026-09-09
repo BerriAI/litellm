@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::Error;
 use crate::integrations::custom_logger::{LogError, LogFuture};
 use crate::integrations::types::Usage;
-use crate::lifecycle::program::{CallProgram, ProgramOptions, actions_for};
+use crate::lifecycle::program::{ProgramOptions, actions_for};
 use crate::lifecycle::{
     ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock,
     DeploymentFailureHooks, DeploymentPreHooks, DeploymentSuccessHooks, ExecutedCall, Lifecycle,
@@ -27,7 +27,7 @@ pub struct Options {
 
 #[derive(Debug)]
 pub struct MessagesState {
-    program: CallProgram,
+    program: CallLifecycle,
 }
 
 #[derive(Debug)]
@@ -47,7 +47,7 @@ impl LifecycleRoute for MessagesRoute {
 
     fn admit(_: &(), options: Options) -> Result<Result<Self::State, Self::Decline>, Error> {
         Ok(Ok(MessagesState {
-            program: CallProgram::new(ProgramOptions {
+            program: CallLifecycle::planned(ProgramOptions {
                 asynchronous: options.asynchronous,
                 internal_call: options.internal_call,
             }),
@@ -212,7 +212,7 @@ pub async fn messages<S: MessagesServices>(
     _options: Options,
     context: CallLifecycleContext,
 ) -> ExecutedCall<AnthropicMessagesResponse, Error> {
-    CallLifecycle
+    CallLifecycle::default()
         .run_with_usage(
             (context, request),
             services,
@@ -235,7 +235,7 @@ where
     ProviderCall: FnOnce(MessagesRequest) -> ProviderFuture,
     ProviderFuture: Future<Output = Result<AnthropicMessagesResponse, Error>>,
 {
-    CallLifecycle
+    CallLifecycle::default()
         .run_with_usage(
             (context, request),
             services,
@@ -270,7 +270,7 @@ where
     ProviderCall: FnOnce(MessagesRequest) -> ProviderFuture,
     ProviderFuture: Future<Output = Result<crate::lifecycle::StreamingSource, Error>>,
 {
-    CallLifecycle
+    CallLifecycle::default()
         .run_streaming(
             context,
             request,

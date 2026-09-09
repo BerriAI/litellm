@@ -6,7 +6,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
-use crate::ocr::types::{OcrRequestData, OcrResponseData};
+use crate::ocr::types::{OcrDocument, OcrRequestData, OcrResponseData};
 
 pub const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
 pub const REDUCTO_API_KEY_ENV: &str = "REDUCTO_API_KEY";
@@ -80,16 +80,10 @@ pub fn resolve_api_key(
         .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
 }
 
-pub fn extract_document_source(document: &Value) -> Result<ReductoDocumentSource, Error> {
-    let document = document.as_object().ok_or_else(|| Error::InvalidType {
-        expected: "object",
-        actual: json_type_name(document),
-    })?;
+pub fn extract_document_source(document: &OcrDocument) -> Result<ReductoDocumentSource, Error> {
     let source = document
-        .get("document_url")
-        .and_then(Value::as_str)
+        .source_url()
         .filter(|source| !source.is_empty())
-        .or_else(|| document.get("image_url").and_then(Value::as_str))
         .ok_or_else(|| {
             Error::InvalidRequest(
                 "Reducto expected OCR preprocessing to produce document_url or image_url"
@@ -176,10 +170,7 @@ pub fn build_parse_v3_request(
     let data = std::iter::once(("input".to_string(), Value::String(file_id.to_string())))
         .chain(optional_params)
         .collect();
-    OcrRequestData {
-        data: Value::Object(data),
-        files: None,
-    }
+    OcrRequestData { data }
 }
 
 pub fn build_parse_legacy_request(
@@ -202,13 +193,10 @@ pub fn build_parse_legacy_request(
             Value::String(file_id.to_string()),
         )]),
     };
-    OcrRequestData {
-        data: Value::Object(data),
-        files: None,
-    }
+    OcrRequestData { data }
 }
 
-fn source_file_id(document: &Value) -> Result<String, Error> {
+fn source_file_id(document: &OcrDocument) -> Result<String, Error> {
     match extract_document_source(document)? {
         ReductoDocumentSource::FileId(file_id) => Ok(file_id),
         ReductoDocumentSource::Upload { .. } => Err(Error::Unsupported(DATA_URI_UPLOAD_REQUIRED)),
@@ -334,7 +322,7 @@ impl OcrProviderConfig for ReductoParseV3Config {
     fn transform_ocr_request(
         &self,
         _model: &str,
-        document: Value,
+        document: OcrDocument,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
         let file_id = source_file_id(&document)?;
@@ -380,7 +368,7 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
     fn transform_ocr_request(
         &self,
         _model: &str,
-        document: Value,
+        document: OcrDocument,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
         let file_id = source_file_id(&document)?;

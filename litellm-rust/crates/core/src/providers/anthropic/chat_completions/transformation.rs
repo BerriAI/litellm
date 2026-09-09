@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::chat_completions::conversation::{Conversation, build_conversation};
@@ -37,11 +38,35 @@ pub struct AnthropicChatCompletionsConfig;
 pub const ANTHROPIC_CHAT_COMPLETIONS_CONFIG: AnthropicChatCompletionsConfig =
     AnthropicChatCompletionsConfig;
 
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    model: String,
+    content: Vec<Value>,
+    stop_reason: Option<String>,
+    usage: AnthropicResponseUsage,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponseUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+}
+
 fn text_block(text: &str) -> Value {
     json!({"type": "text", "text": text})
 }
 
-fn anthropic_body(model: &str, conversation: &Conversation, params: Map<String, Value>) -> Value {
+fn anthropic_body(
+    model: &str,
+    conversation: &Conversation,
+    params: Map<String, Value>,
+) -> Map<String, Value> {
     let messages: Vec<Value> = conversation
         .turns
         .iter()
@@ -55,7 +80,7 @@ fn anthropic_body(model: &str, conversation: &Conversation, params: Map<String, 
 
     let system: Vec<Value> = conversation.system.iter().map(|s| text_block(s)).collect();
 
-    let body = Map::from_iter(
+    Map::from_iter(
         [
             ("model".to_string(), json!(model)),
             ("messages".to_string(), json!(messages)),
@@ -66,8 +91,7 @@ fn anthropic_body(model: &str, conversation: &Conversation, params: Map<String, 
         // key of the same name wins here too.
         .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system))))
         .chain(params),
-    );
-    Value::Object(body)
+    )
 }
 
 impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
@@ -158,60 +182,50 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         _model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let body = response
+        let raw_body = response
             .body
             .as_object()
             .ok_or_else(|| Error::InvalidResponse("messages response is not an object".into()))?;
-
-        let content = body
-            .get("content")
-            .and_then(Value::as_array)
-            .ok_or(Error::MissingField("content"))?;
+        for field in ["content", "usage", "model"] {
+            if !raw_body.contains_key(field) {
+                return Err(Error::MissingField(field));
+            }
+        }
+        let body: AnthropicResponse = serde_json::from_value(response.body)
+            .map_err(|error| Error::InvalidResponse(error.to_string()))?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.
         // Decline rather than silently dropping it; the host falls back.
-        if content
+        if body
+            .content
             .iter()
             .any(|block| block.get("type").and_then(Value::as_str) != Some("text"))
         {
             return Err(Error::Unsupported("non-text response content block"));
         }
-        let text: String = content
+        let text: String = body
+            .content
             .iter()
             .filter_map(|block| block.get("text").and_then(Value::as_str))
             .collect();
 
-        let usage = body
-            .get("usage")
-            .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
-        let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
-
         Ok(ChatCompletionsResponse {
             created: unix_now(),
-            model: body
-                .get("model")
-                .and_then(Value::as_str)
-                .ok_or(Error::MissingField("model"))?
-                .to_string(),
+            model: body.model,
             choices: vec![ChatCompletionsChoice {
                 index: 0,
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
                 },
-                finish_reason: finish_reason_for(
-                    body.get("stop_reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or(""),
-                )
-                .to_string(),
+                finish_reason: finish_reason_for(body.stop_reason.as_deref().unwrap_or(""))
+                    .to_string(),
             }],
             usage: usage_from_parts(
-                field("input_tokens"),
-                field("output_tokens"),
-                field("cache_read_input_tokens"),
-                field("cache_creation_input_tokens"),
+                body.usage.input_tokens,
+                body.usage.output_tokens,
+                body.usage.cache_read_input_tokens,
+                body.usage.cache_creation_input_tokens,
             ),
         })
     }

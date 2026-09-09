@@ -31,6 +31,14 @@ pub enum OcrDocument {
 }
 
 impl OcrDocument {
+    pub fn source_url(&self) -> Option<&str> {
+        match self {
+            Self::DocumentUrl { document_url } => Some(document_url),
+            Self::ImageUrl { image_url } => Some(image_url),
+            Self::File | Self::Unsupported => None,
+        }
+    }
+
     pub fn validate(&self, requires_data_uri: bool) -> Result<(), crate::Error> {
         let url = match self {
             Self::DocumentUrl { document_url } => document_url,
@@ -121,8 +129,7 @@ pub struct SettledOcrRequest {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OcrRequestData {
-    pub data: Value,
-    pub files: Option<Value>,
+    pub data: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

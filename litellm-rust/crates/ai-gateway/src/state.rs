@@ -276,7 +276,8 @@ mod tests {
         let client = LiteLlm::from_services(GatewayMessagesServices::new(|_| None));
         let request = ChatCompletionsRequest {
             model: "anthropic/claude-sonnet-4-5",
-            messages: json!([{"role": "user", "content": "hello"}]),
+            messages: serde_json::from_value(json!([{"role": "user", "content": "hello"}]))
+                .unwrap(),
             optional_params: Map::new(),
             api_key: Some("test-key"),
             api_base: Some(&api_base),

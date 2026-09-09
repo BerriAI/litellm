@@ -7,7 +7,7 @@ use super::transformation::AnthropicMessagesProviderConfig;
 
 pub struct MessagesRequest {
     pub model: String,
-    pub body: Value,
+    pub body: AnthropicMessagesRequest,
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,

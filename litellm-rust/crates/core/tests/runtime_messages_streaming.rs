@@ -20,6 +20,12 @@ use litellm_core::runtime::{
 };
 use serde_json::json;
 
+macro_rules! messages_body {
+    ($($json:tt)+) => {
+        serde_json::from_value(json!($($json)+)).expect("messages body")
+    };
+}
+
 struct Tracking {
     opened: AtomicUsize,
     session_drops: AtomicUsize,
@@ -163,7 +169,7 @@ impl MessagesRuntimeServices for Services {
 fn request() -> MessagesRequest {
     MessagesRequest {
         model: "anthropic/claude-test".to_string(),
-        body: json!({
+        body: messages_body!({
             "model": "claude-test",
             "max_tokens": 8,
             "messages": [{"role": "user", "content": "hello"}],

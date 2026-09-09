@@ -1421,6 +1421,7 @@ dependencies = [
  "litellm-config",
  "litellm-core",
  "litellm-gateway-auth",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

@@ -1,6 +1,6 @@
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
-use crate::ocr::types::{OcrRequestData, OcrResponseData};
+use crate::ocr::types::{OcrDocument, OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value};
 
 const SUPPORTED_OCR_PARAMS: &[&str] = &[
@@ -83,27 +83,26 @@ impl OcrProviderConfig for MistralOcrConfig {
     fn transform_ocr_request(
         &self,
         model: &str,
-        document: Value,
+        document: OcrDocument,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
-        if !document.is_object() {
-            return Err(Error::InvalidType {
-                expected: "object",
-                actual: json_type_name(&document),
-            });
+        if document.source_url().is_none() {
+            return Err(Error::InvalidRequest(
+                "OCR document must contain document_url or image_url".to_string(),
+            ));
         }
-
         let mut data = Map::new();
         data.insert("model".to_string(), Value::String(model.to_string()));
-        data.insert("document".to_string(), document);
+        data.insert(
+            "document".to_string(),
+            serde_json::to_value(document)
+                .map_err(|error| Error::InvalidRequest(error.to_string()))?,
+        );
         for (param, value) in optional_params {
             data.insert(param, value);
         }
 
-        Ok(OcrRequestData {
-            data: Value::Object(data),
-            files: None,
-        })
+        Ok(OcrRequestData { data })
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -175,7 +174,7 @@ pub fn map_ocr_params(non_default_params: &Map<String, Value>) -> Map<String, Va
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub fn transform_ocr_request(
     model: &str,
-    document: Value,
+    document: OcrDocument,
     optional_params: Map<String, Value>,
 ) -> Result<OcrRequestData, Error> {
     MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
@@ -190,6 +189,10 @@ pub fn transform_ocr_response(model: &str, response_json: Value) -> Result<OcrRe
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn ocr_document(value: Value) -> OcrDocument {
+        serde_json::from_value(value).expect("OCR document")
+    }
 
     #[test]
     fn extract_header_is_a_supported_ocr_param() {
@@ -285,10 +288,11 @@ mod tests {
 
     #[test]
     fn transform_ocr_request_includes_each_optional_param() {
-        let document = json!({
+        let document_json = json!({
             "type": "document_url",
             "document_url": "https://example.com/doc.pdf"
         });
+        let document = ocr_document(document_json.clone());
         for (param, value) in [
             ("table_format", json!("html")),
             ("confidence_scores_granularity", json!("word")),
@@ -309,17 +313,16 @@ mod tests {
             .expect("request should transform");
             assert_eq!(result.data.get(param), Some(&value));
             assert_eq!(result.data.get("model"), Some(&json!("mistral-ocr-latest")));
-            assert_eq!(result.data.get("document"), Some(&document));
-            assert_eq!(result.files, None);
+            assert_eq!(result.data.get("document"), Some(&document_json));
         }
     }
 
     #[test]
     fn transform_ocr_request_includes_multiple_new_params() {
-        let document = json!({
+        let document = ocr_document(json!({
             "type": "document_url",
             "document_url": "https://example.com/doc.pdf"
-        });
+        }));
         let optional_params = json!({
             "table_format": "html",
             "confidence_scores_granularity": "page",
@@ -370,16 +373,10 @@ mod tests {
 
     #[test]
     fn transform_ocr_request_rejects_non_object_document() {
-        let err = transform_ocr_request("mistral-ocr-latest", json!("bad"), Map::new())
-            .expect_err("string document should be rejected");
+        let err = transform_ocr_request("mistral-ocr-latest", OcrDocument::Unsupported, Map::new())
+            .expect_err("unsupported document should be rejected");
 
-        assert_eq!(
-            err,
-            Error::InvalidType {
-                expected: "object",
-                actual: "string",
-            }
-        );
+        assert!(matches!(err, Error::InvalidRequest(_)));
     }
 
     #[test]

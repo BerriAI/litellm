@@ -47,3 +47,9 @@ Callback is the umbrella term. Core models each callback contract as a focused c
 | `TerminalDispatcher` | success and failure logging handlers | Deliver the authoritative terminal record without changing the public response or original error |
 
 Guardrails implement pre-call or moderation hook capabilities. They do not prepare provider requests, call providers, or independently dispatch terminal failures. The shared lifecycle converts their rejection into the same terminal failure path used by provider and transformation errors
+
+`CallLifecycle` owns both typed native execution and the operation plan used by Python-backed routes. The Python loop only schedules direct operations on the caller's Python task so synchronous callbacks retain `contextvars`, event-loop identity, and nested-call behavior. Core selects every transition and whether an operation is awaited; the bridge only maps an abstract operation to its Python adapter method.
+
+Long-lived streaming calls own a completion guard. HTTP streams, Responses WebSockets, and Realtime WebSockets dispatch a cancelled terminal record from that guard when the consumer drops the call before normal settlement.
+
+Destination-specific callback transport belongs outside core. The LiteLLM Python proxy HTTP logger and its batching worker live in `litellm-ai-gateway`; core exposes only the destination-agnostic `CustomLogger` and terminal dispatcher contracts.

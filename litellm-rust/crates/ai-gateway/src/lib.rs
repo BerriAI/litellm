@@ -11,6 +11,8 @@
 pub mod io;
 
 #[cfg(feature = "server")]
+mod proxy_logger;
+#[cfg(feature = "server")]
 pub mod routes;
 #[cfg(feature = "server")]
 pub mod server;

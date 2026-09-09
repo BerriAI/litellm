@@ -12,8 +12,8 @@ use crate::integrations::types::{StandardLoggingMetadata, Usage};
 
 use super::terminal::CostInputs;
 use super::{
-    ActionResult, ExecutedCall, RouteProjection, StreamingCall, StreamingObserver, StreamingSource,
-    TerminalClassification, TerminalRecord,
+    ActionResult, CallLifecycle, ExecutedCall, RouteProjection, StreamingCall, StreamingObserver,
+    StreamingSource, TerminalClassification, TerminalRecord,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -161,9 +161,6 @@ impl Clock for SystemClock {
         epoch_seconds()
     }
 }
-
-#[derive(Default)]
-pub struct CallLifecycle;
 
 impl CallLifecycle {
     pub async fn run_streaming<Request, Services, ProviderCall, ProviderFuture>(
@@ -569,7 +566,7 @@ mod tests {
     #[tokio::test]
     async fn run_applies_replacements_and_returns_terminal_record() {
         let policy = RecordingPolicy::default();
-        let executed = CallLifecycle
+        let executed = CallLifecycle::default()
             .run(
                 CallLifecycleContext::new("ocr", "model", "provider", "call-1"),
                 "request".to_string(),
@@ -596,7 +593,7 @@ mod tests {
             reject: true,
             ..Default::default()
         };
-        let executed = CallLifecycle
+        let executed = CallLifecycle::default()
             .run(
                 CallLifecycleContext::new("ocr", "model", "provider", "call-2"),
                 "request".to_string(),
@@ -668,7 +665,7 @@ mod tests {
     #[tokio::test]
     async fn preparation_is_separate_from_callback_phases() {
         let hooks = PreparedHooks::default();
-        let executed = CallLifecycle
+        let executed = CallLifecycle::default()
             .run_prepared(
                 CallLifecycleContext::new("audio_transcription", "model", "provider", "call-3"),
                 "request".to_string(),
@@ -784,7 +781,7 @@ mod tests {
     #[tokio::test]
     async fn deployment_replacements_are_adopted_before_terminal_dispatch() {
         let hooks = DeploymentRecordingHooks::default();
-        let executed = CallLifecycle
+        let executed = CallLifecycle::default()
             .run(
                 CallLifecycleContext::new("chat_completion", "model", "provider", "call-4"),
                 "request".to_string(),
@@ -808,7 +805,7 @@ mod tests {
     #[tokio::test]
     async fn deployment_failure_hook_cannot_replace_the_original_error() {
         let hooks = DeploymentRecordingHooks::default();
-        let executed: ExecutedCall<String, Error> = CallLifecycle
+        let executed: ExecutedCall<String, Error> = CallLifecycle::default()
             .run(
                 CallLifecycleContext::new("chat_completion", "model", "provider", "call-5"),
                 "request".to_string(),

@@ -16,11 +16,13 @@ use litellm_core::Error;
 use litellm_core::audio_transcription::audio_transcription;
 #[cfg(feature = "bedrock-auth")]
 use litellm_core::audio_transcription::types::AudioTranscriptionRequest;
-use litellm_core::audio_transcription::{AudioRoute, AudioRouteRequest, DefaultAudioServices};
+use litellm_core::audio_transcription::{
+    AudioDuringCallGuardrailRequest, AudioFormat, AudioInput, AudioPreCallGuardrailRequest,
+    AudioRoute, AudioRouteRequest, DefaultAudioServices,
+};
 #[cfg(feature = "bedrock-auth")]
 use litellm_core::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailEventHook, GuardrailFuture,
-    GuardrailRequest,
 };
 use litellm_core::lifecycle::{ExecutedCall, RouteProjection};
 
@@ -53,7 +55,7 @@ async fn bedrock_request_is_signed_and_contains_audio() {
     let api_base = format!("http://{address}");
     let response = audio_transcription(AudioTranscriptionRequest {
         model: "mistral.voxtral-mini-3b-2507",
-        audio: json!({"data": "AQI=", "format": "wav", "filename": "audio.wav"}),
+        audio: audio_input("AQI="),
         api_key: None,
         api_base: Some(&api_base),
         custom_llm_provider: Some("bedrock"),
@@ -74,6 +76,9 @@ struct ReplacingGuardrail {
 
 #[cfg(feature = "bedrock-auth")]
 impl CustomGuardrail for ReplacingGuardrail {
+    type PreCallRequest = AudioPreCallGuardrailRequest;
+    type DuringCallRequest = AudioDuringCallGuardrailRequest;
+
     fn guardrail_name(&self) -> &str {
         "audio-test"
     }
@@ -85,25 +90,26 @@ impl CustomGuardrail for ReplacingGuardrail {
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a GuardrailContext,
-        mut request: GuardrailRequest,
-    ) -> GuardrailFuture<'a> {
+        request: AudioPreCallGuardrailRequest,
+    ) -> GuardrailFuture<'a, AudioPreCallGuardrailRequest> {
         Box::pin(async move {
             self.calls.lock().unwrap().push("pre");
-            request.data["audio"]["data"] = json!("AwQ=");
-            Ok(GuardrailDecision::Mask(request))
+            Ok(GuardrailDecision::Mask(
+                request.with_audio(audio_input("AwQ=")),
+            ))
         })
     }
 
     fn async_moderation_hook<'a>(
         &'a self,
         _: &'a GuardrailContext,
-        mut request: GuardrailRequest,
-    ) -> GuardrailFuture<'a> {
+        request: AudioDuringCallGuardrailRequest,
+    ) -> GuardrailFuture<'a, AudioDuringCallGuardrailRequest> {
         Box::pin(async move {
             self.calls.lock().unwrap().push("during");
-            request.data["body"]["messages"][0]["content"][0]["text"] =
-                json!("Guarded transcription prompt");
-            Ok(GuardrailDecision::Mask(request))
+            let mut body = request.body().clone();
+            body["messages"][0]["content"][0]["text"] = json!("Guarded transcription prompt");
+            Ok(GuardrailDecision::Mask(request.with_body(body)))
         })
     }
 }
@@ -132,7 +138,7 @@ async fn route_owns_guardrail_provider_and_terminal_sequence() {
         &services,
         AudioRouteRequest {
             model: "bedrock/mistral.voxtral-mini-3b-2507",
-            audio: json!({"data": "AQI=", "format": "wav", "filename": "audio.wav"}),
+            audio: audio_input("AQI="),
             api_key: None,
             api_base: Some(&api_base),
             custom_llm_provider: None,
@@ -169,7 +175,7 @@ async fn route_returns_preparation_failure_with_audio_terminal() {
         &services,
         AudioRouteRequest {
             model: "unsupported/model",
-            audio: json!({"data": "AQI="}),
+            audio: audio_input("AQI="),
             api_key: None,
             api_base: None,
             custom_llm_provider: Some("unsupported"),
@@ -190,4 +196,12 @@ async fn route_returns_preparation_failure_with_audio_terminal() {
         } if terminal.call_id == "audio-call-failure"
             && matches!(terminal.projection, RouteProjection::Audio { .. })
     ));
+}
+
+fn audio_input(data: &str) -> AudioInput {
+    AudioInput {
+        data: data.to_string(),
+        format: AudioFormat::Wav,
+        filename: Some("audio.wav".to_string()),
+    }
 }

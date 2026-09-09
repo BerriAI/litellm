@@ -1,6 +1,12 @@
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
+
+macro_rules! messages_body {
+    ($($json:tt)+) => {
+        serde_json::from_value(json!($($json)+)).expect("messages body")
+    };
+}
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -151,7 +157,7 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
 
     let response = messages(MessagesRequest {
         model: "claude-sonnet-4-5".into(),
-        body: json!({
+        body: messages_body!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 1024,
             "messages": [{
@@ -214,7 +220,7 @@ async fn messages_round_trip_builds_native_anthropic_request() {
 
     let response = messages(MessagesRequest {
         model: "claude-sonnet-4-5".into(),
-        body: json!({
+        body: messages_body!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 1024,
             "messages": [{"role": "user", "content": "hi"}]
@@ -271,7 +277,7 @@ async fn messages_does_not_duplicate_auth_when_x_api_key_supplied() {
 
     messages(MessagesRequest {
         model: "claude-sonnet-4-5".into(),
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+        body: messages_body!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
         api_key: Some("rust-fallback-key".into()),
         api_base: Some(format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai".into()),
@@ -325,7 +331,7 @@ async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
 
     messages(MessagesRequest {
         model: "claude-sonnet-4-5".into(),
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+        body: messages_body!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
         api_key: None,
         api_base: Some(format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai".into()),
@@ -349,7 +355,7 @@ async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
 async fn messages_requires_auth_when_no_key_and_no_header() {
     let err = messages(MessagesRequest {
         model: "claude-sonnet-4-5".into(),
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+        body: messages_body!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
         api_key: None,
         api_base: Some("http://127.0.0.1:1".into()),
         custom_llm_provider: Some("azure_ai".into()),
@@ -387,7 +393,7 @@ async fn messages_ignores_malformed_authorization_and_uses_api_key() {
 
     messages(MessagesRequest {
         model: "claude-sonnet-4-5".into(),
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+        body: messages_body!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
         api_key: Some("sk-azure".into()),
         api_base: Some(format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai".into()),
@@ -428,7 +434,7 @@ async fn messages_maps_provider_error_status_to_http_error() {
 
     let err = messages(MessagesRequest {
         model: "claude-sonnet-4-5".into(),
-        body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
+        body: messages_body!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
         api_key: Some("sk-azure".into()),
         api_base: Some(format!("http://{addr}")),
         custom_llm_provider: Some("azure_ai".into()),
@@ -445,7 +451,7 @@ async fn messages_maps_provider_error_status_to_http_error() {
 async fn messages_rejects_unsupported_provider() {
     let err = messages(MessagesRequest {
         model: "claude-3-5-sonnet".into(),
-        body: json!({"model": "claude-3-5-sonnet", "max_tokens": 8, "messages": []}),
+        body: messages_body!({"model": "claude-3-5-sonnet", "max_tokens": 8, "messages": []}),
         api_key: Some("sk".into()),
         api_base: Some("http://127.0.0.1:1".into()),
         custom_llm_provider: Some("openai".into()),

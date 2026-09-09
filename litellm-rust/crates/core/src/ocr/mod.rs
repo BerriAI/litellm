@@ -53,7 +53,7 @@ pub async fn ocr<S: OcrServices>(
     _options: crate::lifecycle::ocr::Options,
     context: CallLifecycleContext,
 ) -> ExecutedCall<Value, Error> {
-    CallLifecycle
+    CallLifecycle::default()
         .run(
             context,
             request,

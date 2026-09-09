@@ -12,12 +12,12 @@ pub mod types;
 pub use action::{ActionBinding, Owner, ResultPolicy};
 pub use executed::ExecutedCall;
 pub use execution::{
-    CallLifecycle, CallLifecycleContext, CallLifecycleRequest, CallbackFuture, Clock,
-    DeploymentFailureHooks, DeploymentPreHooks, DeploymentSuccessHooks, ModerationHooks,
-    PreCallHooks, SystemClock, TerminalDispatcher,
+    CallLifecycleContext, CallLifecycleRequest, CallbackFuture, Clock, DeploymentFailureHooks,
+    DeploymentPreHooks, DeploymentSuccessHooks, ModerationHooks, PreCallHooks, SystemClock,
+    TerminalDispatcher,
 };
 pub use machine::{Lifecycle, LifecycleRoute};
-pub use program::{Commitment, FailureStage};
+pub use program::{CallLifecycle, Commitment, FailureStage};
 pub use request_body::{
     AuthorizedBody, PreCallBody, RequestBodyPolicy, SettledHttpRequest, WireBody,
 };

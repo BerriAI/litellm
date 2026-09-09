@@ -7,8 +7,13 @@ pub mod types;
 
 use serde_json::Value;
 
-pub use lifecycle::{AudioRoute, AudioServices, DefaultAudioServices};
-pub use types::{AudioRouteRequest, AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
+pub use lifecycle::{
+    AudioGuardrail, AudioGuardrailRunner, AudioRoute, AudioServices, DefaultAudioServices,
+};
+pub use types::{
+    AudioDuringCallGuardrailRequest, AudioFormat, AudioInput, AudioPreCallGuardrailRequest,
+    AudioRouteRequest, AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
+};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {

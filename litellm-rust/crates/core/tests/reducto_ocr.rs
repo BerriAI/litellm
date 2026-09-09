@@ -2,6 +2,7 @@ use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
 use litellm_core::ocr::transformation::OcrProviderConfig;
+use litellm_core::ocr::types::OcrDocument;
 use litellm_core::providers::reducto::ocr::transformation::*;
 
 #[fixture]
@@ -74,7 +75,7 @@ fn test_parse_v3_file_upload_and_response_mapping(parse_response: Value) {
     .clone();
     let request = build_parse_v3_request("reducto://uploaded.pdf", optional_params);
     assert_eq!(
-        request.data,
+        Value::Object(request.data),
         json!({
             "input": "reducto://uploaded.pdf",
             "formatting": {"table_output_format": "html"},
@@ -108,10 +109,9 @@ fn test_parse_v3_file_upload_and_response_mapping(parse_response: Value) {
 
 #[rstest]
 fn test_parse_v3_reducto_id_passthrough_skips_upload(parse_response: Value) {
-    let document = json!({
-        "type": "document_url",
-        "document_url": "reducto://already-uploaded.pdf",
-    });
+    let document = OcrDocument::DocumentUrl {
+        document_url: "reducto://already-uploaded.pdf".to_string(),
+    };
     let source = extract_document_source(&document).expect("Reducto ID should be valid");
     assert!(build_upload_request(source.clone(), "Bearer test-key", None).is_none());
     assert_eq!(
@@ -152,7 +152,7 @@ fn test_parse_legacy_wraps_enhance_under_options() {
             .expect("params should be object"),
     );
     assert_eq!(
-        request.data,
+        Value::Object(request.data),
         json!({
             "document_url": "reducto://legacy.pdf",
             "options": {"enhance": {"agentic": [{"type": "table"}]}},

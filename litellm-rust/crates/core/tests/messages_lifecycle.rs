@@ -12,6 +12,12 @@ use litellm_core::lifecycle::{
 use litellm_core::messages::lifecycle::{Options, messages};
 use litellm_core::messages::types::MessagesRequest;
 use serde_json::json;
+
+macro_rules! messages_body {
+    ($($json:tt)+) => {
+        serde_json::from_value(json!($($json)+)).expect("messages body")
+    };
+}
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -74,7 +80,7 @@ impl TerminalDispatcher for Services {
 fn request(api_base: String) -> MessagesRequest {
     MessagesRequest {
         model: "claude-test".into(),
-        body: json!({
+        body: messages_body!({
             "model": "claude-test",
             "max_tokens": 8,
             "messages": [{"role": "user", "content": "hello"}]

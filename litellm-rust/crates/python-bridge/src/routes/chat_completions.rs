@@ -3,7 +3,7 @@ use litellm_core::chat_completions::lifecycle::{
     Admission, ChatCompletionsRoute, Observations, Operation, Options, machine,
 };
 use litellm_core::chat_completions::request::{
-    build_pre_call_request_with_services, settle_pre_call_request_with_services,
+    build_pre_call_request_with_services, parse_messages, settle_pre_call_request_with_services,
 };
 use litellm_core::chat_completions::types::{
     ChatCompletionsRequest, ChatPreCallReadback, ChatPreCallRequest,
@@ -87,10 +87,12 @@ fn optional_map(arguments: &Bound<'_, PyDict>, name: &str) -> PyResult<Option<Ma
 }
 
 fn admission(arguments: &Bound<'_, PyDict>) -> PyResult<Admission> {
+    let messages = parse_messages(value(arguments, "messages")?)
+        .map_err(|_| RustBridgeDeclined::new_err("unreadable message list"))?;
     Ok(Admission {
         model: scalar(arguments, "model")?
             .ok_or_else(|| PyValueError::new_err("chat completions requires model"))?,
-        messages: value(arguments, "messages")?,
+        messages,
         optional_params: optional_map(arguments, "optional_params")?.unwrap_or_default(),
         custom_llm_provider: scalar(arguments, "custom_llm_provider")?,
     })
@@ -448,10 +450,13 @@ fn chat_completions_decline(
     >,
     custom_llm_provider: Option<String>,
 ) -> Option<String> {
+    let Ok(messages) = parse_messages(messages) else {
+        return Some("unreadable message list".to_string());
+    };
     chat_completions_decline_reason(
         &model,
         custom_llm_provider.as_deref(),
-        messages,
+        &messages,
         &optional_params.unwrap_or_default(),
     )
     .map(str::to_string)

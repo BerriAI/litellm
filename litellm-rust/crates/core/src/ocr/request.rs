@@ -107,15 +107,8 @@ pub fn build_pre_call_request(request: OcrAdmissionRequest) -> Result<OcrPreCall
     if !matches!(parsed_url.scheme(), "http" | "https") || parsed_url.host_str().is_none() {
         return Err(Error::InvalidRequest("invalid OCR API URL".into()));
     }
-    let document = serde_json::to_value(&request.document)
-        .map_err(|_| Error::InvalidRequest("could not project OCR document".into()))?;
-    let template = config.transform_ocr_request(provider.model, document, Map::new())?;
-    if template.files.is_some() {
-        return Err(Error::Unsupported("OCR multipart document preparation"));
-    }
-    let Value::Object(body) = template.data else {
-        return Err(Error::Unsupported("non-object OCR request template"));
-    };
+    let template =
+        config.transform_ocr_request(provider.model, request.document.clone(), Map::new())?;
     let body_policy = config.request_body_policy();
     if body_policy != crate::lifecycle::RequestBodyPolicy::StructuredAtSend {
         return Err(Error::Unsupported("OCR request body policy"));
@@ -128,7 +121,9 @@ pub fn build_pre_call_request(request: OcrAdmissionRequest) -> Result<OcrPreCall
             timeout_seconds: request.timeout_seconds,
         },
         headers,
-        body: crate::lifecycle::PreCallBody::StructuredAtSend { callback: body },
+        body: crate::lifecycle::PreCallBody::StructuredAtSend {
+            callback: template.data,
+        },
         document_projection: config.document_projection(),
         parameter_fields: config.supported_ocr_params(),
     })

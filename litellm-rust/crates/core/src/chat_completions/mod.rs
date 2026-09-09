@@ -19,7 +19,7 @@ pub mod types;
 use serde_json::{Map, Value};
 
 pub use handler::{as_response_error, signed_headers, signed_headers_with_services};
-use request::{parse_messages, resolve_provider_config};
+use request::resolve_provider_config;
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
 use crate::lifecycle::{CallLifecycleContext, ExecutedCall};
@@ -49,19 +49,16 @@ pub async fn execute_settled_with_terminal(
 pub fn chat_completions_decline_reason(
     model: &str,
     custom_llm_provider: Option<&str>,
-    messages: Value,
+    messages: &[types::ChatMessage],
     optional_params: &Map<String, Value>,
 ) -> Option<&'static str> {
     let Ok((_, config)) = resolve_provider_config(model, custom_llm_provider) else {
         return Some("provider is not on the rust chat completions path");
     };
-    let Ok(messages) = parse_messages(messages) else {
-        return Some("unreadable message list");
-    };
     if messages.is_empty() {
         return Some("empty message list");
     }
     config
-        .unsupported_reason(&messages, optional_params)
+        .unsupported_reason(messages, optional_params)
         .map(|reason| reason.0)
 }

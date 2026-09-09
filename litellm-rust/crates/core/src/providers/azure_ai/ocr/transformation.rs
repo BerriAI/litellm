@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::{OcrAuthStrategy, OcrProviderConfig, OcrResponseHandling};
-use crate::ocr::types::{OcrDocumentProjection, OcrRequestData, OcrResponseData};
+use crate::ocr::types::{OcrDocument, OcrDocumentProjection, OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
@@ -385,29 +385,15 @@ pub fn complete_document_intelligence_url(
     Ok(url)
 }
 
-fn document_url_from_mistral_document(document: &Value) -> Result<&str, Error> {
-    let object = document.as_object().ok_or_else(|| Error::InvalidType {
-        expected: "object",
-        actual: json_type_name(document),
-    })?;
-    let doc_type = object
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or(Error::MissingField("document.type"))?;
-    let field_name = match doc_type {
-        "document_url" => "document_url",
-        "image_url" => "image_url",
-        other => {
-            return Err(Error::InvalidRequest(format!(
-                "Invalid document type: {other}. Must be 'document_url' or 'image_url'"
-            )));
-        }
-    };
-    object
-        .get(field_name)
-        .and_then(Value::as_str)
+fn document_url_from_mistral_document(document: &OcrDocument) -> Result<&str, Error> {
+    document
+        .source_url()
         .filter(|value| !value.is_empty())
-        .ok_or(Error::MissingField(field_name))
+        .ok_or_else(|| {
+            Error::InvalidRequest(
+                "Invalid document type. Must be 'document_url' or 'image_url'".to_string(),
+            )
+        })
 }
 
 fn extract_base64_from_data_uri(data_uri: &str) -> &str {
@@ -559,7 +545,7 @@ impl OcrProviderConfig for AzureAiOcrConfig {
     fn transform_ocr_request(
         &self,
         model: &str,
-        document: Value,
+        document: OcrDocument,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
         MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
@@ -650,7 +636,7 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
     fn transform_ocr_request(
         &self,
         _model: &str,
-        document: Value,
+        document: OcrDocument,
         _optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
         let document_url = document_url_from_mistral_document(&document)?;
@@ -666,10 +652,7 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
                 Value::String(document_url.to_string()),
             );
         }
-        Ok(OcrRequestData {
-            data: Value::Object(data),
-            files: None,
-        })
+        Ok(OcrRequestData { data })
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -726,6 +709,10 @@ impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
 mod tests {
     use super::*;
     use rstest::{fixture, rstest};
+
+    fn ocr_document(value: Value) -> OcrDocument {
+        serde_json::from_value(value).expect("OCR document")
+    }
 
     const ENDPOINT: &str = "https://example.cognitiveservices.azure.com";
 
@@ -826,7 +813,7 @@ mod tests {
         let body = AZURE_AI_OCR_CONFIG
             .transform_ocr_request(
                 "pixtral-12b-2409",
-                json!({"type": "document_url", "document_url": "data:application/pdf;base64,abc"}),
+                ocr_document(json!({"type": "document_url", "document_url": "data:application/pdf;base64,abc"})),
                 serde_json::Map::from_iter([("include_image_base64".to_string(), json!(true))]),
             )
             .expect("request transforms")
@@ -967,13 +954,13 @@ mod tests {
         let body = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
             .transform_ocr_request(
                 "prebuilt-read",
-                json!({"type": "document_url", "document_url": "data:application/pdf;base64,abc123"}),
+                ocr_document(json!({"type": "document_url", "document_url": "data:application/pdf;base64,abc123"})),
                 Map::new(),
             )
             .expect("request transforms")
             .data;
 
-        assert_eq!(body, json!({"base64Source": "abc123"}));
+        assert_eq!(Value::Object(body), json!({"base64Source": "abc123"}));
     }
 
     #[rstest]
@@ -1368,13 +1355,15 @@ mod tests {
         let request = document_intelligence_config
             .transform_ocr_request(
                 "prebuilt-layout",
-                json!({"type": "document_url", "document_url": "https://example.com/x.pdf"}),
+                ocr_document(
+                    json!({"type": "document_url", "document_url": "https://example.com/x.pdf"}),
+                ),
                 Map::from_iter([("pages".to_string(), json!("1,2,3"))]),
             )
             .expect("request transforms");
 
         assert_eq!(
-            request.data,
+            Value::Object(request.data),
             json!({"urlSource": "https://example.com/x.pdf"})
         );
     }
@@ -1394,14 +1383,16 @@ mod tests {
         let request = AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG
             .transform_ocr_request(
                 "prebuilt-layout",
-                json!({"type": "document_url", "document_url": "https://example.com/x.pdf"}),
+                ocr_document(
+                    json!({"type": "document_url", "document_url": "https://example.com/x.pdf"}),
+                ),
                 mapped,
             )
             .expect("request transforms");
 
         assert!(url.contains("pages=3,4,5,6,7,8,9"));
         assert_eq!(
-            request.data,
+            Value::Object(request.data),
             json!({"urlSource": "https://example.com/x.pdf"})
         );
     }

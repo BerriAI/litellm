@@ -14,7 +14,7 @@ use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
 #[derive(Clone)]
 pub struct ChatCompletionsRequest<'a> {
     pub model: &'a str,
-    pub messages: Value,
+    pub messages: Vec<ChatMessage>,
     pub optional_params: Map<String, Value>,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
@@ -38,7 +38,7 @@ pub struct ProviderChatCompletionsRequest {
     pub model: String,
     pub config: &'static dyn ChatCompletionsProviderConfig,
     pub url: String,
-    pub body: Value,
+    pub body: Map<String, Value>,
     pub upstream_headers: Vec<(String, String)>,
     pub auth: ChatCompletionsAuth,
     #[cfg_attr(not(feature = "bedrock-auth"), allow(dead_code))]
@@ -86,7 +86,7 @@ impl ProviderChatCompletionsRequest {
 /// `Value` so the transform contract stays a typed one, mirroring
 /// [`crate::audio_transcription::types::AudioTranscriptionRequestData`].
 pub struct ProviderChatRequestData {
-    pub body: Value,
+    pub body: Map<String, Value>,
 }
 
 pub struct ChatEndpoint {

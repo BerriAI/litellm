@@ -1,6 +1,6 @@
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
-use crate::ocr::types::{OcrDocumentProjection, OcrRequestData, OcrResponseData};
+use crate::ocr::types::{OcrDocument, OcrDocumentProjection, OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
@@ -137,29 +137,15 @@ pub fn complete_vertex_deepseek_url(
     ))
 }
 
-fn document_content_item(document: &Value) -> Result<Value, Error> {
-    let object = document.as_object().ok_or_else(|| Error::InvalidType {
-        expected: "object",
-        actual: json_type_name(document),
-    })?;
-    let doc_type = object
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or(Error::MissingField("document.type"))?;
-    let url_field = match doc_type {
-        "image_url" => "image_url",
-        "document_url" => "document_url",
-        other => {
-            return Err(Error::InvalidRequest(format!(
-                "Unsupported document type: {other}. Expected 'image_url' or 'document_url'"
-            )));
-        }
-    };
-    let url = object
-        .get(url_field)
-        .and_then(Value::as_str)
+fn document_content_item(document: &OcrDocument) -> Result<Value, Error> {
+    let url = document
+        .source_url()
         .filter(|value| !value.is_empty())
-        .ok_or(Error::MissingField(url_field))?;
+        .ok_or_else(|| {
+            Error::InvalidRequest(
+                "Unsupported document type. Expected 'image_url' or 'document_url'".to_string(),
+            )
+        })?;
 
     Ok(json!({
         "type": "image_url",
@@ -250,7 +236,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
     fn transform_ocr_request(
         &self,
         model: &str,
-        document: Value,
+        document: OcrDocument,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
         MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
@@ -327,7 +313,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
     fn transform_ocr_request(
         &self,
         model: &str,
-        document: Value,
+        document: OcrDocument,
         optional_params: Map<String, Value>,
     ) -> Result<OcrRequestData, Error> {
         let mut data = Map::new();
@@ -344,10 +330,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
                 data.insert(key, value);
             }
         }
-        Ok(OcrRequestData {
-            data: Value::Object(data),
-            files: None,
-        })
+        Ok(OcrRequestData { data })
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -433,6 +416,10 @@ mod tests {
     use super::*;
     use rstest::rstest;
 
+    fn ocr_document(value: Value) -> OcrDocument {
+        serde_json::from_value(value).expect("OCR document")
+    }
+
     #[test]
     fn vertex_mistral_url_uses_project_location_and_model() {
         let params = Map::from_iter([
@@ -454,7 +441,9 @@ mod tests {
         let body = VERTEX_AI_OCR_CONFIG
             .transform_ocr_request(
                 "mistral-ocr-maas",
-                json!({"type": "image_url", "image_url": "data:image/png;base64,abc"}),
+                ocr_document(
+                    json!({"type": "image_url", "image_url": "data:image/png;base64,abc"}),
+                ),
                 Map::new(),
             )
             .expect("request transforms")
@@ -469,7 +458,9 @@ mod tests {
         let body = VERTEX_AI_DEEPSEEK_OCR_CONFIG
             .transform_ocr_request(
                 "deepseek-ocr-maas",
-                json!({"type": "document_url", "document_url": "gs://bucket/doc.pdf"}),
+                ocr_document(
+                    json!({"type": "document_url", "document_url": "gs://bucket/doc.pdf"}),
+                ),
                 Map::from_iter([("temperature".to_string(), json!(0.1))]),
             )
             .expect("request transforms")
@@ -490,7 +481,9 @@ mod tests {
         let body = VERTEX_AI_DEEPSEEK_OCR_CONFIG
             .transform_ocr_request(
                 model,
-                json!({"type": "image_url", "image_url": "data:image/png;base64,AA=="}),
+                ocr_document(
+                    json!({"type": "image_url", "image_url": "data:image/png;base64,AA=="}),
+                ),
                 Map::new(),
             )
             .expect("request transforms")

@@ -56,7 +56,7 @@ pub struct ProgramOptions {
 }
 
 #[derive(Debug)]
-pub struct CallProgram {
+pub struct CallLifecycle {
     operation: Operation,
     outcome: Outcome,
     commitment: Commitment,
@@ -64,8 +64,8 @@ pub struct CallProgram {
     options: ProgramOptions,
 }
 
-impl CallProgram {
-    pub fn new(options: ProgramOptions) -> Self {
+impl CallLifecycle {
+    pub fn planned(options: ProgramOptions) -> Self {
         Self {
             operation: Operation::Setup,
             outcome: Outcome::Success,
@@ -166,6 +166,27 @@ impl CallProgram {
     }
 }
 
+impl Default for CallLifecycle {
+    fn default() -> Self {
+        Self::planned(ProgramOptions {
+            asynchronous: false,
+            internal_call: false,
+        })
+    }
+}
+
+impl Operation {
+    pub fn is_awaited(self, asynchronous: bool) -> bool {
+        matches!(
+            self,
+            Self::DeploymentPre
+                | Self::DeploymentSuccess
+                | Self::DeploymentFailure
+                | Self::AsyncFailure
+        ) || (asynchronous && self == Self::Send)
+    }
+}
+
 pub fn actions_for(operation: Operation) -> &'static [ActionBinding] {
     match operation {
         Operation::BuildRequest => &REQUEST_BUILD_ACTION,
@@ -241,7 +262,7 @@ mod tests {
 
     #[test]
     fn commitment_classifies_failures_without_host_inference() {
-        let mut before = CallProgram::new(ProgramOptions {
+        let mut before = CallLifecycle::planned(ProgramOptions {
             asynchronous: false,
             internal_call: false,
         });
@@ -249,7 +270,7 @@ mod tests {
         assert_eq!(failure.commitment, Commitment::Replayable);
         assert_eq!(failure.failure_stage, Some(FailureStage::BeforeProvider));
 
-        let mut provider = CallProgram::new(ProgramOptions {
+        let mut provider = CallLifecycle::planned(ProgramOptions {
             asynchronous: false,
             internal_call: false,
         });
@@ -260,7 +281,7 @@ mod tests {
         assert_eq!(failure.commitment, Commitment::ProviderStarted);
         assert_eq!(failure.failure_stage, Some(FailureStage::ProviderCall));
 
-        let mut after = CallProgram::new(ProgramOptions {
+        let mut after = CallLifecycle::planned(ProgramOptions {
             asynchronous: false,
             internal_call: false,
         });
@@ -279,7 +300,7 @@ mod tests {
     #[test]
     fn request_build_and_pre_call_failures_are_replayable() {
         for success_count in [1, 2] {
-            let mut program = CallProgram::new(ProgramOptions {
+            let mut program = CallLifecycle::planned(ProgramOptions {
                 asynchronous: false,
                 internal_call: false,
             });

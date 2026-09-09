@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -132,14 +132,14 @@ pub async fn warmup(connection: &RealtimeConnectionSpec) -> Result<WarmConnectio
 }
 
 pub async fn realtime<S, In, Out>(
-    services: &S,
+    services: Arc<S>,
     request: RealtimeRequest,
     context: CallLifecycleContext,
     client_in: In,
     client_out: Out,
 ) -> ExecutedCall<(), Error>
 where
-    S: TerminalDispatcher + Clock,
+    S: TerminalDispatcher + Clock + 'static,
     In: Stream<Item = RealtimeEvent> + Unpin + Send,
     Out: Sink<RealtimeEvent> + Unpin + Send,
     Out::Error: std::fmt::Display,
@@ -165,14 +165,23 @@ where
             }),
         (Err(error), _) => Err(error),
     };
-    let mut observation = RealtimeObservation::new(context.litellm_call_id.clone(), model.clone());
+    let observation = Arc::new(Mutex::new(RealtimeObservation::new(
+        context.litellm_call_id.clone(),
+        model.clone(),
+    )));
+    let mut completion = RealtimeCompletion::new(
+        Arc::clone(&services),
+        context,
+        start_time,
+        Arc::clone(&observation),
+    );
     let result = match connection {
         Ok(connection) => {
             splice(
                 connection,
                 &model,
                 request.idle_timeout.unwrap_or(IDLE_TIMEOUT),
-                &mut observation,
+                &observation,
                 client_in,
                 client_out,
             )
@@ -187,29 +196,7 @@ where
             message: failure.error.to_string(),
         },
     };
-    let projection = match &classification {
-        TerminalClassification::Success => Value::Null,
-        TerminalClassification::Failure { kind, message } => {
-            json!({"kind": kind, "message": message})
-        }
-    };
-    let terminal = TerminalRecord {
-        call_id: observation.call_id,
-        trace_id: context.trace_id,
-        attempt: context.attempt,
-        call_type: context.call_type,
-        model: observation.model,
-        provider: context.custom_llm_provider,
-        timing: CallbackTiming::new(start_time, services.now()),
-        usage: observation.usage,
-        cost_inputs: CostInputs {
-            response_cost: context.response_cost,
-            metadata: context.metadata,
-        },
-        classification,
-        projection: RouteProjection::Realtime { value: projection },
-    };
-    let _ = services.dispatch(&terminal).await;
+    let terminal = completion.settle(classification).await;
     match result {
         Ok(()) => ExecutedCall::Success {
             response: (),
@@ -222,11 +209,95 @@ where
     }
 }
 
+trait RealtimeCompletionServices: TerminalDispatcher + Clock {}
+
+impl<T> RealtimeCompletionServices for T where T: TerminalDispatcher + Clock {}
+
+struct RealtimeCompletion {
+    services: Arc<dyn RealtimeCompletionServices>,
+    context: Option<CallLifecycleContext>,
+    start_time: f64,
+    observation: Arc<Mutex<RealtimeObservation>>,
+}
+
+impl RealtimeCompletion {
+    fn new<S>(
+        services: Arc<S>,
+        context: CallLifecycleContext,
+        start_time: f64,
+        observation: Arc<Mutex<RealtimeObservation>>,
+    ) -> Self
+    where
+        S: RealtimeCompletionServices + 'static,
+    {
+        Self {
+            services,
+            context: Some(context),
+            start_time,
+            observation,
+        }
+    }
+
+    async fn settle(&mut self, classification: TerminalClassification) -> TerminalRecord {
+        let terminal = self.terminal(classification);
+        let dispatched = terminal.clone();
+        let services = Arc::clone(&self.services);
+        let dispatch = tokio::spawn(async move {
+            let _ = services.dispatch(&dispatched).await;
+        });
+        let _ = dispatch.await;
+        terminal
+    }
+
+    fn terminal(&mut self, classification: TerminalClassification) -> TerminalRecord {
+        let context = self.context.take().expect("realtime session settled once");
+        let observation = self.observation.lock().unwrap();
+        let projection = match &classification {
+            TerminalClassification::Success => Value::Null,
+            TerminalClassification::Failure { kind, message } => {
+                json!({"kind": kind, "message": message})
+            }
+        };
+        TerminalRecord {
+            call_id: observation.call_id.clone(),
+            trace_id: context.trace_id,
+            attempt: context.attempt,
+            call_type: context.call_type,
+            model: observation.model.clone(),
+            provider: context.custom_llm_provider,
+            timing: CallbackTiming::new(self.start_time, self.services.now()),
+            usage: observation.usage,
+            cost_inputs: CostInputs {
+                response_cost: context.response_cost,
+                metadata: context.metadata,
+            },
+            classification,
+            projection: RouteProjection::Realtime { value: projection },
+        }
+    }
+}
+
+impl Drop for RealtimeCompletion {
+    fn drop(&mut self) {
+        if self.context.is_none() {
+            return;
+        }
+        let terminal = self.terminal(TerminalClassification::Failure {
+            kind: "Cancelled".to_string(),
+            message: "realtime session was cancelled before completion".to_string(),
+        });
+        let services = Arc::clone(&self.services);
+        tokio::spawn(async move {
+            let _ = services.dispatch(&terminal).await;
+        });
+    }
+}
+
 async fn splice<In, Out>(
     connection: WarmConnection,
     model: &str,
     idle_timeout: Duration,
-    observation: &mut RealtimeObservation,
+    observation: &Mutex<RealtimeObservation>,
     mut client_in: In,
     mut client_out: Out,
 ) -> Result<(), RealtimeFailure>
@@ -243,14 +314,14 @@ where
     let config = connection.config;
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
     if !session_created.event_type.is_empty() {
-        observation.observe(&session_created);
+        observation.lock().unwrap().observe(&session_created);
         send_client_event(config, &mut client_out, &session_created, model).await?;
     }
     loop {
         tokio::select! {
             event = client_in.next() => {
                 let Some(event) = event else {
-                    return observation.settle(
+                    return observation.lock().unwrap().settle(
                         "Cancelled",
                         "realtime client disconnected before provider completion",
                     );
@@ -260,11 +331,11 @@ where
                         .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                     upstream_tx.send(Message::Text(payload)).await.map_err(ws_transport_error)?;
                 }
-                observation.observe_client(&event);
+                observation.lock().unwrap().observe_client(&event);
             }
             message = upstream_rx.next() => {
                 let Some(message) = message else {
-                    return observation.settle(
+                    return observation.lock().unwrap().settle(
                         "NetworkError",
                         "realtime provider closed before completion",
                     );
@@ -273,7 +344,7 @@ where
                     Message::Text(text) => {
                         let event = serde_json::from_str::<RealtimeEvent>(&text)
                             .map_err(|error| Error::InvalidResponse(error.to_string()))?;
-                        observation.observe(&event);
+                        observation.lock().unwrap().observe(&event);
                         send_client_event(config, &mut client_out, &event, model).await?;
                         if event.event_type == "error" || response_failed(&event) {
                             return Err(RealtimeFailure::new(
@@ -283,7 +354,7 @@ where
                         }
                     }
                     Message::Close(_) => {
-                        return observation.settle(
+                        return observation.lock().unwrap().settle(
                             "NetworkError",
                             "realtime provider closed before completion",
                         );
@@ -652,7 +723,7 @@ mod tests {
         idle_timeout: Duration,
     ) -> (ExecutedCall<(), Error>, Vec<TerminalRecord>) {
         let base = scripted_provider(events, close_after_events).await;
-        let services = Services::default();
+        let services = Arc::new(Services::default());
         let (input_tx, input) = mpsc::unbounded();
         if send_response_create {
             input_tx
@@ -664,7 +735,7 @@ mod tests {
         }
         let (output, _output_rx) = mpsc::unbounded();
         let result = realtime(
-            &services,
+            Arc::clone(&services),
             RealtimeRequest {
                 model: "requested".to_string(),
                 api_key: Some("key".to_string()),
@@ -677,14 +748,14 @@ mod tests {
             output,
         )
         .await;
-        let terminals = services.terminals.into_inner().unwrap();
+        let terminals = services.terminals.lock().unwrap().clone();
         (result, terminals)
     }
 
     async fn execute(warm: bool) -> (ExecutedCall<(), Error>, Vec<RealtimeEvent>, usize) {
         let base = provider().await;
         let spec = RealtimeConnectionSpec::new("requested", Some("key"), Some(&base)).unwrap();
-        let services = Services::default();
+        let services = Arc::new(Services::default());
         let warm = if warm {
             Some(warmup(&spec).await.unwrap())
         } else {
@@ -698,7 +769,7 @@ mod tests {
             .unbounded_send(serde_json::from_value(json!({"type":"response.create"})).unwrap())
             .unwrap();
         let result = realtime(
-            &services,
+            Arc::clone(&services),
             RealtimeRequest {
                 model: spec.model.clone(),
                 api_key: Some("key".to_string()),
@@ -758,6 +829,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dropping_session_future_dispatches_cancelled_terminal() {
+        let base = scripted_provider(Vec::new(), false).await;
+        let spec = RealtimeConnectionSpec::new("requested", Some("key"), Some(&base)).unwrap();
+        let warm = warmup(&spec).await.unwrap();
+        let services = Arc::new(Services::default());
+        let (_input_tx, input) = mpsc::unbounded();
+        let (output, _output_rx) = mpsc::unbounded();
+        let task = tokio::spawn(realtime(
+            Arc::clone(&services),
+            RealtimeRequest {
+                model: spec.model.clone(),
+                api_key: Some("key".to_string()),
+                api_base: Some(base),
+                warm: Some(warm),
+                idle_timeout: Some(Duration::from_secs(30)),
+            },
+            CallLifecycleContext::new("realtime", "requested", "openai", "cancelled"),
+            input,
+            output,
+        ));
+
+        tokio::task::yield_now().await;
+        task.abort();
+        let _ = task.await;
+        for _ in 0..20 {
+            if !services.terminals.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        let terminals = services.terminals.lock().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0].classification,
+            TerminalClassification::Failure { kind, .. } if kind == "Cancelled"
+        ));
+    }
+
+    #[tokio::test]
     async fn idle_timeout_before_provider_completion_fails_once() {
         let (result, terminals) =
             execute_scenario(Vec::new(), false, false, false, Duration::from_millis(20)).await;
@@ -805,7 +916,7 @@ mod tests {
 
     #[tokio::test]
     async fn warmup_success_and_failure_dispatch_nothing() {
-        let services = Services::default();
+        let services = Arc::new(Services::default());
         let base = provider().await;
         let good = RealtimeConnectionSpec::new("model", Some("key"), Some(&base)).unwrap();
         assert!(warmup(&good).await.is_ok());
@@ -817,11 +928,11 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_dial_failure_returns_and_dispatches_one_terminal() {
-        let services = Services::default();
+        let services = Arc::new(Services::default());
         let (_, input) = mpsc::unbounded();
         let (output, _) = mpsc::unbounded();
         let result = realtime(
-            &services,
+            Arc::clone(&services),
             RealtimeRequest {
                 model: "model".to_string(),
                 api_key: Some("key".to_string()),

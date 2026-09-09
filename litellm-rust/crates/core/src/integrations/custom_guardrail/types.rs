@@ -7,8 +7,8 @@ use strum::AsRefStr;
 
 use crate::integrations::custom_logger::CallType;
 
-pub type GuardrailFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<GuardrailDecision, GuardrailError>> + Send + 'a>>;
+pub type GuardrailFuture<'a, Request> =
+    Pin<Box<dyn Future<Output = Result<GuardrailDecision<Request>, GuardrailError>> + Send + 'a>>;
 
 #[derive(AsRefStr, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuardrailEventHook {
@@ -72,25 +72,14 @@ impl GuardrailContext {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct GuardrailRequest {
-    pub data: Value,
-}
-
-impl GuardrailRequest {
-    pub fn new(data: Value) -> Self {
-        Self { data }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum GuardrailDecision {
-    Allow(GuardrailRequest),
-    Mask(GuardrailRequest),
+pub enum GuardrailDecision<Request> {
+    Allow(Request),
+    Mask(Request),
     Block(GuardrailError),
 }
 
-impl GuardrailDecision {
-    pub(super) fn into_request(self) -> Result<GuardrailRequest, GuardrailError> {
+impl<Request> GuardrailDecision<Request> {
+    pub(super) fn into_request(self) -> Result<Request, GuardrailError> {
         match self {
             Self::Allow(request) | Self::Mask(request) => Ok(request),
             Self::Block(error) => Err(error),

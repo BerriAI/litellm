@@ -3,17 +3,21 @@
 //! This module is intentionally Rust-only: Python/PyO3 adapters are a later
 //! layer that should implement this trait rather than changing the runner.
 
-use std::future::Future;
 use std::sync::Arc;
+
+use futures_util::stream::{self, StreamExt, TryStreamExt};
 
 pub mod types;
 
 pub use types::{
     GuardrailContext, GuardrailDecision, GuardrailDispatchReport, GuardrailError,
-    GuardrailEventHook, GuardrailFuture, GuardrailRequest,
+    GuardrailEventHook, GuardrailFuture,
 };
 
 pub trait CustomGuardrail: Send + Sync {
+    type PreCallRequest: Send + 'static;
+    type DuringCallRequest: Send + 'static;
+
     fn guardrail_name(&self) -> &str;
 
     fn supported_event_hooks(&self) -> &[GuardrailEventHook];
@@ -22,8 +26,8 @@ pub trait CustomGuardrail: Send + Sync {
     fn async_pre_call_hook<'a>(
         &'a self,
         _context: &'a GuardrailContext,
-        request: GuardrailRequest,
-    ) -> GuardrailFuture<'a> {
+        request: Self::PreCallRequest,
+    ) -> GuardrailFuture<'a, Self::PreCallRequest> {
         Box::pin(async move { Ok(GuardrailDecision::Allow(request)) })
     }
 
@@ -31,19 +35,39 @@ pub trait CustomGuardrail: Send + Sync {
     fn async_moderation_hook<'a>(
         &'a self,
         _context: &'a GuardrailContext,
-        request: GuardrailRequest,
-    ) -> GuardrailFuture<'a> {
+        request: Self::DuringCallRequest,
+    ) -> GuardrailFuture<'a, Self::DuringCallRequest> {
         Box::pin(async move { Ok(GuardrailDecision::Allow(request)) })
     }
 }
 
 #[derive(Clone)]
-pub struct CustomGuardrailRunner {
-    guardrails: Vec<Arc<dyn CustomGuardrail>>,
+pub struct CustomGuardrailRunner<PreCallRequest, DuringCallRequest> {
+    guardrails: Vec<
+        Arc<
+            dyn CustomGuardrail<
+                    PreCallRequest = PreCallRequest,
+                    DuringCallRequest = DuringCallRequest,
+                >,
+        >,
+    >,
 }
 
-impl CustomGuardrailRunner {
-    pub fn new(guardrails: Vec<Arc<dyn CustomGuardrail>>) -> Self {
+impl<PreCallRequest, DuringCallRequest> CustomGuardrailRunner<PreCallRequest, DuringCallRequest>
+where
+    PreCallRequest: Send + 'static,
+    DuringCallRequest: Send + 'static,
+{
+    pub fn new(
+        guardrails: Vec<
+            Arc<
+                dyn CustomGuardrail<
+                        PreCallRequest = PreCallRequest,
+                        DuringCallRequest = DuringCallRequest,
+                    >,
+            >,
+        >,
+    ) -> Self {
         Self { guardrails }
     }
 
@@ -54,77 +78,59 @@ impl CustomGuardrailRunner {
     pub async fn run_pre_call(
         &self,
         context: &GuardrailContext,
-        request: GuardrailRequest,
-    ) -> Result<(GuardrailRequest, GuardrailDispatchReport), GuardrailError> {
-        self.run_hook(GuardrailEventHook::PreCall, context, request)
-            .await
+        request: PreCallRequest,
+    ) -> Result<(PreCallRequest, GuardrailDispatchReport), GuardrailError> {
+        stream::iter(self.guardrails.iter().filter(|guardrail| {
+            Self::should_run(guardrail.as_ref(), GuardrailEventHook::PreCall, context)
+        }))
+        .map(Ok::<_, GuardrailError>)
+        .try_fold(
+            (request, GuardrailDispatchReport::default()),
+            |(request, report), guardrail| async move {
+                let request = guardrail
+                    .async_pre_call_hook(context, request)
+                    .await?
+                    .into_request()?;
+                Ok((
+                    request,
+                    GuardrailDispatchReport {
+                        invoked: report.invoked + 1,
+                    },
+                ))
+            },
+        )
+        .await
     }
 
     pub async fn run_during_call(
         &self,
         context: &GuardrailContext,
-        request: GuardrailRequest,
-    ) -> Result<(GuardrailRequest, GuardrailDispatchReport), GuardrailError> {
-        self.run_hook(GuardrailEventHook::DuringCall, context, request)
-            .await
-    }
-
-    pub async fn run_before_provider<F, Fut, T>(
-        &self,
-        event_hook: GuardrailEventHook,
-        context: &GuardrailContext,
-        request: GuardrailRequest,
-        provider: F,
-    ) -> Result<T, GuardrailError>
-    where
-        F: FnOnce(GuardrailRequest) -> Fut,
-        Fut: Future<Output = Result<T, GuardrailError>>,
-    {
-        let (request, _) = self.run_hook(event_hook, context, request).await?;
-        provider(request).await
-    }
-
-    async fn run_hook(
-        &self,
-        event_hook: GuardrailEventHook,
-        context: &GuardrailContext,
-        mut request: GuardrailRequest,
-    ) -> Result<(GuardrailRequest, GuardrailDispatchReport), GuardrailError> {
-        if self.guardrails.is_empty() {
-            return Ok((request, GuardrailDispatchReport::default()));
-        }
-
-        let mut report = GuardrailDispatchReport::default();
-        for guardrail in &self.guardrails {
-            if !self.should_run(guardrail.as_ref(), event_hook, context) {
-                continue;
-            }
-
-            report.invoked += 1;
-            let decision = match event_hook {
-                GuardrailEventHook::PreCall => {
-                    guardrail
-                        .async_pre_call_hook(context, request.clone())
-                        .await?
-                }
-                GuardrailEventHook::DuringCall => {
-                    guardrail
-                        .async_moderation_hook(context, request.clone())
-                        .await?
-                }
-            };
-            match decision.into_request() {
-                Ok(next_request) => request = next_request,
-                Err(error) => return Err(error),
-            }
-        }
-
-        Ok((request, report))
+        request: DuringCallRequest,
+    ) -> Result<(DuringCallRequest, GuardrailDispatchReport), GuardrailError> {
+        stream::iter(self.guardrails.iter().filter(|guardrail| {
+            Self::should_run(guardrail.as_ref(), GuardrailEventHook::DuringCall, context)
+        }))
+        .map(Ok::<_, GuardrailError>)
+        .try_fold(
+            (request, GuardrailDispatchReport::default()),
+            |(request, report), guardrail| async move {
+                let request = guardrail
+                    .async_moderation_hook(context, request)
+                    .await?
+                    .into_request()?;
+                Ok((
+                    request,
+                    GuardrailDispatchReport {
+                        invoked: report.invoked + 1,
+                    },
+                ))
+            },
+        )
+        .await
     }
 
     fn should_run(
-        &self,
-        guardrail: &dyn CustomGuardrail,
+        guardrail: &dyn CustomGuardrail<PreCallRequest = PreCallRequest, DuringCallRequest = DuringCallRequest>,
         event_hook: GuardrailEventHook,
         context: &GuardrailContext,
     ) -> bool {
@@ -142,8 +148,19 @@ impl CustomGuardrailRunner {
 mod tests {
     use super::*;
     use crate::integrations::custom_logger::CallType;
-    use serde_json::json;
     use std::sync::Mutex;
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct TestPreCallRequest {
+        content: String,
+        masked: bool,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct TestDuringCallRequest {
+        content: String,
+        masked: bool,
+    }
 
     #[derive(Clone)]
     enum TestDecision {
@@ -173,13 +190,32 @@ mod tests {
             self.calls.lock().unwrap().clone()
         }
 
-        fn decision(&self, mut request: GuardrailRequest) -> GuardrailDecision {
+        fn pre_call_decision(
+            &self,
+            request: TestPreCallRequest,
+        ) -> GuardrailDecision<TestPreCallRequest> {
             match self.decision {
                 TestDecision::Allow => GuardrailDecision::Allow(request),
-                TestDecision::Mask => {
-                    request.data["masked"] = json!(true);
-                    GuardrailDecision::Mask(request)
+                TestDecision::Mask => GuardrailDecision::Mask(TestPreCallRequest {
+                    masked: true,
+                    ..request
+                }),
+                TestDecision::Block => {
+                    GuardrailDecision::Block(GuardrailError::blocked("blocked by guardrail"))
                 }
+            }
+        }
+
+        fn during_call_decision(
+            &self,
+            request: TestDuringCallRequest,
+        ) -> GuardrailDecision<TestDuringCallRequest> {
+            match self.decision {
+                TestDecision::Allow => GuardrailDecision::Allow(request),
+                TestDecision::Mask => GuardrailDecision::Mask(TestDuringCallRequest {
+                    masked: true,
+                    ..request
+                }),
                 TestDecision::Block => {
                     GuardrailDecision::Block(GuardrailError::blocked("blocked by guardrail"))
                 }
@@ -188,6 +224,9 @@ mod tests {
     }
 
     impl CustomGuardrail for RecordingCustomGuardrail {
+        type PreCallRequest = TestPreCallRequest;
+        type DuringCallRequest = TestDuringCallRequest;
+
         fn guardrail_name(&self) -> &str {
             &self.name
         }
@@ -199,22 +238,22 @@ mod tests {
         fn async_pre_call_hook<'a>(
             &'a self,
             _context: &'a GuardrailContext,
-            request: GuardrailRequest,
-        ) -> GuardrailFuture<'a> {
+            request: TestPreCallRequest,
+        ) -> GuardrailFuture<'a, TestPreCallRequest> {
             Box::pin(async move {
                 self.calls.lock().unwrap().push("async_pre_call_hook");
-                Ok(self.decision(request))
+                Ok(self.pre_call_decision(request))
             })
         }
 
         fn async_moderation_hook<'a>(
             &'a self,
             _context: &'a GuardrailContext,
-            request: GuardrailRequest,
-        ) -> GuardrailFuture<'a> {
+            request: TestDuringCallRequest,
+        ) -> GuardrailFuture<'a, TestDuringCallRequest> {
             Box::pin(async move {
                 self.calls.lock().unwrap().push("async_moderation_hook");
-                Ok(self.decision(request))
+                Ok(self.during_call_decision(request))
             })
         }
     }
@@ -229,7 +268,10 @@ mod tests {
         let runner = CustomGuardrailRunner::new(vec![guardrail.clone()]);
         let context =
             GuardrailContext::new(CallType::Ocr).with_selected_guardrails(vec!["pre".to_string()]);
-        let request = GuardrailRequest::new(json!({"messages": ["hello"]}));
+        let request = TestPreCallRequest {
+            content: "hello".to_string(),
+            masked: false,
+        };
 
         let (result, report) = runner
             .run_pre_call(&context, request)
@@ -237,7 +279,7 @@ mod tests {
             .expect("guardrail allows request");
 
         assert_eq!(report.invoked, 1);
-        assert_eq!(result.data["messages"], json!(["hello"]));
+        assert_eq!(result.content, "hello");
         assert_eq!(guardrail.calls(), vec!["async_pre_call_hook"]);
     }
 
@@ -251,7 +293,10 @@ mod tests {
         let runner = CustomGuardrailRunner::new(vec![guardrail.clone()]);
         let context = GuardrailContext::new(CallType::Completion)
             .with_selected_guardrails(vec!["during".to_string()]);
-        let request = GuardrailRequest::new(json!({"prompt": "hello"}));
+        let request = TestDuringCallRequest {
+            content: "hello".to_string(),
+            masked: false,
+        };
 
         let (_result, report) = runner
             .run_during_call(&context, request)
@@ -271,7 +316,10 @@ mod tests {
         ));
         let runner = CustomGuardrailRunner::new(vec![guardrail]);
         let context = GuardrailContext::new(CallType::Ocr);
-        let request = GuardrailRequest::new(json!({"document": "secret"}));
+        let request = TestPreCallRequest {
+            content: "secret".to_string(),
+            masked: false,
+        };
 
         let (result, report) = runner
             .run_pre_call(&context, request)
@@ -279,7 +327,7 @@ mod tests {
             .expect("mask continues");
 
         assert_eq!(report.invoked, 1);
-        assert_eq!(result.data["masked"], json!(true));
+        assert!(result.masked);
     }
 
     #[tokio::test]
@@ -296,17 +344,12 @@ mod tests {
         ));
         let runner =
             CustomGuardrailRunner::new(vec![blocking_guardrail.clone(), later_guardrail.clone()]);
-        let provider_called = Arc::new(Mutex::new(false));
-        let provider_called_for_closure = provider_called.clone();
-
         let result = runner
-            .run_before_provider(
-                GuardrailEventHook::PreCall,
+            .run_pre_call(
                 &GuardrailContext::new(CallType::Completion),
-                GuardrailRequest::new(json!({"prompt": "blocked"})),
-                move |_request| async move {
-                    *provider_called_for_closure.lock().unwrap() = true;
-                    Ok("provider response")
+                TestPreCallRequest {
+                    content: "blocked".to_string(),
+                    masked: false,
                 },
             )
             .await;
@@ -314,41 +357,17 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(blocking_guardrail.calls(), vec!["async_pre_call_hook"]);
         assert_eq!(later_guardrail.calls(), Vec::<&'static str>::new());
-        assert!(!*provider_called.lock().unwrap());
-    }
-
-    #[tokio::test]
-    async fn run_before_provider_returns_provider_guardrail_error_directly() {
-        let guardrail = Arc::new(RecordingCustomGuardrail::new(
-            "allow",
-            vec![GuardrailEventHook::PreCall],
-            TestDecision::Allow,
-        ));
-        let runner = CustomGuardrailRunner::new(vec![guardrail]);
-
-        let result = runner
-            .run_before_provider(
-                GuardrailEventHook::PreCall,
-                &GuardrailContext::new(CallType::Completion),
-                GuardrailRequest::new(json!({"prompt": "allowed"})),
-                |_request| async move {
-                    Err::<&'static str, GuardrailError>(GuardrailError::blocked(
-                        "provider-side guardrail error",
-                    ))
-                },
-            )
-            .await;
-
-        let err = result.expect_err("provider error is returned directly");
-        assert_eq!(err.kind, "GuardrailBlocked");
-        assert_eq!(err.message, "provider-side guardrail error");
     }
 
     #[tokio::test]
     async fn no_guardrails_fast_path_dispatches_nothing() {
-        let runner = CustomGuardrailRunner::new(Vec::new());
+        let runner: CustomGuardrailRunner<TestPreCallRequest, TestDuringCallRequest> =
+            CustomGuardrailRunner::new(Vec::new());
         let context = GuardrailContext::new(CallType::Ocr);
-        let request = GuardrailRequest::new(json!({"document": "ok"}));
+        let request = TestPreCallRequest {
+            content: "ok".to_string(),
+            masked: false,
+        };
 
         let (result, report) = runner
             .run_pre_call(&context, request)
@@ -357,6 +376,6 @@ mod tests {
 
         assert!(runner.is_empty());
         assert_eq!(report, GuardrailDispatchReport::default());
-        assert_eq!(result.data["document"], json!("ok"));
+        assert_eq!(result.content, "ok");
     }
 }

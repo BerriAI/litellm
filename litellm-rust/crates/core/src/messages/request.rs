@@ -25,10 +25,7 @@ pub(crate) fn build_provider_request_with_environment(
         },
         environment,
     )?;
-    let typed_request = serde_json::from_value(request.body).map_err(|err| {
-        Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
-    })?;
-    let transformed = endpoint.config.transform_request(typed_request)?;
+    let transformed = endpoint.config.transform_request(request.body)?;
     let body = serde_json::to_value(transformed).map_err(|err| {
         Error::InvalidRequest(format!(
             "failed to serialize Anthropic messages request: {err}"
