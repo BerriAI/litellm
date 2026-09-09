@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from itertools import accumulate
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict, assert_never
@@ -13,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
@@ -461,6 +463,16 @@ def get_remaining_tokens_and_requests_from_request_data(data: dict) -> dict[str,
     return headers
 
 
+def _serialize_scan_metadata_header(entries: Iterable[object], *, max_length: int) -> str | None:
+    """Compact JSON list of scan metadata entries, dropping trailing entries so the header fits in max_length."""
+    encoded: Final = tuple(json.dumps(entry, separators=(",", ":")) for entry in entries)
+    lengths: Final = tuple(accumulate(len(item) + 1 for item in encoded))
+    kept: Final = sum(1 for length in lengths if length + 1 <= max_length)
+    if kept == 0:
+        return None
+    return f"[{','.join(encoded[:kept])}]"
+
+
 def get_logging_caching_headers(request_data: dict) -> dict | None:
     _metadata: Final[dict] = {}
     metadata_bucket: Final = request_data.get("metadata")
@@ -480,8 +492,13 @@ def get_logging_caching_headers(request_data: dict) -> dict | None:
         headers["x-litellm-guardrail-scan-id"] = ",".join(scan_ids)
 
     scan_metadata: Final = _metadata.get(GUARDRAIL_SCAN_METADATA_METADATA_KEY)
-    if scan_metadata:
-        headers["x-litellm-guardrail-scan-metadata"] = json.dumps(scan_metadata, separators=(",", ":"))
+    scan_metadata_header: Final = (
+        _serialize_scan_metadata_header(scan_metadata, max_length=MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH)
+        if isinstance(scan_metadata, (list, tuple))
+        else None
+    )
+    if scan_metadata_header:
+        headers["x-litellm-guardrail-scan-metadata"] = scan_metadata_header
 
     if "applied_policies" in _metadata:
         headers["x-litellm-applied-policies"] = ",".join(_metadata["applied_policies"])
