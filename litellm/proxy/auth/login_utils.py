@@ -84,11 +84,12 @@ async def screen_login_password_for_breach(
         return False
     breached: Final = await is_password_breached(password, general_settings, client)
     checked_at: Final = datetime.now(timezone.utc)
-    update_data: Final[prisma_types.LiteLLM_UserTableUpdateInput] = (
-        {"last_breach_check_at": checked_at, "password_reset_required": True}
-        if breached
-        else {"last_breach_check_at": checked_at}
-    )
+    breached_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {
+        "last_breach_check_at": checked_at,
+        "password_reset_required": True,
+    }
+    recheck_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {"last_breach_check_at": checked_at}
+    update_data: Final = breached_update if breached else recheck_update
     find_user: Final[prisma_types.LiteLLM_UserTableWhereInput] = {"user_id": user_id}
     try:
         await UserRepository(prisma_client).table.update(where=find_user, data=update_data)
