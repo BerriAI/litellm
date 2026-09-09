@@ -2,7 +2,18 @@
 Tests for the OpenInfer LLM provider configuration and integration.
 """
 
+import json
+from pathlib import Path
+
+import pytest
+
 import litellm
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_PRICE_FILES = (
+    _REPO_ROOT / "model_prices_and_context_window.json",
+    _REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json",
+)
 
 
 class TestOpenInferProviderConfig:
@@ -89,3 +100,23 @@ class TestOpenInferProviderConfig:
             )
             == "https://api.openinfer.ai/v1/chat/completions"
         )
+
+    @pytest.mark.parametrize(
+        ("model", "input_cost_per_token", "output_cost_per_token"),
+        (
+            ("openinfer/@oi/Llama-3.2-1B-Instruct", 2e-08, 2e-08),
+            ("openinfer/@oi/Qwen3.5-9B", 1.5e-07, 1.8e-07),
+            ("openinfer/@oi/Qwen3.5-27B", 7.2e-07, 7.2e-07),
+            ("openinfer/@oi/Gemma4-31B", 5.2e-07, 7.5e-07),
+        ),
+    )
+    def test_catalog_token_rates_match_vendor_per_million_prices(
+        self, model: str, input_cost_per_token: float, output_cost_per_token: float
+    ):
+        for path in _PRICE_FILES:
+            catalog = json.loads(path.read_text())
+            row = catalog[model]
+            assert row["input_cost_per_token"] == input_cost_per_token
+            assert row["output_cost_per_token"] == output_cost_per_token
+            assert row["input_cost_per_token"] > 0
+            assert row["output_cost_per_token"] > 0
