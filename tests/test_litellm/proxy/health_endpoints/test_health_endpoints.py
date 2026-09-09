@@ -3229,7 +3229,7 @@ def _configured_non_team_deployment():
             api_base="https://configured.invalid/v1",
             api_key="CONFIGURED-API-KEY",
         ),
-        model_info=ModelInfo(id="non-team-deployment-id"),
+        model_info=ModelInfo(id="non-team-deployment-id", mode="chat"),
     )
 
 
@@ -3459,3 +3459,43 @@ async def test_test_model_connection_tolerates_missing_user_record_for_non_admin
 
     assert result["status"] == "success"
     assert user_check.await_args.kwargs["user_object"] is None
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_keeps_mode_overrides_admin_only():
+    """
+    `mode` selects which provider operation the probe performs, so a non-admin
+    may only probe with the deployment's configured mode (or none, which
+    auto-detects it).
+    """
+    from fastapi import HTTPException
+
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    deployment = Deployment(
+        model_name="gpt-4o",
+        litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="CONFIGURED-API-KEY"),
+        model_info=ModelInfo(id="non-team-deployment-id", mode="chat"),
+    )
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = deployment
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", AsyncMock(return_value=True)) as key_check,
+        patch("litellm.ahealth_check", AsyncMock()) as health_check,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="image_generation",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"id": "non-team-deployment-id"},
+            user_api_key_dict=_internal_user(),
+        )
+
+    assert exc_info.value.status_code == 403
+    key_check.assert_not_awaited()
+    health_check.assert_not_awaited()
