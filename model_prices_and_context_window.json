@@ -59849,6 +59849,7 @@
         "mode": "video_generation",
         "output_cost_per_second": 0.05,
         "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video",
         "supported_modalities": [
             "text",
@@ -59866,6 +59867,7 @@
         "output_cost_per_second": 0.08,
         "output_cost_per_second_1080p": 0.25,
         "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.14,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
         "supported_modalities": [
             "text",
@@ -59883,6 +59885,7 @@
         "output_cost_per_second": 0.08,
         "output_cost_per_second_1080p": 0.25,
         "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.14,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
         "supported_modalities": [
             "text",
@@ -59900,6 +59903,7 @@
         "output_cost_per_second": 0.08,
         "output_cost_per_second_1080p": 0.25,
         "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.14,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
         "supported_modalities": [
             "text",
