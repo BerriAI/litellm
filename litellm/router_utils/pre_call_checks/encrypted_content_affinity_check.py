@@ -37,6 +37,7 @@ Safe to enable globally:
 """
 
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
 
 import httpx
@@ -148,8 +149,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _extract_model_id_from_messages(messages: list[AllMessageValues] | None) -> str | None:
-        for message in messages or []:
+    def _extract_model_id_from_messages(messages: Sequence[AllMessageValues] | None) -> str | None:
+        for message in messages or ():
             if message.get("role") != "assistant":
                 continue
             model_id: Final = EncryptedContentAffinityCheck._extract_model_id_from_input(message.get("reasoning_items"))
@@ -228,7 +229,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         self,
         model: str,
         healthy_deployments: list,
-        messages: list[AllMessageValues] | None,
+        messages: Sequence[AllMessageValues] | None,
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
@@ -243,8 +244,12 @@ class EncryptedContentAffinityCheck(CustomLogger):
         remaining cooldown window) so OpenAI-compatible clients back off and
         retry after the deployment is eligible again.
         """
-        routing_kwargs: Final = request_kwargs if request_kwargs is not None else {}
-        typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
+        routing_kwargs: Final = (
+            request_kwargs if request_kwargs is not None else {}
+        )  # mutable-ok: preserve shared request context when kwargs are absent
+        typed_healthy_deployments: Final = cast(
+            list[dict], healthy_deployments
+        )  # cast-ok: router supplies deployment dictionaries
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
 
