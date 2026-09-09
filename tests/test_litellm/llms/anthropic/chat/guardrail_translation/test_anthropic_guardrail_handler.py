@@ -368,6 +368,29 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert "persim" not in raw
 
     @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_tool_use_name_back_into_sse_chunks(self):
+        class RenameTool(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                for tool_call in inputs.get("tool_calls", []):
+                    tool_call.function.name = "lookup_fruit_reviewed"
+                return inputs
+
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_tool_use_sse_chunks()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=RenameTool(guardrail_name="test"),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        raw = b"".join(chunks).decode()
+        assert '"name": "lookup_fruit_reviewed"' in raw and '"id": "toolu_1"' in raw
+        assert '"name": "lookup_fruit"' not in raw
+        assert json.loads("".join(self._partial_jsons(chunks))) == {"fruit": "persimmon"}
+
+    @pytest.mark.asyncio
     async def test_ended_stream_tool_use_rewrite_leaves_chunks_untouched_by_default(self):
         handler = AnthropicMessagesHandler()
         chunks = self._ended_tool_use_sse_chunks()
