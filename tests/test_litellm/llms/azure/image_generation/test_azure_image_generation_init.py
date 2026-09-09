@@ -11,6 +11,7 @@ import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.common_utils import (
+    _cached_azure_ad_token_refresh_provider,
     _cached_entra_id_token_provider,
     get_azure_request_auth_headers,
     redact_azure_auth_headers,
@@ -773,6 +774,52 @@ def test_azure_image_generation_with_api_key_keeps_api_key_header(
     assert fake_entra_id == []
     assert response.data[0].b64_json == "aaaa"
     assert logging_obj.pre_call.call_args.kwargs["additional_args"]["headers"]["api-key"] == "***REDACTED***"
+
+
+@pytest.fixture
+def fake_default_azure_credential(monkeypatch: pytest.MonkeyPatch):
+    built_credentials = []
+
+    class FakeDefaultAzureCredential:
+        def __init__(self) -> None:
+            built_credentials.append(self)
+
+    for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_CREDENTIAL", "AZURE_AD_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("azure.identity.DefaultAzureCredential", FakeDefaultAzureCredential)
+    monkeypatch.setattr(
+        "azure.identity.get_bearer_token_provider", lambda credential, scope: lambda: "default-credential-token"
+    )
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", True)
+    _cached_azure_ad_token_refresh_provider.cache_clear()
+    yield built_credentials
+    _cached_azure_ad_token_refresh_provider.cache_clear()
+
+
+def test_azure_image_generation_token_refresh_reuses_credential_across_requests(
+    respx_mock: respx.MockRouter, fake_default_azure_credential: list
+):
+    api_base = "https://my-resource.openai.azure.com"
+    api_version = "2025-04-01-preview"
+    route = _mock_image_generation_route(respx_mock, api_base, "gpt-image-1")
+
+    for _ in range(3):
+        AzureChatCompletion().image_generation(
+            prompt="a cat",
+            timeout=60.0,
+            optional_params={"n": 1, "size": "1024x1024"},
+            logging_obj=MagicMock(),
+            headers={"Content-Type": "application/json"},
+            model="gpt-image-1",
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"api_base": api_base, "api_version": api_version},
+        )
+
+    assert route.call_count == 3
+    assert all(call.request.headers["Authorization"] == "Bearer default-credential-token" for call in route.calls)
+    assert len(fake_default_azure_credential) == 1
 
 
 @pytest.mark.parametrize(
