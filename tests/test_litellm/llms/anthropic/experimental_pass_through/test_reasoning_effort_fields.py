@@ -10,6 +10,7 @@ Covers:
 import json
 import os
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -160,6 +161,23 @@ class TestNormalizeReasoningEffortValue:
     @pytest.mark.parametrize("effort", ["max", "xhigh", "minimal"])
     def test_a_model_the_map_does_not_describe_keeps_the_requested_tier(self, local_model_cost_map, effort):
         assert normalize_reasoning_effort_value(effort, "totally-made-up-model-xyz", "openai") == effort
+
+    @pytest.mark.parametrize(
+        "model_info, effort",
+        [
+            ({}, "max"),
+            ({}, "xhigh"),
+            ({"supports_reasoning": None}, "max"),
+            ({"supports_reasoning": None}, "xhigh"),
+        ],
+    )
+    def test_unknown_effort_metadata_keeps_the_requested_tier(self, model_info, effort):
+        with patch("litellm.utils.get_model_info", return_value=model_info):
+            assert normalize_reasoning_effort_value(effort, "custom-registered-model", "anthropic") == effort
+
+    def test_explicit_non_reasoning_still_degrades_to_the_chain_floor(self):
+        with patch("litellm.utils.get_model_info", return_value={"supports_reasoning": False}):
+            assert normalize_reasoning_effort_value("max", "custom-registered-model", "anthropic") == "high"
 
 
 # ---------------------------------------------------------------------------

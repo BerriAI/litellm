@@ -79,7 +79,7 @@ def normalize_reasoning_effort_value(
     except Exception:
         return effort
 
-    supported: Final = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
+    supported: Final = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=False)
     if supported is None:
         return effort
     if not supported:
