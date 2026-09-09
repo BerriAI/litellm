@@ -136,6 +136,36 @@ class ModelRateLimitingCheck(CustomLogger):
 
         return tpm_key, rpm_key
 
+    def _get_current_tpm(self, key: str, tpm_limit: int) -> float | None:
+        cached: Final[object] = self.dual_cache.get_cache(key=key, local_only=True)
+        local_tpm: Final = cached if isinstance(cached, (int, float)) else None
+        if self.dual_cache.redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
+            return local_tpm
+        from redis.exceptions import RedisError
+
+        try:
+            shared_tpm: Final[object] = self.dual_cache.redis_cache.get_cache(key=key)
+            return shared_tpm if isinstance(shared_tpm, (int, float)) else local_tpm
+        except (RedisError, OSError):
+            verbose_router_logger.exception("Redis TPM read failed, using local usage")
+            return local_tpm
+
+    async def _async_get_current_tpm(self, key: str, tpm_limit: int, parent_otel_span: Span | None) -> float | None:
+        cached: Final[object] = await self.dual_cache.async_get_cache(key=key, local_only=True)
+        local_tpm: Final = cached if isinstance(cached, (int, float)) else None
+        if self.dual_cache.redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
+            return local_tpm
+        from redis.exceptions import RedisError
+
+        try:
+            shared_tpm: Final[object] = await self.dual_cache.redis_cache.async_get_cache(
+                key=key, parent_otel_span=parent_otel_span
+            )
+            return shared_tpm if isinstance(shared_tpm, (int, float)) else local_tpm
+        except (RedisError, OSError):
+            verbose_router_logger.exception("Redis TPM read failed, using local usage")
+            return local_tpm
+
     def pre_call_check(self, deployment: dict) -> dict | None:
         """
         Synchronous pre-call check for model rate limits.
@@ -168,11 +198,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                current_tpm: Final = (
-                    self.dual_cache.redis_cache.get_cache(key=tpm_key)
-                    if self.dual_cache.redis_cache is not None
-                    else self.dual_cache.get_cache(key=tpm_key, local_only=True)
-                )
+                current_tpm: Final = self._get_current_tpm(tpm_key, tpm_limit)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -252,11 +278,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                current_tpm: Final = (
-                    await self.dual_cache.redis_cache.async_get_cache(key=tpm_key, parent_otel_span=parent_otel_span)
-                    if self.dual_cache.redis_cache is not None
-                    else await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
-                )
+                current_tpm: Final = await self._async_get_current_tpm(tpm_key, tpm_limit, parent_otel_span)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",

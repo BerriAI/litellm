@@ -11,6 +11,8 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 import litellm
 from litellm import Router
@@ -74,7 +76,7 @@ async def test_deployment_tpm_reads_shared_usage(use_async: bool, local_tpm: int
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize("shared_tpm", [None, 999])
-async def test_deployment_tpm_ignores_stale_local_limit(use_async: bool, shared_tpm: int | None) -> None:
+async def test_deployment_tpm_rejects_local_limit_without_redis_read(use_async: bool, shared_tpm: int | None) -> None:
     redis: Final = MagicMock(spec=RedisCache)
     redis.get_cache.return_value = shared_tpm
     redis.async_get_cache = AsyncMock(return_value=shared_tpm)
@@ -92,28 +94,52 @@ async def test_deployment_tpm_ignores_stale_local_limit(use_async: bool, shared_
         return_value=datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc),
     ):
         if use_async:
-            assert await check.async_pre_call_check(deployment) == deployment
+            with pytest.raises(litellm.RateLimitError, match="TPM limit=1000"):
+                await check.async_pre_call_check(deployment)
         else:
-            assert check.pre_call_check(deployment) == deployment
+            with pytest.raises(litellm.RateLimitError, match="TPM limit=1000"):
+                check.pre_call_check(deployment)
+    redis.get_cache.assert_not_called()
+    redis.async_get_cache.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
-async def test_deployment_tpm_redis_error_fails_open(use_async: bool) -> None:
+@pytest.mark.parametrize("local_tpm", [None, 100, 1000])
+@pytest.mark.parametrize("read_error", [None, ConnectionError, RedisConnectionError, RedisTimeoutError])
+async def test_deployment_tpm_redis_failure_keeps_local_enforcement(
+    use_async: bool, local_tpm: int | None, read_error: type[Exception] | None
+) -> None:
     redis: Final = MagicMock(spec=RedisCache)
-    redis.get_cache.side_effect = ConnectionError("Redis unavailable")
-    redis.async_get_cache = AsyncMock(side_effect=ConnectionError("Redis unavailable"))
-    check: Final = ModelRateLimitingCheck(DualCache(redis_cache=redis))
+    redis.get_cache.return_value = None
+    redis.async_get_cache = AsyncMock(return_value=None)
+    if read_error is not None:
+        redis.get_cache.side_effect = read_error("Redis unavailable")
+        redis.async_get_cache.side_effect = read_error("Redis unavailable")
+    cache: Final = DualCache(redis_cache=redis)
+    if local_tpm is not None:
+        cache.in_memory_cache.set_cache("test-id:gpt-4:tpm:12-00", local_tpm)
+    check: Final = ModelRateLimitingCheck(cache)
     deployment: Final = {
         "model_name": "test-model",
         "tpm": 1000,
         "litellm_params": {"model": "gpt-4"},
         "model_info": {"id": "test-id"},
     }
-    if use_async:
-        assert await check.async_pre_call_check(deployment) == deployment
-    else:
-        assert check.pre_call_check(deployment) == deployment
+    with patch(  # test-quality-ok: Freeze only the clock to read the seeded minute's counter deterministically
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime",
+        return_value=datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc),
+    ):
+        if use_async and local_tpm == 1000:
+            with pytest.raises(litellm.RateLimitError, match="TPM limit=1000"):
+                await check.async_pre_call_check(deployment)
+        elif local_tpm == 1000:
+            with pytest.raises(litellm.RateLimitError, match="TPM limit=1000"):
+                check.pre_call_check(deployment)
+        elif use_async:
+            assert await check.async_pre_call_check(deployment) == deployment
+        else:
+            assert check.pre_call_check(deployment) == deployment
 
 
 class TestModelRateLimitingCheck:
