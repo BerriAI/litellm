@@ -7,8 +7,9 @@ use futures_util::{StreamExt, stream};
 use litellm_core::Error;
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks,
-    TerminalClassification, TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycleContext, Clock, DeploymentFailureHooks, DeploymentPreHooks,
+    DeploymentSuccessHooks, ModerationHooks, PreCallHooks, TerminalClassification,
+    TerminalDispatcher, TerminalRecord,
 };
 use litellm_core::messages::lifecycle::Options;
 use litellm_core::messages::types::MessagesRequest;
@@ -75,6 +76,10 @@ impl ModerationHooks<MessagesRequest> for Session {
         ready(ActionResult::Continue(request))
     }
 }
+
+impl DeploymentPreHooks<MessagesRequest> for Session {}
+impl DeploymentSuccessHooks<litellm_core::messages::types::AnthropicMessagesResponse> for Session {}
+impl DeploymentFailureHooks for Session {}
 
 impl TerminalDispatcher for Session {
     fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {

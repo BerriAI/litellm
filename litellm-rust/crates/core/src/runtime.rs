@@ -7,8 +7,9 @@ use crate::Error;
 use crate::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
 use crate::integrations::custom_logger::{LogError, LogFuture};
 use crate::lifecycle::{
-    ActionResult, BytesStream, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks,
-    StreamingCall, TerminalDispatcher, TerminalRecord,
+    ActionResult, BytesStream, CallLifecycleContext, Clock, DeploymentFailureHooks,
+    DeploymentPreHooks, DeploymentSuccessHooks, ModerationHooks, PreCallHooks, StreamingCall,
+    TerminalDispatcher, TerminalRecord,
 };
 use crate::messages::lifecycle::{MessagesServices, Options as MessagesOptions};
 use crate::messages::types::{AnthropicMessagesResponse, MessagesRequest};
@@ -196,23 +197,19 @@ impl ModerationHooks<MessagesRequest> for NativeSession {
     }
 }
 
-impl<'request>
-    PreCallHooks<crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>>
-    for NativeSession
-{
+impl DeploymentPreHooks<MessagesRequest> for NativeSession {}
+impl DeploymentSuccessHooks<AnthropicMessagesResponse> for NativeSession {}
+impl DeploymentFailureHooks for NativeSession {}
+
+impl<'request> PreCallHooks<ChatCompletionsRequest<'request>> for NativeSession {
     type PreCallFuture<'a>
-        = std::future::Ready<
-        ActionResult<
-            crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
-            Error,
-        >,
-    >
+        = std::future::Ready<ActionResult<ChatCompletionsRequest<'request>, Error>>
     where
         Self: 'a;
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
-        request: crate::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+        request: ChatCompletionsRequest<'request>,
     ) -> Self::PreCallFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
@@ -240,6 +237,10 @@ impl<'request>
         std::future::ready(ActionResult::Continue(request))
     }
 }
+
+impl<'request> DeploymentPreHooks<ChatCompletionsRequest<'request>> for NativeSession {}
+
+impl DeploymentSuccessHooks<ChatCompletionsResponse> for NativeSession {}
 
 impl TerminalDispatcher for NativeSession {
     fn dispatch<'a>(&'a self, _: &'a TerminalRecord) -> LogFuture<'a> {
@@ -447,7 +448,7 @@ where
         context: CallLifecycleContext,
         bindings: <<S as ChatCompletionsServices>::Calls as CallServices>::Bindings,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let request = crate::chat_completions::request::resolve_request(request)?;
+        crate::chat_completions::request::resolve_request(request.clone())?;
         let session = self
             .services
             .calls()
@@ -548,6 +549,61 @@ where
         request: MessagesRequest,
     ) -> Self::ModerationFuture<'a> {
         self.invocation.async_moderation_hook(context, request)
+    }
+}
+
+impl<S, Session> DeploymentPreHooks<MessagesRequest> for StreamingRuntimeSession<S, Session>
+where
+    S: Send + Sync,
+    Session: DeploymentPreHooks<MessagesRequest>,
+{
+    fn async_pre_call_deployment_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        request: MessagesRequest,
+    ) -> crate::lifecycle::execution::CallbackFuture<'a, ActionResult<MessagesRequest, Error>>
+    where
+        MessagesRequest: 'a,
+    {
+        self.invocation
+            .async_pre_call_deployment_hook(context, request)
+    }
+}
+
+impl<S, Session> DeploymentSuccessHooks<AnthropicMessagesResponse>
+    for StreamingRuntimeSession<S, Session>
+where
+    S: Send + Sync,
+    Session: DeploymentSuccessHooks<AnthropicMessagesResponse>,
+{
+    fn async_post_call_success_deployment_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        response: AnthropicMessagesResponse,
+    ) -> crate::lifecycle::execution::CallbackFuture<
+        'a,
+        ActionResult<AnthropicMessagesResponse, Error>,
+    >
+    where
+        AnthropicMessagesResponse: 'a,
+    {
+        self.invocation
+            .async_post_call_success_deployment_hook(context, response)
+    }
+}
+
+impl<S, Session> DeploymentFailureHooks for StreamingRuntimeSession<S, Session>
+where
+    S: Send + Sync,
+    Session: DeploymentFailureHooks,
+{
+    fn async_post_call_failure_deployment_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        error: &'a Error,
+    ) -> crate::lifecycle::execution::CallbackFuture<'a, Result<(), Error>> {
+        self.invocation
+            .async_post_call_failure_deployment_hook(context, error)
     }
 }
 

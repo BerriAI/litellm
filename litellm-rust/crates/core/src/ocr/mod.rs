@@ -96,6 +96,10 @@ impl crate::lifecycle::ModerationHooks<SettledOcrRequest> for SettledOcrPolicy {
     }
 }
 
+impl crate::lifecycle::DeploymentPreHooks<SettledOcrRequest> for SettledOcrPolicy {}
+impl crate::lifecycle::DeploymentSuccessHooks<Value> for SettledOcrPolicy {}
+impl crate::lifecycle::DeploymentFailureHooks for SettledOcrPolicy {}
+
 pub(crate) async fn send(request: SettledOcrRequest) -> Result<OcrResponseData, Error> {
     let SettledOcrRequest { endpoint, http } = request;
     let body: Value = serde_json::from_slice(http.body())

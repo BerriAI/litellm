@@ -2,6 +2,11 @@ use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use pyo3::prelude::*;
+use serde::Serialize;
+use serde_json::Value;
+use tower::ServiceExt;
+
 use axum::http::{Request, StatusCode};
 use litellm_ai_gateway::io::realtime_pool::RealtimePool;
 use litellm_ai_gateway::routes;
@@ -9,10 +14,6 @@ use litellm_ai_gateway::state::AppState;
 use litellm_core::Error;
 use litellm_core::router::{Deployment, LiteLLMParams, Router as ModelRouter};
 use litellm_python_interop::run_async;
-use pyo3::prelude::*;
-use serde::Serialize;
-use serde_json::Value;
-use tower::ServiceExt;
 
 use crate::errors::core_error_to_pyerr;
 

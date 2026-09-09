@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -89,7 +90,7 @@ pub trait PreCallHooks<Request>: Send + Sync {
 
     fn async_pre_call_hook<'a>(
         &'a self,
-        context: &'a CallLifecycleContext,
+        _context: &'a CallLifecycleContext,
         request: Request,
     ) -> Self::PreCallFuture<'a>;
 }
@@ -101,9 +102,47 @@ pub trait ModerationHooks<Request>: Send + Sync {
 
     fn async_moderation_hook<'a>(
         &'a self,
-        context: &'a CallLifecycleContext,
+        _context: &'a CallLifecycleContext,
         request: Request,
     ) -> Self::ModerationFuture<'a>;
+}
+
+pub type CallbackFuture<'a, Output> = Pin<Box<dyn Future<Output = Output> + Send + 'a>>;
+
+pub trait DeploymentPreHooks<Request: Send>: Send + Sync {
+    fn async_pre_call_deployment_hook<'a>(
+        &'a self,
+        _context: &'a CallLifecycleContext,
+        request: Request,
+    ) -> CallbackFuture<'a, ActionResult<Request, Error>>
+    where
+        Request: 'a,
+    {
+        Box::pin(async move { ActionResult::Continue(request) })
+    }
+}
+
+pub trait DeploymentSuccessHooks<Response: Send>: Send + Sync {
+    fn async_post_call_success_deployment_hook<'a>(
+        &'a self,
+        _context: &'a CallLifecycleContext,
+        response: Response,
+    ) -> CallbackFuture<'a, ActionResult<Response, Error>>
+    where
+        Response: 'a,
+    {
+        Box::pin(async move { ActionResult::Continue(response) })
+    }
+}
+
+pub trait DeploymentFailureHooks: Send + Sync {
+    fn async_post_call_failure_deployment_hook<'a>(
+        &'a self,
+        _context: &'a CallLifecycleContext,
+        _error: &'a Error,
+    ) -> CallbackFuture<'a, Result<(), Error>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 pub trait TerminalDispatcher: Send + Sync {
@@ -145,14 +184,16 @@ impl CallLifecycle {
         let request = match services.async_pre_call_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
-                let executed = failure(&*services, &*services, &context, error, start_time).await;
+                let executed =
+                    terminal_failure(&*services, &*services, &context, error, start_time).await;
                 return executed.into_result();
             }
         };
         let provider_request = match services.async_moderation_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
-                let executed = failure(&*services, &*services, &context, error, start_time).await;
+                let executed =
+                    terminal_failure(&*services, &*services, &context, error, start_time).await;
                 return executed.into_result();
             }
         };
@@ -160,7 +201,7 @@ impl CallLifecycle {
             Ok(source) => Ok(StreamingCall::new(
                 source, observer, context, start_time, services,
             )),
-            Err(error) => failure(&*services, &*services, &context, error, start_time)
+            Err(error) => terminal_failure(&*services, &*services, &context, error, start_time)
                 .await
                 .into_result(),
         }
@@ -176,8 +217,13 @@ impl CallLifecycle {
         provider_call: ProviderCall,
     ) -> ExecutedCall<Resp, Error>
     where
-        Resp: Serialize,
-        Policy: PreCallHooks<Request> + ModerationHooks<Request>,
+        Request: Send,
+        Resp: Serialize + Send,
+        Policy: PreCallHooks<Request>
+            + ModerationHooks<Request>
+            + DeploymentPreHooks<Request>
+            + DeploymentSuccessHooks<Resp>
+            + DeploymentFailureHooks,
         Dispatcher: TerminalDispatcher,
         ClockImpl: Clock,
         ProviderCall: FnOnce(Request) -> ProviderFuture,
@@ -213,43 +259,29 @@ impl CallLifecycle {
         response_usage: ResponseUsage,
     ) -> ExecutedCall<Resp, Error>
     where
-        Resp: Serialize,
-        Policy: PreCallHooks<Request> + ModerationHooks<Request>,
+        Request: Send,
+        Resp: Serialize + Send,
+        Policy: PreCallHooks<Request>
+            + ModerationHooks<Request>
+            + DeploymentPreHooks<Request>
+            + DeploymentSuccessHooks<Resp>
+            + DeploymentFailureHooks,
         Dispatcher: TerminalDispatcher,
         ClockImpl: Clock,
         ProviderCall: FnOnce(Request) -> ProviderFuture,
         ProviderFuture: Future<Output = Result<Resp, Error>>,
         ResponseUsage: FnOnce(&Resp) -> Option<Usage>,
     {
-        let (mut context, request) = input;
-        let start_time = clock.now();
-        let request = match policy.async_pre_call_hook(&context, request).await {
-            ActionResult::Continue(request) | ActionResult::Replace(request) => request,
-            ActionResult::Reject(error) => {
-                return failure(dispatcher, clock, &context, error, start_time).await;
-            }
-        };
-        let provider_request = match policy.async_moderation_hook(&context, request).await {
-            ActionResult::Continue(request) | ActionResult::Replace(request) => request,
-            ActionResult::Reject(error) => {
-                return failure(dispatcher, clock, &context, error, start_time).await;
-            }
-        };
-        match provider_call(provider_request).await {
-            Ok(response) => {
-                if let Some(usage) = response_usage(&response) {
-                    context.usage = usage;
-                }
-                let terminal = context.terminal(
-                    CallbackTiming::new(start_time, clock.now()),
-                    TerminalClassification::Success,
-                    serde_json::to_value(&response).unwrap_or(Value::Null),
-                );
-                let _ = dispatcher.dispatch(&terminal).await;
-                ExecutedCall::Success { response, terminal }
-            }
-            Err(error) => failure(dispatcher, clock, &context, error, start_time).await,
-        }
+        self.run_prepared_with_usage(
+            input,
+            policy,
+            dispatcher,
+            clock,
+            |request| std::future::ready(Ok(request)),
+            provider_call,
+            response_usage,
+        )
+        .await
     }
 
     pub async fn run_prepared<
@@ -274,8 +306,13 @@ impl CallLifecycle {
         provider_call: ProviderCall,
     ) -> ExecutedCall<Response, Error>
     where
-        Response: Serialize,
-        Hooks: PreCallHooks<InitialRequest> + ModerationHooks<ProviderRequest>,
+        InitialRequest: Send,
+        Response: Serialize + Send,
+        Hooks: PreCallHooks<InitialRequest>
+            + ModerationHooks<ProviderRequest>
+            + DeploymentPreHooks<InitialRequest>
+            + DeploymentSuccessHooks<Response>
+            + DeploymentFailureHooks,
         Dispatcher: TerminalDispatcher,
         ClockImpl: Clock,
         Prepare: FnOnce(InitialRequest) -> PrepareFuture,
@@ -283,17 +320,77 @@ impl CallLifecycle {
         ProviderCall: FnOnce(ProviderRequest) -> ProviderFuture,
         ProviderFuture: Future<Output = Result<Response, Error>>,
     {
+        self.run_prepared_with_usage(
+            (context, request),
+            hooks,
+            dispatcher,
+            clock,
+            prepare,
+            provider_call,
+            |_| None,
+        )
+        .await
+    }
+
+    pub(crate) async fn run_prepared_with_usage<
+        InitialRequest,
+        ProviderRequest,
+        Response,
+        Hooks,
+        Dispatcher,
+        ClockImpl,
+        Prepare,
+        PrepareFuture,
+        ProviderCall,
+        ProviderFuture,
+        ResponseUsage,
+    >(
+        &self,
+        input: (CallLifecycleContext, InitialRequest),
+        hooks: &Hooks,
+        dispatcher: &Dispatcher,
+        clock: &ClockImpl,
+        prepare: Prepare,
+        provider_call: ProviderCall,
+        response_usage: ResponseUsage,
+    ) -> ExecutedCall<Response, Error>
+    where
+        InitialRequest: Send,
+        Response: Serialize + Send,
+        Hooks: PreCallHooks<InitialRequest>
+            + ModerationHooks<ProviderRequest>
+            + DeploymentPreHooks<InitialRequest>
+            + DeploymentSuccessHooks<Response>
+            + DeploymentFailureHooks,
+        Dispatcher: TerminalDispatcher,
+        ClockImpl: Clock,
+        Prepare: FnOnce(InitialRequest) -> PrepareFuture,
+        PrepareFuture: Future<Output = Result<ProviderRequest, Error>>,
+        ProviderCall: FnOnce(ProviderRequest) -> ProviderFuture,
+        ProviderFuture: Future<Output = Result<Response, Error>>,
+        ResponseUsage: FnOnce(&Response) -> Option<Usage>,
+    {
+        let (mut context, request) = input;
         let start_time = clock.now();
+        let request = match hooks
+            .async_pre_call_deployment_hook(&context, request)
+            .await
+        {
+            ActionResult::Continue(request) | ActionResult::Replace(request) => request,
+            ActionResult::Reject(error) => {
+                return failure(hooks, dispatcher, clock, &context, error, start_time).await;
+            }
+        };
         let request = match hooks.async_pre_call_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
-                return failure(dispatcher, clock, &context, error, start_time).await;
+                return failure(hooks, dispatcher, clock, &context, error, start_time).await;
             }
         };
         let provider_request = match prepare(request).await {
             Ok(request) => request,
             Err(error) => {
-                return failure(dispatcher, clock, &context, error, start_time).await;
+                return failure(hooks, dispatcher, clock, &context, error, start_time).await;
             }
         };
         let provider_request = match hooks
@@ -302,11 +399,24 @@ impl CallLifecycle {
         {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
-                return failure(dispatcher, clock, &context, error, start_time).await;
+                return failure(hooks, dispatcher, clock, &context, error, start_time).await;
             }
         };
         match provider_call(provider_request).await {
             Ok(response) => {
+                let response = match hooks
+                    .async_post_call_success_deployment_hook(&context, response)
+                    .await
+                {
+                    ActionResult::Continue(response) | ActionResult::Replace(response) => response,
+                    ActionResult::Reject(error) => {
+                        return failure(hooks, dispatcher, clock, &context, error, start_time)
+                            .await;
+                    }
+                };
+                if let Some(usage) = response_usage(&response) {
+                    context.usage = usage;
+                }
                 let terminal = context.terminal(
                     CallbackTiming::new(start_time, clock.now()),
                     TerminalClassification::Success,
@@ -315,20 +425,39 @@ impl CallLifecycle {
                 let _ = dispatcher.dispatch(&terminal).await;
                 ExecutedCall::Success { response, terminal }
             }
-            Err(error) => failure(dispatcher, clock, &context, error, start_time).await,
+            Err(error) => failure(hooks, dispatcher, clock, &context, error, start_time).await,
         }
     }
 }
 
-async fn failure<R, Policy, ClockImpl>(
-    policy: &Policy,
+async fn failure<R, Hooks, Dispatcher, ClockImpl>(
+    hooks: &Hooks,
+    dispatcher: &Dispatcher,
     clock: &ClockImpl,
     context: &CallLifecycleContext,
     error: Error,
     start_time: f64,
 ) -> ExecutedCall<R, Error>
 where
-    Policy: TerminalDispatcher,
+    Hooks: DeploymentFailureHooks,
+    Dispatcher: TerminalDispatcher,
+    ClockImpl: Clock,
+{
+    let _ = hooks
+        .async_post_call_failure_deployment_hook(context, &error)
+        .await;
+    terminal_failure(dispatcher, clock, context, error, start_time).await
+}
+
+async fn terminal_failure<R, Dispatcher, ClockImpl>(
+    dispatcher: &Dispatcher,
+    clock: &ClockImpl,
+    context: &CallLifecycleContext,
+    error: Error,
+    start_time: f64,
+) -> ExecutedCall<R, Error>
+where
+    Dispatcher: TerminalDispatcher,
     ClockImpl: Clock,
 {
     let kind = error_kind(&error).to_string();
@@ -341,7 +470,7 @@ where
         },
         json!({"message": message, "kind": kind}),
     );
-    let _ = policy.dispatch(&terminal).await;
+    let _ = dispatcher.dispatch(&terminal).await;
     ExecutedCall::Failure { error, terminal }
 }
 
@@ -423,6 +552,10 @@ mod tests {
             Box::pin(async move { ActionResult::Replace(format!("{request}:during")) })
         }
     }
+
+    impl DeploymentPreHooks<String> for RecordingPolicy {}
+    impl DeploymentSuccessHooks<String> for RecordingPolicy {}
+    impl DeploymentFailureHooks for RecordingPolicy {}
 
     impl TerminalDispatcher for RecordingPolicy {
         fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
@@ -522,6 +655,10 @@ mod tests {
         }
     }
 
+    impl DeploymentPreHooks<String> for PreparedHooks {}
+    impl DeploymentSuccessHooks<usize> for PreparedHooks {}
+    impl DeploymentFailureHooks for PreparedHooks {}
+
     impl TerminalDispatcher for PreparedHooks {
         fn dispatch<'a>(&'a self, _: &'a TerminalRecord) -> LogFuture<'a> {
             Box::pin(async { Ok(()) })
@@ -556,6 +693,142 @@ mod tests {
         assert_eq!(
             hooks.events.lock().unwrap().as_slice(),
             ["pre_call", "prepare", "moderation", "provider"]
+        );
+    }
+
+    #[derive(Default)]
+    struct DeploymentRecordingHooks {
+        events: Mutex<Vec<&'static str>>,
+        terminals: Mutex<Vec<TerminalRecord>>,
+    }
+
+    impl PreCallHooks<String> for DeploymentRecordingHooks {
+        type PreCallFuture<'a> = PolicyFuture<'a, String>;
+
+        fn async_pre_call_hook<'a>(
+            &'a self,
+            _: &'a CallLifecycleContext,
+            request: String,
+        ) -> Self::PreCallFuture<'a> {
+            Box::pin(async move { ActionResult::Continue(request) })
+        }
+    }
+
+    impl ModerationHooks<String> for DeploymentRecordingHooks {
+        type ModerationFuture<'a> = PolicyFuture<'a, String>;
+
+        fn async_moderation_hook<'a>(
+            &'a self,
+            _: &'a CallLifecycleContext,
+            request: String,
+        ) -> Self::ModerationFuture<'a> {
+            Box::pin(async move { ActionResult::Continue(request) })
+        }
+    }
+
+    impl DeploymentPreHooks<String> for DeploymentRecordingHooks {
+        fn async_pre_call_deployment_hook<'a>(
+            &'a self,
+            _: &'a CallLifecycleContext,
+            request: String,
+        ) -> CallbackFuture<'a, ActionResult<String, Error>>
+        where
+            String: 'a,
+        {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("deployment_pre");
+                ActionResult::Replace(format!("{request}:pre"))
+            })
+        }
+    }
+
+    impl DeploymentSuccessHooks<String> for DeploymentRecordingHooks {
+        fn async_post_call_success_deployment_hook<'a>(
+            &'a self,
+            _: &'a CallLifecycleContext,
+            response: String,
+        ) -> CallbackFuture<'a, ActionResult<String, Error>>
+        where
+            String: 'a,
+        {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("deployment_success");
+                ActionResult::Replace(format!("{response}:post"))
+            })
+        }
+    }
+
+    impl DeploymentFailureHooks for DeploymentRecordingHooks {
+        fn async_post_call_failure_deployment_hook<'a>(
+            &'a self,
+            _: &'a CallLifecycleContext,
+            _: &'a Error,
+        ) -> CallbackFuture<'a, Result<(), Error>> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("deployment_failure");
+                Err(Error::InvalidRequest("callback failed".to_string()))
+            })
+        }
+    }
+
+    impl TerminalDispatcher for DeploymentRecordingHooks {
+        fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("terminal");
+                self.terminals.lock().unwrap().push(terminal.clone());
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn deployment_replacements_are_adopted_before_terminal_dispatch() {
+        let hooks = DeploymentRecordingHooks::default();
+        let executed = CallLifecycle
+            .run(
+                CallLifecycleContext::new("chat_completion", "model", "provider", "call-4"),
+                "request".to_string(),
+                &hooks,
+                &hooks,
+                &SystemClock,
+                |request| std::future::ready(Ok(request)),
+            )
+            .await;
+
+        assert!(matches!(
+            executed,
+            ExecutedCall::Success { response, .. } if response == "request:pre:post"
+        ));
+        assert_eq!(
+            hooks.events.lock().unwrap().as_slice(),
+            ["deployment_pre", "deployment_success", "terminal"]
+        );
+    }
+
+    #[tokio::test]
+    async fn deployment_failure_hook_cannot_replace_the_original_error() {
+        let hooks = DeploymentRecordingHooks::default();
+        let executed: ExecutedCall<String, Error> = CallLifecycle
+            .run(
+                CallLifecycleContext::new("chat_completion", "model", "provider", "call-5"),
+                "request".to_string(),
+                &hooks,
+                &hooks,
+                &SystemClock,
+                |_| std::future::ready(Err(Error::Network("provider failed".to_string()))),
+            )
+            .await;
+
+        assert!(matches!(
+            executed,
+            ExecutedCall::Failure {
+                error: Error::Network(message),
+                ..
+            } if message == "provider failed"
+        ));
+        assert_eq!(
+            hooks.events.lock().unwrap().as_slice(),
+            ["deployment_pre", "deployment_failure", "terminal"]
         );
     }
 }

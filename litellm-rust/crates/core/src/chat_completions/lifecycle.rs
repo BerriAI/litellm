@@ -3,14 +3,17 @@ use crate::integrations::custom_logger::{LogError, LogFuture};
 use crate::integrations::types::Usage;
 use crate::lifecycle::program::{CallProgram, ProgramOptions, actions_for};
 use crate::lifecycle::{
-    ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall,
-    Lifecycle, LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, SystemClock,
-    TerminalDispatcher, TerminalRecord,
+    ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock,
+    DeploymentFailureHooks, DeploymentPreHooks, DeploymentSuccessHooks, ExecutedCall, Lifecycle,
+    LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, SystemClock, TerminalDispatcher,
+    TerminalRecord,
 };
 
 use super::handler::execute_chat_completions_provider_call_with_transport;
 use super::types::SettledChatRequest;
-use super::types::{ChatCompletionsResponse, ResolvedChatCompletionsRequest};
+use super::types::{
+    ChatCompletionsRequest, ChatCompletionsResponse, ResolvedChatCompletionsRequest,
+};
 
 use super::chat_completions_decline_reason;
 
@@ -118,16 +121,22 @@ pub fn machine(
 }
 
 pub trait ChatCompletionsSession:
-    for<'request> PreCallHooks<ResolvedChatCompletionsRequest<'request>>
+    for<'request> PreCallHooks<ChatCompletionsRequest<'request>>
     + for<'request> ModerationHooks<ResolvedChatCompletionsRequest<'request>>
+    + for<'request> DeploymentPreHooks<ChatCompletionsRequest<'request>>
+    + DeploymentSuccessHooks<ChatCompletionsResponse>
+    + DeploymentFailureHooks
     + TerminalDispatcher
     + Clock
 {
 }
 
 impl<T> ChatCompletionsSession for T where
-    T: for<'request> PreCallHooks<ResolvedChatCompletionsRequest<'request>>
+    T: for<'request> PreCallHooks<ChatCompletionsRequest<'request>>
         + for<'request> ModerationHooks<ResolvedChatCompletionsRequest<'request>>
+        + for<'request> DeploymentPreHooks<ChatCompletionsRequest<'request>>
+        + DeploymentSuccessHooks<ChatCompletionsResponse>
+        + DeploymentFailureHooks
         + TerminalDispatcher
         + Clock
 {
@@ -137,7 +146,7 @@ pub async fn execute<'request, S, T, A>(
     application: &A,
     transport: &T,
     session: &S,
-    request: ResolvedChatCompletionsRequest<'request>,
+    request: ChatCompletionsRequest<'request>,
     context: CallLifecycleContext,
 ) -> ExecutedCall<ChatCompletionsResponse, Error>
 where
@@ -146,11 +155,12 @@ where
     A: crate::providers::auth::ChatAuthorizationServices,
 {
     CallLifecycle
-        .run_with_usage(
+        .run_prepared_with_usage(
             (context, request),
             session,
             session,
             session,
+            |request| std::future::ready(super::request::resolve_request(request)),
             |request| async move {
                 execute_chat_completions_provider_call_with_transport(
                     application,
@@ -202,6 +212,10 @@ impl ModerationHooks<SettledChatRequest> for UndispatchedSession {
         std::future::ready(ActionResult::Continue(request))
     }
 }
+
+impl DeploymentPreHooks<SettledChatRequest> for UndispatchedSession {}
+impl DeploymentSuccessHooks<ChatCompletionsResponse> for UndispatchedSession {}
+impl DeploymentFailureHooks for UndispatchedSession {}
 
 impl TerminalDispatcher for UndispatchedSession {
     fn dispatch<'a>(&'a self, _: &'a TerminalRecord) -> LogFuture<'a> {

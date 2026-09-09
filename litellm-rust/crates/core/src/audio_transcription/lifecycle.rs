@@ -13,8 +13,9 @@ use crate::integrations::custom_guardrail::{
 use crate::integrations::custom_logger::{CallType, CustomLogger, CustomLoggerRunner, LogFuture};
 use crate::integrations::types::{RequestMetadata, StandardLoggingMetadata};
 use crate::lifecycle::{
-    ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall, ModerationHooks,
-    PreCallHooks, TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycle, CallLifecycleContext, Clock, DeploymentFailureHooks,
+    DeploymentPreHooks, DeploymentSuccessHooks, ExecutedCall, ModerationHooks, PreCallHooks,
+    TerminalDispatcher, TerminalRecord,
 };
 use crate::providers::dispatch::resolve_audio_route_provider;
 
@@ -292,6 +293,10 @@ impl ModerationHooks<ProviderAudioTranscriptionRequest> for AudioRequestPolicy {
         })
     }
 }
+
+impl DeploymentPreHooks<PreparedAudioTranscriptionRequest> for AudioRequestPolicy {}
+impl DeploymentSuccessHooks<Value> for AudioRequestPolicy {}
+impl DeploymentFailureHooks for AudioRequestPolicy {}
 
 fn logging_metadata(metadata: &RequestMetadata) -> StandardLoggingMetadata {
     StandardLoggingMetadata {

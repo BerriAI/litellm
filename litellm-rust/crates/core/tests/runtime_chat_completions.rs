@@ -6,7 +6,8 @@ use litellm_core::Error;
 use litellm_core::chat_completions::types::ChatCompletionsRequest;
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks, TerminalDispatcher,
+    ActionResult, CallLifecycleContext, CallbackFuture, Clock, DeploymentFailureHooks,
+    DeploymentPreHooks, DeploymentSuccessHooks, ModerationHooks, PreCallHooks, TerminalDispatcher,
     TerminalRecord,
 };
 use litellm_core::providers::auth::{AwsMechanisms, Environment, SigningClock};
@@ -53,17 +54,23 @@ struct RecordingCalls {
 struct Bindings {
     id: u64,
     reject: bool,
+    replacement_message: Option<&'static str>,
 }
 
 impl Bindings {
     fn new(id: u64) -> Self {
-        Self { id, reject: false }
+        Self {
+            id,
+            reject: false,
+            replacement_message: None,
+        }
     }
 }
 
 struct RecordingSession {
     terminals: Arc<Mutex<Vec<TerminalRecord>>>,
     reject: bool,
+    replacement_message: Option<&'static str>,
 }
 
 impl Clock for RecordingSession {
@@ -72,14 +79,13 @@ impl Clock for RecordingSession {
     }
 }
 
-impl<'request>
-    PreCallHooks<litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>>
+impl<'request> PreCallHooks<litellm_core::chat_completions::types::ChatCompletionsRequest<'request>>
     for RecordingSession
 {
     type PreCallFuture<'a>
         = std::future::Ready<
         ActionResult<
-            litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+            litellm_core::chat_completions::types::ChatCompletionsRequest<'request>,
             Error,
         >,
     >
@@ -88,7 +94,7 @@ impl<'request>
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
-        request: litellm_core::chat_completions::types::ResolvedChatCompletionsRequest<'request>,
+        request: litellm_core::chat_completions::types::ChatCompletionsRequest<'request>,
     ) -> Self::PreCallFuture<'a> {
         std::future::ready(if self.reject {
             ActionResult::Reject(Error::InvalidRequest("blocked by session".into()))
@@ -121,6 +127,36 @@ impl<'request>
     }
 }
 
+impl<'request>
+    DeploymentPreHooks<litellm_core::chat_completions::types::ChatCompletionsRequest<'request>>
+    for RecordingSession
+{
+    fn async_pre_call_deployment_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: ChatCompletionsRequest<'request>,
+    ) -> CallbackFuture<'a, ActionResult<ChatCompletionsRequest<'request>, Error>>
+    where
+        ChatCompletionsRequest<'request>: 'a,
+    {
+        Box::pin(async move {
+            if let Some(message) = self.replacement_message {
+                ActionResult::Replace(ChatCompletionsRequest {
+                    messages: json!([{"role": "user", "content": message}]),
+                    ..request
+                })
+            } else {
+                ActionResult::Continue(request)
+            }
+        })
+    }
+}
+impl DeploymentSuccessHooks<litellm_core::chat_completions::types::ChatCompletionsResponse>
+    for RecordingSession
+{
+}
+impl DeploymentFailureHooks for RecordingSession {}
+
 impl TerminalDispatcher for RecordingSession {
     fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
         Box::pin(async move {
@@ -147,6 +183,7 @@ impl CallServices for RecordingCalls {
         Box::pin(std::future::ready(Ok(RecordingSession {
             terminals: self.terminals.clone(),
             reject: bindings.reject,
+            replacement_message: bindings.replacement_message,
         })))
     }
 }
@@ -362,6 +399,27 @@ async fn clones_share_application_services_but_open_isolated_sessions() {
 }
 
 #[tokio::test]
+async fn deployment_pre_replacement_is_prepared_and_sent() {
+    let client = LiteLlm::from_services(services());
+    client
+        .chat_completions_with(
+            request("original", Map::new()),
+            context("deployment-replacement"),
+            Bindings {
+                id: 33,
+                reject: false,
+                replacement_message: Some("replacement"),
+            },
+        )
+        .await
+        .unwrap();
+
+    let requests = client.services().transport.requests.lock().unwrap();
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["messages"][0]["content"][0]["text"], "replacement");
+}
+
+#[tokio::test]
 async fn session_rejection_is_terminal_and_never_reaches_transport() {
     let client = LiteLlm::from_services(services());
     let error = client
@@ -371,6 +429,7 @@ async fn session_rejection_is_terminal_and_never_reaches_transport() {
             Bindings {
                 id: 44,
                 reject: true,
+                replacement_message: None,
             },
         )
         .await

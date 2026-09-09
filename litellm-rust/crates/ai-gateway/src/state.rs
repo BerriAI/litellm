@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use crate::io::realtime_pool::RealtimePool;
 use litellm_core::Error;
-use litellm_core::chat_completions::types::ResolvedChatCompletionsRequest;
+use litellm_core::chat_completions::types::{
+    ChatCompletionsRequest, ResolvedChatCompletionsRequest,
+};
 use litellm_core::integrations::custom_logger::{CustomLogger, CustomLoggerRunner, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks, TerminalDispatcher,
-    TerminalRecord,
+    ActionResult, CallLifecycleContext, Clock, DeploymentFailureHooks, DeploymentPreHooks,
+    DeploymentSuccessHooks, ModerationHooks, PreCallHooks, TerminalDispatcher, TerminalRecord,
 };
 use litellm_core::messages::types::MessagesRequest;
 use litellm_core::router::Router;
@@ -79,15 +81,22 @@ impl ModerationHooks<MessagesRequest> for GatewayMessagesSession {
     }
 }
 
-impl<'request> PreCallHooks<ResolvedChatCompletionsRequest<'request>> for GatewayMessagesSession {
+impl DeploymentPreHooks<MessagesRequest> for GatewayMessagesSession {}
+impl DeploymentSuccessHooks<litellm_core::messages::types::AnthropicMessagesResponse>
+    for GatewayMessagesSession
+{
+}
+impl DeploymentFailureHooks for GatewayMessagesSession {}
+
+impl<'request> PreCallHooks<ChatCompletionsRequest<'request>> for GatewayMessagesSession {
     type PreCallFuture<'a>
-        = std::future::Ready<ActionResult<ResolvedChatCompletionsRequest<'request>, Error>>
+        = std::future::Ready<ActionResult<ChatCompletionsRequest<'request>, Error>>
     where
         Self: 'a;
     fn async_pre_call_hook<'a>(
         &'a self,
         _: &'a CallLifecycleContext,
-        request: ResolvedChatCompletionsRequest<'request>,
+        request: ChatCompletionsRequest<'request>,
     ) -> Self::PreCallFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
@@ -108,6 +117,12 @@ impl<'request> ModerationHooks<ResolvedChatCompletionsRequest<'request>>
     ) -> Self::ModerationFuture<'a> {
         std::future::ready(ActionResult::Continue(request))
     }
+}
+
+impl<'request> DeploymentPreHooks<ChatCompletionsRequest<'request>> for GatewayMessagesSession {}
+impl DeploymentSuccessHooks<litellm_core::chat_completions::types::ChatCompletionsResponse>
+    for GatewayMessagesSession
+{
 }
 
 impl TerminalDispatcher for GatewayMessagesSession {

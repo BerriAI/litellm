@@ -6,9 +6,10 @@ use crate::integrations::custom_logger::{LogError, LogFuture};
 use crate::integrations::types::Usage;
 use crate::lifecycle::program::{CallProgram, ProgramOptions, actions_for};
 use crate::lifecycle::{
-    ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall,
-    Lifecycle, LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, StreamingCall,
-    StreamingObserver, TerminalDispatcher, TerminalRecord,
+    ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock,
+    DeploymentFailureHooks, DeploymentPreHooks, DeploymentSuccessHooks, ExecutedCall, Lifecycle,
+    LifecycleRoute, ModerationHooks, Outcome, PreCallHooks, StreamingCall, StreamingObserver,
+    TerminalDispatcher, TerminalRecord,
 };
 
 use super::handler::execute_messages_provider_call;
@@ -139,13 +140,22 @@ mod program_tests {
 }
 
 pub trait MessagesServices:
-    PreCallHooks<MessagesRequest> + ModerationHooks<MessagesRequest> + TerminalDispatcher + Clock
+    PreCallHooks<MessagesRequest>
+    + ModerationHooks<MessagesRequest>
+    + DeploymentPreHooks<MessagesRequest>
+    + DeploymentSuccessHooks<AnthropicMessagesResponse>
+    + DeploymentFailureHooks
+    + TerminalDispatcher
+    + Clock
 {
 }
 
 impl<T> MessagesServices for T where
     T: PreCallHooks<MessagesRequest>
         + ModerationHooks<MessagesRequest>
+        + DeploymentPreHooks<MessagesRequest>
+        + DeploymentSuccessHooks<AnthropicMessagesResponse>
+        + DeploymentFailureHooks
         + TerminalDispatcher
         + Clock
 {
@@ -185,6 +195,10 @@ impl ModerationHooks<MessagesRequest> for NoopServices {
         ready(ActionResult::Continue(request))
     }
 }
+
+impl DeploymentPreHooks<MessagesRequest> for NoopServices {}
+impl DeploymentSuccessHooks<AnthropicMessagesResponse> for NoopServices {}
+impl DeploymentFailureHooks for NoopServices {}
 
 impl TerminalDispatcher for NoopServices {
     fn dispatch<'a>(&'a self, _: &'a TerminalRecord) -> LogFuture<'a> {

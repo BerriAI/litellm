@@ -5,8 +5,9 @@ use std::sync::Mutex;
 use litellm_core::Error;
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, ModerationHooks, PreCallHooks,
-    TerminalClassification, TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycleContext, Clock, DeploymentFailureHooks, DeploymentPreHooks,
+    DeploymentSuccessHooks, ModerationHooks, PreCallHooks, TerminalClassification,
+    TerminalDispatcher, TerminalRecord,
 };
 use litellm_core::messages::lifecycle::{Options, messages};
 use litellm_core::messages::types::MessagesRequest;
@@ -56,6 +57,10 @@ impl ModerationHooks<MessagesRequest> for Services {
         Box::pin(async move { ActionResult::Continue(request) })
     }
 }
+
+impl DeploymentPreHooks<MessagesRequest> for Services {}
+impl DeploymentSuccessHooks<litellm_core::messages::types::AnthropicMessagesResponse> for Services {}
+impl DeploymentFailureHooks for Services {}
 
 impl TerminalDispatcher for Services {
     fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {

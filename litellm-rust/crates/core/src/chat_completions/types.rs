@@ -11,6 +11,7 @@ use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
 /// names by the host, exactly as the messages route receives an already
 /// Anthropic-shaped body. The core owns the conversation translation, the
 /// provider call, and the response normalization.
+#[derive(Clone)]
 pub struct ChatCompletionsRequest<'a> {
     pub model: &'a str,
     pub messages: Value,
