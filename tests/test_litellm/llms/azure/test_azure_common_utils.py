@@ -1,6 +1,5 @@
 import json
 import os
-import subprocess
 import sys
 import traceback
 from typing import Callable, Optional
@@ -446,6 +445,9 @@ def test_initialize_honors_explicit_max_retries(setup_mocks, configured, expecte
 
 
 def test_default_max_retries_env_var_reaches_azure_sdk_client():
+    import subprocess
+    import sys
+
     code = (
         "from litellm.llms.azure.common_utils import BaseAzureLLM\n"
         "client = BaseAzureLLM().get_azure_openai_client("
