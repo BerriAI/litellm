@@ -454,3 +454,24 @@ async def test_runtime_routing_strategy_args_update_keeps_previous_args_when_inv
     router.update_settings(routing_strategy_args={"ttft_percentile": 5})
 
     assert await _pick_streaming(router) == FAST_TTFT_ID
+
+
+@pytest.mark.asyncio
+async def test_runtime_routing_strategy_args_update_is_a_noop_without_a_selector():
+    """simple-shuffle has no selector to re-link, so an args update must leave
+    the router alone instead of blowing up on a missing selector attribute."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP,
+                "litellm_params": {"model": f"openai/{MODEL_GROUP}", "api_key": "sk-fake"},
+                "model_info": {"id": FAST_TTFT_ID},
+            }
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    router.update_settings(routing_strategy_args={"ttl": 5})
+
+    assert router.routing_strategy_args == {"ttl": 5}
+    assert await _pick_streaming(router) == FAST_TTFT_ID
