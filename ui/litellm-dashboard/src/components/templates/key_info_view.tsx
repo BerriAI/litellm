@@ -328,7 +328,6 @@ export default function KeyInfoView({
         };
       }
 
-      // tags are merged into metadata; do not send as top-level field
       if ("tags" in formValues) {
         delete formValues.tags;
       }
