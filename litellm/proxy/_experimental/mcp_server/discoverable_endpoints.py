@@ -43,9 +43,11 @@ from litellm.proxy._experimental.mcp_server.faults import (
     render_token_fault,
 )
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    VendorCredentialState,
     aggregate_authorize,
     aggregate_token,
     complete_connect_flow,
+    describe_connect_flow,
     introspect_gateway_token,
     is_gateway_dcr_client_id,
     is_proxy_api_resource,
@@ -798,21 +800,7 @@ def _bridge_access_denied_redirect(redirect_uri: str, state: str, mcp_server: MC
     return RedirectResponse(_append_query_params(redirect_uri, params), status_code=302)
 
 
-async def _bridge_authorize_access_denial(
-    litellm_user_id: str,
-    mcp_server: MCPServer,
-    redirect_uri: str,
-    state: str,
-) -> RedirectResponse | None:
-    """The denial redirect for a signed-in user who cannot reach the target server, or None to proceed.
-
-    Admits the user exactly as MCP egress will (the same ``reload_admitted_user`` constructor and the
-    same ``get_allowed_mcp_servers`` resolver), so an envelope is minted only when the resulting
-    session can actually list and call the server's tools. Without this gate the flow completes, the
-    client shows connected, and every tool request fail-closes to an empty list with nothing telling
-    the operator why. An availability fault (5xx, e.g. a DB outage's 503) propagates; an unknown or
-    deactivated user denies like a missing grant, fail closed.
-    """
+async def _user_can_reach_mcp_server(user_id: str, server_id: str) -> bool:
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
@@ -821,13 +809,22 @@ async def _bridge_authorize_access_denial(
     )
 
     try:
-        admitted: Final = await MCPRequestHandler.reload_admitted_user(litellm_user_id)
+        admitted: Final = await MCPRequestHandler.reload_admitted_user(user_id)
     except HTTPException as exc:
         if exc.status_code >= 500:
             raise
-        return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
-    allowed_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(admitted)
-    if mcp_server.server_id in allowed_server_ids:
+        return False
+    return server_id in await global_mcp_server_manager.get_allowed_mcp_servers(admitted)
+
+
+async def _bridge_authorize_access_denial(
+    litellm_user_id: str,
+    mcp_server: MCPServer,
+    redirect_uri: str,
+    state: str,
+) -> RedirectResponse | None:
+    """The denial redirect for a signed-in user who cannot reach the target server, or None to proceed."""
+    if await _user_can_reach_mcp_server(litellm_user_id, mcp_server.server_id):
         return None
     return _bridge_access_denied_redirect(redirect_uri, state, mcp_server)
 
@@ -1910,6 +1907,38 @@ async def token_endpoint(
     )
 
 
+async def _vendor_credential_state(user_id: str, server_id: str) -> VendorCredentialState:
+    """Whether the gateway itself can see a live vendor credential for this user and server.
+
+    The one reading of "authorized" the connect page displays and the finish step enforces, so
+    the button a user sees and the grant they get cannot disagree. A read fault is neither, and
+    fails the scoped grant closed."""
+    from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # circular import at module load
+        get_user_oauth_credential,
+        oauth_grant_state,
+    )
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import at module load
+
+    if prisma_client is None:
+        return "unavailable"
+    try:
+        credential: Final = await get_user_oauth_credential(prisma_client, user_id, server_id)
+    except Exception:  # noqa: BLE001  # a credential-read fault must fail the scoped grant closed
+        return "unavailable"
+    return "absent" if oauth_grant_state(credential) == "absent" else "present"
+
+
+@router.get("/authorize/flow")
+async def authorize_flow(request: Request, flow: str) -> Response:
+    return await describe_connect_flow(
+        request=request,
+        flow_handle=flow,
+        session_user_id=_session_cookie_user_id(request),
+        lookup_vendor_credential=_vendor_credential_state,
+        lookup_server_reachability=_user_can_reach_mcp_server,
+    )
+
+
 @router.post("/authorize/complete")
 async def authorize_complete(
     request: Request,
@@ -1934,6 +1963,8 @@ async def authorize_complete(
         delivery=delivery,
         team_id=team_id,
         decision=decision,
+        lookup_vendor_credential=_vendor_credential_state,
+        lookup_server_reachability=_user_can_reach_mcp_server,
     )
 
 

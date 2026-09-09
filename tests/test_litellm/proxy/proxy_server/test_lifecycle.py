@@ -22,6 +22,7 @@ import inspect
 import json
 import logging
 import os
+import subprocess
 from collections.abc import Awaitable, Callable
 from typing import List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -747,6 +748,30 @@ async def test_proxy_startup_event_invalid_missing_app_arg_raises():
         # no arguments — the decorator preserves the missing-arg TypeError.
         async with proxy_startup_event():  # type: ignore[call-arg]
             pass
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_event_prunes_dead_workers_live_gauges(tmp_path):
+    """With PROMETHEUS_MULTIPROC_DIR set, a booting worker drops the live-gauge files of pids that no longer
+    exist, so a crashed worker's in-flight samples leave the aggregate as soon as its replacement starts."""
+    exited = subprocess.Popen(["true"])
+    assert exited.wait(timeout=30) == 0
+    stale = tmp_path / f"gauge_livesum_{exited.pid}.db"
+    stale.touch()
+    counter = tmp_path / f"counter_{exited.pid}.db"
+    counter.touch()
+
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+    clean_env["PROMETHEUS_MULTIPROC_DIR"] = str(tmp_path)
+    with patch.dict(os.environ, clean_env, clear=True):
+        try:
+            async with proxy_startup_event(app=None):
+                pass
+        except Exception:
+            pass
+
+    assert not stale.exists()
+    assert counter.exists()
 
 
 def test_otel_global_provider_published_after_callback_init():

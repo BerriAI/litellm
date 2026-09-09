@@ -223,6 +223,59 @@ def test_gating_matches_the_monolithic_entrypoint_and_get_secret_bool(
     assert monolith[1] == ("args=litellm --port 4000" if traced else "args=--port 4000")
 
 
+def test_wipes_the_prometheus_multiproc_dir_before_uvicorn_forks(tmp_path: Path) -> None:
+    """A restarted container inherits the emptyDir of its predecessor, whose worker pids it may reuse, so the
+    stale .db files must be gone before any worker opens the one carrying its own pid."""
+    multiproc_dir = tmp_path / "multiproc"
+    multiproc_dir.mkdir()
+    (multiproc_dir / "gauge_livesum_7.db").write_bytes(b"stale")
+    (multiproc_dir / "counter_7.db").write_bytes(b"stale")
+    (multiproc_dir / "keep.txt").write_text("not a sample")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_stubs(bin_dir, ("uvicorn",))
+    record = tmp_path / "record.txt"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "RECORD": str(record),
+        "PROMETHEUS_MULTIPROC_DIR": str(multiproc_dir),
+    }
+    env.pop("USE_DDTRACE", None)
+    result = subprocess.run(
+        ["sh", str(COMPONENT_ENTRYPOINT), "uvicorn", "gateway.main:app"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout} stderr={result.stderr}"
+    assert sorted(p.name for p in multiproc_dir.iterdir()) == ["keep.txt"]
+    assert record.read_text().splitlines()[0] == "exec=uvicorn"
+
+
+def test_creates_a_missing_prometheus_multiproc_dir(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_stubs(bin_dir, ("uvicorn",))
+    missing = tmp_path / "multiproc"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "RECORD": str(tmp_path / "record.txt"),
+        "PROMETHEUS_MULTIPROC_DIR": str(missing),
+    }
+    env.pop("USE_DDTRACE", None)
+    result = subprocess.run(
+        ["sh", str(COMPONENT_ENTRYPOINT), "uvicorn", "gateway.main:app"], env=env, capture_output=True, text=True
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout} stderr={result.stderr}"
+    assert missing.is_dir()
+
+
 def _copied_script(dockerfile: Path, image_path: str) -> Path:
     """Resolve the repo file a Dockerfile `COPY`s to `image_path`, so tests run what the image ships."""
     matches = _COPY_RE.findall(dockerfile.read_text())

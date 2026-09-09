@@ -6092,3 +6092,75 @@ class TestFinalOptionalParamsLineRedaction:
 
         assert "'max_tokens': 17" in printed
         assert "'temperature': 0.25" in printed
+
+
+class TestDropParamsStringCoercion:
+    @pytest.mark.parametrize("drop_params", ["true", "True", True])
+    def test_truthy_drop_params_drops_unsupported_temperature(self, drop_params, monkeypatch):
+        from litellm.utils import get_optional_params
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result = get_optional_params(
+            model="gpt-5-nano",
+            custom_llm_provider="openai",
+            temperature=0.1,
+            drop_params=drop_params,
+        )
+        assert "temperature" not in result
+
+    @pytest.mark.parametrize("drop_params", ["false", False, None])
+    def test_falsy_drop_params_still_raises(self, drop_params, monkeypatch):
+        from litellm.utils import get_optional_params
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model="gpt-5-nano",
+                custom_llm_provider="openai",
+                temperature=0.1,
+                drop_params=drop_params,
+            )
+
+
+def _credential_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if "litellm_credential_name=" in record.getMessage()]
+
+
+def test_load_credentials_from_list_warns_when_the_named_credential_is_not_loaded(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.utils import load_credentials_from_list
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    assert _credential_warnings(caplog) == [
+        "litellm_credential_name=openai-cred matched none of the 0 loaded credentials; the request runs without it"
+    ]
+
+
+def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_without_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.types.utils import CredentialItem
+    from litellm.utils import load_credentials_from_list
+
+    loaded = CredentialItem(
+        credential_name="openai-cred",
+        credential_values={"api_key": "sk-from-db", "api_base": "https://credential.example"},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [loaded])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "api_base": "https://request.example"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {
+        "litellm_credential_name": "openai-cred",
+        "api_base": "https://request.example",
+        "api_key": "sk-from-db",
+    }
+    assert _credential_warnings(caplog) == []

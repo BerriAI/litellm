@@ -35,7 +35,7 @@ from .amazon_titan_multimodal_transformation import (
 )
 from .amazon_titan_v2_transformation import AmazonTitanV2Config
 from .cohere_transformation import BedrockCohereEmbeddingConfig
-from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
+from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig, drop_params_enabled
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -239,7 +239,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 returned_response = AmazonTitanG1Config()._transform_response(response_list=response_list, model=model)
             elif provider == "twelvelabs":
                 returned_response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
-                    response_list=response_list, model=model
+                    response_list=response_list, model=model, batch_data=batch_data
                 )
             elif provider == "nova":
                 returned_response = AmazonNovaEmbeddingConfig()._transform_response(
@@ -484,12 +484,13 @@ class BedrockEmbedding(BaseAWSLLM):
         elif provider == "twelvelabs":
             batch_data = []
             for i in input:
-                twelvelabs_request = TwelveLabsMarengoEmbeddingConfig()._transform_request(
+                twelvelabs_request = TwelveLabsMarengoEmbeddingConfig(model=model)._transform_request(
                     input=i,
                     inference_params=inference_params,
                     async_invoke_route=has_async_invoke,
                     model_id=modelId,
                     output_s3_uri=inference_params.get("output_s3_uri"),
+                    drop_params=drop_params_enabled(litellm_params),
                 )
                 batch_data.append(twelvelabs_request)
         elif provider == "nova":
