@@ -27,17 +27,20 @@ The suites run against a live proxy, so bring one up first by running the litell
 
 2. Bring up a Postgres and a Redis for the proxy to use. The repo-root `docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run. Tests that read Redis directly default to the deployed shape (TLS + cluster mode) whenever `REDIS_HOST` is set, so for a local standalone Redis also set `REDIS_CLUSTER=false` and `REDIS_SSL=false` (plus `REDIS_PASSWORD` when your Redis requires auth)
 
-3. Start the test-only JWT issuer the `other/` suite mints tokens from, then the litellm proxy against your config, and confirm both are live. The issuer is a fake identity provider (`jwt_issuer.py`) with an open mint endpoint, so it binds loopback only; it generates one RSA key per process and serves it as a JWKS, and the proxy caches that JWKS for `public_key_ttl` (600s) without refetching on an unknown `kid`, so restart the proxy whenever you restart the issuer:
+3. Start the identity provider the `other/` suite authenticates against, then the litellm proxy against your config, and confirm both are live. It is a real Keycloak, running the realm in `tests/e2e/idp_realm.json`, and the proxy trusts it because `JWT_PUBLIC_KEY_URL` points at that realm's JWKS. The proxy caches the JWKS for `public_key_ttl` (600s) and does not refetch on an unknown `kid`, so restart the proxy whenever you recreate the container:
 
    ```bash
    set -a && source .env && set +a
-   uv run python tests/e2e/jwt_issuer.py &
-   curl -fs http://127.0.0.1:4190/.well-known/jwks.json
-   JWT_PUBLIC_KEY_URL=http://127.0.0.1:4190/.well-known/jwks.json litellm --config <your-e2e-config>.yml --port 4000
+   docker run -d --name litellm-e2e-idp -p 8480:8080 \
+     -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+     -v "$PWD/tests/e2e/idp_realm.json:/opt/keycloak/data/import/realm.json:ro" \
+     quay.io/keycloak/keycloak:26.7.3 start-dev --import-realm
+   curl -fs --retry 30 --retry-delay 2 --retry-all-errors http://127.0.0.1:8480/realms/litellm-e2e/.well-known/openid-configuration
+   JWT_PUBLIC_KEY_URL=http://127.0.0.1:8480/realms/litellm-e2e/protocol/openid-connect/certs litellm --config <your-e2e-config>.yml --port 4000
    curl -fs http://localhost:4000/health/liveliness
    ```
 
-   The issuer's port is `E2E_JWT_ISSUER_PORT` (default `4190`, the port in the URLs above), read by both the issuer process and the tests, so set it in one place if you change it. JWT auth is an enterprise feature, so the proxy also needs `LITELLM_LICENSE` in its environment, and its config needs the JWT block below. `enable_jwt_auth` only routes bearer tokens with three dot-separated segments into the JWT path, so `sk-` virtual keys and the master key keep working for every other suite. `proxy_batch_write_at` is lowered so the JWT spend-attribution test sees its row well inside the poll deadline:
+   The tests reach Keycloak at `E2E_KEYCLOAK_URL` (default `http://127.0.0.1:8480`) and provision their identities through its admin API, so they also need `E2E_KEYCLOAK_ADMIN_USER` and `E2E_KEYCLOAK_ADMIN_PASSWORD` (`admin` / `admin` for the throwaway container above; the deployed stacks take theirs from a secret). JWT auth is an enterprise feature, so the proxy needs `LITELLM_LICENSE` in its environment, and its config needs the JWT block below. `enable_jwt_auth` only routes bearer tokens with three dot-separated segments into the JWT path, so `sk-` virtual keys and the master key keep working for every other suite. `proxy_batch_write_at` is lowered so the JWT spend-attribution test sees its row well inside the poll deadline:
 
    ```yaml
    general_settings:
@@ -50,7 +53,9 @@ The suites run against a live proxy, so bring one up first by running the litell
        user_id_upsert: true
    ```
 
-   Leave `JWT_AUDIENCE` and `JWT_ISSUER` unset unless you also put matching `aud` / `iss` claims in the tokens the tests mint; the issuer sets `iss` to its own base URL
+   Leave `JWT_AUDIENCE` and `JWT_ISSUER` unset. Keycloak's access tokens carry `aud: account`, its own audience rather than the proxy's, and their `iss` is whatever base URL the token was requested through, so pinning either one only makes sense once the deployment fixes Keycloak's hostname
+
+   CI runs this suite against a Keycloak deployed beside the ephemeral stack, and that deployment (the JWT config block, `JWT_PUBLIC_KEY_URL`, and the admin credential handed to the run pod) lives in the project-releaser repo, not here. A stack without it fails the JWT tests rather than skipping them
 
 4. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`):
 
