@@ -7689,8 +7689,6 @@ async def test_missing_session_id_omit_keeps_client_supplied_session_id():
 async def test_missing_session_id_omit_keeps_body_litellm_session_id(
     monkeypatch: pytest.MonkeyPatch, client_body: dict[str, object]
 ):
-    """A session the client sends as the top-level `litellm_session_id` must reach SpendLogs.session_id under
-    `omit`, matching what callbacks report through StandardLoggingPayload.session_id and what Langfuse logs."""
     from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -7735,8 +7733,6 @@ async def test_missing_session_id_omit_body_litellm_session_id_does_not_override
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
 async def test_missing_session_id_omit_keeps_metadata_session_id_on_litellm_metadata_routes(path: str):
-    """Routes that write to `litellm_metadata` promote the client's `metadata.session_id` later, so the body
-    `litellm_session_id` must not take the slot first."""
     updated = await add_litellm_data_to_request(
         data={
             "model": "gpt-4o",
