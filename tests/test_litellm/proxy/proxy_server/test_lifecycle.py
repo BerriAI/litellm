@@ -22,9 +22,10 @@ import inspect
 import json
 import logging
 import os
+import subprocess
 from collections.abc import Awaitable, Callable
 from typing import Final, Optional, Union
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from prometheus_client import REGISTRY
@@ -968,6 +969,30 @@ async def test_prometheus_alerting_uses_persisted_settings_without_duplicate_cal
             REGISTRY.register(collector)
 
 
+@pytest.mark.asyncio
+async def test_proxy_startup_event_prunes_dead_workers_live_gauges(tmp_path):
+    """With PROMETHEUS_MULTIPROC_DIR set, a booting worker drops the live-gauge files of pids that no longer
+    exist, so a crashed worker's in-flight samples leave the aggregate as soon as its replacement starts."""
+    exited = subprocess.Popen(["true"])
+    assert exited.wait(timeout=30) == 0
+    stale = tmp_path / f"gauge_livesum_{exited.pid}.db"
+    stale.touch()
+    counter = tmp_path / f"counter_{exited.pid}.db"
+    counter.touch()
+
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+    clean_env["PROMETHEUS_MULTIPROC_DIR"] = str(tmp_path)
+    with patch.dict(os.environ, clean_env, clear=True):
+        try:
+            async with proxy_startup_event(app=None):
+                pass
+        except Exception:
+            pass
+
+    assert not stale.exists()
+    assert counter.exists()
+
+
 def test_otel_global_provider_published_after_callback_init():
     """The OTel V2 global-provider publish must run after callback
     initialization in ``proxy_startup_event``.
@@ -1038,6 +1063,27 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     assert budget_check_pos < warn_pos < next_startup_section_pos, (
         "DB-less budget warning must run after Prisma setup and the DB-backed budget block"
     )
+
+
+@pytest.mark.asyncio
+async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
+    from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_config.create = AsyncMock()
+    deployment = {
+        "model_name": "a",
+        "litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": {}},
+    }
+
+    result = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, [deployment])
+
+    assert result == {'yaml:["a",[]]': DEFAULT_TUNING_FINGERPRINT}
+    assert prisma_client.db.litellm_config.create.await_args.kwargs["data"] == {
+        "param_name": "auto_router_tuning_baseline_v2",
+        "param_value": json.dumps(dict(result)),
+    }
 
 
 @pytest.mark.asyncio

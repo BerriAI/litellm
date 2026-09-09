@@ -30,7 +30,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
 
 
 async def _passthrough_row(update_data):
@@ -3070,6 +3070,31 @@ class TestUpdateDBModelBlocked:
         assert "blocked" not in result
 
 
+class TestUpdateDBModelKeepsLegacyDropParams:
+    def test_partial_patch_keeps_encrypted_string_drop_params(self, monkeypatch):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        legacy_row = Deployment(
+            model_name="gpt-5-nano",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-5-nano",
+                api_key=encrypt_value_helper(value="sk-old"),
+                drop_params=encrypt_value_helper(value="true"),
+            ),
+            model_info=ModelInfo(id="legacy-row"),
+        )
+
+        result = update_db_model(
+            db_model=legacy_row,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(api_key="sk-new")),
+        )
+
+        stored = json.loads(result["litellm_params"])
+        assert decrypt_value_helper(value=stored["drop_params"], key="drop_params") == "true"
+
+
 def _build_db_model_with_pricing():
     """Wildcard deployment with custom pricing in litellm_params; Deployment.__init__
     mirrors SPECIAL_MODEL_INFO_PARAMS into model_info, so both blobs hold the rate."""
@@ -4447,12 +4472,12 @@ class TestStrategyRouterWriteValidation:
             self.litellm_proxymodeltable = MagicMock(
                 create=AsyncMock(),
                 update=AsyncMock(),
-                find_many=AsyncMock(
-                    return_value=tuple(
-                        LiteLLM_ProxyModelTable.model_validate(row) for row in self.tuning_rows
-                    )
-                ),
+                find_many=AsyncMock(side_effect=self._find_many),
             )
+
+        async def _find_many(self, where: object = None) -> tuple[LiteLLM_ProxyModelTable, ...]:
+            json.dumps(where)  # prisma serializes the filter with json.dumps and rejects a mappingproxy
+            return tuple(LiteLLM_ProxyModelTable.model_validate(row) for row in self.tuning_rows)
 
         @property
         def db(self) -> "TestStrategyRouterWriteValidation._FakeTx":

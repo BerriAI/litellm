@@ -1095,6 +1095,110 @@ async def test_afile_content_passes_trusted_model_credentials_to_router():
     assert trusted_credentials["s3_bucket_name"] == "my-bucket"
 
 
+def _managed_deletion_file_id(provider_file_id):
+    from litellm.types.utils import SpecialEnums
+
+    value = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "application/json", "test-file", "batch-model", provider_file_id, "model-123"
+    )
+    return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
+
+
+def _managed_files_with_deletion_row(unified_file_id, provider_file_id, file_object):
+    from litellm.caching import DualCache
+    from litellm.models.managed_files import LiteLLM_ManagedFileTable
+    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+
+    row = LiteLLM_ManagedFileTable(
+        unified_file_id=unified_file_id,
+        model_mappings={"model-123": provider_file_id},
+        flat_model_file_ids=[provider_file_id],
+        file_object=file_object,
+    )
+    table = MagicMock(
+        find_first=AsyncMock(return_value=row),
+        delete=AsyncMock(),
+    )
+    return _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=DualCache(),
+        prisma_client=MagicMock(db=MagicMock(litellm_managedfiletable=table)),
+    ), table
+
+
+@pytest.mark.asyncio
+async def test_afile_delete_bedrock_uses_deployment_bucket_and_signed_s3_delete(monkeypatch):
+    import httpx
+    import respx
+
+    from litellm import Router
+
+    monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+                "model_info": {"id": "model-123"},
+            }
+        ],
+        num_retries=0,
+    )
+    s3_uri = "s3://my-bucket/litellm-bedrock-files/input.jsonl"
+    unified_file_id = _managed_deletion_file_id(s3_uri)
+    managed_files, table = _managed_files_with_deletion_row(unified_file_id, s3_uri, None)
+    with respx.mock:
+        route = respx.delete(
+            "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files/input.jsonl"
+        ).mock(return_value=httpx.Response(204))
+        response = await managed_files.afile_delete(
+            file_id=unified_file_id,
+            litellm_parent_otel_span=None,
+            llm_router=router,
+            _litellm_internal_model_credentials={"s3_bucket_name": "request-bucket"},
+        )
+
+    assert len(route.calls) == 1
+    assert route.calls[0].request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert response.id == unified_file_id
+    assert response.deleted is True
+    table.delete.assert_awaited_once_with(where={"unified_file_id": unified_file_id})
+
+
+@pytest.mark.asyncio
+async def test_afile_delete_returns_managed_id_for_stored_provider_output():
+    from openai.types import FileDeleted
+
+    provider_file_id = "file-error-output"
+    unified_file_id = _managed_deletion_file_id(provider_file_id)
+    stored_file = _make_file_object(provider_file_id)
+    managed_files, table = _managed_files_with_deletion_row(unified_file_id, provider_file_id, stored_file)
+    router = MagicMock(
+        get_deployment_credentials_with_provider=MagicMock(return_value=None),
+        afile_delete=AsyncMock(return_value=FileDeleted(id=provider_file_id, object="file", deleted=True)),
+    )
+    response = await managed_files.afile_delete(
+        file_id=unified_file_id,
+        litellm_parent_otel_span=None,
+        llm_router=router,
+        _litellm_internal_model_credentials={"s3_bucket_name": "request-bucket"},
+    )
+
+    assert response.id == unified_file_id
+    assert response.object == "file"
+    assert response.filename == stored_file.filename
+    assert stored_file.id == provider_file_id
+    router.afile_delete.assert_awaited_once_with(model="model-123", file_id=provider_file_id)
+    table.delete.assert_awaited_once_with(where={"unified_file_id": unified_file_id})
+
+
 @pytest.mark.asyncio
 async def test_afile_content_bedrock_unified_id_end_to_end(monkeypatch):
     """

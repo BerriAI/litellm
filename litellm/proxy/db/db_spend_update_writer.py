@@ -502,6 +502,7 @@ class DBSpendUpdateWriter:
                 llm_router=get_llm_router,
                 cost_breakdown=metadata.get("cost_breakdown"),
                 recorded_autorouter_savings=metadata.get("autorouter_savings"),
+                billed_at=payload.get("endTime"),
             )
             transaction: Final = build_autorouter_turn_transaction(
                 payload=payload,
@@ -1062,7 +1063,7 @@ class DBSpendUpdateWriter:
 
             await enqueue_spend_logs(prisma_client, (payload,))
             if payload.get("call_type") in RESPONSES_SESSION_CALL_TYPES:
-                request_spend_log_flush()
+                request_spend_log_flush(prisma_client)
         else:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")
 
@@ -2188,6 +2189,7 @@ class DBSpendUpdateWriter:
                 usage_object=usage_obj,
                 cost_breakdown=_metadata.get("cost_breakdown"),
                 recorded_autorouter_savings=_metadata.get("autorouter_savings"),
+                billed_at=payload.get("endTime"),
             )
 
             daily_transaction: Final = BaseDailySpendTransaction(
