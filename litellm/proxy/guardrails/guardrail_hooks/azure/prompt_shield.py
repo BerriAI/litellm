@@ -120,8 +120,8 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
     Configuration:
         guardrail_name: Name of the guardrail instance
-        api_key: Azure Prompt Shield API key
-        api_base: Azure Prompt Shield API endpoint
+        api_base: Azure Content Safety endpoint
+        api_key: Azure Content Safety API key. Omit it to authenticate with Microsoft Entra ID
         default_on: Whether to enable by default
     """
 
@@ -129,17 +129,18 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
     def __init__(
         self,
+        *,
         guardrail_name: str,
-        api_key: str,
         api_base: str,
+        api_key: str | None = None,
         **kwargs,
     ):
         """Initialize Azure Prompt Shield guardrail handler."""
         # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,
         # async_handler and forwards the rest to CustomGuardrail.
         super().__init__(
-            api_key=api_key,
             api_base=api_base,
+            api_key=api_key,
             guardrail_name=guardrail_name,
             supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,

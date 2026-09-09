@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.azure import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import (
     AzureContentSafetyPromptShieldGuardrail,
 )
@@ -635,3 +636,57 @@ def test_update_in_memory_litellm_params_dead_env_credential_rejected_untouched(
 
     assert guardrail.api_key == "azure_prompt_shield_api_key"
     assert guardrail.price_per_1000_text_records == 0.38
+
+
+@pytest.mark.asyncio
+async def test_initialize_guardrail_without_api_key_authenticates_with_entra(api_base, capturing_handler):
+    """A keyless config entry yields a guardrail that authenticates with Entra."""
+    handler, sent = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(guardrail="azure/prompt_shield", mode="pre_call", api_base=api_base),
+        {"guardrail_name": "azure-prompt-shield"},
+        entra_token_provider=lambda: "entra-token",
+    )
+
+    assert isinstance(guardrail, AzureContentSafetyPromptShieldGuardrail)
+    assert guardrail.api_key is None
+    assert guardrail.api_base == api_base
+
+    guardrail.async_handler = handler
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent[0].headers["Authorization"] == "Bearer entra-token"
+
+
+def test_initialize_guardrail_without_api_base_still_raises():
+    """api_base carries the resource's custom subdomain, which Entra auth cannot work without."""
+    with pytest.raises(ValueError, match="api_base is required"):
+        initialize_guardrail(
+            LitellmParams(guardrail="azure/prompt_shield", mode="pre_call"),
+            {"guardrail_name": "azure-prompt-shield"},
+            entra_token_provider=lambda: "entra-token",
+        )
+
+
+@pytest.mark.asyncio
+async def test_clearing_api_key_at_runtime_switches_to_entra(api_base, capturing_handler):
+    """A dashboard edit that removes the key must re-authenticate, not keep sending a stale header."""
+    handler, sent = capturing_handler
+
+    guardrail = AzureContentSafetyPromptShieldGuardrail(
+        guardrail_name="azure_prompt_shield",
+        api_base=api_base,
+        api_key="secret-key",
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+    guardrail.update_in_memory_litellm_params({"api_key": None})
+    await guardrail.apply_guardrail(inputs={"texts": ["hello again"]}, request_data={}, input_type="request")
+
+    assert sent[0].headers["Ocp-Apim-Subscription-Key"] == "secret-key"
+    assert "authorization" not in sent[0].headers
+    assert sent[1].headers["Authorization"] == "Bearer entra-token"
+    assert "ocp-apim-subscription-key" not in sent[1].headers

@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
@@ -9,11 +10,13 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(
+    litellm_params: "LitellmParams",
+    guardrail: "Guardrail",
+    entra_token_provider: Callable[[], str] | None = None,
+) -> AzureContentSafetyPromptShieldGuardrail | AzureContentSafetyTextModerationGuardrail:
     import litellm
 
-    if not litellm_params.api_key:
-        raise ValueError("Azure Content Safety: api_key is required")
     if not litellm_params.api_base:
         raise ValueError("Azure Content Safety: api_base is required")
 
@@ -32,6 +35,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
                 **litellm_params.model_dump(exclude_none=True),
                 "api_key": litellm_params.api_key,
                 "api_base": litellm_params.api_base,
+                "entra_token_provider": entra_token_provider,
                 "default_on": litellm_params.default_on,
                 "event_hook": litellm_params.mode,
             },
@@ -43,6 +47,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
                 **litellm_params.model_dump(exclude_none=True),
                 "api_key": litellm_params.api_key,
                 "api_base": litellm_params.api_base,
+                "entra_token_provider": entra_token_provider,
                 "default_on": litellm_params.default_on,
                 "event_hook": litellm_params.mode,
             },

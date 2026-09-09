@@ -4,9 +4,11 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.azure import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
     AzureContentSafetyTextModerationGuardrail,
 )
+from litellm.types.guardrails import LitellmParams
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
@@ -463,3 +465,24 @@ async def test_apply_guardrail_handles_missing_texts_key():
 
     mock_post.assert_not_called()
     assert result == {"images": ["x"]}
+
+
+@pytest.mark.asyncio
+async def test_initialize_guardrail_without_api_key_authenticates_with_entra(api_base, capturing_handler):
+    """A keyless config entry yields a guardrail that authenticates with Entra."""
+    handler, sent = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(guardrail="azure/text_moderations", mode="pre_call", api_base=api_base),
+        {"guardrail_name": "azure-text-moderation"},
+        entra_token_provider=lambda: "entra-token",
+    )
+
+    assert isinstance(guardrail, AzureContentSafetyTextModerationGuardrail)
+    assert guardrail.api_key is None
+    assert guardrail.api_base == api_base
+
+    guardrail.async_handler = handler
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent[0].headers["Authorization"] == "Bearer entra-token"

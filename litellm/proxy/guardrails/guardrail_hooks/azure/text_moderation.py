@@ -37,8 +37,8 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
     Configuration:
         guardrail_name: Name of the guardrail instance
-        api_key: Azure Text Moderation API key
-        api_base: Azure Text Moderation API endpoint
+        api_base: Azure Content Safety endpoint
+        api_key: Azure Content Safety API key. Omit it to authenticate with Microsoft Entra ID
         default_on: Whether to enable by default
     """
 
@@ -55,9 +55,10 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
 
     def __init__(
         self,
+        *,
         guardrail_name: str,
-        api_key: str,
         api_base: str,
+        api_key: str | None = None,
         severity_threshold: int | None = None,
         severity_threshold_by_category: dict[str, int] | None = None,
         **kwargs,
@@ -71,8 +72,8 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,
         # async_handler and forwards the rest to CustomGuardrail.
         super().__init__(
-            api_key=api_key,
             api_base=api_base,
+            api_key=api_key,
             guardrail_name=guardrail_name,
             **kwargs,
         )
