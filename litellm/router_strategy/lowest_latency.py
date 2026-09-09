@@ -443,7 +443,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
             )
-            selected_latency: Final = (
+            selected_latency = (
                 _percentile_latency(item_ttft_latency, self.routing_args.ttft_percentile)
                 if use_ttft and self.routing_args.ttft_percentile is not None
                 else _average_latency(item_ttft_latency if use_ttft else item_latency)
