@@ -1864,15 +1864,13 @@ async def bulk_user_update(
                 detail="Only proxy admins can update all users at once.",
             )
         if data.user_updates.password is not None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        "Setting one password for all users is not supported. "
-                        "Use per-user updates via the 'users' list instead."
-                    )
-                },
-            )
+            bulk_password_error: Final[HTTPExceptionErrorDetail] = {
+                "error": (
+                    "Setting one password for all users is not supported. "
+                    "Use per-user updates via the 'users' list instead."
+                )
+            }
+            raise HTTPException(status_code=400, detail=bulk_password_error)
         # Optimized path for updating all users directly in database
         all_users_in_db: Final = await _user_table(prisma_client).find_many(order={"created_at": "desc"})
 

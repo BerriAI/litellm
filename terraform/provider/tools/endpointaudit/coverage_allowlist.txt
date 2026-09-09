@@ -85,6 +85,7 @@ POST /team/key/bulk_update
 POST /team/permissions_bulk_update
 POST /team/{team_id}/disable_logging
 POST /user/bulk_update
+POST /user/password/change
 
 # Alternate method or path for functionality the provider already manages elsewhere
 GET /credentials/by_model/{model_id}
