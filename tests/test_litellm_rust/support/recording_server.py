@@ -9,8 +9,6 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
-import pytest
-
 
 @dataclass
 class RecordedRequest:
@@ -27,11 +25,6 @@ class ResponseSpec:
     status: int = 200
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
-    events: tuple[tuple[str, object], ...] = ()
-    chunks: tuple[bytes, ...] = ()
-    accepted: threading.Event | None = None
-    release_before_response: threading.Event | None = None
-    release: threading.Event | None = None
 
 
 @dataclass
@@ -76,44 +69,20 @@ def recording_service() -> Iterator[RecordingServer]:
                 )
             )
             response: Final = responses.pop(0) if responses else copy.deepcopy(recording_server.default_response)
-            if response.accepted is not None:
-                response.accepted.set()
-            if response.release_before_response is not None:
-                response.release_before_response.wait(timeout=10)
             if response.delay:
                 time.sleep(response.delay)
-            payload: Final = (
-                b"".join(response.chunks)
-                if response.chunks
-                else (
-                    b"".join(
-                        f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in response.events
-                    )
-                    if response.events
-                    else json.dumps(response.body).encode()
-                )
-            )
+            payload: Final = json.dumps(response.body).encode()
             self.send_response(response.status)
-            self.send_header(
-                "Content-Type", "text/event-stream" if response.events or response.chunks else "application/json"
-            )
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.end_headers()
             try:
-                if response.chunks:
-                    for index, chunk in enumerate(response.chunks):
-                        if index == 1 and response.release is not None:
-                            response.release.wait(timeout=10)
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
-                else:
-                    self.wfile.write(payload)
+                self.wfile.write(payload)
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
-        do_GET = _handle
         do_POST = _handle
 
         def log_message(self, format: str, *args: object) -> None:
@@ -137,9 +106,3 @@ def recording_service() -> Iterator[RecordingServer]:
         if recording_server.expected_requests is not None:
             assert len(recording_server.requests) == recording_server.expected_requests
         assert recording_server.responses == []
-
-
-@pytest.fixture
-def recording_server() -> Iterator[RecordingServer]:
-    with recording_service() as server:
-        yield server

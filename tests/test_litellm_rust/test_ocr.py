@@ -1,6 +1,7 @@
 import json
 import threading
 from collections.abc import Generator
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
@@ -11,17 +12,23 @@ import litellm
 pytestmark = pytest.mark.requires_rust_extension
 
 
+@dataclass(frozen=True, slots=True)
+class RecordedOCRRequest:
+    headers: dict[str, str]
+    body: object
+
+
 @pytest.fixture
-def native_only_ocr_server() -> Generator[tuple[ThreadingHTTPServer, list[dict[str, object]]]]:
-    requests: Final[list[dict[str, object]]] = []
+def native_only_ocr_server() -> Generator[tuple[ThreadingHTTPServer, list[RecordedOCRRequest]]]:
+    requests: Final[list[RecordedOCRRequest]] = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
             requests.append(
-                {
-                    "headers": {name.lower(): value for name, value in self.headers.items()},
-                    "body": json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
-                }
+                RecordedOCRRequest(
+                    headers={name.lower(): value for name, value in self.headers.items()},
+                    body=json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
+                )
             )
             if self.headers.get("User-Agent", "").startswith("python-httpx"):
                 self.send_response(418)
@@ -55,7 +62,7 @@ def native_only_ocr_server() -> Generator[tuple[ThreadingHTTPServer, list[dict[s
 
 
 def test_public_ocr_executes_the_compiled_extension_without_python_fallback(
-    native_only_ocr_server: tuple[ThreadingHTTPServer, list[dict[str, object]]],
+    native_only_ocr_server: tuple[ThreadingHTTPServer, list[RecordedOCRRequest]],
 ) -> None:
     server, requests = native_only_ocr_server
     address: Final = server.server_address
@@ -71,10 +78,8 @@ def test_public_ocr_executes_the_compiled_extension_without_python_fallback(
 
     assert response.pages[0].markdown == "native OCR response"
     assert len(requests) == 1
-    headers: Final = requests[0]["headers"]
-    assert isinstance(headers, dict)
-    assert not str(headers.get("user-agent", "")).startswith("python-httpx")
-    assert requests[0]["body"] == {
+    assert not requests[0].headers.get("user-agent", "").startswith("python-httpx")
+    assert requests[0].body == {
         "model": "mistral-ocr-latest",
         "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
     }
