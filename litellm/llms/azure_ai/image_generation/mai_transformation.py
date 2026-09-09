@@ -24,7 +24,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
     MAX_IMAGES_PER_REQUEST: Final = 1
     MIN_DIMENSION_PX: Final = 768
-    MAX_TOTAL_PX: Final = 1024 * 1024
+    MAX_TOTAL_PX: Final = 1_056_768
 
     @staticmethod
     def get_mai_image_generation_url(

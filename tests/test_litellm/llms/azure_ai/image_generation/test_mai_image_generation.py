@@ -213,12 +213,33 @@ class TestAzureMAIImageGeneration:
     @pytest.mark.parametrize("size", ["1792x1024", "1024x1792"])
     def test_map_openai_params_size_over_total_pixel_budget_raises(self, size):
         config = AzureFoundryMAIImageGenerationConfig()
-        with pytest.raises(UnsupportedParamsError, match="at most 1048576 total pixels"):
+        with pytest.raises(UnsupportedParamsError, match="at most 1056768 total pixels"):
             config.map_openai_params(
                 non_default_params={"size": size},
                 optional_params={},
                 model="MAI-Image-2.5",
                 drop_params=True,
+            )
+
+    @pytest.mark.parametrize("size", ["1032x1024", "1376x768"])
+    def test_map_openai_params_size_at_live_pixel_cap_passes_through(self, size):
+        config = AzureFoundryMAIImageGenerationConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"size": size},
+            optional_params={},
+            model="MAI-Image-2.5",
+            drop_params=False,
+        )
+        assert optional_params["width"] * optional_params["height"] == 1_056_768
+
+    def test_map_openai_params_size_one_pixel_over_live_cap_raises(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        with pytest.raises(UnsupportedParamsError, match="at most 1056768 total pixels"):
+            config.map_openai_params(
+                non_default_params={"size": "1033x1024"},
+                optional_params={},
+                model="MAI-Image-2.5",
+                drop_params=False,
             )
 
     def test_map_openai_params_explicit_width_height_not_range_checked(self):
