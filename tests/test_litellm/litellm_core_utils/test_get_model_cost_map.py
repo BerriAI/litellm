@@ -6,6 +6,7 @@ count actual model entries, not reserved meta keys) and the extraction of the
 
 import json
 import os
+import threading
 
 import pytest
 
@@ -20,7 +21,6 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     _count_model_entries,
     _finalize_model_cost_map,
-    adopt_model_cost_map,
     get_model_cost_map_provenance,
     git_blob_id,
 )
@@ -566,194 +566,125 @@ from litellm.litellm_core_utils.get_model_cost_map import (
 class _SyncSleepRecorder:
     """Injected in place of time.sleep so the boot path's waits are asserted without delay."""
 
-    def __init__(self):
+    def __init__(self, block=False):
         self.waits = []
+        self.block = block
+        self.started = threading.Event()
+        self.release = threading.Event()
 
     def __call__(self, seconds: float) -> None:
+        if self.block:
+            self.started.set()
+            self.release.wait(timeout=10)
         self.waits.append(seconds)
 
 
-class _BackgroundRecorder:
-    def __init__(self):
-        self.callbacks = []
-
-    def __call__(self, callback):
-        self.callbacks.append(callback)
+def _retry_threads():
+    return [thread for thread in threading.enumerate() if thread.name == "litellm-model-cost-map-retry"]
 
 
-def test_boot_load_returns_local_map_and_schedules_transient_retry():
-    client, calls = _mock_client(
-        [
-            httpx.ConnectError("connection refused"),
-        ],
-        client_cls=httpx.Client,
-    )
-    sleeper = _SyncSleepRecorder()
-    background = _BackgroundRecorder()
-
-    cost_map = get_model_cost_map(
-        url=_URL,
-        sleep=sleeper,
-        rng=random.Random(0),
-        client=client,
-        start_background=background,
-    )
-    assert calls["count"] == 1
-    assert sleeper.waits == []
-    assert len(background.callbacks) == 1
-    assert len(cost_map) > 100
-    source = get_model_cost_map_source_info()
-    assert source["source"] == "local"
-    assert source["fallback_reason"] is not None
-
-
-def test_background_retry_adopts_valid_remote_map():
-    client, calls = _mock_client(
-        [
-            httpx.ConnectError("connection refused"),
-            httpx.Response(200, content=_real_map_bytes()),
-        ],
-        client_cls=httpx.Client,
-    )
-    sleeper = _SyncSleepRecorder()
-    background = _BackgroundRecorder()
-    applied = []
-
-    get_model_cost_map(
-        url=_URL,
-        sleep=sleeper,
-        rng=random.Random(0),
-        client=client,
-        start_background=background,
-        apply=applied.append,
-    )
-    assert calls["count"] == 1
-    assert sleeper.waits == []
-    assert len(background.callbacks) == 1
-
-    background.callbacks[0]()
-
-    assert calls["count"] == 2
-    assert len(sleeper.waits) == 1
-    assert 2.0 <= sleeper.waits[0] < 3.0
-    assert len(applied) == 1
-    assert applied[0].keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
-    source = get_model_cost_map_source_info()
-    assert source["source"] == "remote"
-    assert source["fallback_reason"] is None
-
-
-def test_background_retry_keeps_local_map_after_remaining_failures():
-    client, calls = _mock_client(
-        [httpx.ConnectError("connection refused"), httpx.Response(503)],
-        client_cls=httpx.Client,
-    )
-    sleeper = _SyncSleepRecorder()
-    background = _BackgroundRecorder()
-    applied = []
-
-    get_model_cost_map(
-        url=_URL,
-        sleep=sleeper,
-        rng=random.Random(0),
-        client=client,
-        start_background=background,
-        apply=applied.append,
-    )
-    background.callbacks[0]()
-
-    assert calls["count"] == 3
-    assert len(sleeper.waits) == 2
-    assert 2.0 <= sleeper.waits[0] < 3.0
-    assert 4.0 <= sleeper.waits[1] < 5.0
-    assert applied == []
-    assert get_model_cost_map_source_info()["source"] == "local"
-
-
-def test_boot_load_does_not_schedule_non_retryable_failure():
-    client, calls = _mock_client([httpx.Response(404)], client_cls=httpx.Client)
-    sleeper = _SyncSleepRecorder()
-    background = _BackgroundRecorder()
-
-    get_model_cost_map(
-        url=_URL,
-        sleep=sleeper,
-        rng=random.Random(0),
-        client=client,
-        start_background=background,
-    )
-
-    assert calls["count"] == 1
-    assert sleeper.waits == []
-    assert background.callbacks == []
-    source = get_model_cost_map_source_info()
-    assert source["source"] == "local"
-    assert source["fallback_reason"] is not None
-
-
-def test_boot_load_success_does_not_schedule_background_retry():
+def test_boot_load_success_does_not_start_background_retry():
     client, calls = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
     sleeper = _SyncSleepRecorder()
-    background = _BackgroundRecorder()
 
     cost_map = get_model_cost_map(
         url=_URL,
         sleep=sleeper,
         rng=random.Random(0),
         client=client,
-        start_background=background,
     )
     assert calls["count"] == 1
     assert sleeper.waits == []
-    assert background.callbacks == []
-    assert get_model_cost_map_source_info()["source"] == "remote"
+    assert _retry_threads() == []
     assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
+    assert get_model_cost_map_source_info()["source"] == "remote"
 
 
-def test_boot_load_with_one_attempt_does_not_schedule_background_retry():
-    client, calls = _mock_client([httpx.ConnectError("connection refused")], client_cls=httpx.Client)
-    sleeper = _SyncSleepRecorder()
-    background = _BackgroundRecorder()
+def test_boot_load_transient_failure_returns_local_then_background_retry_adopts_remote(monkeypatch):
+    import litellm
+    from litellm import utils as litellm_utils
+    from litellm.litellm_core_utils import get_model_cost_map as module
 
-    get_model_cost_map(
+    original_model_cost = litellm.model_cost
+    monkeypatch.setattr(litellm, "model_cost", dict(original_model_cost))
+    for name, provider_models in tuple(vars(litellm).items()):
+        if name.endswith("_models") and isinstance(provider_models, set):
+            monkeypatch.setattr(litellm, name, set(provider_models))
+    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
+    monkeypatch.setattr(
+        litellm_utils,
+        "_runtime_registered_model_cost",
+        dict(litellm_utils._runtime_registered_model_cost),
+    )
+    source_info = module._cost_map_source_info
+    for name in ("source", "url", "is_env_forced", "fallback_reason", "loaded_at", "source_revision", "etag"):
+        monkeypatch.setattr(source_info, name, getattr(source_info, name))
+
+    remote_map = _load_root_cost_map()
+    remote_map["claude-remote-only-test"] = {"litellm_provider": "anthropic", "mode": "chat"}
+    client, calls = _mock_client(
+        [
+            httpx.ConnectError("connection refused"),
+            httpx.Response(200, content=json.dumps(remote_map).encode()),
+        ],
+        client_cls=httpx.Client,
+    )
+    sleeper = _SyncSleepRecorder(block=True)
+    litellm.register_model({"my-runtime-model": {"litellm_provider": "custom", "max_input_tokens": 4321}})
+
+    cost_map = get_model_cost_map(
         url=_URL,
-        max_attempts=1,
+        max_attempts=3,
         sleep=sleeper,
         rng=random.Random(0),
         client=client,
-        start_background=background,
     )
 
     assert calls["count"] == 1
     assert sleeper.waits == []
-    assert background.callbacks == []
-    assert get_model_cost_map_source_info()["source"] == "local"
-
-
-def test_adopt_model_cost_map_replays_runtime_registration_and_provider_models():
-    import litellm
-    from litellm import utils as litellm_utils
-
-    original_model_cost = litellm.model_cost
-    original_registry = dict(litellm_utils._runtime_registered_model_cost)
-    original_anthropic_models = set(litellm.anthropic_models)
+    assert sleeper.started.wait(timeout=10)
+    threads = _retry_threads()
     try:
-        litellm.register_model(
-            model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
-        )
-
-        models_count = adopt_model_cost_map({"anthropic/new-model": {"litellm_provider": "anthropic", "mode": "chat"}})
-
-        assert models_count == 1
-        assert "anthropic/new-model" in litellm.anthropic_models
-        assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
+        assert len(threads) == 1
+        assert "claude-remote-only-test" not in cost_map
+        assert cost_map.keys() == _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map()).keys()
+        source = get_model_cost_map_source_info()
+        assert source["source"] == "local"
+        assert source["fallback_reason"].startswith("Remote fetch failed:")
+        sleeper.release.set()
+        for thread in threads:
+            thread.join(timeout=10)
+        assert all(not thread.is_alive() for thread in threads)
+        assert sleeper.waits and 2.0 <= sleeper.waits[0] < 3.0
+        assert calls["count"] == 2
+        assert "claude-remote-only-test" in litellm.model_cost
+        assert "claude-remote-only-test" in litellm.anthropic_models
+        assert "my-runtime-model" in litellm.model_cost
+        source = get_model_cost_map_source_info()
+        assert source["source"] == "remote"
+        assert source["fallback_reason"] is None
     finally:
-        litellm.model_cost = original_model_cost  # test-quality-ok: restore the module state changed by adoption
-        litellm_utils._runtime_registered_model_cost.clear()
-        litellm_utils._runtime_registered_model_cost.update(original_registry)
-        litellm.anthropic_models.clear()
-        litellm.anthropic_models.update(original_anthropic_models)
-        litellm_utils._invalidate_model_cost_lowercase_map()
+        sleeper.release.set()
+        for thread in _retry_threads():
+            thread.join(timeout=10)
+
+
+def test_boot_load_does_not_retry_non_retryable_failure():
+    client, calls = _mock_client([httpx.Response(404)], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+
+    get_model_cost_map(
+        url=_URL,
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+    )
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+    assert _retry_threads() == []
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert source["fallback_reason"] is not None
 
 
 def test_boot_load_respects_local_env_override(monkeypatch):
