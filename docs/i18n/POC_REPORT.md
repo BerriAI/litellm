@@ -21,13 +21,13 @@
 
 - **方法**：A4 在平台 worktree `npm run build`（`output:"export"`）。检查：构建无因引入 i18next 产生的解析/打包错误；`out/` 正常产出；`turbopack` 能打包 json 资源。
 - **预期证据**：`next build` 成功，`out/` 目录生成，无「Cannot resolve i18next/react-i18next」、无 static-export 舞台报错；`npm ls i18next react-i18next` 无 peer 冲突。
-- **结果**：【待执行】
+- **结果**：【✅ 通过 —— 2026-09-09，Agent 0 在集成分支 `i18n/w1-integration` 验证】`npm run build` 全绿：`✓ Compiled successfully`、`✓ Generating static pages using 11 workers (51/51)`（全部 51 路由静态预渲染）、TypeScript 阶段无平台错误、`BUILD_EXIT=0`。i18next/react-i18next/@playwright/test 依赖解析正常，无 peer 冲突。
 
 ## PoC-2：首屏策略（就绪门禁 + `<html lang>` 同步）行为
 
 - **方法**：默认浏览器语言 en：加载页面，在首帧与 JS 就绪后截图/断言。
   1. en 用户：首帧即为中文 UI 不存在（应显示英文 UI），`<html lang="en">` 保持。
-  2. zh-CN 偏好用户（预置 `dashboard.locale=zh-CN` 再刷新）：JS 就绪前不渲染业务 `t()` 内容（就绪态/空），就绪后一次性渲染中文，且 `document.documentElement.lang === 'zh-CN'`。
+  2. zh-CN 偏好用户（预置 `litellm.locale=zh-CN` 再刷新）：JS 就绪前不渲染业务 `t()` 内容（就绪态/空），就绪后一次性渲染中文，且 `document.documentElement.lang === 'zh-CN'`。
 - **预期证据**：截图对比 + DOM 断言：①en 首帧无 key/英文句闪烁；②zh 就绪前无业务文案、就绪后 `lang` 正确；③测量就绪门禁额外延时（performance 日志）记录数值，供评审接受性判断。
 - **结果**：【待执行】
 
@@ -46,7 +46,7 @@
 ## PoC-5：刷新后语言偏好保留（D6/D5）
 
 - **方法**：切 zh-CN → 刷新 → 断言仍 zh-CN；清空 cookie 但留 localStorage → 刷新 → 仍 zh-CN（双层读取）；两者都清 → 回退浏览器语言/en。
-- **预期证据**：各分支刷新后语言正确；`dashboard.locale` cookie 存在且 `SameSite=Lax`。
+- **预期证据**：各分支刷新后语言正确；`litellm.locale` cookie 存在且 `SameSite=Lax`。
 - **结果**：【待执行】
 
 ## PoC-6：英文为首帧默认、无偏好时按浏览器语言（D5/D2）

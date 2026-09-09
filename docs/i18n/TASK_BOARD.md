@@ -24,9 +24,15 @@
 
 | Agent | 名称 | 状态 | worktree/分支 | 交付物 | 最后更新 |
 |---|---|---|---|---|---|
-| A4 | i18n-platform-developer | 待命 | i18n/w1-agent4-platform | src/i18n/** 平台代码 + PLATFORM_VALIDATION_REPORT | - |
-| A5 | i18n-shell-auth-developer | 待命（Wave1 仅只读盘点） | — | key 拟定清单（不写码） | - |
-| A7 | i18n-qa | 待命 | i18n/w1-agent7-qa | 平台测试 + key 一致性工具 | - |
+| A4 | i18n-platform-developer | **实现完成 ✅；build 验证进行中** | i18n/w1-agent4-platform | src/i18n/** + 8 namespace 骨架 + layout + LanguageSwitcher + Playwright基建 + 依赖写入 + 30单测/7集成测试通过 | 2026-09-09 |
+| A5 | i18n-shell-auth-developer | **只读盘点完成 ✅** | —（只读） | W2_SHELL_INVENTORY.md（~170 key，25 文件） | 2026-09-09 |
+| A7 | i18n-qa | **工具开发完成 ✅** | i18n/w1-agent7-qa | scripts/i18n/check-keys + scan-hardcoded + 测试（待 A4 集成后正式跑 vitest） | 2026-09-09 |
+
+**Wave 1 集成基线（Agent 0，本地，未 push）**
+- 分支 `i18n/w1-integration`（主 worktree）= 基线 `31e3a76d3f` → 平台 `37dd0678f6`（含你的修复 `6321c8b52d`）→ A7 QA `fff2c41c44` 合并。
+- A4 平台 33 单测 + 7 集成全过；A7 QA 19 测试全过（**修复 1 处 A7 测试漏引号 typo**）。
+- A7 的 check-keys 对 A4 8 namespace 端到端 **PASS**。
+- **未决**：集成分支 `npm run build` 验证中（后台）；PLATFORM_VALIDATION_REPORT、PoC 回填待补；push 因无 GitHub 凭据暂缓（用户决定不 push）。
 
 ## Wave 2 — 第一批功能
 

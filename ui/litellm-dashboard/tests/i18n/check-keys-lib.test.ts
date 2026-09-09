@@ -22,7 +22,7 @@ describe("flattenDict", () => {
 
 describe("extractInterpolationVars", () => {
   it("extracts {{var}} names", () => {
-    expect([...extractInterpolationVars("Hello {{name}}, you have {{count}}")).toEqual(["name", "count"]);
+    expect([...extractInterpolationVars("Hello {{name}}, you have {{count}}")]).toEqual(["name", "count"]);
   });
   it("returns empty set for non-strings", () => {
     expect(extractInterpolationVars(42).size).toBe(0);
