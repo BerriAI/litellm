@@ -77,6 +77,16 @@ def test_build_responses_kwargs_skips_include_for_a_responses_provider_that_reje
     assert "reasoning" in responses_kwargs
 
 
+def test_build_responses_kwargs_keeps_the_deployment_include_next_to_encrypted_reasoning():
+    responses_kwargs = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        extra_kwargs={"custom_llm_provider": "openai", "include": ["file_search_call.results"]},
+    )
+    assert responses_kwargs["include"] == ["reasoning.encrypted_content", "file_search_call.results"]
+
+
 def test_build_responses_kwargs_without_metadata_sets_no_prompt_cache_key():
     responses_kwargs = _build_responses_kwargs(
         max_tokens=1024,
