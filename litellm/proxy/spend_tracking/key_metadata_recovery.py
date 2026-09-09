@@ -1,5 +1,7 @@
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final, TypeVar
 
@@ -7,6 +9,13 @@ from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import (
+    SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
+    SPEND_LOG_KEY_METADATA_CACHE_TTL,
+    SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
+    SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS,
+)
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.user_repository import UserRepository
@@ -27,6 +36,33 @@ WHERE encode(sha256(convert_to(token, 'UTF8')), 'hex') = ANY($1::text[])
 ORDER BY token, deleted_at DESC
 """
 
+_SPEND_LOG_ALIAS_SQL: Final = """
+SELECT api_key AS digest,
+    MIN(key_alias) AS first_alias,
+    MAX(key_alias) AS last_alias,
+    MIN(team_id) AS first_team,
+    MAX(team_id) AS last_team,
+    MIN(user_id) AS first_owner,
+    MAX(user_id) AS last_owner
+FROM (
+    SELECT api_key,
+        NULLIF(metadata->>'user_api_key_alias', '') AS key_alias,
+        COALESCE(NULLIF(team_id, ''), NULLIF(metadata->>'user_api_key_team_id', '')) AS team_id,
+        COALESCE(NULLIF("user", ''), NULLIF(metadata->>'user_api_key_user_id', '')) AS user_id
+    FROM "LiteLLM_SpendLogs"
+    WHERE api_key = ANY($1::text[])
+      AND "startTime" >= $2::timestamp
+      AND "startTime" < $3::timestamp
+) named
+WHERE COALESCE(key_alias, user_id, team_id) IS NOT NULL
+GROUP BY api_key
+"""
+
+_SPEND_LOG_STATEMENT_TIMEOUT_SQL: Final = f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
+_SPEND_LOG_TRANSACTION_TIMEOUT: Final = timedelta(milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS)
+
+_HASHED_JWT_PREFIX: Final = "hashed-jwt-"
+
 
 class KeyMetadataDict(TypedDict, total=False):
     key_alias: ReadOnly[str | None]
@@ -42,7 +78,35 @@ class _TokenDigestRow(BaseModel):
     user_id: str | None = None
 
 
+def _unanimous(first: str | None, last: str | None) -> str | None:
+    return first if first == last else None
+
+
+class _SpendLogDigestRow(BaseModel):
+    digest: str
+    first_alias: str | None = None
+    last_alias: str | None = None
+    first_team: str | None = None
+    last_team: str | None = None
+    first_owner: str | None = None
+    last_owner: str | None = None
+
+    def metadata(self) -> KeyMetadataDict:
+        return KeyMetadataDict(
+            key_alias=_unanimous(self.first_alias, self.last_alias),
+            team_id=_unanimous(self.first_team, self.last_team),
+            user_id=_unanimous(self.first_owner, self.last_owner),
+        )
+
+
 _TOKEN_DIGEST_ROWS: Final = TypeAdapter(tuple[_TokenDigestRow, ...])
+_SPEND_LOG_DIGEST_ROWS: Final = TypeAdapter(tuple[_SpendLogDigestRow, ...])
+_CACHED_KEY_METADATA: Final = TypeAdapter(KeyMetadataDict)
+_SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
+    max_size_in_memory=SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
+    default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL,
+)
+_SPEND_LOG_QUERY_LOCK: Final = asyncio.Lock()
 _EMPTY_KEY_METADATA: Final[Mapping[str, KeyMetadataDict]] = MappingProxyType({})
 _EMPTY_EMAILS: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -138,14 +202,6 @@ async def recover_double_hashed_key_metadata(
     prisma_client: PrismaClient,
     missing_keys: AbstractSet[str],
 ) -> Mapping[str, KeyMetadataDict]:
-    """
-    Recover key_alias/team_id/user_id for DailyUserSpend.api_key values that
-    were double-hashed by the v1.99 spend-log provenance gate.
-
-    Those rows store hash(VerificationToken.token) instead of the token, so the
-    exact join misses. Postgres hashes the token column itself, one pass over
-    active keys and one over deleted keys, so no key row crosses the wire.
-    """
     sha_missing: Final = frozenset(key for key in missing_keys if is_valid_sha256_hash(key))
     if not sha_missing:
         return _EMPTY_KEY_METADATA
@@ -166,6 +222,117 @@ async def recover_double_hashed_key_metadata(
         warning="Failed reverse-hash recovery against deleted keys for %d missing keys: %s",
     )
     return MappingProxyType({**from_active, **from_deleted})
+
+
+def _is_spend_log_digest(key: str) -> bool:
+    return is_valid_sha256_hash(key.removeprefix(_HASHED_JWT_PREFIX))
+
+
+def _spend_log_cache_key(digest: str, window: tuple[datetime, datetime]) -> str:
+    start, end = window
+    return f"spend_log_key_metadata:{digest}:{start.isoformat()}:{end.isoformat()}"
+
+
+def _cached_spend_log_metadata(
+    cache: InMemoryCache,
+    digests: AbstractSet[str],
+    window: tuple[datetime, datetime],
+) -> Mapping[str, KeyMetadataDict]:
+    return MappingProxyType(
+        {
+            digest: _CACHED_KEY_METADATA.validate_python(cached)
+            for digest in digests
+            for cached in (cache.get_cache(_spend_log_cache_key(digest, window)),)
+            if cached is not None
+        }
+    )
+
+
+async def _spend_log_rows_within_the_statement_timeout(
+    prisma_client: PrismaClient,
+    digests: AbstractSet[str],
+    window: tuple[datetime, datetime],
+) -> Sequence[Mapping[str, object]]:
+    start, end = window
+    async with prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction:
+        await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
+        return await transaction.query_raw(_SPEND_LOG_ALIAS_SQL, sorted(digests), start, end)
+
+
+async def _query_spend_log_metadata(
+    prisma_client: PrismaClient,
+    digests: AbstractSet[str],
+    window: tuple[datetime, datetime],
+) -> Mapping[str, KeyMetadataDict] | None:
+    rows: Final = await _db_or_empty(
+        lambda: _spend_log_rows_within_the_statement_timeout(prisma_client, digests, window),
+        "Failed spend-log alias recovery for %d missing keys: %s",
+        len(digests),
+    )
+    if rows is None:
+        return None
+    return MappingProxyType(
+        {
+            row.digest: meta
+            for row in _SPEND_LOG_DIGEST_ROWS.validate_python(rows)
+            for meta in (row.metadata(),)
+            if row.digest in digests and any(meta.values())
+        }
+    )
+
+
+def _remember_spend_log_metadata(
+    cache: InMemoryCache, digest: str, window: tuple[datetime, datetime], meta: KeyMetadataDict | None
+) -> None:
+    key: Final = _spend_log_cache_key(digest, window)
+    if meta is not None:
+        cache.set_cache(key, meta)
+        return
+    missed_before: Final = f"{key}:missed-before"
+    if cache.get_cache(missed_before) is not None:
+        cache.set_cache(key, KeyMetadataDict())
+        return
+    cache.set_cache(key, KeyMetadataDict(), ttl=SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL)
+    cache.set_cache(missed_before, True)
+
+
+async def _spend_log_metadata_one_query_at_a_time(
+    prisma_client: PrismaClient,
+    cache: InMemoryCache,
+    lock: asyncio.Lock,
+    digests: AbstractSet[str],
+    window: tuple[datetime, datetime],
+) -> Mapping[str, KeyMetadataDict]:
+    async with lock:
+        settled: Final = _cached_spend_log_metadata(cache, digests, window)
+        pending: Final = digests - frozenset(settled)
+        fresh: Final = (
+            await _query_spend_log_metadata(prisma_client, pending, window) if pending else _EMPTY_KEY_METADATA
+        )
+        found: Final = fresh if fresh is not None else _EMPTY_KEY_METADATA
+        for digest in pending:
+            _remember_spend_log_metadata(cache, digest, window, found.get(digest))
+        return MappingProxyType({**settled, **found})
+
+
+async def recover_key_metadata_from_spend_logs(
+    prisma_client: PrismaClient,
+    missing_keys: AbstractSet[str],
+    window: tuple[datetime, datetime],
+    cache: InMemoryCache = _SPEND_LOG_METADATA_CACHE,
+    lock: asyncio.Lock = _SPEND_LOG_QUERY_LOCK,
+) -> Mapping[str, KeyMetadataDict]:
+    digests: Final = frozenset(key for key in missing_keys if _is_spend_log_digest(key))
+    if not digests:
+        return _EMPTY_KEY_METADATA
+    cached: Final = _cached_spend_log_metadata(cache, digests, window)
+    uncached: Final = digests - frozenset(cached)
+    settled: Final = (
+        await _spend_log_metadata_one_query_at_a_time(prisma_client, cache, lock, uncached, window)
+        if uncached
+        else _EMPTY_KEY_METADATA
+    )
+    return MappingProxyType({digest: meta for digest, meta in (*cached.items(), *settled.items()) if meta})
 
 
 def _row_with_recovered_fields(
