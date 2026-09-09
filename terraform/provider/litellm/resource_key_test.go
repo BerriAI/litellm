@@ -318,6 +318,19 @@ func TestWithoutReservedKeyMetadataFieldsKeepsFieldsWithNoAttributeYet(t *testin
 	}
 }
 
+// Ties reservedKeyMetadataFields to the real schema instead of trusting the comment on the map:
+// a name added there without an actual matching attribute (or a schema attribute renamed/removed
+// out from under an existing entry) is exactly the P1 data-loss failure mode this map exists to
+// avoid, and would otherwise only surface as a silent gap in what a future config change reports.
+func TestReservedKeyMetadataFieldsAllHaveSchemaAttribute(t *testing.T) {
+	schema := resourceKey().Schema
+	for name := range reservedKeyMetadataFields {
+		if _, ok := schema[name]; !ok {
+			t.Errorf("%s is filtered out of metadata but litellm_key has no such attribute", name)
+		}
+	}
+}
+
 // resourceKeyRead must not surface the proxy-merged fields as if they were part of the
 // caller's own metadata, or every key that sets model_tpm_limit (or any of the other fields
 // key_management_endpoints.py folds into metadata) shows a permanent plan diff.
