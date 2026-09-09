@@ -58,7 +58,10 @@ class ChatGPTRealtime(OpenAIRealtime):
         return api_base or Authenticator.get_api_base(default_base="https://api.openai.com/v1")
 
     def __init__(
-        self, params: GenericLiteLLMParams, headers: Mapping[str, str], extra_headers: Mapping[str, object] | None = None
+        self,
+        params: GenericLiteLLMParams,
+        headers: Mapping[str, str],
+        extra_headers: Mapping[str, object] | None = None,
     ) -> None:
         super().__init__()
         self._profile_headers = realtime_headers(params, headers, extra_headers)
