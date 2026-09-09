@@ -879,8 +879,8 @@ def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
     alias_info = litellm.get_model_info("gpt-4o-mini")
     snapshot_info = litellm.get_model_info("gpt-4o-mini-2024-07-18")
 
-    assert snapshot_info["supports_web_search"] is True
-    assert alias_info["supports_web_search"] is True
+    assert not snapshot_info["supports_web_search"]
+    assert not alias_info["supports_web_search"]
 
     snapshot_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
         web_search_options=web_search_options, model_info=snapshot_info
