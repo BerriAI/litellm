@@ -217,6 +217,27 @@ def test_openai_client_uses_per_call_ssl_verify(monkeypatch):
     client.close()
 
 
+@pytest.mark.asyncio
+async def test_async_openai_client_uses_per_call_ssl_verify(monkeypatch):
+    from litellm.caching.llm_caching_handler import LLMClientCache
+    from litellm.llms.openai.openai import OpenAIChatCompletion
+
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr(litellm, "network_mock", False)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    client = OpenAIChatCompletion()._get_openai_client(
+        is_async=True,
+        api_key="sk-test",
+        api_base="https://example.test/v1",
+        max_retries=2,
+        ssl_verify=False,
+    )
+
+    assert client is not None
+    assert client._client._transport._ssl_verify is False
+    await client.close()
+
+
 def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open(monkeypatch):
     """`litellm.aclient_session` belongs to the caller, who goes on using it.
 
