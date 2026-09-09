@@ -1,6 +1,6 @@
 import json
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Final
 
 import pytest
@@ -41,10 +41,10 @@ class Clock:
 @dataclass
 class Search:
     responses: Iterator[StreamingResponse]
-    calls: list[tuple[str, float]] = field(default_factory=list)
+    calls: tuple[tuple[str, float], ...] = ()
 
     def __call__(self, query: str, timeout: float) -> StreamingResponse:
-        self.calls.append((query, timeout))
+        self.calls += ((query, timeout),)
         return next(self.responses)
 
 
@@ -79,7 +79,7 @@ def test_429_honors_server_reset_and_preserves_duplicate_events() -> None:
 
     assert tuple(event.attributes["id"] for event in events) == ("first", "duplicate")
     assert clock.elapsed == 6.25
-    assert search.calls == [("test-marker", 30.0), ("test-marker", 30.0)]
+    assert search.calls == (("test-marker", 30.0), ("test-marker", 30.0))
 
 
 @pytest.mark.parametrize("reset", ("", "invalid", "nan", "inf", "-1"))
@@ -124,7 +124,7 @@ def test_rate_limit_wait_stops_at_deadline_without_issuing_another_request() -> 
         reader.events_for_query("test-marker")
 
     assert clock.elapsed == POLL_TIMEOUT
-    assert search.calls == [("test-marker", 30.0)]
+    assert search.calls == (("test-marker", 30.0),)
 
 
 def test_late_retry_cannot_receive_a_fresh_request_timeout() -> None:
@@ -135,7 +135,7 @@ def test_late_retry_cannot_receive_a_fresh_request_timeout() -> None:
     )
 
     assert reader.events_for_query("test-marker") == []
-    assert search.calls == [("test-marker", 30.0), ("test-marker", 4.75)]
+    assert search.calls == (("test-marker", 30.0), ("test-marker", 4.75))
 
 
 @pytest.mark.parametrize("status", (-1, 401, 403, 500))
@@ -146,5 +146,78 @@ def test_non_quota_failures_are_not_retried_or_treated_as_empty_results(status: 
     with pytest.raises(pytest.fail.Exception, match=f"failed with HTTP {status}"):
         reader.events_for_query("test-marker")
 
-    assert search.calls == [("test-marker", 30.0)]
+    assert search.calls == (("test-marker", 30.0),)
     assert clock.elapsed == 0
+
+
+def test_polling_quota_retries_share_the_original_deadline() -> None:
+    clock: Final = Clock()
+    reader, search = _reader(
+        (_page(), StreamingResponse(status_code=429, body="", headers={"x-ratelimit-reset": str(POLL_TIMEOUT)})),
+        clock,
+    )
+
+    with pytest.raises(pytest.fail.Exception, match="remained rate-limited"):
+        reader.poll_events_for_query("test-marker")
+
+    assert clock.elapsed == POLL_TIMEOUT
+    assert len(search.calls) == 2
+
+
+def test_empty_polling_does_not_start_a_final_search_after_its_deadline() -> None:
+    clock: Final = Clock()
+    attempts: Final = int(POLL_TIMEOUT / DD_SEARCH_INTERVAL)
+    reader, search = _reader((_page(),) * attempts, clock)
+
+    assert reader.poll_events_for_query("test-marker") == []
+    assert clock.elapsed == POLL_TIMEOUT
+    assert len(search.calls) == attempts
+
+
+def test_settlement_quota_retries_keep_the_remaining_readback_budget() -> None:
+    clock: Final = Clock()
+    empty_reads: Final = int(POLL_TIMEOUT / DD_SEARCH_INTERVAL) - 2
+    reader, search = _reader(
+        (_page(),) * empty_reads
+        + (_page("first"), StreamingResponse(status_code=429, body="", headers={"x-ratelimit-reset": str(POLL_TIMEOUT)})),
+        clock,
+    )
+
+    with pytest.raises(pytest.fail.Exception, match="remained rate-limited"):
+        reader.poll_events_for_query("test-marker")
+
+    assert clock.elapsed == POLL_TIMEOUT
+    assert search.calls[-1] == ("test-marker", DD_SEARCH_INTERVAL)
+    assert len(search.calls) == empty_reads + 2
+
+
+def test_settlement_detects_a_duplicate_on_the_final_search() -> None:
+    clock: Final = Clock()
+    reader, _ = _reader((_page("first"), _page("first"), _page(), _page("first", "duplicate")), clock)
+
+    events: Final = reader.poll_events_for_query("test-marker")
+
+    assert tuple(event.attributes["id"] for event in events) == ("first", "duplicate")
+    assert clock.elapsed == 30
+
+
+def test_settlement_keeps_confirmed_events_through_empty_searches() -> None:
+    clock: Final = Clock()
+    reader, _ = _reader((_page("first"), _page(), _page(), _page()), clock)
+
+    events: Final = reader.poll_events_for_query("test-marker")
+
+    assert tuple(event.attributes["id"] for event in events) == ("first",)
+    assert clock.elapsed == 30
+
+
+def test_late_delivery_cannot_pass_without_a_complete_settle_window() -> None:
+    clock: Final = Clock()
+    empty_reads: Final = int(POLL_TIMEOUT / DD_SEARCH_INTERVAL) - 2
+    reader, search = _reader((_page(),) * empty_reads + (_page("first"), _page("first")), clock)
+
+    with pytest.raises(pytest.fail.Exception, match="duplicate-detection window"):
+        reader.poll_events_for_query("test-marker")
+
+    assert clock.elapsed == POLL_TIMEOUT
+    assert len(search.calls) == empty_reads + 2

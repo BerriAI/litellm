@@ -132,7 +132,9 @@ class DdLogsReader:
         a single event. A 429 backs off and retries - the search budget is
         org-wide, so another consumer can empty it under us - while any other
         failure stays a hard fail."""
-        deadline: Final = self.now() + POLL_TIMEOUT
+        return self._events_for_query(query, self.now() + POLL_TIMEOUT)
+
+    def _events_for_query(self, query: str, deadline: float) -> list[DdLogEvent]:
         search: Final = self.search or self._search_page
         while (remaining := deadline - self.now()) > 0:
             if (result := search(query, min(30.0, remaining))).ok:
@@ -165,33 +167,42 @@ class DdLogsReader:
         hide from the exactly-one assertion - real-DataDog jitter can surface
         one call's two events tens of seconds apart. Searches pace at
         DD_SEARCH_INTERVAL, not POLL_INTERVAL, to respect the search API's
-        request budget. At the deadline the last result is returned as-is."""
-        deadline = self.now() + POLL_TIMEOUT
-        while self.now() < deadline:
-            events = self.events_for_query(query)
+        request budget. Discovery, quota retries, and duplicate detection share
+        one POLL_TIMEOUT deadline; an incomplete settle window fails closed."""
+        deadline: Final = self.now() + POLL_TIMEOUT
+        while (remaining := deadline - self.now()) > 0:
+            events = self._events_for_query(query, deadline)
             if events:
-                return self._settled_events_for_query(query, events)
-            self.sleep(DD_SEARCH_INTERVAL)
-        return self.events_for_query(query)
+                return self._settled_events_for_query(query, events, deadline)
+            if (remaining := deadline - self.now()) > 0:
+                self.sleep(min(DD_SEARCH_INTERVAL, remaining))
+        return []
 
-    def _settled_events_for_query(self, query: str, events: list[DdLogEvent]) -> list[DdLogEvent]:
+    def _settled_events_for_query(self, query: str, events: list[DdLogEvent], deadline: float) -> list[DdLogEvent]:
         """Re-read at every search interval until the settle window closes; a
         duplicate ends the watch early because more waiting cannot clear it.
 
         Keep the last non-empty result: a transient empty search (index lag)
         must not erase events already confirmed earlier in the settle window.
+        A successful final search must reach the full settle window before the
+        shared read-back deadline; otherwise duplicate detection is incomplete.
         """
-        settle_deadline = self.now() + DD_SETTLE_SECONDS
+        settle_deadline: Final = self.now() + DD_SETTLE_SECONDS
         last_nonempty = events
-        while self.now() < settle_deadline:
-            self.sleep(DD_SEARCH_INTERVAL)
-            latest = self.events_for_query(query)
-            if not latest:
-                continue
+        if len(events) > 1:
+            return events
+        while (remaining := deadline - self.now()) > 0:
+            self.sleep(min(DD_SEARCH_INTERVAL, remaining))
+            if self.now() >= deadline:
+                break
+            latest = self._events_for_query(query, deadline)
             if len(latest) > 1:
                 return latest
-            last_nonempty = latest
-        return last_nonempty
+            if latest:
+                last_nonempty = latest
+            if self.now() >= settle_deadline:
+                return last_nonempty
+        pytest.fail(f"DataDog log delivery could not complete its duplicate-detection window within {POLL_TIMEOUT}s")
 
 
 def build_dd_logs_reader() -> DdLogsReader:

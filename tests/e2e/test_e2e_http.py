@@ -13,7 +13,7 @@ monkeypatches anything.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
@@ -44,10 +44,10 @@ class FakeResponse:
 
 @dataclass
 class SleepRecorder:
-    delays: list[float] = field(default_factory=list)
+    delays: tuple[float, ...] = ()
 
     def __call__(self, seconds: float) -> None:
-        self.delays.append(seconds)
+        self.delays += (seconds,)
 
 
 def _issue_from(responses: Sequence[FakeResponse]) -> Callable[[], FakeResponse]:
@@ -66,7 +66,7 @@ class TestTransientRetryPolicy:
         sleep = SleepRecorder()
         result = request_with_retry(_issue_from(responses), sleep=sleep)
         assert result is responses[0]
-        assert sleep.delays == []
+        assert sleep.delays == ()
         assert responses[0].close_calls == 0
 
     def test_429_is_never_retried(self) -> None:
@@ -74,7 +74,7 @@ class TestTransientRetryPolicy:
         sleep = SleepRecorder()
         result = request_with_retry(_issue_from(responses), sleep=sleep)
         assert result is responses[0]
-        assert sleep.delays == []
+        assert sleep.delays == ()
         assert responses[0].close_calls == 0
 
     def test_overloaded_529_retries_with_backoff_then_returns_the_success(self) -> None:
@@ -82,7 +82,7 @@ class TestTransientRetryPolicy:
         sleep = SleepRecorder()
         result = request_with_retry(_issue_from(responses), sleep=sleep)
         assert result is responses[1]
-        assert sleep.delays == [0.5]
+        assert sleep.delays == (0.5,)
         assert responses[0].close_calls == 1
         assert responses[1].close_calls == 0
 
@@ -91,7 +91,7 @@ class TestTransientRetryPolicy:
         sleep = SleepRecorder()
         result = request_with_retry(_issue_from(responses), sleep=sleep)
         assert result is responses[RETRY_ATTEMPTS - 1]
-        assert sleep.delays == [0.5, 1.0]
+        assert sleep.delays == (0.5, 1.0)
         assert [r.close_calls for r in responses] == [1, 1, 0, 0]
 
 
