@@ -250,6 +250,80 @@ func TestTeamReadMapsNewFields(t *testing.T) {
 	}
 }
 
+// /team/info returns per-model limits under metadata (where /team/new stores them), not top-level.
+func TestTeamReadMapsPerModelLimitsFromMetadata(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{
+		"team_id": "team-1",
+		"team_info": {
+			"team_id": "team-1",
+			"team_alias": "eng",
+			"model_rpm_limit": null,
+			"model_tpm_limit": null,
+			"metadata": {
+				"department": "eng",
+				"model_rpm_limit": {"gpt-4o-mini": 250},
+				"model_tpm_limit": {"gpt-4o-mini": 5000}
+			}
+		}
+	}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{
+		"team_alias":      "eng",
+		"model_rpm_limit": map[string]interface{}{"gpt-4o-mini": 100},
+	})
+	d.SetId("team-1")
+
+	if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read returned error: %v", err)
+	}
+	if got := d.Get("model_rpm_limit"); !reflect.DeepEqual(got, map[string]interface{}{"gpt-4o-mini": 250}) {
+		t.Errorf("model_rpm_limit = %v, want server value 250", got)
+	}
+	if got := d.Get("model_tpm_limit"); !reflect.DeepEqual(got, map[string]interface{}{"gpt-4o-mini": 5000}) {
+		t.Errorf("model_tpm_limit = %v, want server value 5000", got)
+	}
+	if got := d.Get("metadata"); !reflect.DeepEqual(got, map[string]interface{}{"department": "eng"}) {
+		t.Errorf("metadata = %v, want per-model limits kept out of the string map", got)
+	}
+}
+
+// Dropping the per-model limits from config must clear them on the proxy, which only happens when
+// /team/update receives an explicit empty map.
+func TestTeamUpdateClearsRemovedPerModelLimits(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"team-1","team_info":{"team_id":"team-1","team_alias":"eng"}}`)
+	defer srv.Close()
+
+	res := ResourceLiteLLMTeam()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{
+		"team_alias":      "eng",
+		"model_rpm_limit": map[string]interface{}{"gpt-4o-mini": 100},
+		"model_tpm_limit": map[string]interface{}{"gpt-4o-mini": 5000},
+	})
+	priorData.SetId("team-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"team_alias": "eng"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(prior, diff)
+	if err != nil {
+		t.Fatalf("data failed: %v", err)
+	}
+
+	if err := resourceLiteLLMTeamUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	for _, k := range []string{"model_rpm_limit", "model_tpm_limit"} {
+		if got, ok := captured[k]; !ok || !reflect.DeepEqual(got, map[string]interface{}{}) {
+			t.Errorf("payload %s = %v (present=%v), want explicit empty map", k, got, ok)
+		}
+	}
+}
+
 // rpm_limit_type / tpm_limit_type are accepted by /team/new but not
 // /team/update, so create must send them and update must not.
 func TestTeamLimitTypesSentOnCreateOnly(t *testing.T) {
