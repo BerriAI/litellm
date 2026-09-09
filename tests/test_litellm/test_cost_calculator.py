@@ -3736,6 +3736,62 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown(_local_model_cost_ma
     assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
 
 
+def test_completion_cost_logs_the_rates_it_billed_at(monkeypatch):
+    """A caller reporting the cost lines beside their per-token rates reads both off this one call.
+    completion_cost infers the provider, and xai's inclusive tier thresholds put a request sitting
+    exactly on 200k at the tier rate, which a lookup made without that inferred provider would miss.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "xai/tiered-model",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "input_cost_per_token_above_200k_tokens": 6e-6,
+            "output_cost_per_token_above_200k_tokens": 3e-5,
+            "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+            "litellm_provider": "xai",
+            "mode": "chat",
+        },
+    )
+    logging_obj = Logging(
+        model="xai/tiered-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="billed-rates",
+        function_id="f",
+    )
+    usage = Usage(
+        prompt_tokens=200_000,
+        completion_tokens=1_000,
+        total_tokens=201_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+    )
+
+    litellm.completion_cost(
+        completion_response=ModelResponse(model="xai/tiered-model", usage=usage),
+        model="xai/tiered-model",
+        custom_llm_provider=None,
+        litellm_logging_obj=logging_obj,
+    )
+
+    rates = logging_obj.billed_token_rates
+    assert rates is not None
+    assert rates.input_cost_per_token == pytest.approx(6e-6)
+    assert rates.cache_read_input_token_cost == pytest.approx(6e-7)
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(
+        100_000 * rates.cache_read_input_token_cost
+    )
+    assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(1_000 * rates.output_cost_per_token)
+
+
 def test_completion_cost_logs_cache_and_reasoning_breakdown_for_custom_pricing():
     """
     A custom-priced deployment bills cache tokens at its custom cache rates, but the

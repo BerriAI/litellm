@@ -21,7 +21,6 @@ import litellm
 from litellm._internal_context import current_billing_time, pinned_billing_time
 from litellm._logging import verbose_proxy_logger
 from litellm.cost_calculator import completion_cost
-from litellm.litellm_core_utils.llm_cost_calc.utils import get_billed_token_rates
 from litellm.proxy._types import (
     CommonProxyErrors,
     CostEstimateRequest,
@@ -85,9 +84,9 @@ def _extract_custom_pricing(
     )
 
 
-def _lookup_model_info(model: str) -> ModelInfo | None:
+def _lookup_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo | None:
     try:
-        return litellm.get_model_info(model=model)
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
 
@@ -122,7 +121,7 @@ def _resolve_model_for_cost_lookup(model: str) -> ResolvedCostModel:
                 if resolved_model:
                     verbose_proxy_logger.debug("Resolved model '%s' to '%s' from router", model, resolved_model)
                     custom_cost_per_token: Final = _extract_custom_pricing(
-                        litellm_params, model_info, _lookup_model_info(str(resolved_model))
+                        litellm_params, model_info, _lookup_model_info(str(resolved_model), provider)
                     )
                     return ResolvedCostModel(str(resolved_model), provider, custom_cost_per_token)
         except Exception as e:
@@ -632,10 +631,9 @@ async def estimate_cost(
         function_id="cost-estimate",
     )
 
-    # The totals, the per-token-type lines and the reported rates each resolve pricing on their
-    # own path. Pinning one moment keeps an off-peak window that opens mid-quote from splitting them.
-    billed_at: Final = current_billing_time()
-    with pinned_billing_time(billed_at):
+    # Pinning one moment keeps an off-peak window that opens mid-quote from pricing the totals on
+    # one side of it and the reported rates on the other.
+    with pinned_billing_time(current_billing_time()):
         # Use completion_cost which handles all the logic including margins/discounts
         try:
             cost_per_request: Final = completion_cost(
@@ -653,19 +651,16 @@ async def estimate_cost(
                 },
             )
 
-        rates: Final = get_billed_token_rates(
-            model=resolved_model,
-            custom_llm_provider=resolved_provider,
-            usage=usage,
-            custom_cost_per_token=resolved.custom_cost_per_token,
-            current_time=billed_at,
-        )
-
+    # The rates come back from the pricing call itself rather than a second lookup, so they are the
+    # ones the cost lines above billed at even when completion_cost infers a provider this endpoint
+    # never resolved (an unrouted "xai/grok-4" prices on xai's inclusive tier thresholds; a lookup
+    # here without that provider would report the sub-200k rate for a line billed above it).
+    rates: Final = litellm_logging_obj.billed_token_rates
     per_request: Final = _cost_lines(cost_per_request, litellm_logging_obj.cost_breakdown)
     daily: Final = per_request.times(request.num_requests_per_day)
     monthly: Final = per_request.times(request.num_requests_per_month)
 
-    model_info: Final = _lookup_model_info(resolved_model)
+    model_info: Final = _lookup_model_info(resolved_model, resolved_provider)
     mapped_provider: Final = model_info.get("litellm_provider") if model_info is not None else None
     custom_llm_provider: Final = mapped_provider if mapped_provider is not None else resolved_provider
 

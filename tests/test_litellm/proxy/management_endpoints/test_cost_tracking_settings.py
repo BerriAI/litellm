@@ -1139,6 +1139,45 @@ class TestEstimateCostCacheAndReasoningTokens:
         assert response.output_cost_per_request == pytest.approx(OUTPUT_TOKENS * response.output_cost_per_token)
 
 
+    @pytest.mark.asyncio
+    async def test_an_unrouted_model_reports_the_rates_of_the_provider_the_calculator_inferred(self, monkeypatch):
+        """The cost calculator infers a provider this endpoint never resolved, and the provider decides
+        whether a tier threshold is inclusive. xai bills a request sitting exactly on the 200k threshold
+        at the tier rate, so the reported rates have to be the tier's rather than the sub-tier base."""
+        an_xai_model = "xai/tiered-model"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            an_xai_model,
+            {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 3e-7,
+                "input_cost_per_token_above_200k_tokens": 6e-6,
+                "output_cost_per_token_above_200k_tokens": 3e-5,
+                "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+                "litellm_provider": "xai",
+                "mode": "chat",
+            },
+        )
+
+        response = await _estimate(
+            None,
+            model=an_xai_model,
+            input_tokens=200_000,
+            cache_read_input_tokens=100_000,
+            output_tokens=1_000,
+        )
+
+        assert response.input_cost_per_token == pytest.approx(6e-6)
+        assert response.output_cost_per_token == pytest.approx(3e-5)
+        assert response.cache_read_input_token_cost == pytest.approx(6e-7)
+        assert response.cache_read_cost_per_request == pytest.approx(100_000 * response.cache_read_input_token_cost)
+        assert response.input_cost_per_request == pytest.approx(
+            100_000 * response.input_cost_per_token + response.cache_read_cost_per_request
+        )
+        assert response.output_cost_per_request == pytest.approx(1_000 * response.output_cost_per_token)
+
+
 class TestCostEstimateRequestTokenSubsets:
     def test_cache_tokens_beyond_the_input_tokens_are_rejected(self):
         with pytest.raises(ValidationError, match="cannot exceed input_tokens"):

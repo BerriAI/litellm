@@ -1303,34 +1303,6 @@ def _coerce_token_count(value: object) -> int:
 
 
 @dataclass(frozen=True, slots=True)
-class TokenTypeCostBreakdown:
-    reasoning_cost: float
-    cache_read_cost: float
-    cache_creation_cost: float
-
-
-def _reasoning_token_count(usage: Usage) -> int:
-    parsed: Final = (
-        parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
-    )
-    return parsed or _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
-
-
-def _cache_token_counts(usage: Usage) -> tuple[int, int, CacheCreationTokenDetails | None]:
-    """(cache read tokens, cache creation tokens, cache creation details): read from prompt_tokens_details
-    first, then the private top-level counters the Usage constructor mirrors cache tokens onto for
-    providers/callers that bypass the details."""
-    parsed: Final = parse_prompt_tokens_details(usage) if usage.prompt_tokens_details is not None else None
-    parsed_read: Final = parsed["cache_hit_tokens"] if parsed is not None else 0
-    parsed_creation: Final = parsed["cache_creation_tokens"] if parsed is not None else 0
-    return (
-        parsed_read or _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0)),
-        parsed_creation or _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0)),
-        parsed["cache_creation_token_details"] if parsed is not None else None,
-    )
-
-
-@dataclass(frozen=True, slots=True)
 class BilledTokenRates:
     """Per-token rates one request's usage bills at, after token tiers, off-peak windows and the
     regional multipliers the totals apply, so each cost line equals its token count times its rate."""
@@ -1353,6 +1325,37 @@ class BilledTokenRates:
             cache_creation_input_token_cost_above_1hr=self.cache_creation_input_token_cost_above_1hr * multiplier,
             output_cost_per_reasoning_token=self.output_cost_per_reasoning_token * multiplier,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class TokenTypeCostBreakdown:
+    reasoning_cost: float
+    cache_read_cost: float
+    cache_creation_cost: float
+    rates: BilledTokenRates | None = None
+    """Rates these lines were billed at, so a caller reporting both cannot resolve them a second,
+    differently-argued way. None when the model's pricing could not be resolved."""
+
+
+def _reasoning_token_count(usage: Usage) -> int:
+    parsed: Final = (
+        parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
+    )
+    return parsed or _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
+
+
+def _cache_token_counts(usage: Usage) -> tuple[int, int, CacheCreationTokenDetails | None]:
+    """(cache read tokens, cache creation tokens, cache creation details): read from prompt_tokens_details
+    first, then the private top-level counters the Usage constructor mirrors cache tokens onto for
+    providers/callers that bypass the details."""
+    parsed: Final = parse_prompt_tokens_details(usage) if usage.prompt_tokens_details is not None else None
+    parsed_read: Final = parsed["cache_hit_tokens"] if parsed is not None else 0
+    parsed_creation: Final = parsed["cache_creation_tokens"] if parsed is not None else 0
+    return (
+        parsed_read or _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0)),
+        parsed_creation or _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0)),
+        parsed["cache_creation_token_details"] if parsed is not None else None,
+    )
 
 
 def _custom_pricing_rates(custom_cost_per_token: CostPerToken) -> BilledTokenRates:
@@ -1497,6 +1500,7 @@ def get_token_type_cost_breakdown(
         reasoning_cost=float(_reasoning_token_count(usage)) * rates.output_cost_per_reasoning_token,
         cache_read_cost=float(cache_read_tokens) * rates.cache_read_input_token_cost,
         cache_creation_cost=cache_creation_cost,
+        rates=rates,
     )
 
 
