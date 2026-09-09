@@ -594,7 +594,7 @@ def _retry_remote_fetch_in_background(
         _cost_map_source_info.fallback_reason = None
         _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
         adopt_model_cost_map(finalized)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # a failed background retry must not kill the task; the backup stays
         verbose_logger.warning("LiteLLM: Background model cost map retry failed: %s", e)
 
 
