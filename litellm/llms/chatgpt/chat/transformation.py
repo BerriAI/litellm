@@ -30,7 +30,7 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        dynamic_api_base: Final = self.authenticator.get_api_base()
+        dynamic_api_base: Final = api_base or self.authenticator.get_api_base()
         try:
             dynamic_api_key: Final = self.authenticator.get_access_token()
         except GetAccessTokenError as e:

@@ -9,7 +9,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 
 
-def test_generation_routes_with_chatgpt_oauth(chatgpt_tokens):
+@pytest.mark.parametrize("api_base", [None, "https://image-gateway.test"])
+def test_generation_routes_with_chatgpt_oauth(chatgpt_tokens, api_base):
     requests = []
 
     def respond(request):
@@ -21,6 +22,7 @@ def test_generation_routes_with_chatgpt_oauth(chatgpt_tokens):
     result = litellm.image_generation(
         model="chatgpt/gpt-image-2",
         prompt="blue circle",
+        api_base=api_base,
         client=client,
         quality="auto",
         size="auto",
@@ -29,7 +31,7 @@ def test_generation_routes_with_chatgpt_oauth(chatgpt_tokens):
     )
     assert requests[0].headers["x-gateway-route"] == "images"
     assert result.data[0].b64_json == "aGVsbG8="
-    assert str(requests[0].url) == "https://chatgpt.com/backend-api/codex/images/generations"
+    assert str(requests[0].url) == (api_base or "https://chatgpt.com/backend-api/codex") + "/images/generations"
     assert requests[0].headers["authorization"] == "Bearer test-token-" + "default"
     assert requests[0].headers["chatgpt-account-id"] == "test-account-" + "default"
     assert b'"model":"gpt-image-2"' in requests[0].content
