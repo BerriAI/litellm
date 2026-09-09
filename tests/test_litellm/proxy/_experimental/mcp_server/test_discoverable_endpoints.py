@@ -7651,12 +7651,6 @@ async def test_token_endpoint_client_secret_basic_without_secret_returns_400():
     assert exc_info.value.status_code == 400
 
 
-# -------------------------------------------------------------------
-# Non-oauth2 (auth_type=none, access-group gated) servers must not be
-# driven through the gateway OAuth authorize/token/register/discovery
-# flow, and must not be advertised as OAuth-protected in discovery docs.
-# -------------------------------------------------------------------
-
 
 def _access_group_none_server(server_name="access_group_server"):
     """A non-oauth2, access-group gated MCP server: no client_id, no OAuth."""
@@ -7794,35 +7788,38 @@ async def test_register_client_rejects_non_oauth2_server():
 
 
 @pytest.mark.asyncio
-async def test_oauth_protected_resource_404_for_non_oauth2_server():
-    """Discovery must not advertise a none-auth server as an OAuth-protected resource."""
-    try:
-        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            _build_oauth_protected_resource_response,
-        )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-    except ImportError:
-        pytest.skip("MCP discoverable endpoints not available")
+@pytest.mark.parametrize(
+    "auth_type", (None, "none", "api_key", "bearer_token", "basic", "aws_sigv4", "authorization", "token")
+)
+@pytest.mark.parametrize("use_standard_pattern", (False, True))
+async def test_oauth_protected_resource_for_gateway_owned_auth(auth_type, use_standard_pattern):
+    from starlette.requests import Request
 
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _access_group_none_server().model_copy(update={"auth_type": auth_type})
+    request = Request(
+        {"type": "http", "scheme": "https", "path": "/", "headers": [(b"host", b"litellm.example.com")]}
+    )
     global_mcp_server_manager.registry.clear()
-    server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
-
-    mock_request = MagicMock()
-    mock_request.base_url = "https://litellm.example.com/"
-    mock_request.headers = {}
-
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await _build_oauth_protected_resource_response(
-                request=mock_request,
-                mcp_server_name="access_group_server",
-                use_standard_pattern=False,
-            )
-        assert exc_info.value.status_code == 404
-        assert "not an OAuth-protected resource" in str(exc_info.value.detail)
+        response = await _build_oauth_protected_resource_response(
+            request=request,
+            mcp_server_name="access_group_server",
+            use_standard_pattern=use_standard_pattern,
+        )
+        resource_path = "/mcp/access_group_server" if use_standard_pattern else "/access_group_server/mcp"
+        assert response == {
+            "resource": f"https://litellm.example.com{resource_path}",
+            "authorization_servers": ["https://litellm.example.com/mcp"],
+            "scopes_supported": [],
+        }
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -7914,9 +7911,7 @@ async def test_oauth_protected_resource_passthrough_none_auth_not_404():
 
 @pytest.mark.asyncio
 async def test_oauth_protected_resource_404_for_unknown_server_name():
-    """A discovery request for an unknown server name returns the same 404 as a non-oauth2
-    server (not a 200 metadata doc with broken URLs), so the well-known paths cannot be used
-    to enumerate non-OAuth server names."""
+    """Unknown server names must not produce metadata advertising nonexistent resources."""
     try:
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             _build_oauth_protected_resource_response,
