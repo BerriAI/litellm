@@ -9826,7 +9826,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
+                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
                 extra_body=extra_body,
                 embedding_executor=embedding_executor,
             )
@@ -9871,6 +9871,12 @@ class BaseLLMHTTPHandler:
                 data=request_data,
                 timeout=timeout,
             )
+        except httpx.TimeoutException:
+            raise vector_store_provider_config.get_error_class(
+                error_message="Vector store search exceeded the caller timeout.",
+                status_code=408,
+                headers=httpx.Headers(),
+            ) from None
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -9955,7 +9961,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
-                litellm_params=dict(litellm_params),
+                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
                 extra_body=extra_body,
                 embedding_executor=embedding_executor,
             )
@@ -10000,7 +10006,14 @@ class BaseLLMHTTPHandler:
                 url=url,
                 headers=headers,
                 data=request_data,
+                timeout=timeout,
             )
+        except httpx.TimeoutException:
+            raise vector_store_provider_config.get_error_class(
+                error_message="Vector store search exceeded the caller timeout.",
+                status_code=408,
+                headers=httpx.Headers(),
+            ) from None
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
 
@@ -10029,6 +10042,8 @@ class BaseLLMHTTPHandler:
             )
         else:
             async_httpx_client = client
+
+        vector_store_provider_config.validate_create_vector_store()
 
         headers: Final = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
@@ -10099,6 +10114,8 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
+
+        vector_store_provider_config.validate_create_vector_store()
 
         headers: Final = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params

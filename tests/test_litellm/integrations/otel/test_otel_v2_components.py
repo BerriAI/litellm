@@ -6,14 +6,18 @@ import json
 import threading
 from collections.abc import Iterator
 from dataclasses import replace
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import pytest
 
 pytest.importorskip("opentelemetry")
 
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
+    ExportTraceServiceRequest,
+)
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import (  # noqa: E402
     BatchSpanProcessor,
     ConsoleSpanExporter,
@@ -541,6 +545,89 @@ def test_build_span_exporter_variants():
     assert "OTLPSpanExporter" in type(http_exporter).__name__
 
 
+def _export_one_trace_to_local_collector(exporter_kind: str) -> tuple[list[dict], tuple[int, int, int]]:
+    """Run a parent/child trace through the configured exporter against a
+    throwaway HTTP collector. Returns the requests as the collector saw them
+    (child first, since it ends first) and (trace_id, parent span_id, child span_id)."""
+    received: list[dict] = []
+
+    class Collector(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            received.append({"path": self.path, "headers": dict(self.headers), "body": body})
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Collector)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        config = OpenTelemetryV2Config(
+            exporter=exporter_kind,
+            endpoint=f"http://127.0.0.1:{server.server_port}",
+            headers="x-collector-token=secret",
+        )
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(providers.build_span_exporter(config)))
+        tracer = provider.get_tracer("test")
+        with tracer.start_as_current_span("parent", kind=SpanKind.SERVER) as parent:
+            with tracer.start_as_current_span("child") as child:
+                ids = (
+                    parent.get_span_context().trace_id,
+                    parent.get_span_context().span_id,
+                    child.get_span_context().span_id,
+                )
+        provider.shutdown()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert len(received) == 2
+    return received, ids
+
+
+def _only_span(request: dict) -> dict:
+    scope_spans = json.loads(request["body"])["resourceSpans"][0]["scopeSpans"][0]["spans"]
+    assert len(scope_spans) == 1
+    return scope_spans[0]
+
+
+def test_http_json_exporter_posts_otlp_json_to_traces_endpoint():
+    """``http/json`` must put the OTLP/JSON mapping on the wire (camelCase
+    fields, integer enums, hex ids) with a JSON content type, so collectors that
+    cannot decode protobuf can ingest the trace. Headers still travel."""
+    (child_request, parent_request), (trace_id, parent_id, child_id) = _export_one_trace_to_local_collector("http/json")
+
+    assert parent_request["path"] == "/v1/traces"
+    assert parent_request["headers"]["Content-Type"] == "application/json"
+    assert parent_request["headers"]["x-collector-token"] == "secret"
+    parent = _only_span(parent_request)
+    assert parent["name"] == "parent"
+    assert parent["kind"] == 2
+    assert parent["traceId"] == format(trace_id, "032x")
+    assert parent["spanId"] == format(parent_id, "016x")
+    assert "parentSpanId" not in parent
+    child = _only_span(child_request)
+    assert child["traceId"] == format(trace_id, "032x")
+    assert child["spanId"] == format(child_id, "016x")
+    assert child["parentSpanId"] == format(parent_id, "016x")
+
+
+def test_http_protobuf_exporter_still_posts_protobuf():
+    (_child_request, parent_request), (trace_id, _parent_id, _child_id) = _export_one_trace_to_local_collector(
+        "http/protobuf"
+    )
+
+    assert parent_request["path"] == "/v1/traces"
+    assert parent_request["headers"]["Content-Type"] == "application/x-protobuf"
+    assert format(trace_id, "032x").encode() not in parent_request["body"]
+    decoded = ExportTraceServiceRequest.FromString(parent_request["body"])
+    span = decoded.resource_spans[0].scope_spans[0].spans[0]
+    assert span.name == "parent"
+    assert span.trace_id == trace_id.to_bytes(16, "big")
+
+
 @pytest.fixture
 def otlp_collector() -> Iterator[tuple[str, list[str]]]:
     received_paths: list[str] = []
@@ -610,6 +697,21 @@ def test_traces_endpoint_per_exporter_coexists_with_default_normalization(otlp_c
     )
     _export_one_span(cfg)
     assert sorted(received_paths) == ["/services/collector/traces", "/v1/traces"]
+
+
+def test_http_json_exporter_honors_traces_endpoint(otlp_collector):
+    base_url, received_paths = otlp_collector
+    cfg = OpenTelemetryV2Config(
+        exporters=[
+            {
+                "kind": "http/json",
+                "endpoint": base_url,
+                "traces_endpoint": f"{base_url}/services/collector/traces",
+            }
+        ]
+    )
+    _export_one_span(cfg)
+    assert received_paths == ["/services/collector/traces"]
 
 
 def test_otlp_metric_exporter_uses_cumulative_histogram_temporality():

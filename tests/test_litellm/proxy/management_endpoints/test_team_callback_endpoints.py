@@ -19,6 +19,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.callback_config_validation import cross_entry_family_error
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     add_team_callbacks,
     delete_team_callback,
@@ -1443,3 +1444,118 @@ async def test_delete_team_callback_route_accepts_team_ids_containing_slashes():
     assert response.json()["data"]["success_callbacks"] == ["langsmith"]
     written = json.loads(mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
     assert [entry["callback_name"] for entry in written["logging"]] == ["langsmith"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_handler",
+    [
+        lambda caller: add_team_callbacks(
+            data=AddTeamCallback(
+                callback_name="langfuse",
+                callback_type="success",
+                callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+            ),
+            http_request=Mock(spec=Request),
+            team_id="team-does-not-exist",
+            user_api_key_dict=caller,
+        ),
+        lambda caller: get_team_callbacks(
+            http_request=Mock(spec=Request),
+            team_id="team-does-not-exist",
+            user_api_key_dict=caller,
+        ),
+        lambda caller: delete_team_callback(
+            http_request=Mock(spec=Request),
+            team_id="team-does-not-exist",
+            callback_name="langfuse",
+            user_api_key_dict=caller,
+        ),
+    ],
+    ids=["add", "get", "delete"],
+)
+async def test_unknown_team_is_indistinguishable_from_no_access(call_handler, unauthorized_caller):
+    """An unauthorized caller must not learn whether a team id exists.
+
+    These routes are reachable by any authenticated caller so a team admin can get
+    as far as the access check, so a distinct "does not exist" would turn them into
+    a probe for valid team ids. The unknown-team response has to match the
+    no-access one exactly, status and body.
+    """
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_client:  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
+        mock_client.get_data = AsyncMock(return_value=None)
+        with pytest.raises(HTTPException) as unknown_team:
+            await call_handler(unauthorized_caller)
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_client:  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
+        mock_client.get_data = AsyncMock(return_value=_team_row())
+        mock_client.db.litellm_teamtable.update = AsyncMock()
+        with patch(  # test-quality-ok: _verify_team_access calls this module-level helper directly, so there is no seam to inject through
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            with pytest.raises(HTTPException) as no_access:
+                await call_handler(unauthorized_caller)
+
+    assert unknown_team.value.status_code == no_access.value.status_code == 403
+    assert unknown_team.value.detail == no_access.value.detail
+    assert "does not exist" not in str(unknown_team.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_still_told_the_team_is_unknown():
+    """The masking is only for callers who could not have managed the team; a proxy
+    admin keeps the diagnosable error."""
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin", api_key="sk-admin")
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_client:  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
+        mock_client.get_data = AsyncMock(return_value=None)
+        with pytest.raises(HTTPException) as exc:
+            await get_team_callbacks(
+                http_request=Mock(spec=Request),
+                team_id="team-does-not-exist",
+                user_api_key_dict=admin,
+            )
+
+    assert exc.value.status_code == 404
+    assert "does not exist" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize(
+    "new_vars, stored, rejected",
+    [
+        # the redirect, in every carrier a caller could pick: an entry naming
+        # only a host, pairing with a key pair written on another entry
+        ({"langfuse_host": "http://attacker.invalid"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], True),
+        # the sibling carrier -- langfuse and langfuse_otel are one account
+        ({"langfuse_host": "http://attacker.invalid"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_secret_key": "sk"}], True),
+        # a destination variable no integration registry lists
+        ({"dd_agent_host": "attacker.invalid"}, [{"dd_api_key": "k", "dd_site": "us5.datadoghq.com"}], True),
+        # one entry owning its family end to end is the feature
+        ({"langfuse_host": "https://eu.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [], False),
+        # a different family alongside an existing one stays fine
+        ({"gcs_bucket_name": "bucket"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        ({"langsmith_api_key": "k"}, [{"dd_api_key": "k"}], False),
+        # variables that configure no backend carry nothing to redirect
+        ({"turn_off_message_logging": "true"}, [{"langfuse_secret_key": "sk"}], False),
+        # the same integration registered for a second event: identical values
+        # flatten to the identical dict, so there is nothing to redirect
+        ({"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        # the same credential under its other spelling is the same credential
+        ({"langfuse_secret": "sk"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        # a value the family already holds cannot be moved into another of its
+        # variables either; the exporter would address or authenticate with it
+        ({"langfuse_host": "pk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk"}], True),
+        # the same shape with one value moved is the redirect again
+        ({"langfuse_host": "http://attacker.invalid", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], True),
+    ],
+)
+def test_one_entry_owns_a_credential_family(new_vars, stored, rejected):
+    """A team admin must not be able to redirect a credential they cannot read.
+
+    The stored entries are flattened into one dict before a request reads them,
+    so an entry naming only a destination pairs with a key written elsewhere and
+    carries it to that destination.
+    """
+    error = cross_entry_family_error(new_vars, stored)
+    assert (error is not None) is rejected

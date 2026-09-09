@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 import warnings
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from functools import reduce
@@ -27,6 +27,7 @@ from e2e_http import (
     Result,
     StreamingResponse,
     Success,
+    UnknownApiError,
     is_ok,
     unwrap,
 )
@@ -73,6 +74,9 @@ from models import (
     SpendLogsPageParams,
     SpendLogsParams,
     StoredDeployment,
+    ToolsetCreateBody,
+    ToolsetRow,
+    ToolsetUpdateBody,
 )
 from e2e_config import (
     CONTROL_PLANE_BASE_URL,
@@ -128,103 +132,6 @@ class NotServableOn:
 
     replica: str
     last_result: Result[ModelsListResponse] | None
-
-
-type BodyReader[R: BaseModel] = Callable[[float], Result[R]]
-
-
-@dataclass(frozen=True, slots=True)
-class BodyNotConverged[R: BaseModel]:
-    """The deadline passed without a read the predicate accepted; `last_result` is the
-    final read, so the caller can tell a body that never matched from a read that
-    failed."""
-
-    last_result: Result[R] | None
-
-
-@dataclass(frozen=True, slots=True)
-class BodyConverged[R: BaseModel]:
-    """Every replica answered a body the predicate accepted; `bodies` is the last read
-    per replica."""
-
-    bodies: Mapping[str, R]
-
-
-@dataclass(frozen=True, slots=True)
-class NeverConvergedOn[R: BaseModel]:
-    """`BodyNotConverged` labeled with the replica whose reads never satisfied the predicate."""
-
-    replica: str
-    last_result: Result[R] | None
-
-
-def await_body_converged[R: BaseModel](
-    read: BodyReader[R],
-    *,
-    predicate: Callable[[R], bool],
-    timeout: float,
-    interval: float,
-    request_timeout: float,
-    now: Callable[[], float],
-    sleep: Callable[[float], None],
-) -> Success[R] | BodyNotConverged[R]:
-    """Poll `read` until it answers a body `predicate` accepts, or `timeout` passes.
-
-    Each read's request timeout is clamped to the remaining budget, and the sleep
-    between reads to the time left, so the last read before the deadline is never
-    skipped. Clock and sleep are injected."""
-    deadline: Final = now() + timeout
-
-    def reads() -> Iterator[Result[R]]:
-        while (remaining := deadline - now()) > 0:
-            yield read(min(request_timeout, remaining))
-            sleep(min(interval, max(deadline - now(), 0.0)))
-
-    def attempts() -> Iterator[Success[R] | BodyNotConverged[R]]:
-        for result in reads():
-            if isinstance(result, Success) and predicate(result.data):
-                yield result
-                return
-            yield BodyNotConverged(last_result=result)
-
-    initial: Final[Success[R] | BodyNotConverged[R]] = BodyNotConverged(last_result=None)
-    return reduce(lambda _previous, result: result, attempts(), initial)
-
-
-def await_body_converged_everywhere[R: BaseModel](
-    readers: Mapping[str, BodyReader[R]],
-    *,
-    predicate: Callable[[R], bool],
-    timeout: float,
-    interval: float,
-    request_timeout: float,
-    now: Callable[[], float],
-    sleep: Callable[[float], None],
-) -> BodyConverged[R] | NeverConvergedOn[R]:
-    """`await_body_converged` against every replica in turn, each with the full budget, so a
-    write counts as landed only once every replica serves it."""
-    def read_replica(
-        outcome: BodyConverged[R] | NeverConvergedOn[R],
-        item: tuple[str, BodyReader[R]],
-    ) -> BodyConverged[R] | NeverConvergedOn[R]:
-        if isinstance(outcome, NeverConvergedOn):
-            return outcome
-        replica, read = item
-        match await_body_converged(
-            read,
-            predicate=predicate,
-            timeout=timeout,
-            interval=interval,
-            request_timeout=request_timeout,
-            now=now,
-            sleep=sleep,
-        ):
-            case Success(data=data):
-                return BodyConverged(bodies=MappingProxyType({**outcome.bodies, replica: data}))
-            case BodyNotConverged(last_result=last_result):
-                return NeverConvergedOn(replica=replica, last_result=last_result)
-    initial: Final[BodyConverged[R] | NeverConvergedOn[R]] = BodyConverged(bodies=MappingProxyType({}))
-    return reduce(read_replica, readers.items(), initial)
 
 
 def await_servable(
@@ -335,6 +242,99 @@ def servable_timeout_message(
     )
 
 
+type ReplicaRead[T] = Callable[[float], T]
+
+
+@dataclass(frozen=True, slots=True)
+class EverywhereConverged[T]:
+    """Every replica answered with something `settled` accepts, keyed by replica."""
+
+    answers: Mapping[str, T]
+
+
+@dataclass(frozen=True, slots=True)
+class NeverConvergedOn[T]:
+    """`replica` ran out its budget without an answer `settled` accepts; `last` is
+    its final answer, so the failure can say what that replica still serves."""
+
+    replica: str
+    last: T
+
+
+def _last_answer[T](
+    read: ReplicaRead[T],
+    *,
+    settled: Callable[[T], bool],
+    timeout: float,
+    interval: float,
+    request_timeout: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> T:
+    """Poll `read` until `settled` accepts its answer or `timeout` runs out, and
+    return the last answer either way. Each read's request timeout is clamped to
+    the budget left, and the final poll runs even when less than an interval
+    remains, so a deadline never skips the read that would have settled."""
+    deadline: Final = now() + timeout
+    answer = read(min(request_timeout, timeout))
+    while not settled(answer):
+        remaining = deadline - now()
+        if remaining <= 0:
+            return answer
+        sleep(min(interval, remaining))
+        answer = read(min(request_timeout, remaining))
+    return answer
+
+
+def await_everywhere[T](
+    reads: Mapping[str, ReplicaRead[T]],
+    *,
+    settled: Callable[[T], bool],
+    timeout: float,
+    interval: float,
+    request_timeout: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> EverywhereConverged[T] | NeverConvergedOn[T]:
+    """`_last_answer` against every replica in turn, each with the full budget, so a
+    write counts as visible only once the last replica reflects it, and stop at the
+    first replica that never converges. Clock and sleep are injected."""
+    def read_replica(
+        outcome: EverywhereConverged[T] | NeverConvergedOn[T],
+        item: tuple[str, ReplicaRead[T]],
+    ) -> EverywhereConverged[T] | NeverConvergedOn[T]:
+        if isinstance(outcome, NeverConvergedOn):
+            return outcome
+        replica, read = item
+        answer: Final = _last_answer(
+            read,
+            settled=settled,
+            timeout=timeout,
+            interval=interval,
+            request_timeout=request_timeout,
+            now=now,
+            sleep=sleep,
+        )
+        if not settled(answer):
+            return NeverConvergedOn(replica=replica, last=answer)
+        return EverywhereConverged(answers=MappingProxyType({**outcome.answers, replica: answer}))
+
+    initial: Final[EverywhereConverged[T] | NeverConvergedOn[T]] = EverywhereConverged(answers=MappingProxyType({}))
+    return reduce(read_replica, reads.items(), initial)
+
+
+def _is_not_found[R: BaseModel](result: Result[R]) -> bool:
+    return isinstance(result, UnknownApiError) and result.status_code == 404
+
+
+def _status_of[R: BaseModel](result: Result[R]) -> int:
+    match result:
+        case Success(status_code=status_code) | UnknownApiError(status_code=status_code):
+            return status_code
+        case _:
+            return -1
+
+
 type Poller[T] = Callable[[], T]
 
 
@@ -421,6 +421,7 @@ def converge_timeout_message(*, what: str, replica: str, timeout: float, last_re
 class ProxyClient:
     transport: Transport
     replicas: Mapping[str, Transport]
+    control_replicas: Mapping[str, Transport]
     poll_timeout: float = 120.0
     poll_interval: float = 5.0
     model_servable_timeout: float = MODEL_SERVABLE_TIMEOUT
@@ -673,88 +674,6 @@ class ProxyClient:
             )
         )
 
-    def read_model_back_everywhere[R: BaseModel](
-        self, path: str, response_type: type[R], *, predicate: Callable[[R], bool]
-    ) -> Mapping[str, R]:
-        """GET `path` on every replica until each answers a body `predicate` accepts,
-        polling to poll_timeout, and return the last body per replica.
-
-        Fails naming the replica that never converged, so a write that reached one
-        gateway but not the others is caught instead of passing on whichever gateway
-        the balancer answered from. Falls back to the single proxy address when no
-        replica list is configured.
-
-        `path` must be a data-plane route. The replicas are gateways, which serve only
-        the LLM surface, so a control-plane path answers on exactly one service and
-        404s on every replica in a split deployment: asking each replica for one is
-        never the question the caller means. Read those through `self.transport`
-        instead, which routes them to the control plane."""
-        if is_control_plane_path(path):
-            raise AssertionError(
-                f"read_model_back_everywhere({path!r}) asks every data-plane replica for a control-plane route. "
-                "The replicas are gateways and do not serve it; poll a data-plane path such as /v1/models "
-                "here, and read the control plane through the shared transport."
-            )
-        readers: Final = {
-            url: self._body_reader(transport, path, response_type)
-            for url, transport in self._read_back_replicas().items()
-        }
-        outcome: Final = await_body_converged_everywhere(
-            readers,
-            predicate=predicate,
-            timeout=self.poll_timeout,
-            interval=self.poll_interval,
-            request_timeout=REQUEST_TIMEOUT,
-            now=time.monotonic,
-            sleep=time.sleep,
-        )
-        match outcome:
-            case BodyConverged(bodies=bodies):
-                return bodies
-            case NeverConvergedOn(replica=replica, last_result=last_result):
-                raise AssertionError(
-                    f"GET {path} on {replica} never answered the expected body within "
-                    f"{self.poll_timeout}s; last read: {last_result}"
-                )
-
-    def read_model_back[R: BaseModel](self, path: str, response_type: type[R], *, predicate: Callable[[R], bool]) -> R:
-        """GET `path` through the shared transport until the body satisfies `predicate`,
-        polling to poll_timeout, and return that body.
-
-        The counterpart to `read_model_back_everywhere` for a control-plane route such as
-        /model/info: the stored row lives in one database behind one control plane, so
-        there is a single answer to converge on rather than one per gateway."""
-        outcome: Final = await_body_converged_everywhere(
-            {CONTROL_PLANE_BASE_URL: self._body_reader(self.transport, path, response_type)},
-            predicate=predicate,
-            timeout=self.poll_timeout,
-            interval=self.poll_interval,
-            request_timeout=REQUEST_TIMEOUT,
-            now=time.monotonic,
-            sleep=time.sleep,
-        )
-        match outcome:
-            case BodyConverged(bodies=bodies):
-                return bodies[CONTROL_PLANE_BASE_URL]
-            case NeverConvergedOn(last_result=last_result):
-                raise AssertionError(
-                    f"GET {path} never answered the expected body within "
-                    f"{self.poll_timeout}s; last read: {last_result}"
-                )
-
-    def _read_back_replicas(self) -> Mapping[str, Transport]:
-        return self.replicas or MappingProxyType({CONTROL_PLANE_BASE_URL: self.transport})
-
-    @staticmethod
-    def _body_reader[R: BaseModel](transport: Transport, path: str, response_type: type[R]) -> BodyReader[R]:
-        return lambda timeout: transport.get(
-            path,
-            headers=transport.master,
-            params=NoBody(),
-            response_type=response_type,
-            timeout=timeout,
-        )
-
     def delete_model(self, model_id: str) -> None:
         result = self.transport.post(
             "/model/delete",
@@ -764,6 +683,112 @@ class ProxyClient:
         )
         if not is_ok(result):
             warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2)
+
+    # ---- replica read-back ----------------------------------------------
+
+    def replicas_for(self, path: str) -> Mapping[str, Transport]:
+        """The replicas that serve `path`: every data-plane replica for an LLM route,
+        and for a management route the control-plane replicas, since the data-plane
+        replicas trim management routes and answer them 404. A monolith serves both
+        from every replica, so a management read-back polls all of them; a split
+        deployment exposes one control-plane address (there is one backend process
+        behind it on the stack these suites run against), so it polls that. A
+        control plane fronting several backends would need its own replica list to
+        prove each one converged, the way PROXY_REPLICA_URLS does for the gateways.
+        Never empty: a read-back against no replica would assert nothing and pass."""
+        replicas: Final = self.control_replicas if is_control_plane_path(path) else self.replicas
+        assert replicas, f"no replica is configured to serve {path}, so a read-back there would prove nothing"
+        return replicas
+
+    def read_body_back_everywhere[R: BaseModel](
+        self, path: str, response_type: type[R], *, settled: Callable[[R], bool]
+    ) -> Mapping[str, R]:
+        """GET `path` on every replica that serves it, polling each to poll_timeout
+        until `settled` accepts its body, and fail naming the first replica that
+        never converged. Returns each replica's settled body, keyed by replica, so
+        the caller can assert the rest of it."""
+        outcome: Final = await_everywhere(
+            {url: self._reader(transport, path, response_type) for url, transport in self.replicas_for(path).items()},
+            settled=lambda result: isinstance(result, Success) and settled(result.data),
+            timeout=self.poll_timeout,
+            interval=self.poll_interval,
+            request_timeout=REQUEST_TIMEOUT,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        match outcome:
+            case EverywhereConverged(answers=answers):
+                return MappingProxyType({url: unwrap(result) for url, result in answers.items()})
+            case NeverConvergedOn(replica=replica, last=last):
+                raise AssertionError(
+                    f"GET {path} on {replica} never converged within {self.poll_timeout}s of the write; "
+                    f"last read: {last}"
+                )
+
+    def gone_everywhere(self, path: str) -> Mapping[str, int]:
+        """Poll GET `path` on every replica that serves it until each stops serving
+        it, and fail naming the first replica that still does at poll_timeout.
+        Returns each replica's final status, so the caller asserts the 404 itself."""
+        outcome: Final = await_everywhere(
+            {url: self._reader(transport, path, NoBody) for url, transport in self.replicas_for(path).items()},
+            settled=_is_not_found,
+            timeout=self.poll_timeout,
+            interval=self.poll_interval,
+            request_timeout=REQUEST_TIMEOUT,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        match outcome:
+            case EverywhereConverged(answers=answers):
+                return MappingProxyType({url: _status_of(result) for url, result in answers.items()})
+            case NeverConvergedOn(replica=replica, last=last):
+                raise AssertionError(
+                    f"GET {path} on {replica} still answers {self.poll_timeout}s after the delete; last read: {last}"
+                )
+
+    @staticmethod
+    def _reader[R: BaseModel](transport: Transport, path: str, response_type: type[R]) -> ReplicaRead[Result[R]]:
+        return lambda request_timeout: transport.get(
+            path,
+            headers=transport.master,
+            params=NoBody(),
+            response_type=response_type,
+            timeout=request_timeout,
+        )
+
+    # ---- mcp toolsets ---------------------------------------------------
+
+    def create_toolset(self, body: ToolsetCreateBody) -> ToolsetRow:
+        return unwrap(
+            self.transport.post(
+                "/v1/mcp/toolset",
+                headers=self.transport.master,
+                json=body,
+                response_type=ToolsetRow,
+            )
+        )
+
+    def update_toolset(self, body: ToolsetUpdateBody) -> ToolsetRow:
+        """PUT /v1/mcp/toolset: a partial update where a field left unset keeps its
+        stored value and None clears it."""
+        return unwrap(
+            self.transport.put(
+                "/v1/mcp/toolset",
+                headers=self.transport.master,
+                json=body,
+                response_type=ToolsetRow,
+            )
+        )
+
+    def delete_toolset(self, toolset_id: str) -> Result[NoBody]:
+        """DELETE /v1/mcp/toolset/{toolset_id}. Returns the outcome so the act phase
+        can unwrap it while a deferred teardown can ignore an already-deleted row."""
+        return self.transport.delete(
+            f"/v1/mcp/toolset/{toolset_id}",
+            headers=self.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
 
     def create_credential(self, body: CredentialCreateBody) -> None:
         unwrap(
@@ -932,7 +957,10 @@ def build_proxy_client(
     base URLs are the same for a monolithic proxy, so routing is then a no-op.
     ``replica_urls`` (PROXY_REPLICA_URLS) names every data-plane replica the model
     barrier polls directly; it is the data-plane URL itself unless the stack
-    exports each gateway's own address.
+    exports each gateway's own address. Management read-backs poll those same
+    replicas when the two planes share a base URL (a monolith, where every replica
+    serves every route) and the control plane alone when they differ (a split
+    deployment, where the data-plane replicas do not serve management routes).
 
     The endpoints are injectable for callers that resolve the proxy some other
     way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
@@ -960,9 +988,13 @@ def build_proxy_client(
             for url in replica_urls
         }
     )
+    control_replicas: Final = (
+        replicas if control_plane_base_url == base_url else MappingProxyType({control_plane_base_url: split.control})
+    )
     return ProxyClient(
         transport=split,
         replicas=replicas,
+        control_replicas=control_replicas,
         poll_timeout=POLL_TIMEOUT,
         poll_interval=POLL_INTERVAL,
     )

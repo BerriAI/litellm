@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Final, Literal
 
+from e2e_http import PartialBody
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_serializer, model_validator
 
 # ---------- keys ----------
@@ -55,6 +56,7 @@ class KeyMetadata(BaseModel):
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
     mcp_access_groups: list[str] | None = None
+    mcp_toolsets: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -77,7 +79,7 @@ class KeyGenerateBody(BaseModel):
     allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
     object_permission: ObjectPermission | None = None
-    router_settings: "RouterSettingsOverride | None" = None
+    router_settings: RouterSettingsOverride | None = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -516,6 +518,15 @@ class CountTokensResponse(BaseModel):
 # ---------- mcp servers ----------
 
 
+class McpInfo(BaseModel):
+    """The `mcp_info` display block stored on an MCP server; only the fields the
+    lifecycle test writes and reads back."""
+
+    server_name: str | None = None
+    description: str | None = None
+    logo_url: str | None = None
+
+
 class McpServerCreateBody(BaseModel):
     """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
     `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
@@ -530,6 +541,18 @@ class McpServerCreateBody(BaseModel):
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    server_name: str | None = None
+    description: str | None = None
+    mcp_info: McpInfo | None = None
+
+
+class McpServerUpdateBody(PartialBody):
+    """PUT /v1/mcp/server: a field left unset keeps its stored value, a field set
+    to None is cleared."""
+
+    server_id: str
+    alias: str | None = None
+    description: str | None = None
 
 
 class McpServerInfo(BaseModel):
@@ -541,6 +564,54 @@ class McpServerInfo(BaseModel):
     auth_type: str | None = None
     oauth2_flow: str | None = None
     allow_all_keys: bool | None = None
+
+
+class McpServerRow(McpServerInfo):
+    """A stored MCP server as the create, get, and list routes return it: the
+    fields the lifecycle test asserts survive the round trip."""
+
+    server_name: str | None = None
+    transport: str | None = None
+    description: str | None = None
+    mcp_info: McpInfo | None = None
+
+
+class McpServerListResponse(RootModel[list[McpServerRow]]):
+    """GET /v1/mcp/server answers with a bare array of servers."""
+
+
+class ToolsetTool(BaseModel):
+    server_id: str
+    tool_name: str
+
+
+class ToolsetCreateBody(BaseModel):
+    toolset_name: str
+    description: str | None = None
+    tools: list[ToolsetTool]
+
+
+class ToolsetUpdateBody(PartialBody):
+    """PUT /v1/mcp/toolset: a field left unset keeps its stored value, a field set
+    to None is cleared."""
+
+    toolset_id: str
+    description: str | None = None
+    tools: list[ToolsetTool] | None = None
+
+
+class ToolsetRow(BaseModel):
+    """A stored toolset as POST /v1/mcp/toolset, GET /v1/mcp/toolset/{toolset_id},
+    and each row of GET /v1/mcp/toolset return it."""
+
+    toolset_id: str
+    toolset_name: str
+    description: str | None = None
+    tools: list[ToolsetTool] = Field(default_factory=list)
+
+
+class ToolsetListResponse(RootModel[list[ToolsetRow]]):
+    """GET /v1/mcp/toolset answers with a bare array of toolsets."""
 
 
 class EmbedBody(BaseModel):

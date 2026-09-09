@@ -67,7 +67,6 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
     --extra semantic-router \
     --extra saml \
     --extra bedrock-realtime \
-    --extra mongodb \
     --python python3.13
 
 # Copy full source tree
@@ -90,7 +89,6 @@ RUN uv sync --frozen --no-default-groups --no-editable \
     --extra semantic-router \
     --extra saml \
     --extra bedrock-realtime \
-    --extra mongodb \
     --python python3.13
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \

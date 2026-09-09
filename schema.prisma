@@ -1036,6 +1036,7 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   created_at DateTime @default(now())
   created_by String?
   team_id String?
+  org_id String? // creating key's organization at submission time; CheckBatchCost bills org spend against it
   api_key String?
   request_tags Json? @default("[]")
   updated_at DateTime @updatedAt

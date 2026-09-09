@@ -118,8 +118,20 @@ def _tier_name(tier: ComplexityTier | str) -> str:
     return tier.value if isinstance(tier, ComplexityTier) else tier
 
 
+def _built_in_tier_or_none(tier_name: str) -> ComplexityTier | None:
+    """The built-in tier a `tiers` key names, or None when the key is an operator-defined name."""
+    return ComplexityTier.__members__.get(tier_name)
+
+
 _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProxyType(
     {
+        ComplexityTier.NON_REASONING: (
+            "operational requests whose whole job is to pass information along or put it in a "
+            "requested shape: relaying or reformatting tool output, acknowledging a completed action, "
+            "or extracting a stated value. Use it only when no judgment about the content is asked for; "
+            "the moment the request is to summarize, compare, explain, debug, or decide, it belongs "
+            "in a higher tier however short it is."
+        ),
         ComplexityTier.SIMPLE: (
             "greetings, chitchat, or factual lookups with a short known answer. Do not use this tier for "
             "unsolved problems, proofs, deep theory, multi-step analysis, or non-trivial code, even if the "
@@ -1244,7 +1256,7 @@ class ComplexityRouter(CustomLogger):
         """
         if self.config.has_custom_tiers:
             return tuple(dict.fromkeys(model for models in self._tier_pools().values() for model in models))
-        for tier in reversed(TIER_SEVERITY_ORDER):
+        for tier in reversed(self.config.active_tier_severity_order()):
             models = self.config.tiers.get(tier.value)
             if models:
                 return tuple(models) if isinstance(models, list) else (models,)
@@ -1890,7 +1902,11 @@ class ComplexityRouter(CustomLogger):
         default_model: Final = self.config.default_model
         pools: Final = self._tier_pools()
         tier: Final = next(
-            (candidate for candidate in TIER_SEVERITY_ORDER if default_model in pools.get(candidate.value, ())),
+            (
+                candidate
+                for candidate in self.config.active_tier_severity_order()
+                if default_model in pools.get(candidate.value, ())
+            ),
             ComplexityTier.MEDIUM,
         )
         return ClassificationOutcome(
@@ -2279,7 +2295,8 @@ class ComplexityRouter(CustomLogger):
             return self._fitting_tier_fallback(classified_tier, fit_filter)
 
         request_type: Final = classify_prompt(user_message)
-        classified_idx: Final = TIER_SEVERITY_ORDER.index(classified_tier)
+        severity_order: Final = self.config.active_tier_severity_order()
+        classified_idx: Final = severity_order.index(classified_tier)
         pools: Final = self._tier_pools()
         classified_candidates: Final = _allowed(tuple(pools.get(_tier_name(classified_tier), ())), fit_filter)
         cold_start_candidates: Final = tuple(
@@ -2343,9 +2360,7 @@ class ComplexityRouter(CustomLogger):
                 distance = 0
             else:
                 model_tiers = self._model_tiers.get(model, (classified_tier,))
-                distance = min(
-                    abs(TIER_SEVERITY_ORDER.index(model_tier) - classified_idx) for model_tier in model_tiers
-                )
+                distance = min(abs(severity_order.index(model_tier) - classified_idx) for model_tier in model_tiers)
             score = quality_weight * quality_sample + cost_weight * cost_score - penalty_weight * distance
             candidate_scores.append(
                 {
@@ -2660,10 +2675,15 @@ class ComplexityRouter(CustomLogger):
     def _tier_for_model(self, model: str) -> ComplexityTier | None:
         """Return the most-severe configured tier whose pool contains this model."""
         pools: Final = self._tier_pools()
-        matched: Final = tuple(ComplexityTier(tier_name) for tier_name, models in pools.items() if model in models)
+        order: Final = self.config.active_tier_severity_order()
+        matched: Final = tuple(
+            tier
+            for tier_name, models in pools.items()
+            if model in models and (tier := _built_in_tier_or_none(tier_name)) is not None and tier in order
+        )
         if not matched:
             return None
-        return max(matched, key=TIER_SEVERITY_ORDER.index)
+        return max(matched, key=order.index)
 
     def _escalate_tier(self, tier: ComplexityTier | str) -> ComplexityTier | str:
         """Bump a tier one step up to the next-higher configured tier.
@@ -2678,9 +2698,10 @@ class ComplexityRouter(CustomLogger):
         if self.config.has_custom_tiers:
             return tier
         configured: Final = frozenset(self.config.tiers)
-        current_index: Final = TIER_SEVERITY_ORDER.index(tier)
+        order: Final = self.config.active_tier_severity_order()
+        current_index: Final = order.index(tier)
         higher_tiers: Final = tuple(
-            candidate for candidate in TIER_SEVERITY_ORDER[current_index + 1 :] if candidate.value in configured
+            candidate for candidate in order[current_index + 1 :] if candidate.value in configured
         )
         return higher_tiers[0] if higher_tiers else tier
 

@@ -8542,6 +8542,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/mcp/proxy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        get: operations["proxy_mcp_route_mcp_proxy_get"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        put: operations["proxy_mcp_route_mcp_proxy_put"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        post: operations["proxy_mcp_route_mcp_proxy_post"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        delete: operations["proxy_mcp_route_mcp_proxy_delete"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        options: operations["proxy_mcp_route_mcp_proxy_options"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        head: operations["proxy_mcp_route_mcp_proxy_head"];
+        /**
+         * Proxy Mcp Route
+         * @description Serve the fixed three-tool MCP proxy surface.
+         */
+        patch: operations["proxy_mcp_route_mcp_proxy_patch"];
+        trace?: never;
+    };
     "/memory-usage-in-mem-cache": {
         parameters: {
             query?: never;
@@ -8701,6 +8745,9 @@ export interface paths {
          *     - url: the remote URL that was attempted (null when env-forced local)
          *     - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
          *     - fallback_reason: human-readable reason why remote failed (null on success)
+         *     - loaded_at: when this pod last loaded the map
+         *     - source_revision: git blob id of the loaded file, what git rev-parse <commit>:<path> prints for it
+         *     - etag: the ETag of the remote fetch (null for the bundled backup)
          *     - model_count: number of models in the currently loaded cost map
          */
         get: operations["get_model_cost_map_source_model_cost_map_source_get"];
@@ -25580,7 +25627,7 @@ export interface components {
          * @description Complexity tiers for routing decisions.
          * @enum {string}
          */
-        ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+        ComplexityTier: "NON_REASONING" | "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
         /** ComplexityTierModel */
         ComplexityTierModel: {
             /** Litellm Params */
@@ -29450,6 +29497,8 @@ export interface components {
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
             default_api_key_tpm_limit?: number | null;
+            /** Drop Params */
+            drop_params?: boolean | string | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -34956,6 +35005,12 @@ export interface components {
              */
             enable_context_window_escalation: boolean;
             /**
+             * Enable Non Reasoning Tier
+             * @description Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic that relays or reformats information rather than reasoning about it. Off by default: turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's rubric, and a value the classifier may return, all of which move tier decisions and spend on an already-deployed router. Requires an LLM classifier or a custom classifier plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` under the NON_REASONING key. Escalation still walks up from it, and it is never the savings baseline or a `heuristic_v2` prediction.
+             * @default false
+             */
+            enable_non_reasoning_tier: boolean;
+            /**
              * Escalation Keywords
              * @description Case-sensitive phrases a user can include to force a bump to the next-higher complexity tier when they aren't satisfied with results (they can force a stronger model, but not choose which one). Defaults to ['LITELLM ESCALATE'] when unset; set to an empty list to disable.
              */
@@ -37226,7 +37281,7 @@ export interface components {
         TierDefinition: {
             /**
              * Description
-             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which inherits the built-in criteria when omitted
+             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (NON_REASONING, SIMPLE, MEDIUM, COMPLEX, REASONING), which inherits the built-in criteria when omitted
              */
             description?: string | null;
             /**
@@ -39633,6 +39688,8 @@ export interface components {
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
             default_api_key_tpm_limit?: number | null;
+            /** Drop Params */
+            drop_params?: boolean | string | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -50970,6 +51027,146 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_mcp_route_mcp_proxy_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

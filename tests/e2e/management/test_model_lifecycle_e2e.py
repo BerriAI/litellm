@@ -12,7 +12,7 @@ deployment from /model/info and makes the model name unknown to /chat/completion
 The stored row is read back from /model/info, a control-plane route with one answer
 behind it. What every gateway must agree on is which models it serves, so the create
 and delete steps poll /v1/models on every URL in PROXY_REPLICA_URLS through
-ProxyClient.read_model_back_everywhere, failing by name on the gateway that never converged.
+ProxyClient.read_body_back_everywhere, failing by name on the gateway that never converged.
 """
 
 from __future__ import annotations
@@ -113,9 +113,9 @@ def _stored_entry(
 ) -> ModelInfoEntry:
     """The stored /model/info row for `model_name`, once it satisfies `converged`.
 
-    /model/info is a control-plane route: the gateways named in PROXY_REPLICA_URLS
-    serve the LLM surface only, so the stored row has one answer, not one per
-    gateway. What every gateway must agree on is which models it serves, and
+    /model/info is a control-plane route, so `replicas_for` polls the control plane
+    rather than the gateways in PROXY_REPLICA_URLS, which serve the LLM surface only.
+    What every gateway must agree on is which models it serves, and
     `_assert_served_everywhere` / `_assert_absent_everywhere` poll /v1/models for
     that."""
 
@@ -123,8 +123,8 @@ def _stored_entry(
         entry: Final = _entry(body, model_name)
         return entry is not None and converged(entry)
 
-    body: Final = client.proxy.read_model_back("/model/info", ModelInfoResponse, predicate=has_converged)
-    entry: Final = _entry(body, model_name)
+    bodies: Final = client.proxy.read_body_back_everywhere("/model/info", ModelInfoResponse, settled=has_converged)
+    entry: Final = _entry(next(iter(bodies.values())), model_name)
     assert entry is not None, f"/model/info stopped listing {model_name!r} between the poll and the read"
     return entry
 
@@ -134,14 +134,14 @@ def _serves(body: ModelsListResponse, model_name: str) -> bool:
 
 
 def _assert_served_everywhere(client: ManagementClient, model_name: str) -> None:
-    _ = client.proxy.read_model_back_everywhere(
-        "/v1/models", ModelsListResponse, predicate=lambda body: _serves(body, model_name)
+    _ = client.proxy.read_body_back_everywhere(
+        "/v1/models", ModelsListResponse, settled=lambda body: _serves(body, model_name)
     )
 
 
 def _assert_absent_everywhere(client: ManagementClient, model_name: str) -> None:
-    _ = client.proxy.read_model_back_everywhere(
-        "/v1/models", ModelsListResponse, predicate=lambda body: not _serves(body, model_name)
+    _ = client.proxy.read_body_back_everywhere(
+        "/v1/models", ModelsListResponse, settled=lambda body: not _serves(body, model_name)
     )
 
 
