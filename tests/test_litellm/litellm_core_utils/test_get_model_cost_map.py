@@ -20,21 +20,18 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     _count_model_entries,
     _finalize_model_cost_map,
+    adopt_model_cost_map,
 )
 
 
 def _load_root_cost_map() -> dict:
-    path = os.path.join(
-        os.path.dirname(__file__), "../../../model_prices_and_context_window.json"
-    )
+    path = os.path.join(os.path.dirname(__file__), "../../../model_prices_and_context_window.json")
     with open(path) as f:
         return json.load(f)
 
 
 def _make_models(n: int) -> dict:
-    return {
-        f"model-{i}": {"litellm_provider": "openai", "mode": "chat"} for i in range(n)
-    }
+    return {f"model-{i}": {"litellm_provider": "openai", "mode": "chat"} for i in range(n)}
 
 
 def test_count_model_entries_excludes_reserved_keys():
@@ -117,9 +114,7 @@ def test_finalize_pops_key_and_installs_rules():
 def test_finalize_with_no_block_clears_rules():
     previous = list(get_fallback_generalization_rules())
     try:
-        set_fallback_generalizations(
-            [{"name": "stale", "pattern": r"^x", "model_info": {"a": 1}}]
-        )
+        set_fallback_generalizations([{"name": "stale", "pattern": r"^x", "model_info": {"a": 1}}])
         _finalize_model_cost_map(_make_models(2))
         assert match_capability_generalizations("x-1") is None
     finally:
@@ -306,9 +301,7 @@ def test_get_model_cost_map_stamps_loaded_at(monkeypatch):
     from litellm.litellm_core_utils import get_model_cost_map as module
 
     monkeypatch.setattr(module._cost_map_source_info, "loaded_at", None)
-    client, _calls = _mock_client(
-        [httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client
-    )
+    client, _calls = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
 
     before = datetime.now(timezone.utc)
     module.get_model_cost_map(url="https://example.invalid/cost_map.json", client=client)
@@ -316,6 +309,7 @@ def test_get_model_cost_map_stamps_loaded_at(monkeypatch):
 
     assert loaded_at is not None
     assert before <= loaded_at <= datetime.now(timezone.utc)
+
 
 # ---------------------------------------------------------------------------
 # refetch_model_cost_map: retry/backoff behavior for runtime reloads
@@ -382,9 +376,7 @@ async def test_refetch_retries_429_honoring_retry_after():
         ]
     )
     sleeper = _SleepRecorder()
-    result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
-    )
+    result = await refetch_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
     assert isinstance(result, ModelCostMapReloaded)
     assert len(result.model_cost_map) > 100
     assert calls["count"] == 3
@@ -396,9 +388,7 @@ async def test_refetch_gives_up_after_max_attempts_with_exponential_backoff():
     """All 429 without Retry-After: exponential backoff waits, then a failure value."""
     client, calls = _mock_client([httpx.Response(429)])
     sleeper = _SleepRecorder()
-    result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
-    )
+    result = await refetch_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
     assert isinstance(result, ModelCostMapReloadUnavailable)
     assert "429" in result.reason
     assert "after 3 attempts" in result.reason
@@ -418,9 +408,7 @@ async def test_refetch_caps_retry_after_wait():
         ]
     )
     sleeper = _SleepRecorder()
-    result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
-    )
+    result = await refetch_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
     assert isinstance(result, ModelCostMapReloaded)
     assert sleeper.waits == [30.0]
 
@@ -435,9 +423,7 @@ async def test_refetch_retries_transport_errors():
         ]
     )
     sleeper = _SleepRecorder()
-    result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
-    )
+    result = await refetch_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
     assert isinstance(result, ModelCostMapReloaded)
     assert calls["count"] == 2
     assert len(sleeper.waits) == 1
@@ -448,9 +434,7 @@ async def test_refetch_non_retryable_status_fails_immediately():
     """A 404 is permanent: one attempt, no sleeps, failure value."""
     client, calls = _mock_client([httpx.Response(404)])
     sleeper = _SleepRecorder()
-    result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
-    )
+    result = await refetch_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
     assert isinstance(result, ModelCostMapReloadUnavailable)
     assert "404" in result.reason
     assert calls["count"] == 1
@@ -461,9 +445,7 @@ async def test_refetch_non_retryable_status_fails_immediately():
 async def test_refetch_invalid_json_fails_immediately():
     client, calls = _mock_client([httpx.Response(200, content=b"not json")])
     sleeper = _SleepRecorder()
-    result = await refetch_model_cost_map(
-        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
-    )
+    result = await refetch_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
     assert isinstance(result, ModelCostMapReloadUnavailable)
     assert "invalid JSON" in result.reason
     assert calls["count"] == 1
@@ -475,9 +457,7 @@ async def test_refetch_shrunk_map_fails_integrity_not_swapped_in():
     """A drastically shrunk upstream file is rejected instead of being adopted."""
     tiny = json.dumps(_make_models(60)).encode()
     client, _calls = _mock_client([httpx.Response(200, content=tiny)])
-    result = await refetch_model_cost_map(
-        url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client
-    )
+    result = await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client)
     assert isinstance(result, ModelCostMapReloadUnavailable)
     assert "integrity validation" in result.reason
 
@@ -520,62 +500,187 @@ class _SyncSleepRecorder:
         self.waits.append(seconds)
 
 
-def test_boot_load_retries_transient_failures_instead_of_falling_back():
-    """A refused connection then a 503 at pod boot used to pin the process to the bundled
-    backup for its lifetime; both are transient and must be retried before giving up."""
+class _BackgroundRecorder:
+    def __init__(self):
+        self.callbacks = []
+
+    def __call__(self, callback):
+        self.callbacks.append(callback)
+
+
+def test_boot_load_returns_local_map_and_schedules_transient_retry():
     client, calls = _mock_client(
         [
             httpx.ConnectError("connection refused"),
-            httpx.Response(503),
+        ],
+        client_cls=httpx.Client,
+    )
+    sleeper = _SyncSleepRecorder()
+    background = _BackgroundRecorder()
+
+    cost_map = get_model_cost_map(
+        url=_URL,
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+        start_background=background,
+    )
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+    assert len(background.callbacks) == 1
+    assert len(cost_map) > 100
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert source["fallback_reason"] is not None
+
+
+def test_background_retry_adopts_valid_remote_map():
+    client, calls = _mock_client(
+        [
+            httpx.ConnectError("connection refused"),
             httpx.Response(200, content=_real_map_bytes()),
         ],
         client_cls=httpx.Client,
     )
     sleeper = _SyncSleepRecorder()
+    background = _BackgroundRecorder()
+    applied = []
 
-    cost_map = get_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
+    get_model_cost_map(
+        url=_URL,
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+        start_background=background,
+        apply=applied.append,
+    )
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+    assert len(background.callbacks) == 1
+
+    background.callbacks[0]()
+
+    assert calls["count"] == 2
+    assert len(sleeper.waits) == 1
+    assert 2.0 <= sleeper.waits[0] < 3.0
+    assert len(applied) == 1
+    assert applied[0].keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "remote"
+    assert source["fallback_reason"] is None
+
+
+def test_background_retry_keeps_local_map_after_remaining_failures():
+    client, calls = _mock_client(
+        [httpx.ConnectError("connection refused"), httpx.Response(503)],
+        client_cls=httpx.Client,
+    )
+    sleeper = _SyncSleepRecorder()
+    background = _BackgroundRecorder()
+    applied = []
+
+    get_model_cost_map(
+        url=_URL,
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+        start_background=background,
+        apply=applied.append,
+    )
+    background.callbacks[0]()
 
     assert calls["count"] == 3
     assert len(sleeper.waits) == 2
     assert 2.0 <= sleeper.waits[0] < 3.0
     assert 4.0 <= sleeper.waits[1] < 5.0
+    assert applied == []
+    assert get_model_cost_map_source_info()["source"] == "local"
+
+
+def test_boot_load_does_not_schedule_non_retryable_failure():
+    client, calls = _mock_client([httpx.Response(404)], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+    background = _BackgroundRecorder()
+
+    get_model_cost_map(
+        url=_URL,
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+        start_background=background,
+    )
+
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+    assert background.callbacks == []
     source = get_model_cost_map_source_info()
-    assert source["source"] == "remote"
-    assert source["fallback_reason"] is None
+    assert source["source"] == "local"
+    assert source["fallback_reason"] is not None
+
+
+def test_boot_load_success_does_not_schedule_background_retry():
+    client, calls = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+    background = _BackgroundRecorder()
+
+    cost_map = get_model_cost_map(
+        url=_URL,
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+        start_background=background,
+    )
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+    assert background.callbacks == []
+    assert get_model_cost_map_source_info()["source"] == "remote"
     assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
 
 
-def test_boot_load_honors_retry_after_then_falls_back_after_max_attempts():
-    """An outage longer than the retry budget still ends on the bundled backup, and the
-    recorded fallback reason says how many attempts were spent so operators can tell."""
-    client, calls = _mock_client(
-        [httpx.Response(429, headers={"Retry-After": "7"})], client_cls=httpx.Client
+def test_boot_load_with_one_attempt_does_not_schedule_background_retry():
+    client, calls = _mock_client([httpx.ConnectError("connection refused")], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+    background = _BackgroundRecorder()
+
+    get_model_cost_map(
+        url=_URL,
+        max_attempts=1,
+        sleep=sleeper,
+        rng=random.Random(0),
+        client=client,
+        start_background=background,
     )
-    sleeper = _SyncSleepRecorder()
 
-    cost_map = get_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
-
-    assert calls["count"] == 3
-    assert sleeper.waits == [7.0, 7.0]
-    source = get_model_cost_map_source_info()
-    assert source["source"] == "local"
-    assert "after 3 attempts" in source["fallback_reason"]
-    assert len(cost_map) > 100
-
-
-def test_boot_load_does_not_retry_permanent_failures():
-    """A 404 or a malformed URL cannot heal by waiting: one attempt, no sleeps, backup."""
-    client, calls = _mock_client([httpx.Response(404)], client_cls=httpx.Client)
-    sleeper = _SyncSleepRecorder()
-
-    get_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
     assert calls["count"] == 1
     assert sleeper.waits == []
+    assert background.callbacks == []
     assert get_model_cost_map_source_info()["source"] == "local"
 
-    get_model_cost_map(url="not a url", sleep=sleeper, rng=random.Random(0))
-    assert sleeper.waits == []
-    assert get_model_cost_map_source_info()["source"] == "local"
+
+def test_adopt_model_cost_map_replays_runtime_registration_and_provider_models():
+    import litellm
+    from litellm import utils as litellm_utils
+
+    original_model_cost = litellm.model_cost
+    original_registry = dict(litellm_utils._runtime_registered_model_cost)
+    original_anthropic_models = set(litellm.anthropic_models)
+    try:
+        litellm.register_model(
+            model_cost={"custom/deployment-model": {"litellm_provider": "custom", "max_input_tokens": 4321}}
+        )
+
+        models_count = adopt_model_cost_map({"anthropic/new-model": {"litellm_provider": "anthropic", "mode": "chat"}})
+
+        assert models_count == 1
+        assert "anthropic/new-model" in litellm.anthropic_models
+        assert litellm.model_cost["custom/deployment-model"]["max_input_tokens"] == 4321
+    finally:
+        litellm.model_cost = original_model_cost  # test-quality-ok: restore the module state changed by adoption
+        litellm_utils._runtime_registered_model_cost.clear()
+        litellm_utils._runtime_registered_model_cost.update(original_registry)
+        litellm.anthropic_models.clear()
+        litellm.anthropic_models.update(original_anthropic_models)
+        litellm_utils._invalidate_model_cost_lowercase_map()
 
 
 def test_boot_load_respects_local_env_override(monkeypatch):
