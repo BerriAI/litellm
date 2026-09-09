@@ -1,8 +1,9 @@
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Literal
 
 import pytest
@@ -13,6 +14,7 @@ from prometheus_client import REGISTRY
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
@@ -26,12 +28,188 @@ from tests.test_litellm_rust.contracts import (
     MESSAGES_MODEL,
     MESSAGES_RESPONSE,
     OCR_RESPONSE,
-    call_native_aocr,
-    call_native_ocr,
+    call_aocr,
+    call_ocr,
 )
 from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
 
 RouteName = Literal["ocr-sync", "ocr-async", "messages", "messages-stream"]
+DependencyProfile = Literal["required", "enterprise"]
+
+OSS_LOGGER_NAMES: Final = frozenset(
+    {
+        "agentops",
+        "anthropic_cache_control_hook",
+        "argilla",
+        "arize",
+        "arize_phoenix",
+        "aws_sqs",
+        "azure_sentinel",
+        "azure_storage",
+        "bitbucket",
+        "braintrust",
+        "cloudzero",
+        "datadog",
+        "datadog_llm_observability",
+        "datadog_metrics",
+        "deepeval",
+        "dotprompt",
+        "dynamic_rate_limiter",
+        "dynamic_rate_limiter_v3",
+        "focus",
+        "galileo",
+        "gcs_bucket",
+        "gcs_pubsub",
+        "gitlab",
+        "humanloop",
+        "lago",
+        "langfuse",
+        "langfuse_otel",
+        "langsmith",
+        "langtrace",
+        "levo",
+        "literalai",
+        "litellm_agent",
+        "logfire",
+        "mavvrik",
+        "mlflow",
+        "newrelic",
+        "opentelemetry",
+        "openmeter",
+        "opik",
+        "otel",
+        "posthog",
+        "prometheus",
+        "s3_v2",
+        "vantage",
+        "vector_store_pre_call_hook",
+        "weave_otel",
+    }
+)
+ENTERPRISE_LOGGER_NAMES: Final = frozenset({"generic_api", "pagerduty", "resend_email", "sendgrid_email", "smtp_email"})
+GUARDRAIL_NAMES: Final = frozenset(
+    {
+        "aim",
+        "akto",
+        "alice",
+        "aporia",
+        "azure/prompt_shield",
+        "azure/text_moderations",
+        "bedrock",
+        "block_code_execution",
+        "cato_networks",
+        "cisco_ai_defense",
+        "compresr",
+        "crowdstrike_aidr",
+        "custom_code",
+        "deepkeep",
+        "dynamoai",
+        "enkryptai",
+        "generic_guardrail_api",
+        "grayswan",
+        "guardrails_ai",
+        "headroom",
+        "hiddenlayer",
+        "hide-secrets",
+        "ibm_guardrails",
+        "javelin",
+        "lakera",
+        "lakera_v2",
+        "lasso",
+        "litellm_content_filter",
+        "llm_as_a_judge",
+        "mcp_end_user_permission",
+        "mcp_jwt_signer",
+        "mcp_security",
+        "microsoft_purview",
+        "model_armor",
+        "noma",
+        "noma_v2",
+        "onyx",
+        "openai_moderation",
+        "ovalix",
+        "pangea",
+        "panw_prisma_airs",
+        "pillar",
+        "presidio",
+        "prompt_security",
+        "promptguard",
+        "qostodian_nexus",
+        "qualifire",
+        "repelloai",
+        "rubrik",
+        "semantic_guard",
+        "singulr",
+        "straiker",
+        "tool_permission",
+        "vigil_guard",
+        "xecguard",
+        "zscaler_ai_guard",
+    }
+)
+DISCOVERED_ONLY_GUARDRAIL_NAMES: Final = frozenset({"tool_policy"})
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageObligation:
+    stable_name: str
+    registration_names: tuple[str, ...]
+    dependency_profile: DependencyProfile
+    behavioral_cases: tuple[str, ...]
+
+
+def _logger_obligations() -> Mapping[str, CoverageObligation]:
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    registry: Final = CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
+    expected_names: Final = OSS_LOGGER_NAMES | ENTERPRISE_LOGGER_NAMES
+    grouped: Final[dict[type[object], tuple[str, ...]]] = {
+        implementation: tuple(sorted(name for name in expected_names if registry.get(name) is implementation))
+        for implementation in frozenset(registry.values())
+    }
+    obligations: Final = {
+        names[0]: CoverageObligation(
+            stable_name=names[0],
+            registration_names=names,
+            dependency_profile="enterprise" if set(names) & ENTERPRISE_LOGGER_NAMES else "required",
+            behavioral_cases=(
+                ("generic-api-success",)
+                if "generic_api" in names
+                else ("prometheus-string-registration",)
+                if "prometheus" in names
+                else ("otel-export",)
+                if "opentelemetry" in names
+                else ()
+            ),
+        )
+        for names in grouped.values()
+        if names
+    }
+    missing_optional: Final = ENTERPRISE_LOGGER_NAMES - registry.keys()
+    unavailable: Final = {name: CoverageObligation(name, (name,), "enterprise", ()) for name in missing_optional}
+    return MappingProxyType({**obligations, **unavailable})
+
+
+LOGGER_OBLIGATIONS: Final = _logger_obligations()
+GUARDRAIL_OBLIGATIONS: Final = MappingProxyType(
+    {
+        name: CoverageObligation(
+            stable_name=name,
+            registration_names=(name,),
+            dependency_profile="required",
+            behavioral_cases=(
+                ("azure-text-moderation",)
+                if name == "azure/text_moderations"
+                else ("crowdstrike-redaction-native-chat",)
+                if name == "crowdstrike_aidr"
+                else ("content-filter-block",)
+                if name == "litellm_content_filter"
+                else ()
+            ),
+        )
+        for name in GUARDRAIL_NAMES | DISCOVERED_ONLY_GUARDRAIL_NAMES
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,14 +226,40 @@ class Route:
     async def invoke(self, server: RecordingServer, **kwargs: object) -> object:
         match self.name:
             case "ocr-sync":
-                return await asyncio.to_thread(call_native_ocr, server, **kwargs)
+                return await asyncio.to_thread(call_ocr, server, **kwargs)
             case "ocr-async":
-                return await call_native_aocr(server, **kwargs)
+                return await call_aocr(server, **kwargs)
             case "messages":
                 return await _call_messages(server, **kwargs)
             case "messages-stream":
-                stream: Final = await _call_messages(server, stream=True, **kwargs)
+                stream: Final = await self.open_stream(server, **kwargs)
                 return [chunk async for chunk in stream]
+
+    async def open_stream(self, server: RecordingServer, **kwargs: object) -> AsyncIterator[object]:
+        if self.name != "messages-stream":
+            raise ValueError(f"{self.name} is not a streaming route")
+        stream: Final = await _call_messages(server, stream=True, **kwargs)
+        if not isinstance(stream, AsyncIterator):
+            raise TypeError(f"Expected async stream, got {type(stream).__name__}")
+        return stream
+
+
+@dataclass(frozen=True, slots=True)
+class CompositionCase:
+    stable_id: str
+    integrations: tuple[str, ...]
+    route: Route
+    scenario: Literal["success"]
+
+
+@dataclass(frozen=True, slots=True)
+class RunObservation:
+    call_type: str
+    model: str
+    response_cost: float
+    response_text: str
+    provider_body: Mapping[str, object]
+    native_dispatch: bool
 
 
 async def _call_messages(server: RecordingServer, **kwargs: object) -> object:
@@ -115,6 +319,15 @@ MESSAGES_STREAM: Final = Route(
 ALL_ROUTES: Final = (OCR_SYNC, OCR_ASYNC, MESSAGES_ROUTE, MESSAGES_STREAM)
 ASYNC_ROUTES: Final = tuple(route for route in ALL_ROUTES if route.fires_async_hooks)
 NON_STREAM_ASYNC_ROUTES: Final = (OCR_ASYNC, MESSAGES_ROUTE)
+EXPORT_COMPOSITIONS: Final = tuple(
+    CompositionCase(
+        stable_id=f"otel-prometheus-generic-api-{route.name}-success",
+        integrations=("opentelemetry", "prometheus", "generic_api"),
+        route=route,
+        scenario="success",
+    )
+    for route in ASYNC_ROUTES
+)
 AZURE_MODERATION_ALLOW_RESPONSE: Final = {
     "blocklistsMatch": [],
     "categoriesAnalysis": [
@@ -204,3 +417,15 @@ class ReviewGuardrail(CustomGuardrail):
     async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
         self.call_types.append(call_type)
         return await self._review(response)
+
+
+class MutatingFailingLogger(CustomLogger):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        payload: Final = kwargs["standard_logging_object"]
+        payload["metadata"]["composition_marker"] = "visible-before-failure"
+        raise RuntimeError("synthetic callback failure")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        payload: Final = kwargs["standard_logging_object"]
+        payload["metadata"]["composition_marker"] = "visible-before-failure"
+        raise RuntimeError("synthetic callback failure")

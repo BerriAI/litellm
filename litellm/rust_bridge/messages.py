@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -69,6 +70,8 @@ class _Unset:
 
 
 _UNSET: Final[_Unset] = _Unset()
+_STREAM_COMPLETION_KEY: Final = "_rust_stream_completion"
+_STREAM_CLEANUP_TASKS: Final[set[asyncio.Task[None]]] = set()
 
 
 @dataclass(slots=True)
@@ -140,16 +143,43 @@ class MessagesStream(AsyncIterator[bytes]):
         self.source: Final = source
         self.arguments: Mapping[str, object] = arguments
         self.logger: _MessagesLogging | None = logger if isinstance(logger, _MessagesLogging) else None
+        completion: Final = arguments.get(_STREAM_COMPLETION_KEY)
+        self.completion: _MessagesHost | None = completion if isinstance(completion, _MessagesHost) else None
         self.started: bool = False
+
+    def __del__(self) -> None:
+        if self.completion is None:
+            return
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            self._release()
+            return
+        task: Final = loop.create_task(self.aclose())
+        _STREAM_CLEANUP_TASKS.add(task)
+        task.add_done_callback(_STREAM_CLEANUP_TASKS.discard)
 
     async def __anext__(self) -> bytes:
         try:
             chunk: Final = await anext(self.source)
         except StopAsyncIteration:
+            await self._complete()
             self._release()
+            raise
+        except asyncio.CancelledError:
+            from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+                aclose_if_supported,
+            )
+
+            try:
+                await aclose_if_supported(self.source)
+                await self._complete()
+            finally:
+                self._release()
             raise
         except Exception as error:
             mapped: Final = map_native_error(error, self.arguments, "messages")
+            await self._complete()
             self._release()
             raise mapped
         if not self.started:
@@ -165,12 +195,18 @@ class MessagesStream(AsyncIterator[bytes]):
 
         try:
             await aclose_if_supported(self.source)
+            await self._complete()
         finally:
             self._release()
+
+    async def _complete(self) -> None:
+        if self.completion is not None:
+            await self.completion.finish_deferred_stream()
 
     def _release(self) -> None:
         self.arguments = MappingProxyType({})
         self.logger = None
+        self.completion = None
 
 
 def _arguments(
@@ -338,6 +374,7 @@ class _MessagesHost:
         self.start: datetime = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
         self.end: datetime | None = None
         self.stream_transferred: bool = False
+        self.deferred_stream: tuple[object, str | None, float] | None = None
 
     def invoke(self) -> tuple[bool, object]:
         return self.bindings.invoke(self.machine, self)
@@ -371,6 +408,8 @@ class _MessagesHost:
     async def send(self) -> None:
         self.response = await self.bindings.send(self.state, self)
         self.stream_transferred = isinstance(self.response, AsyncIterator)
+        if self.stream_transferred and not self.lifecycle_owned:
+            self.arguments[_STREAM_COMPLETION_KEY] = self
         self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def deployment_success(self) -> None:
@@ -382,6 +421,19 @@ class _MessagesHost:
             self.response = await deployment_success(self.current, self.response, CallTypes.aanthropic_messages)
 
     async def complete_stream(self, response: object, error: str | None, end_time: float) -> None:
+        if not self.lifecycle_owned:
+            self.deferred_stream = (response, error, end_time)
+            return
+        await self._dispatch_stream_completion(response, error, end_time)
+
+    async def finish_deferred_stream(self) -> None:
+        deferred: Final = self.deferred_stream
+        if deferred is None:
+            return
+        self.deferred_stream = None
+        await self._dispatch_stream_completion(*deferred)
+
+    async def _dispatch_stream_completion(self, response: object, error: str | None, end_time: float) -> None:
         from litellm.exceptions import APIError
 
         if not isinstance(self.logger, _MessagesLogging):
@@ -410,10 +462,14 @@ class _MessagesHost:
                 invoke_terminal("sync_success_if_needed", roots, logger, None, complete, self.start, end)
         finally:
             restore_correlation_context(logger)
-            self.state = None
-            self.logger = None
-            self.arguments = {}  # mutable-ok: native driver requires dict fields after releasing request roots
-            self.current = {}  # mutable-ok: native driver requires dict fields after releasing request roots
+            self._release_stream_roots()
+
+    def _release_stream_roots(self) -> None:
+        self.arguments.pop(_STREAM_COMPLETION_KEY, None)
+        self.state = None
+        self.logger = None
+        self.arguments = {}  # mutable-ok: native driver requires dict fields after releasing request roots
+        self.current = {}  # mutable-ok: native driver requires dict fields after releasing request roots
 
     async def deployment_failure(self) -> None:
         if not self.lifecycle_owned:

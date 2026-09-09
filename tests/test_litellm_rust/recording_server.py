@@ -29,6 +29,8 @@ class ResponseSpec:
     delay: float = 0
     events: tuple[tuple[str, object], ...] = ()
     chunks: tuple[bytes, ...] = ()
+    accepted: threading.Event | None = None
+    release_before_response: threading.Event | None = None
     release: threading.Event | None = None
 
 
@@ -74,6 +76,10 @@ def recording_service() -> Iterator[RecordingServer]:
                 )
             )
             response: Final = responses.pop(0) if responses else copy.deepcopy(recording_server.default_response)
+            if response.accepted is not None:
+                response.accepted.set()
+            if response.release_before_response is not None:
+                response.release_before_response.wait(timeout=10)
             if response.delay:
                 time.sleep(response.delay)
             payload: Final = (

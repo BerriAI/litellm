@@ -126,3 +126,53 @@ class RecordingLogger(CustomLogger):
 
     async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, fallback_depth=None):
         self._record("async_post_call_failure_deployment_hook", request_data, exception)
+
+
+@dataclass(frozen=True, slots=True)
+class LiveReferenceEvent:
+    kwargs: object
+    response: object
+
+
+class LiveReferenceLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self._events: list[LiveReferenceEvent] = []
+        self._condition = threading.Condition()
+
+    @property
+    def events(self) -> tuple[LiveReferenceEvent, ...]:
+        with self._condition:
+            return tuple(self._events)
+
+    def _record(self, kwargs: object, response: object) -> None:
+        with self._condition:
+            self._events.append(LiveReferenceEvent(kwargs=kwargs, response=response))
+            self._condition.notify_all()
+
+    def wait_for(self, count: int = 1, timeout: float = 10) -> tuple[LiveReferenceEvent, ...]:
+        deadline: Final = time.monotonic() + timeout
+        with self._condition:
+            while len(self._events) < count:
+                remaining: Final = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"Timed out waiting for {count} live-reference events")
+                self._condition.wait(remaining)
+            return tuple(self._events)
+
+    async def wait_for_async(self, count: int = 1, timeout: float = 10) -> tuple[LiveReferenceEvent, ...]:
+        return await asyncio.wait_for(asyncio.to_thread(self.wait_for, count, timeout), timeout=timeout + 1)
+
+    def release(self) -> None:
+        with self._condition:
+            self._events.clear()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._record(kwargs, response_obj)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self._record(kwargs, response_obj)
+
+
+class SecondaryLiveReferenceLogger(LiveReferenceLogger):
+    pass

@@ -1,5 +1,6 @@
 from typing import Final
 
+import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import ocr as native_ocr
 from tests.test_litellm_rust.recording_server import RecordingServer
@@ -24,6 +25,23 @@ MESSAGES_RESPONSE: Final = {
     "stop_sequence": None,
     "usage": {"input_tokens": 5, "output_tokens": 4},
 }
+CHAT_MODEL: Final = "anthropic/claude-opus-5"
+CHAT_MESSAGES: Final = [
+    {"role": "system", "content": "Keep the answer short"},
+    {"role": "user", "content": "Earlier safe question"},
+    {"role": "assistant", "content": "Earlier safe answer"},
+    {"role": "user", "content": "Employee SSN: 078-05-1120"},
+]
+CHAT_RESPONSE: Final = {
+    "id": "msg_chat_native",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-opus-5",
+    "content": [{"type": "text", "text": "Handled safely"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 8, "output_tokens": 2},
+}
 
 
 def ocr_arguments(server: RecordingServer, **kwargs: object) -> dict[str, object]:
@@ -34,6 +52,17 @@ def ocr_arguments(server: RecordingServer, **kwargs: object) -> dict[str, object
         "api_base": server.base_url,
         **kwargs,
     }
+
+
+def call_ocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
+    response: Final = litellm.ocr(**ocr_arguments(server, **kwargs))
+    if not isinstance(response, OCRResponse):
+        raise TypeError(f"Expected OCRResponse, got {type(response).__name__}")
+    return response
+
+
+async def call_aocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
+    return await litellm.aocr(**ocr_arguments(server, **kwargs))
 
 
 def call_native_ocr(server: RecordingServer, **kwargs: object) -> OCRResponse:

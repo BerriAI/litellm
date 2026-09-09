@@ -2,9 +2,9 @@ import asyncio
 import os
 from collections.abc import AsyncIterator, Generator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from types import ModuleType
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 import pytest
 import pytest_asyncio
@@ -35,6 +35,7 @@ CALLBACK_ATTRIBUTES: Final = (
     "_async_success_callback",
     "_async_failure_callback",
 )
+Backend = Literal["python", "rust"]
 
 
 def _list_attribute(container: ModuleType, attribute: str) -> list[object]:
@@ -68,17 +69,17 @@ def _rebound(container: ModuleType, attribute: str, value: object) -> Generator[
 
 
 @contextmanager
-def _rust_mode() -> Generator[None]:
+def _rust_mode(enabled: bool) -> Generator[None]:
     reset_rust_configuration()
-    litellm.rust(True)
+    litellm.rust(enabled)
     try:
         yield
     finally:
         reset_rust_configuration()
 
 
-@pytest_asyncio.fixture(autouse=True, loop_scope="function")
-async def isolate_rust_state() -> AsyncIterator[ExitStack]:
+@asynccontextmanager
+async def isolated_backend(backend: Backend) -> AsyncIterator[ExitStack]:
     with ExitStack() as stack:
         for attribute in CALLBACK_ATTRIBUTES:
             stack.enter_context(_isolated_list(litellm, attribute))
@@ -86,7 +87,7 @@ async def isolate_rust_state() -> AsyncIterator[ExitStack]:
         stack.enter_context(_rebound(utils, "callback_list", []))  # rebind-ok: legacy global registry mutated by set_callbacks
         stack.enter_context(_rebound(litellm, "cache", None))  # test-quality-ok: isolate the process-global cache from native extension tests
         stack.enter_context(isolated_prometheus_registry())
-        stack.enter_context(_rust_mode())
+        stack.enter_context(_rust_mode(backend == "rust"))
         executor: Final = ThreadPoolExecutor(thread_name_prefix="rust-test-logging")
         stack.enter_context(_rebound(utils, "executor", executor))
         try:
@@ -97,6 +98,12 @@ async def isolate_rust_state() -> AsyncIterator[ExitStack]:
             finally:
                 await asyncio.to_thread(executor.shutdown, wait=True)
                 await GLOBAL_LOGGING_WORKER.stop()
+
+
+@pytest_asyncio.fixture(autouse=True, loop_scope="function")
+async def isolate_rust_state() -> AsyncIterator[ExitStack]:
+    async with isolated_backend("rust") as stack:
+        yield stack
 
 
 def pytest_collection_modifyitems(items):
