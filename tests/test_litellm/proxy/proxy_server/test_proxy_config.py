@@ -20,6 +20,7 @@ import pytest
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -2426,6 +2427,111 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
 
     assert added == 1
     assert deployment.litellm_params.some_future_field == "resolved-custom-value"
+
+
+@pytest.mark.parametrize(
+    "stored_drop_params",
+    ["true", "os.environ/DROP_PARAMS_FLAG"],
+)
+def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(monkeypatch, stored_drop_params):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("DROP_PARAMS_FLAG", "true")
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="gpt-5-nano",
+        model_info={"id": "model-1"},
+        litellm_params={
+            "model": encrypt_value_helper(value="openai/gpt-5-nano"),
+            "drop_params": encrypt_value_helper(value=stored_drop_params),
+        },
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    assert deployment.litellm_params.drop_params is True
+
+
+def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_params(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+
+    def db_model(model_id, drop_params):
+        return SimpleNamespace(
+            model_id=model_id,
+            model_name="gpt-5-nano",
+            model_info={"id": model_id},
+            litellm_params={
+                "model": encrypt_value_helper(value="openai/gpt-5-nano"),
+                "drop_params": encrypt_value_helper(value=drop_params),
+            },
+            blocked=False,
+        )
+
+    added = pc._add_deployment(db_models=[db_model("bad-row", 2), db_model("good-after", "true")])
+    deployments = [call.kwargs["deployment"] for call in fake_router.upsert_deployment.call_args_list]
+
+    assert added == 2
+    assert [d.litellm_params.drop_params for d in deployments] == [None, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured, expected", [("true", True), ("false", False)])
+async def test_ProxyConfig_load_config_turns_litellm_settings_drop_params_string_into_bool(
+    tmp_path, monkeypatch, configured, expected
+):
+    f = tmp_path / "c.yaml"
+    f.write_text(f'model_list: []\nlitellm_settings:\n  drop_params: "{configured}"\n')
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", not expected)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.drop_params is expected
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_resolves_a_litellm_settings_drop_params_env_ref(tmp_path, monkeypatch):
+    f = tmp_path / "c.yaml"
+    f.write_text("model_list: []\nlitellm_settings:\n  drop_params: os.environ/DROP_PARAMS_FROM_ENV\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setenv("DROP_PARAMS_FROM_ENV", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.drop_params is True
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_warns_and_turns_off_a_non_flag_litellm_settings_drop_params(
+    tmp_path, monkeypatch, caplog
+):
+    f = tmp_path / "c.yaml"
+    f.write_text("model_list: []\nlitellm_settings:\n  drop_params: ture\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.drop_params is False
+    assert "litellm_settings.drop_params='ture' is not a flag value, treating it as off" in caplog.text
 
 
 # ---------------------------------------------------------------------------
