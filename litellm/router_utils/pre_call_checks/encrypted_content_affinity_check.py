@@ -156,7 +156,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         for message in messages:
             if message.get("role") != "assistant":
                 continue
-            model_id: Final = EncryptedContentAffinityCheck._extract_model_id_from_input(message.get("reasoning_items"))
+            model_id = EncryptedContentAffinityCheck._extract_model_id_from_input(message.get("reasoning_items"))
             if model_id:
                 return model_id
         return None
