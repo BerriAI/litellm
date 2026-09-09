@@ -55196,6 +55196,60 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
+    "us.openai.gpt-6-astra": {
+        "input_cost_per_token": 1.1e-05,
+        "input_cost_per_token_above_272k_tokens": 2.2e-05,
+        "cache_creation_input_token_cost": 1.375e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.75e-05,
+        "cache_read_input_token_cost": 1.1e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2.2e-06,
+        "output_cost_per_token": 5.5e-05,
+        "output_cost_per_token_above_272k_tokens": 8.25e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_vision": true
+    },
+    "global.openai.gpt-6-astra": {
+        "input_cost_per_token": 1e-05,
+        "input_cost_per_token_above_272k_tokens": 2e-05,
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-05,
+        "cache_read_input_token_cost": 1e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-06,
+        "output_cost_per_token": 5e-05,
+        "output_cost_per_token_above_272k_tokens": 7.5e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_vision": true
+    },
     "bedrock_mantle/openai.gpt-5.5": {
         "input_cost_per_token": 5.5e-06,
         "input_cost_per_token_above_272k_tokens": 1.1e-05,

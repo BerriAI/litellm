@@ -98,6 +98,24 @@ GPT_5_6_PROFILES = [
     ),
 ]
 
+# From the GPT-6 Astra model card: Geo CRIS (us.) and Global CRIS (global.), 272K tiers, cache rates.
+GPT_6_PROFILES = [
+    GptProfile(
+        model_id="us.openai.gpt-6-astra",
+        input_cost=1.1e-05, input_cost_above_272k=2.2e-05,
+        cache_write=1.375e-05, cache_write_above_272k=2.75e-05,
+        cache_read=1.1e-06, cache_read_above_272k=2.2e-06,
+        output_cost=5.5e-05, output_cost_above_272k=8.25e-05,
+    ),
+    GptProfile(
+        model_id="global.openai.gpt-6-astra",
+        input_cost=1e-05, input_cost_above_272k=2e-05,
+        cache_write=1.25e-05, cache_write_above_272k=2.5e-05,
+        cache_read=1e-06, cache_read_above_272k=2e-06,
+        output_cost=5e-05, output_cost_above_272k=7.5e-05,
+    ),
+]
+
 
 def _bedrock_response(model, usage):
     return ModelResponse(
@@ -222,6 +240,57 @@ def test_bedrock_gpt_5_6_offers_tools_and_reasoning_effort_but_not_thinking(prof
     supported = AmazonConverseConfig().get_supported_openai_params(
         model=f"bedrock/{profile.model_id}"
     )
+
+    assert "tools" in supported
+    assert "tool_choice" in supported
+    assert "reasoning_effort" in supported
+    assert "thinking" not in supported
+    assert "output_config" not in supported
+
+
+@pytest.mark.parametrize("profile", GPT_6_PROFILES, ids=lambda p: p.model_id)
+def test_bedrock_gpt_6_profiles_route_to_converse(profile, local_model_cost_map):
+    """GPT-6 Astra has no in-Region id and no Invoke support on bedrock-runtime; the
+    us./global. profiles must resolve to Converse, not fall through to Invoke."""
+    assert BedrockModelInfo.get_bedrock_route(f"bedrock/{profile.model_id}") == "converse"
+
+
+@pytest.mark.parametrize("profile", GPT_6_PROFILES, ids=lambda p: p.model_id)
+def test_bedrock_gpt_6_price_map_matches_model_card(profile, local_model_cost_map):
+    info = _get_model_info_helper(model=profile.model_id, custom_llm_provider="bedrock")
+
+    assert info["mode"] == "chat"
+    assert info["max_input_tokens"] == 1050000
+    assert info["max_output_tokens"] == 128000
+    assert info["input_cost_per_token"] == pytest.approx(profile.input_cost)
+    assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(profile.input_cost_above_272k)
+    assert info["cache_creation_input_token_cost"] == pytest.approx(profile.cache_write)
+    assert info["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(profile.cache_write_above_272k)
+    assert info["cache_read_input_token_cost"] == pytest.approx(profile.cache_read)
+    assert info["cache_read_input_token_cost_above_272k_tokens"] == pytest.approx(profile.cache_read_above_272k)
+    assert info["output_cost_per_token"] == pytest.approx(profile.output_cost)
+    assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(profile.output_cost_above_272k)
+
+
+def test_bedrock_gpt_6_above_272k_tier_applies_to_cost(local_model_cost_map):
+    response = _bedrock_response(
+        "bedrock/global.openai.gpt-6-astra",
+        Usage(prompt_tokens=300000, completion_tokens=1000, total_tokens=301000),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="bedrock/global.openai.gpt-6-astra",
+        custom_llm_provider="bedrock",
+    )
+
+    assert cost == pytest.approx((300000 * 2e-05) + (1000 * 7.5e-05), rel=1e-9)
+
+
+@pytest.mark.parametrize("profile", GPT_6_PROFILES, ids=lambda p: p.model_id)
+def test_bedrock_gpt_6_offers_tools_and_reasoning_effort_but_not_thinking(profile, local_model_cost_map):
+    """Same Converse surface as GPT-5.6: tools and reasoning_effort in, Anthropic thinking out."""
+    supported = AmazonConverseConfig().get_supported_openai_params(model=f"bedrock/{profile.model_id}")
 
     assert "tools" in supported
     assert "tool_choice" in supported

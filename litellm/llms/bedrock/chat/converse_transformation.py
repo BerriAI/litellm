@@ -115,6 +115,12 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 ]
 
 
+def _is_openai_frontier_model(model: str) -> bool:
+    """OpenAI GPT-5.x / GPT-6 on Bedrock (``openai.gpt-5.6-sol``, ``openai.gpt-6-astra``): reasoning goes
+    through ``reasoning.effort``. ``openai.gpt-oss-*`` is excluded; it takes ``reasoning_effort`` as-is."""
+    return "openai.gpt-" in model and "gpt-oss" not in model
+
+
 class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
@@ -430,7 +436,7 @@ class AmazonConverseConfig(BaseConfig):
         """
         if "gpt-oss" in model:
             optional_params["reasoning_effort"] = reasoning_effort
-        elif "openai.gpt-5" in model:
+        elif _is_openai_frontier_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
             optional_params["reasoning"] = reasoning
         elif self._is_nova_2_model(model):
@@ -564,7 +570,7 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "gpt-oss" in model or "openai.gpt-5" in model or "openai.gpt-5" in base_model:
+        if "gpt-oss" in model or _is_openai_frontier_model(model) or _is_openai_frontier_model(base_model):
             supported_params.append("reasoning_effort")
         elif self._is_nova_2_model(model):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
@@ -920,7 +926,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
-            if param == "thinking" and "openai.gpt-5" not in model:
+            if param == "thinking" and not _is_openai_frontier_model(model):
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
