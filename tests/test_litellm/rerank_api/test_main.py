@@ -3,7 +3,9 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import BaseModel, field_serializer
 import respx
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 import litellm
@@ -63,60 +65,65 @@ def test_rerank_does_not_log_request_content_at_info(caplog):
 
     optional_params_logs = [r for r in litellm_records if "optional_rerank_params" in r.getMessage()]
     assert optional_params_logs, "expected the optional_rerank_params line to be logged"
-    assert all(
-        r.levelno == logging.DEBUG for r in optional_params_logs
-    ), "optional_rerank_params must be logged at DEBUG, not INFO"
+    assert all(r.levelno == logging.DEBUG for r in optional_params_logs), (
+        "optional_rerank_params must be logged at DEBUG, not INFO"
+    )
 
 
-def test_rerank_preserves_proxy_request_without_serializing_it():
-    """Large proxy request bodies must bypass GenericLiteLLMParams serialization."""
-    documents = [f"document-{index}-" + ("x" * 4096) for index in range(350)]
-    proxy_server_request = {"body": {"query": "query", "documents": documents}}
-    logging_obj = MagicMock()
+class SerializationProbe(BaseModel):
+    value: str
 
-    with patch(
-        "litellm.rerank_api.main.base_llm_http_handler.rerank",
-        return_value=MagicMock(),
-    ) as rerank_call:
-        litellm.rerank(
+    @field_serializer("value")
+    def reject_serialization(self, value: str) -> str:
+        raise RuntimeError("proxy request was serialized")
+
+
+def test_rerank_does_not_serialize_proxy_request():
+    proxy_server_request = {"body": {"probe": SerializationProbe(value="payload")}}
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"data": [{"index": 0, "relevance_score": 0.95}], "usage": {}},
+            request=request,
+        )
+    )
+
+    with httpx.Client(transport=transport) as raw_client:
+        response = litellm.rerank(
             model="fireworks_ai/accounts/fireworks/models/qwen3-reranker-8b",
             query="query",
-            documents=documents,
+            documents=["document"],
             api_key="fake-fireworks-key",
-            litellm_logging_obj=logging_obj,
+            client=HTTPHandler(client=raw_client),
             proxy_server_request=proxy_server_request,
         )
 
-    provider_params = rerank_call.call_args.kwargs["litellm_params"]
-    assert provider_params["proxy_server_request"] is proxy_server_request
-
-    logging_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
-    assert logging_params["proxy_server_request"] is proxy_server_request
+    assert response.results[0]["relevance_score"] == 0.95
 
 
-def test_bedrock_rerank_excludes_proxy_request_from_optional_params():
-    """Bedrock's second parameter dump must also bypass the proxy request body."""
-    proxy_server_request = {"body": {"documents": ["document"] * 350}}
-    logging_obj = MagicMock()
+def test_bedrock_rerank_does_not_serialize_proxy_request():
+    proxy_server_request = {"body": {"probe": SerializationProbe(value="payload")}}
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={"results": [{"index": 0, "relevanceScore": 0.95}]},
+            request=request,
+        )
+    )
 
-    with patch(
-        "litellm.rerank_api.main.bedrock_rerank.rerank",
-        return_value=MagicMock(),
-    ) as rerank_call:
-        litellm.rerank(
+    with httpx.Client(transport=transport) as raw_client:
+        response = litellm.rerank(
             model="bedrock/arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0",
             query="query",
             documents=["document"],
             aws_region_name="us-east-1",
-            litellm_logging_obj=logging_obj,
+            aws_access_key_id="fake-access-key",
+            aws_secret_access_key="fake-secret-key",
+            client=HTTPHandler(client=raw_client),
             proxy_server_request=proxy_server_request,
         )
 
-    optional_params = rerank_call.call_args.kwargs["optional_params"]
-    assert "proxy_server_request" not in optional_params
-
-    logging_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
-    assert logging_params["proxy_server_request"] is proxy_server_request
+    assert response.results[0]["relevance_score"] == 0.95
 
 
 TOGETHER_RERANK_BODY = {
