@@ -622,6 +622,15 @@ def _defer_post_call_pipelines(
             response.id,
             ", ".join(tag_matched),
         )
+    body_selected: Final = _body_selected_deferrals(data, deferred)
+    if body_selected:
+        verbose_proxy_logger.warning(
+            "Policy engine: background response %s matched post_call policies through the request body's policies "
+            "list at submit; retrieval carries no request body, so those policies do not govern the completed "
+            "response: %s",
+            response.id,
+            ", ".join(body_selected),
+        )
     _withdraw_deferred_claims(data, deferred)
 
 
@@ -636,6 +645,14 @@ def _tag_matched_deferrals(
         for policy_name, _pipeline in deferred
         if policy_name in sources and "tag:" in str(sources[policy_name])
     )
+
+
+def _body_selected_deferrals(
+    data: Mapping[str, object], deferred: Sequence[tuple[str, "GuardrailPipeline"]]
+) -> tuple[str, ...]:
+    sources: Final = _policy_state_metadata(data).get("policy_sources")
+    attributed: Final = frozenset(sources) if isinstance(sources, dict) else frozenset()
+    return tuple(policy_name for policy_name, _pipeline in deferred if policy_name not in attributed)
 
 
 def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> bool:
