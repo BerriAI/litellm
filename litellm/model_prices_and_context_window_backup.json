@@ -63871,7 +63871,7 @@
         "supports_function_calling": true,
         "source": "https://api.openinfer.ai/v1/models"
     },
-    "openinfer/@oi/Gemma4-31B": {
+    "openinfer/@oi/Gemma4-31B-It": {
         "max_tokens": 8192,
         "max_input_tokens": 262144,
         "max_output_tokens": 8192,
