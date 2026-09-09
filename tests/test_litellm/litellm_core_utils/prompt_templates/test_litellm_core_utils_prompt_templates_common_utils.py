@@ -1554,3 +1554,106 @@ class TestRequestContainsImageContent:
         for _ in range(50):
             nested = {"type": "tool_result", "content": [nested]}
         assert request_contains_image_content([{"role": "user", "content": [nested]}]) is False
+
+
+class TestResponsesReasoningItemFromThinkingBlocks:
+    def test_summary_only_blocks_do_not_invent_id_or_encrypted_content(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            responses_reasoning_item_from_thinking_blocks,
+        )
+
+        item = responses_reasoning_item_from_thinking_blocks(
+            [{"type": "thinking", "thinking": "Computing 12*13 via distribution."}]
+        )
+        assert item == {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Computing 12*13 via distribution."}],
+        }
+        assert "id" not in item
+        assert "encrypted_content" not in item
+
+    def test_foreign_signature_is_not_replayed_as_encrypted_content(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            responses_reasoning_item_from_thinking_blocks,
+        )
+
+        item = responses_reasoning_item_from_thinking_blocks(
+            [
+                {
+                    "type": "thinking",
+                    "thinking": "Private reasoning.",
+                    "signature": "rs_abc123",
+                }
+            ]
+        )
+        assert item is not None
+        assert "id" not in item
+        assert "encrypted_content" not in item
+
+    def test_packed_signature_restores_encrypted_content_and_id(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            pack_responses_reasoning_signature,
+            responses_reasoning_item_from_thinking_blocks,
+        )
+
+        signature = pack_responses_reasoning_signature(
+            "rs_07db33a5c961deeb016aa06e634e1087d2914097f0ed2016c7",
+            "gAAAAABp-encrypted-content-blob",
+        )
+        item = responses_reasoning_item_from_thinking_blocks(
+            [
+                {
+                    "type": "thinking",
+                    "thinking": "Computing 12*13 via distribution.",
+                    "signature": signature,
+                }
+            ]
+        )
+        assert item == {
+            "type": "reasoning",
+            "id": "rs_07db33a5c961deeb016aa06e634e1087d2914097f0ed2016c7",
+            "encrypted_content": "gAAAAABp-encrypted-content-blob",
+            "summary": [{"type": "summary_text", "text": "Computing 12*13 via distribution."}],
+        }
+
+    def test_restored_reasoning_item_is_cache_stable_across_calls(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            pack_responses_reasoning_signature,
+            responses_reasoning_item_from_thinking_blocks,
+        )
+
+        blocks = (
+            {
+                "type": "thinking",
+                "thinking": "Computing 12*13 via distribution.",
+                "signature": pack_responses_reasoning_signature("rs_stable", "gAAAAABp-stable"),
+            },
+        )
+        first = responses_reasoning_item_from_thinking_blocks(blocks)
+        second = responses_reasoning_item_from_thinking_blocks(blocks)
+        assert first == second
+        assert first is not None
+        assert first["id"] == "rs_stable"
+        assert first["encrypted_content"] == "gAAAAABp-stable"
+
+    def test_signature_only_block_restores_encrypted_content_without_summary_text(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            pack_responses_reasoning_signature,
+            responses_reasoning_item_from_thinking_blocks,
+        )
+
+        item = responses_reasoning_item_from_thinking_blocks(
+            [
+                {
+                    "type": "thinking",
+                    "thinking": "",
+                    "signature": pack_responses_reasoning_signature("rs_empty", "gAAAAABp-empty"),
+                }
+            ]
+        )
+        assert item == {
+            "type": "reasoning",
+            "id": "rs_empty",
+            "encrypted_content": "gAAAAABp-empty",
+            "summary": [],
+        }

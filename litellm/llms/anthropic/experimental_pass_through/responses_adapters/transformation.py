@@ -13,6 +13,7 @@ from typing import Any, Final, cast
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    pack_responses_reasoning_signature,
     responses_reasoning_item_from_thinking_blocks,
     with_prompt_cache_breakpoint,
 )
@@ -162,24 +163,60 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return str(mapping.get("text") or "")
         return str(getattr(part, "text", None) or "")
 
+    @staticmethod
+    def _optional_str_field(value: object) -> str | None:
+        return value if isinstance(value, str) and value else None
+
+    @classmethod
+    def _reasoning_replay_fields(cls, item: object) -> tuple[str | None, str | None]:
+        if isinstance(item, Mapping):
+            mapping: Final = cast(Mapping[str, object], item)  # cast-ok: untyped provider json
+            return (
+                cls._optional_str_field(mapping.get("id")),
+                cls._optional_str_field(mapping.get("encrypted_content")),
+            )
+        return (
+            cls._optional_str_field(getattr(item, "id", None)),
+            cls._optional_str_field(getattr(item, "encrypted_content", None)),
+        )
+
     @classmethod
     def _thinking_blocks_from_reasoning_item(
         cls,
-        summary: Iterable[object],
+        item: object,
     ) -> tuple[dict[str, Any], ...]:  # mutable-ok: API message payload
         """Anthropic thinking blocks for one Responses reasoning item.
 
-        The signature stays empty: only Anthropic can sign a thinking block, and a stand-in
-        value would be replayed as a real one and rejected by every backend that verifies it.
+        `encrypted_content` (and the provider-minted `id`) are packed into `signature` so
+        the client can echo them back. A stand-in is never invented from `id` or summary
+        text alone: that would be rejected by every backend that verifies signatures.
         """
+        raw_summary: Final = (
+            cast(Mapping[str, object], item).get("summary")  # cast-ok: untyped provider json
+            if isinstance(item, Mapping)
+            else getattr(item, "summary", None)
+        )
+        summary: Final = raw_summary or ()
+        item_id, encrypted_content = cls._reasoning_replay_fields(item)
+        signature: Final = pack_responses_reasoning_signature(item_id, encrypted_content)
+        texts: Final = tuple(text for part in summary if (text := cls._summary_part_text(part)))
+        if not texts:
+            if signature is None:
+                return ()
+            return (
+                AnthropicResponseContentBlockThinking(
+                    type="thinking",
+                    thinking="",
+                    signature=signature,
+                ).model_dump(),
+            )
         return tuple(
             AnthropicResponseContentBlockThinking(
                 type="thinking",
                 thinking=text,
-                signature=None,
+                signature=signature,
             ).model_dump()
-            for part in summary
-            if (text := cls._summary_part_text(part))
+            for text in texts
         )
 
     @staticmethod
@@ -572,6 +609,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning
+                responses_kwargs["include"] = ["reasoning.encrypted_content"]
 
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}
@@ -634,7 +672,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
-                content.extend(self._thinking_blocks_from_reasoning_item(item.summary))
+                content.extend(self._thinking_blocks_from_reasoning_item(item))
 
             elif isinstance(item, ResponseOutputMessage):
                 for part in item.content:
@@ -684,11 +722,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     ).model_dump()
                                 )
                 elif item_type == "reasoning":
-                    content.extend(
-                        self._thinking_blocks_from_reasoning_item(
-                            cast(Iterable[object], item.get("summary") or ()),  # cast-ok: untyped provider json
-                        )
-                    )
+                    content.extend(self._thinking_blocks_from_reasoning_item(item))
                 elif item_type == "function_call":
                     try:
                         input_data = json.loads(item.get("arguments", "{}"))

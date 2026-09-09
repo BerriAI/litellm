@@ -47,6 +47,7 @@ from .common_utils import (
     convert_content_list_to_str,
     infer_content_type_from_url_and_content,
     is_non_content_values_set,
+    is_responses_reasoning_thinking_signature,
     parse_tool_call_arguments,
 )
 from .image_handling import convert_url_to_base64
@@ -2309,7 +2310,9 @@ def _is_unsignable_thinking_block(block: object) -> bool:
     if not isinstance(block, dict) or block.get("type") != "thinking":
         return False
     signature: Final = block.get("signature")
-    return not (isinstance(signature, str) and len(signature) > 0)
+    if not (isinstance(signature, str) and len(signature) > 0):
+        return True
+    return is_responses_reasoning_thinking_signature(signature)
 
 
 def _drop_unsignable_thinking_blocks(

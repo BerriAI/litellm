@@ -258,6 +258,40 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
     assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
 
 
+def test_anthropic_messages_pt_drops_packed_responses_reasoning_signature():
+    """OpenAI encrypted_content packed into signature is not an Anthropic signature."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        pack_responses_reasoning_signature,
+    )
+
+    packed_block = {
+        "type": "thinking",
+        "thinking": "openai reasoning",
+        "signature": pack_responses_reasoning_signature("rs_abc", "gAAAAABp-blob"),
+    }
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "2+2 equals 4.",
+            "thinking_blocks": [packed_block],
+        },
+        {"role": "user", "content": "Now what is 3+3?"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+    )
+
+    assistant = next(m for m in result if m["role"] == "assistant")
+    content = assistant["content"]
+    assert all(block.get("type") != "thinking" for block in content)
+    assert any(
+        block.get("type") == "text" and block.get("text") == "2+2 equals 4."
+        for block in content
+    )
+
+
 def test_convert_to_azure_openai_messages():
     """Test coverting image_url to azure_openai spec"""
 

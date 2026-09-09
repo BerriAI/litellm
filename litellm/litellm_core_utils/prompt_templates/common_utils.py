@@ -2,6 +2,7 @@
 Common utility functions used for translating messages across providers
 """
 
+import base64
 import io
 import json
 import mimetypes
@@ -1843,22 +1844,103 @@ def reasoning_content_from_thinking_blocks(
     return "\n".join(text for block in thinking_blocks if (text := _readable_thinking_text(block)))
 
 
+_RESPONSES_REASONING_SIGNATURE_PREFIX: Final = "lllm-rsenc-v1:"
+
+
+def pack_responses_reasoning_signature(item_id: str | None, encrypted_content: str | None) -> str | None:
+    """Pack a Responses reasoning `id` + `encrypted_content` into an Anthropic thinking signature.
+
+    The client must echo `signature` unmodified. A fabricated id 404s upstream, so id is only
+    written when the provider minted one. No signature is invented from summary text alone.
+    """
+    if not encrypted_content:
+        return None
+    payload: Final = {"id": item_id, "ec": encrypted_content} if item_id else {"ec": encrypted_content}
+    encoded: Final = base64.b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    return f"{_RESPONSES_REASONING_SIGNATURE_PREFIX}{encoded}"
+
+
+def unpack_responses_reasoning_signature(signature: str) -> tuple[str | None, str | None]:
+    """Restore `(id, encrypted_content)` from a packed thinking signature, else `(None, None)`.
+
+    Native Anthropic signatures and fabricated stand-ins fail closed so they are never sent
+    upstream as `encrypted_content`.
+    """
+    if not signature.startswith(_RESPONSES_REASONING_SIGNATURE_PREFIX):
+        return None, None
+    raw: Final = signature[len(_RESPONSES_REASONING_SIGNATURE_PREFIX) :]
+    try:
+        payload: Final[object] = json.loads(base64.b64decode(raw, validate=True))
+    except (ValueError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    item_id: Final = payload.get("id")
+    encrypted_content: Final = payload.get("ec")
+    return (
+        item_id if isinstance(item_id, str) and item_id else None,
+        encrypted_content if isinstance(encrypted_content, str) and encrypted_content else None,
+    )
+
+
+def is_responses_reasoning_thinking_signature(signature: str) -> bool:
+    """True when `signature` is a packed Responses replay blob, not an Anthropic signature."""
+    return signature.startswith(_RESPONSES_REASONING_SIGNATURE_PREFIX)
+
+
+def _reasoning_replay_fields_from_thinking_blocks(
+    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+) -> tuple[str | None, str | None]:
+    for block in thinking_blocks:
+        signature: Final = block.get("signature") if isinstance(block, Mapping) else None
+        if not isinstance(signature, str) or not signature:
+            continue
+        item_id, encrypted_content = unpack_responses_reasoning_signature(signature)
+        if item_id is not None or encrypted_content is not None:
+            return item_id, encrypted_content
+    return None, None
+
+
+def _responses_reasoning_item(
+    summary: tuple[ChatCompletionReasoningSummaryTextBlock, ...],
+    item_id: str | None,
+    encrypted_content: str | None,
+) -> ChatCompletionReasoningItem:
+    summary_list: Final = list(summary)  # mutable-ok: Responses API summary is a json list
+    match (item_id, encrypted_content):
+        case (str() as rid, str() as blob):
+            return ChatCompletionReasoningItem(
+                type="reasoning", id=rid, encrypted_content=blob, summary=summary_list
+            )
+        case (str() as rid, None):
+            return ChatCompletionReasoningItem(type="reasoning", id=rid, summary=summary_list)
+        case (None, str() as blob):
+            return ChatCompletionReasoningItem(
+                type="reasoning", encrypted_content=blob, summary=summary_list
+            )
+        case _:
+            return ChatCompletionReasoningItem(type="reasoning", summary=summary_list)
+
+
 def responses_reasoning_item_from_thinking_blocks(
     thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
 ) -> ChatCompletionReasoningItem | None:
     """Build a Responses API `reasoning` input item from Anthropic thinking blocks.
 
-    The item carries no `id`: the Responses API rejects an empty one and 404s on any id it
-    did not mint itself, while an item without an id is always accepted.
+    A packed thinking `signature` restores the original `id` and `encrypted_content` so the
+    item is byte-stable across turns. A fabricated id 404s, so an unpacked miss omits those
+    fields. Summary-only text is never used to invent a new reasoning item identity.
     """
-    summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
+    blocks: Final = tuple(thinking_blocks)
+    summary: Final = tuple(
         ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
-        for block in thinking_blocks
+        for block in blocks
         if (text := _readable_thinking_text(block))
-    ]
-    if not summary:
+    )
+    item_id, encrypted_content = _reasoning_replay_fields_from_thinking_blocks(blocks)
+    if not summary and encrypted_content is None:
         return None
-    return ChatCompletionReasoningItem(type="reasoning", summary=summary)
+    return _responses_reasoning_item(summary, item_id, encrypted_content)
 
 
 def _parse_content_for_reasoning(

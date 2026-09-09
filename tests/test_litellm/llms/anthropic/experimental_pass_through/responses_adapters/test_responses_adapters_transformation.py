@@ -1096,11 +1096,13 @@ class TestTranslateRequestBroaderCoverage:
         # reasoning_auto_summary is False by default, so no summary key
         assert kwargs["reasoning"] == {"effort": "high"}
         assert "summary" not in kwargs["reasoning"]
+        assert kwargs["include"] == ["reasoning.encrypted_content"]
 
     def test_disabled_thinking_not_included_in_kwargs(self):
         req = _make_request(thinking={"type": "disabled"})
         kwargs = _ADAPTER.translate_request(req)
         assert "reasoning" not in kwargs
+        assert "include" not in kwargs
 
     def test_metadata_user_id_mapped_to_user(self):
         req = _make_request(metadata={"user_id": "user-42"})
@@ -1246,7 +1248,11 @@ def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMo
     return item
 
 
-def _make_reasoning_item(summaries: List[str], item_id: str = "rs_test_1") -> MagicMock:
+def _make_reasoning_item(
+    summaries: List[str],
+    item_id: str = "rs_test_1",
+    encrypted_content: str | None = None,
+) -> MagicMock:
     """Build a mock ResponseReasoningItem."""
     from openai.types.responses import ResponseReasoningItem  # type: ignore[import]
 
@@ -1259,6 +1265,7 @@ def _make_reasoning_item(summaries: List[str], item_id: str = "rs_test_1") -> Ma
     item = MagicMock(spec=ResponseReasoningItem)
     item.id = item_id
     item.summary = summary_mocks
+    item.encrypted_content = encrypted_content
     return item
 
 
@@ -1382,11 +1389,94 @@ class TestTranslateResponse:
         assert result["content"] == []
 
     def test_reasoning_item_id_never_becomes_a_thinking_signature(self):
-        """Only Anthropic can sign a thinking block, so a stand-in signature is never invented."""
+        """An id alone is not a signature. Only encrypted_content is packed into one."""
         reasoning = _make_reasoning_item(["Part one.", "Part two."], item_id="rs_abc123")
         response = _make_mock_response(output=[reasoning])
         result: Any = _ADAPTER.translate_response(response)
         assert [block["signature"] for block in result["content"]] == [None, None]
+
+    def test_encrypted_content_is_packed_into_thinking_signature(self):
+        reasoning = _make_reasoning_item(
+            ["Computing 12*13 via distribution."],
+            item_id="rs_07db33a5c961deeb016aa06e634e1087d2914097f0ed2016c7",
+            encrypted_content="gAAAAABp-encrypted-content-blob",
+        )
+        response = _make_mock_response(output=[reasoning])
+        result: Any = _ADAPTER.translate_response(response)
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_responses_reasoning_signature,
+        )
+
+        assert len(result["content"]) == 1
+        item_id, encrypted_content = unpack_responses_reasoning_signature(result["content"][0]["signature"])
+        assert item_id == "rs_07db33a5c961deeb016aa06e634e1087d2914097f0ed2016c7"
+        assert encrypted_content == "gAAAAABp-encrypted-content-blob"
+
+    def test_dict_reasoning_item_packs_encrypted_content_into_signature(self):
+        response = _make_mock_response(
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_dict_enc_1",
+                    "encrypted_content": "gAAAAABp-dict-blob",
+                    "summary": [{"type": "summary_text", "text": "Weighing the options."}],
+                }
+            ]
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_responses_reasoning_signature,
+        )
+
+        item_id, encrypted_content = unpack_responses_reasoning_signature(result["content"][0]["signature"])
+        assert item_id == "rs_dict_enc_1"
+        assert encrypted_content == "gAAAAABp-dict-blob"
+
+    def test_reasoning_item_round_trip_is_cache_stable(self):
+        """Turn-2 replay must send the same reasoning item bytes OpenAI minted on turn 1."""
+        reasoning = _make_reasoning_item(
+            ["Computing 12*13 via distribution."],
+            item_id="rs_07db33a5c961deeb016aa06e634e1087d2914097f0ed2016c7",
+            encrypted_content="gAAAAABp-encrypted-content-blob",
+        )
+        anthropic = _ADAPTER.translate_response(_make_mock_response(output=[reasoning]))
+        replay = [
+            {
+                "role": "assistant",
+                "content": anthropic["content"],
+            }
+        ]
+        first = _ADAPTER.translate_messages_to_responses_input(replay)
+        second = _ADAPTER.translate_messages_to_responses_input(replay)
+        assert first == second
+        assert first == [
+            {
+                "type": "reasoning",
+                "id": "rs_07db33a5c961deeb016aa06e634e1087d2914097f0ed2016c7",
+                "encrypted_content": "gAAAAABp-encrypted-content-blob",
+                "summary": [{"type": "summary_text", "text": "Computing 12*13 via distribution."}],
+            }
+        ]
+
+    def test_encrypted_content_without_summary_still_round_trips(self):
+        reasoning = _make_reasoning_item(
+            [""],
+            item_id="rs_empty_summary",
+            encrypted_content="gAAAAABp-no-summary",
+        )
+        anthropic = _ADAPTER.translate_response(_make_mock_response(output=[reasoning]))
+        assert anthropic["content"][0]["thinking"] == ""
+        replayed = _ADAPTER.translate_messages_to_responses_input(
+            [{"role": "assistant", "content": anthropic["content"]}]
+        )
+        assert replayed == [
+            {
+                "type": "reasoning",
+                "id": "rs_empty_summary",
+                "encrypted_content": "gAAAAABp-no-summary",
+                "summary": [],
+            }
+        ]
 
     def test_dict_reasoning_item_becomes_thinking_block(self):
         """A reasoning item arriving as a plain dict is kept, not dropped."""
@@ -1410,6 +1500,24 @@ class TestTranslateResponse:
 
         response = _make_mock_response(output=[_make_reasoning_item(["Part one."], item_id="rs_abc123")])
         result: Any = _ADAPTER.translate_response(response)
+        assert _drop_unsignable_thinking_blocks(result["content"]) == []
+
+    def test_packed_reasoning_signature_is_dropped_when_replayed_to_anthropic(self):
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            _drop_unsignable_thinking_blocks,
+        )
+
+        response = _make_mock_response(
+            output=[
+                _make_reasoning_item(
+                    ["Part one."],
+                    item_id="rs_abc123",
+                    encrypted_content="gAAAAABp-encrypted-content-blob",
+                )
+            ]
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"][0]["signature"]
         assert _drop_unsignable_thinking_blocks(result["content"]) == []
 
     def test_usage_mapped_correctly(self):
