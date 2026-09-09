@@ -56,6 +56,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     SingulrGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.spanda import (
+    SpandaGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
 )
@@ -137,6 +140,7 @@ class SupportedGuardrailIntegrations(Enum):
     COMPRESR = "compresr"
     STRAIKER = "straiker"
     ALICE = "alice"
+    SPANDA = "spanda"
 
 
 class Role(Enum):
@@ -1082,6 +1086,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
+    SpandaGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: str | list[str] | Mode = Field(
