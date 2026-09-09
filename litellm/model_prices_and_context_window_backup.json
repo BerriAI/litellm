@@ -56009,12 +56009,6 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supported_modalities": [
-            "text"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "tpm": 600000,
         "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
     },
@@ -56032,12 +56026,6 @@
         "supports_response_schema": true,
         "rpm": 30,
         "tpm": 600000,
-        "supported_modalities": [
-            "text"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
     },
     "streamlake/DeepSeek-V3": {
@@ -56068,12 +56056,6 @@
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
         "tpm": 300000,
-        "supported_modalities": [
-            "text"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
     },
     "streamlake/GLM-5.3-Flash": {
@@ -56092,16 +56074,7 @@
         "rpm": 30,
         "supports_assistant_prefill": true,
         "supports_prompt_caching": true,
-        "supports_video_input": true,
         "tpm": 300000,
-        "supported_modalities": [
-            "text",
-            "image",
-            "video"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
         "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
     },
     "streamlake/KAT-Coder-Air-V2.5": {
