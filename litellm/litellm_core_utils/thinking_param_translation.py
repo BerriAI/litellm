@@ -88,6 +88,29 @@ def _clamp_effort(value: object, allowed: Sequence[str]) -> str | None:
     return None
 
 
+def _mapping_or_none(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _merged_mapping_value(left: Mapping[str, object], right: Mapping[str, object], key: str) -> object:
+    if key not in right:
+        return left[key]
+    if key not in left:
+        return right[key]
+    left_map: Final = _mapping_or_none(left[key])
+    right_map: Final = _mapping_or_none(right[key])
+    if left_map is not None and right_map is not None:
+        return _deep_merge_pair(left_map, right_map)
+    return right[key]
+
+
+def _deep_merge_pair(left: Mapping[str, object], right: Mapping[str, object]) -> Mapping[str, object]:
+    keys: Final = frozenset(left) | frozenset(right)
+    return MappingProxyType({key: _merged_mapping_value(left, right, key) for key in keys})
+
+
 def _map_thinking_to_extra_body(
     *,
     thinking_param: str | None,
@@ -117,6 +140,20 @@ def _map_thinking_to_extra_body(
             return MappingProxyType({})
 
 
+def _map_effort_to_extra_body(
+    *,
+    effort: object,
+    effort_values: Sequence[str],
+    send_via: object,
+) -> Mapping[str, object]:
+    clamped: Final = _clamp_effort(effort, effort_values)
+    if clamped is not None:
+        return MappingProxyType({"reasoning_effort": clamped})
+    if not effort_values and send_via == _SEND_VIA_EXTRA_BODY and isinstance(effort, str):
+        return MappingProxyType({"reasoning_effort": effort})
+    return MappingProxyType({})
+
+
 def translate_thinking_params(
     *,
     model_info: Mapping[str, object] | None,
@@ -143,33 +180,33 @@ def translate_thinking_params(
     if thinking is None and effort is None:
         return state
 
-    existing_extra: Final = dict(state.extra_body)
-    patch: dict[str, object] = {}
     keep_thinking: Final = send_via == _SEND_VIA_PROVIDER_MAPPED
-
-    if thinking is not None and send_via == _SEND_VIA_EXTRA_BODY:
-        patch.update(
-            _map_thinking_to_extra_body(
-                thinking_param=thinking_param,
-                thinking=thinking,
-                thinking_values=thinking_values,
-            )
+    thinking_patch: Final = (
+        _map_thinking_to_extra_body(
+            thinking_param=thinking_param,
+            thinking=thinking,
+            thinking_values=thinking_values,
         )
-
-    if effort is not None:
-        clamped: Final = _clamp_effort(effort, effort_values)
-        if clamped is not None:
-            patch["reasoning_effort"] = clamped
-        elif not effort_values and send_via == _SEND_VIA_EXTRA_BODY and isinstance(effort, str):
-            patch["reasoning_effort"] = effort
-
+        if thinking is not None and send_via == _SEND_VIA_EXTRA_BODY
+        else MappingProxyType({})
+    )
+    effort_patch: Final = (
+        _map_effort_to_extra_body(
+            effort=effort,
+            effort_values=effort_values,
+            send_via=send_via,
+        )
+        if effort is not None
+        else MappingProxyType({})
+    )
+    patch: Final = MappingProxyType({**thinking_patch, **effort_patch})
     if not patch:
         return state
 
     thinking_mapped: Final = any(key in patch for key in ("thinking", "enable_thinking", "chat_template_kwargs"))
     next_thinking: Final = thinking if (keep_thinking or not thinking_mapped) else None
     next_effort: Final = None if "reasoning_effort" in patch else effort
-    merged_extra: Final = MappingProxyType({**existing_extra, **patch})
+    merged_extra: Final = _deep_merge_pair(state.extra_body, patch)
     return ThinkingParamsState(
         thinking=next_thinking,
         reasoning_effort=next_effort,
