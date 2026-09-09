@@ -1,14 +1,52 @@
 use std::sync::OnceLock;
 
 use crate::error::{AuthError, Error};
-use crate::providers::auth::CredentialPlacement;
 use crate::providers::auth::azure::{AzureAuthInputs, AzureAuthService};
 use crate::providers::auth::http::apply_credential;
+use crate::providers::auth::{
+    CredentialPlacement, CredentialPlanKind, CredentialRef, CredentialRule, ExistingHeaderBehavior,
+    ProviderAuthPolicy, ResolvedCredential, SecretValue,
+};
 
 pub const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 pub const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
 pub const AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY";
 pub const AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV: &str = "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT";
+
+const AZURE_AI_AUTH_RULES: &[CredentialRule] = &[
+    CredentialRule {
+        kind: CredentialPlanKind::Static,
+        placement: CredentialPlacement::Bearer,
+    },
+    CredentialRule {
+        kind: CredentialPlanKind::Entra,
+        placement: CredentialPlacement::Bearer,
+    },
+];
+const AZURE_AI_AUTH_POLICY: ProviderAuthPolicy = ProviderAuthPolicy {
+    rules: AZURE_AI_AUTH_RULES,
+    accepted_existing_headers: &["Authorization"],
+    existing_header_behavior: ExistingHeaderBehavior::Preserve,
+    scope: Some(crate::providers::auth::azure::DEFAULT_AZURE_SCOPE),
+    audience: None,
+};
+const DOCUMENT_INTELLIGENCE_AUTH_RULES: &[CredentialRule] = &[
+    CredentialRule {
+        kind: CredentialPlanKind::Static,
+        placement: CredentialPlacement::Header("Ocp-Apim-Subscription-Key"),
+    },
+    CredentialRule {
+        kind: CredentialPlanKind::Entra,
+        placement: CredentialPlacement::Bearer,
+    },
+];
+const DOCUMENT_INTELLIGENCE_AUTH_POLICY: ProviderAuthPolicy = ProviderAuthPolicy {
+    rules: DOCUMENT_INTELLIGENCE_AUTH_RULES,
+    accepted_existing_headers: &["Authorization", "Ocp-Apim-Subscription-Key"],
+    existing_header_behavior: ExistingHeaderBehavior::Preserve,
+    scope: Some(crate::providers::auth::azure::DEFAULT_AZURE_SCOPE),
+    audience: None,
+};
 
 fn resolve_value(
     explicit: Option<&str>,
@@ -103,27 +141,16 @@ pub async fn authenticate(
     auth_inputs: Option<&AzureAuthInputs>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, Error> {
-    if crate::http_utils::has_header(&headers, "Authorization") {
-        return Ok(headers);
-    }
-    if let Some(api_key) = resolve_optional_api_key(api_key, env_lookup) {
-        return apply_credential(headers, &api_key, CredentialPlacement::Bearer)
-            .map_err(Error::from);
-    }
-    let credential = resolve_entra_credential(auth_inputs, env_lookup)
-        .await?
-        .ok_or_else(|| {
-            AuthError::InvalidConfiguration(
-                "Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
-                    .to_string(),
-            )
-        })?;
-    apply_credential(
+    authenticate_with_policy(
         headers,
-        credential.secret().expose(),
-        CredentialPlacement::Bearer,
+        api_key,
+        AZURE_AI_API_KEY_ENV,
+        auth_inputs,
+        env_lookup,
+        &AZURE_AI_AUTH_POLICY,
+        "Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID",
     )
-    .map_err(Error::from)
+    .await
 }
 
 pub async fn authenticate_document_intelligence(
@@ -132,35 +159,50 @@ pub async fn authenticate_document_intelligence(
     auth_inputs: Option<&AzureAuthInputs>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, Error> {
-    if crate::http_utils::has_header(&headers, "Authorization")
-        || crate::http_utils::has_header(&headers, "Ocp-Apim-Subscription-Key")
-    {
+    authenticate_with_policy(
+        headers,
+        api_key,
+        AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV,
+        auth_inputs,
+        env_lookup,
+        &DOCUMENT_INTELLIGENCE_AUTH_POLICY,
+        "Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID",
+    )
+    .await
+}
+
+async fn authenticate_with_policy(
+    headers: Vec<(String, String)>,
+    api_key: Option<&str>,
+    api_key_env: &str,
+    auth_inputs: Option<&AzureAuthInputs>,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    policy: &ProviderAuthPolicy,
+    missing_message: &'static str,
+) -> Result<Vec<(String, String)>, Error> {
+    if policy.has_existing_credential(&headers) {
         return Ok(headers);
     }
-    if let Some(api_key) =
-        resolve_optional_value(api_key, AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV, env_lookup)
-    {
-        return apply_credential(
-            headers,
-            &api_key,
-            CredentialPlacement::Header("Ocp-Apim-Subscription-Key"),
-        )
-        .map_err(Error::from);
+    for rule in policy.rules {
+        let credential = match rule.kind {
+            CredentialPlanKind::Static => {
+                resolve_static_credential(api_key, api_key_env, env_lookup)
+            }
+            CredentialPlanKind::Entra => resolve_entra_credential(auth_inputs, env_lookup).await?,
+            CredentialPlanKind::Caller => {
+                return Err(AuthError::InvalidConfiguration(
+                    "caller credential plan requires provider-specific inputs".to_string(),
+                )
+                .into());
+            }
+        };
+        if let Some(credential) = credential {
+            return policy
+                .apply(headers, rule.kind, &credential)
+                .map_err(Error::from);
+        }
     }
-    let credential = resolve_entra_credential(auth_inputs, env_lookup)
-        .await?
-        .ok_or_else(|| {
-            AuthError::InvalidConfiguration(
-                "Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
-                    .to_string(),
-            )
-        })?;
-    apply_credential(
-        headers,
-        credential.secret().expose(),
-        CredentialPlacement::Bearer,
-    )
-    .map_err(Error::from)
+    Err(AuthError::InvalidConfiguration(missing_message.to_string()).into())
 }
 
 async fn resolve_entra_credential(
@@ -173,22 +215,26 @@ async fn resolve_entra_credential(
     }
 }
 
-fn resolve_optional_api_key(
-    api_key: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Option<String> {
-    resolve_optional_value(api_key, AZURE_AI_API_KEY_ENV, env_lookup)
-}
-
-fn resolve_optional_value(
+fn resolve_static_credential(
     explicit: Option<&str>,
     env_name: &str,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Option<String> {
-    explicit
+) -> Option<ResolvedCredential> {
+    let reference = explicit
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| env_lookup(env_name).filter(|value| !value.is_empty()))
+        .map(|value| CredentialRef::Explicit(SecretValue::new(value)))
+        .unwrap_or_else(|| CredentialRef::Env(env_name.to_string()));
+    match reference {
+        CredentialRef::Explicit(secret) => Some(ResolvedCredential::Static(secret)),
+        CredentialRef::Env(name) => env_lookup(&name)
+            .filter(|value| !value.is_empty())
+            .map(SecretValue::new)
+            .map(ResolvedCredential::Static),
+        CredentialRef::File(_)
+        | CredentialRef::Request(_)
+        | CredentialRef::Host(_)
+        | CredentialRef::None => None,
+    }
 }
 
 fn auth_service() -> &'static AzureAuthService {

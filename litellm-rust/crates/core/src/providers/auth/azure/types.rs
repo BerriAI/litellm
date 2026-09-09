@@ -1,14 +1,8 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-
 use serde_json::{Map, Value};
 use strum::EnumString;
-use veil::Redact;
 
 use crate::error::AuthError;
-use crate::providers::auth::secret::SecretValue;
-use crate::providers::auth::token::TokenCallerHandle;
+use crate::providers::auth::{CredentialResolverHandle, SecretValue, TokenCallerHandle};
 
 pub const DEFAULT_AZURE_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
 
@@ -42,6 +36,7 @@ pub enum AzureCredentialType {
 pub struct AzureAuthInputs {
     pub azure_ad_token: ConfigValue<SecretValue>,
     pub azure_ad_token_provider: Option<TokenCallerHandle>,
+    pub credential_resolver: Option<CredentialResolverHandle>,
     pub tenant_id: ConfigValue<String>,
     pub client_id: ConfigValue<String>,
     pub client_secret: ConfigValue<SecretValue>,
@@ -57,6 +52,7 @@ impl AzureAuthInputs {
         Ok(Self {
             azure_ad_token: secret_config(params, "azure_ad_token")?,
             azure_ad_token_provider: None,
+            credential_resolver: None,
             tenant_id: string_config(params, "tenant_id")?,
             client_id: string_config(params, "client_id")?,
             client_secret: secret_config(params, "client_secret")?,
@@ -95,112 +91,6 @@ fn secret_config(
         ConfigValue::ExplicitNone => ConfigValue::ExplicitNone,
         ConfigValue::Value(value) => ConfigValue::Value(SecretValue::new(value)),
     })
-}
-
-pub(crate) type LookupFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Option<SecretValue>, AuthError>> + Send + 'a>>;
-
-pub(crate) trait AzureValueLookup: std::fmt::Debug + Send + Sync {
-    fn resolve<'a>(&'a self, reference: &'a str) -> LookupFuture<'a>;
-}
-
-#[derive(Clone, Redact)]
-pub(crate) struct AzureValueLookupHandle(#[redact(with = "[REDACTED]")] Arc<dyn AzureValueLookup>);
-
-impl AzureValueLookupHandle {
-    pub(crate) fn new(lookup: Arc<dyn AzureValueLookup>) -> Self {
-        Self(lookup)
-    }
-
-    pub(crate) async fn resolve(&self, reference: &str) -> Result<Option<SecretValue>, AuthError> {
-        self.0.resolve(reference).await
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct ProcessAzureValueLookup;
-
-impl AzureValueLookup for ProcessAzureValueLookup {
-    fn resolve<'a>(&'a self, reference: &'a str) -> LookupFuture<'a> {
-        Box::pin(async move { resolve_process_value(reference) })
-    }
-}
-
-fn resolve_process_value(reference: &str) -> Result<Option<SecretValue>, AuthError> {
-    if let Some(name) = reference.strip_prefix("oidc/env/") {
-        return Ok(std::env::var(name).ok().map(SecretValue::new));
-    }
-    if let Some(name) = reference.strip_prefix("oidc/env_path/") {
-        let Some(path) = std::env::var(name).ok() else {
-            return Ok(None);
-        };
-        return read_secret_file(&path, false).map(Some);
-    }
-    if let Some(path) = reference.strip_prefix("oidc/file/") {
-        return read_secret_file(path, true).map(Some);
-    }
-    if reference.starts_with("oidc/") {
-        return Err(AuthError::InvalidConfiguration(format!(
-            "unsupported OIDC reference: {reference}"
-        )));
-    }
-    Ok(None)
-}
-
-fn read_secret_file(path: &str, enforce_allowlist: bool) -> Result<SecretValue, AuthError> {
-    let requested = std::path::Path::new(path);
-    if !requested.is_absolute() {
-        return Err(AuthError::InvalidConfiguration(
-            "oidc/file path must be absolute".to_string(),
-        ));
-    }
-    let resolved = requested.canonicalize().map_err(|error| {
-        AuthError::Acquisition(format!("failed to resolve Azure assertion file: {error}"))
-    })?;
-    if enforce_allowlist {
-        let allowed = oidc_allowed_directories()?;
-        if !allowed
-            .iter()
-            .any(|directory| resolved.starts_with(directory))
-        {
-            return Err(AuthError::InvalidConfiguration(
-                "oidc/file path is outside the allowed credential directories".to_string(),
-            ));
-        }
-    }
-    std::fs::read_to_string(resolved)
-        .map(SecretValue::new)
-        .map_err(|error| {
-            AuthError::Acquisition(format!("failed to read Azure assertion file: {error}"))
-        })
-}
-
-fn oidc_allowed_directories() -> Result<Vec<std::path::PathBuf>, AuthError> {
-    let configured = std::env::var("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS").ok();
-    let raw = configured
-        .as_deref()
-        .map(|value| {
-            value
-                .split(',')
-                .filter(|part| !part.trim().is_empty())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| vec!["/var/run/secrets", "/run/secrets"]);
-    raw.into_iter()
-        .map(|path| {
-            let candidate = std::path::Path::new(path.trim());
-            if !candidate.is_absolute() {
-                return Err(AuthError::InvalidConfiguration(
-                    "OIDC allowed credential directories must be absolute".to_string(),
-                ));
-            }
-            candidate.canonicalize().map_err(|error| {
-                AuthError::InvalidConfiguration(format!(
-                    "failed to resolve OIDC allowed credential directory: {error}"
-                ))
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]

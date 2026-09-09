@@ -1,14 +1,11 @@
-use std::sync::Arc;
-
 use crate::error::AuthError;
-use crate::providers::auth::secret::SecretValue;
-use crate::providers::auth::token::{ResolvedCredential, TokenCallerHandle};
+use crate::providers::auth::{
+    CredentialFileRef, CredentialLookup, CredentialRef, ResolvedCredential, SecretValue,
+    TokenCallerHandle,
+};
 
 use super::native::{NativeAzureRequest, NativeAzureTokenAcquirer};
-use super::types::{
-    AzureAuthInputs, AzureCredentialType, AzureValueLookupHandle, ConfigValue, DEFAULT_AZURE_SCOPE,
-    ProcessAzureValueLookup,
-};
+use super::types::{AzureAuthInputs, AzureCredentialType, ConfigValue, DEFAULT_AZURE_SCOPE};
 
 const AZURE_AD_TOKEN_ENV: &str = "AZURE_AD_TOKEN";
 const AZURE_TENANT_ID_ENV: &str = "AZURE_TENANT_ID";
@@ -20,11 +17,11 @@ const AZURE_CREDENTIAL_ENV: &str = "AZURE_CREDENTIAL";
 const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
 
 #[derive(Clone, Debug)]
-pub(crate) enum AzureAuthPlan {
+pub(crate) enum AzureCredentialPlan {
     Supplied(ResolvedCredential),
     Caller(TokenCallerHandle),
     Oidc {
-        reference: String,
+        reference: CredentialRef,
         tenant_id: String,
         client_id: String,
         scope: String,
@@ -35,18 +32,9 @@ pub(crate) enum AzureAuthPlan {
     Missing,
 }
 
+#[derive(Default)]
 pub(crate) struct AzureAuthService {
     native: NativeAzureTokenAcquirer,
-    lookup: AzureValueLookupHandle,
-}
-
-impl Default for AzureAuthService {
-    fn default() -> Self {
-        Self {
-            native: NativeAzureTokenAcquirer::default(),
-            lookup: AzureValueLookupHandle::new(Arc::new(ProcessAzureValueLookup)),
-        }
-    }
 }
 
 impl AzureAuthService {
@@ -56,8 +44,8 @@ impl AzureAuthService {
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Option<ResolvedCredential>, AuthError> {
         match select_auth_plan(inputs, env_lookup)? {
-            AzureAuthPlan::Supplied(credential) => Ok(Some(credential)),
-            AzureAuthPlan::Caller(caller) => {
+            AzureCredentialPlan::Supplied(credential) => Ok(Some(credential)),
+            AzureCredentialPlan::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
                     return Err(AuthError::Caller(
@@ -66,32 +54,34 @@ impl AzureAuthService {
                 }
                 Ok(Some(credential))
             }
-            AzureAuthPlan::Oidc {
+            AzureCredentialPlan::Oidc {
                 reference,
                 tenant_id,
                 client_id,
                 scope,
                 authority,
             } => {
-                let assertion = self.lookup.resolve(&reference).await?.ok_or_else(|| {
-                    AuthError::Acquisition(
-                        "Azure OIDC reference did not resolve to a value".to_string(),
-                    )
-                })?;
+                let assertion = resolve_reference(inputs, env_lookup, &reference)
+                    .await?
+                    .ok_or_else(|| {
+                        AuthError::Acquisition(
+                            "Azure OIDC reference did not resolve to a value".to_string(),
+                        )
+                    })?;
                 self.native
                     .acquire(NativeAzureRequest::ClientAssertion {
                         tenant_id,
                         client_id,
                         assertion,
-                        assertion_identity: reference,
+                        assertion_identity: format!("{reference:?}"),
                         scope,
                         authority,
                     })
                     .await
                     .map(Some)
             }
-            AzureAuthPlan::Native(request) => self.native.acquire(request).await.map(Some),
-            AzureAuthPlan::Chain(requests) => {
+            AzureCredentialPlan::Native(request) => self.native.acquire(request).await.map(Some),
+            AzureCredentialPlan::Chain(requests) => {
                 let mut failures = Vec::new();
                 for request in requests {
                     match self.native.acquire(request).await {
@@ -101,7 +91,7 @@ impl AzureAuthService {
                 }
                 Err(AuthError::Acquisition(failures.join("; ")))
             }
-            AzureAuthPlan::Missing => Ok(None),
+            AzureCredentialPlan::Missing => Ok(None),
         }
     }
 }
@@ -109,7 +99,7 @@ impl AzureAuthService {
 pub(crate) fn select_auth_plan(
     inputs: &AzureAuthInputs,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<AzureAuthPlan, AuthError> {
+) -> Result<AzureCredentialPlan, AuthError> {
     let token = configured_secret(&inputs.azure_ad_token, AZURE_AD_TOKEN_ENV, env_lookup);
     let tenant_id = configured_string(&inputs.tenant_id, AZURE_TENANT_ID_ENV, env_lookup);
     let client_id = configured_string(&inputs.client_id, AZURE_CLIENT_ID_ENV, env_lookup);
@@ -138,19 +128,23 @@ pub(crate) fn select_auth_plan(
         && let (Some(tenant_id), Some(client_id), Some(client_secret)) =
             (tenant_id.clone(), client_id.clone(), client_secret)
     {
-        return Ok(AzureAuthPlan::Native(NativeAzureRequest::ClientSecret {
-            tenant_id,
-            client_id,
-            client_secret,
-            scope,
-            authority,
-        }));
+        return Ok(AzureCredentialPlan::Native(
+            NativeAzureRequest::ClientSecret {
+                tenant_id,
+                client_id,
+                client_secret,
+                scope,
+                authority,
+            },
+        ));
     }
 
-    if let (Some(reference), Some(tenant_id), Some(client_id)) =
-        (oidc_reference(&token), tenant_id.clone(), client_id.clone())
-    {
-        return Ok(AzureAuthPlan::Oidc {
+    if let (Some(reference), Some(tenant_id), Some(client_id)) = (
+        oidc_reference(&token)?,
+        tenant_id.clone(),
+        client_id.clone(),
+    ) {
+        return Ok(AzureCredentialPlan::Oidc {
             reference,
             tenant_id,
             client_id,
@@ -160,18 +154,20 @@ pub(crate) fn select_auth_plan(
     }
 
     if let Some(caller) = &inputs.azure_ad_token_provider {
-        return Ok(AzureAuthPlan::Caller(caller.clone()));
+        return Ok(AzureCredentialPlan::Caller(caller.clone()));
     }
 
     if let Some(token) = token {
-        return Ok(AzureAuthPlan::Supplied(ResolvedCredential::AccessToken {
-            token,
-            expires_on: None,
-        }));
+        return Ok(AzureCredentialPlan::Supplied(
+            ResolvedCredential::AccessToken {
+                token,
+                expires_on: None,
+            },
+        ));
     }
 
     if !inputs.enable_azure_ad_token_refresh && selector.is_none() {
-        return Ok(AzureAuthPlan::Missing);
+        return Ok(AzureCredentialPlan::Missing);
     }
 
     select_native_plan(
@@ -191,7 +187,7 @@ fn select_native_plan(
     federated_token_file: Option<String>,
     scope: String,
     authority: Option<String>,
-) -> Result<AzureAuthPlan, AuthError> {
+) -> Result<AzureCredentialPlan, AuthError> {
     let selected = selector.unwrap_or_else(|| {
         if federated_token_file.is_some() {
             AzureCredentialType::DefaultAzureCredential
@@ -206,15 +202,12 @@ fn select_native_plan(
         AzureCredentialType::ClientSecretCredential => Err(AuthError::InvalidConfiguration(
             "ClientSecretCredential requires tenant_id, client_id, and client_secret".to_string(),
         )),
-        AzureCredentialType::WorkloadIdentityCredential => Ok(AzureAuthPlan::Native(
+        AzureCredentialType::WorkloadIdentityCredential => Ok(AzureCredentialPlan::Native(
             workload_request(tenant_id, client_id, federated_token_file, scope, authority)?,
         )),
-        AzureCredentialType::ManagedIdentityCredential => {
-            Ok(AzureAuthPlan::Native(NativeAzureRequest::ManagedIdentity {
-                client_id,
-                scope,
-            }))
-        }
+        AzureCredentialType::ManagedIdentityCredential => Ok(AzureCredentialPlan::Native(
+            NativeAzureRequest::ManagedIdentity { client_id, scope },
+        )),
         AzureCredentialType::DefaultAzureCredential => {
             let workload = match (tenant_id, client_id.clone(), federated_token_file) {
                 (Some(tenant_id), Some(client_id), Some(token_file_path)) => {
@@ -228,7 +221,7 @@ fn select_native_plan(
                 }
                 _ => None,
             };
-            Ok(AzureAuthPlan::Chain(
+            Ok(AzureCredentialPlan::Chain(
                 workload
                     .into_iter()
                     .chain(std::iter::once(NativeAzureRequest::ManagedIdentity {
@@ -258,7 +251,7 @@ fn select_native_plan(
                 client_id: Some(client_id),
                 scope: scope.clone(),
             });
-            Ok(AzureAuthPlan::Chain(
+            Ok(AzureCredentialPlan::Chain(
                 workload
                     .into_iter()
                     .chain(user_assigned)
@@ -328,20 +321,100 @@ fn configured_secret(
         })
 }
 
-fn oidc_reference(token: &Option<SecretValue>) -> Option<String> {
-    token
-        .as_ref()
-        .map(SecretValue::expose)
-        .filter(|value| value.starts_with("oidc/"))
-        .map(str::to_string)
+async fn resolve_reference(
+    inputs: &AzureAuthInputs,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    reference: &CredentialRef,
+) -> Result<Option<SecretValue>, AuthError> {
+    let lookup = match reference {
+        CredentialRef::Explicit(secret) => return Ok(Some(secret.clone())),
+        CredentialRef::Env(name) => env_lookup(name)
+            .filter(|value| !value.is_empty())
+            .map(SecretValue::new)
+            .map_or(CredentialLookup::Missing, CredentialLookup::Found),
+        CredentialRef::None => return Ok(None),
+        CredentialRef::File(_) | CredentialRef::Request(_) | CredentialRef::Host(_) => {
+            let resolver = inputs.credential_resolver.as_ref().ok_or_else(|| {
+                AuthError::InvalidConfiguration(
+                    "credential reference requires a host credential resolver".to_string(),
+                )
+            })?;
+            resolver.resolve(reference).await?
+        }
+    };
+    Ok(match lookup {
+        CredentialLookup::Found(secret) => Some(secret),
+        CredentialLookup::Missing | CredentialLookup::Declined => None,
+    })
+}
+
+fn oidc_reference(token: &Option<SecretValue>) -> Result<Option<CredentialRef>, AuthError> {
+    let Some(value) = token.as_ref().map(SecretValue::expose) else {
+        return Ok(None);
+    };
+    if let Some(name) = value.strip_prefix("oidc/env/") {
+        return non_empty_reference(name, "OIDC environment reference")
+            .map(CredentialRef::Env)
+            .map(Some);
+    }
+    if let Some(name) = value.strip_prefix("oidc/env_path/") {
+        return non_empty_reference(name, "OIDC environment path reference")
+            .map(|name| CredentialRef::File(CredentialFileRef::EnvironmentVariable(name)))
+            .map(Some);
+    }
+    if let Some(path) = value.strip_prefix("oidc/file/") {
+        let path = non_empty_reference(path, "OIDC file reference")?;
+        return Ok(Some(CredentialRef::File(CredentialFileRef::Path(
+            path.into(),
+        ))));
+    }
+    if value.starts_with("oidc/") {
+        return Err(AuthError::InvalidConfiguration(format!(
+            "unsupported OIDC reference: {value}"
+        )));
+    }
+    Ok(None)
+}
+
+fn non_empty_reference(value: &str, kind: &str) -> Result<String, AuthError> {
+    if value.is_empty() {
+        return Err(AuthError::InvalidConfiguration(format!(
+            "{kind} cannot be empty"
+        )));
+    }
+    Ok(value.to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use serde_json::json;
 
-    use super::{AzureAuthPlan, select_auth_plan};
+    use super::{AzureCredentialPlan, oidc_reference, resolve_reference, select_auth_plan};
     use crate::providers::auth::azure::AzureAuthInputs;
+    use crate::providers::auth::{
+        CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialRef,
+        CredentialResolver, CredentialResolverHandle, SecretValue,
+    };
+
+    #[derive(Debug)]
+    struct FileResolver;
+
+    impl CredentialResolver for FileResolver {
+        fn resolve<'a>(&'a self, reference: &'a CredentialRef) -> CredentialLookupFuture<'a> {
+            Box::pin(async move {
+                Ok(match reference {
+                    CredentialRef::File(CredentialFileRef::Path(path))
+                        if path == std::path::Path::new("/run/secrets/assertion") =>
+                    {
+                        CredentialLookup::Found(SecretValue::new("rotated-assertion"))
+                    }
+                    _ => CredentialLookup::Declined,
+                })
+            })
+        }
+    }
 
     #[test]
     fn null_and_empty_values_fall_back_to_environment() {
@@ -355,7 +428,7 @@ mod tests {
         })
         .unwrap();
 
-        assert!(matches!(plan, AzureAuthPlan::Native(_)));
+        assert!(matches!(plan, AzureCredentialPlan::Native(_)));
     }
 
     #[test]
@@ -365,7 +438,7 @@ mod tests {
 
         assert!(matches!(
             select_auth_plan(&inputs, &|_| None).unwrap(),
-            AzureAuthPlan::Supplied(_)
+            AzureCredentialPlan::Supplied(_)
         ));
     }
 
@@ -380,7 +453,44 @@ mod tests {
 
         assert!(matches!(
             select_auth_plan(&inputs, &|_| None).unwrap(),
-            AzureAuthPlan::Oidc { .. }
+            AzureCredentialPlan::Oidc {
+                reference: CredentialRef::Env(name),
+                ..
+            } if name == "ASSERTION"
         ));
+    }
+
+    #[test]
+    fn oidc_file_location_is_typed_before_resolution() {
+        assert_eq!(
+            oidc_reference(&Some(SecretValue::new("oidc/file//run/secrets/assertion"))).unwrap(),
+            Some(CredentialRef::File(CredentialFileRef::Path(
+                "/run/secrets/assertion".into()
+            )))
+        );
+    }
+
+    #[test]
+    fn unsupported_oidc_reference_is_rejected_during_plan_creation() {
+        let error = oidc_reference(&Some(SecretValue::new("oidc/vault/assertion")))
+            .expect_err("unsupported backend must fail validation");
+
+        assert!(error.to_string().contains("unsupported OIDC reference"));
+    }
+
+    #[tokio::test]
+    async fn host_resolver_owns_file_access() {
+        let inputs = AzureAuthInputs {
+            credential_resolver: Some(CredentialResolverHandle::new(Arc::new(FileResolver))),
+            ..AzureAuthInputs::default()
+        };
+        let reference =
+            CredentialRef::File(CredentialFileRef::Path("/run/secrets/assertion".into()));
+
+        let resolved = resolve_reference(&inputs, &|_| None, &reference)
+            .await
+            .unwrap();
+
+        assert_eq!(resolved, Some(SecretValue::new("rotated-assertion")));
     }
 }
