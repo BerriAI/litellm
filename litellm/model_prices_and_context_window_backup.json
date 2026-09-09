@@ -14560,7 +14560,6 @@
         "supports_tool_choice": true
     },
     "computer-use-preview": {
-        "deprecation_date": "2026-07-23",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
