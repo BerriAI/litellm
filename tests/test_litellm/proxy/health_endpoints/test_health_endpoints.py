@@ -1,9 +1,9 @@
 import asyncio
 import json
 import time
-from typing import Final
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -3217,3 +3217,129 @@ async def test_health_services_endpoint_pointfive_blocks_non_admin(monkeypatch, 
 
     assert str(raised.value.code) == "403"
     logger_class.assert_not_called()
+
+
+def _configured_non_team_deployment():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    return Deployment(
+        model_name="gpt-4o",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o",
+            api_base="https://configured.invalid/v1",
+            api_key="CONFIGURED-API-KEY",
+        ),
+        model_info=ModelInfo(id="non-team-deployment-id"),
+    )
+
+
+def _internal_user():
+    return UserAPIKeyAuth(
+        token="internal-user-token",
+        user_id="internal-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_allows_internal_user_to_probe_configured_model_they_can_call():
+    """
+    An internal user may test a configured, non-team model they are allowed
+    to call, and the probe runs with the configured credentials.
+    """
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = _configured_non_team_deployment()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", AsyncMock(return_value=True)) as key_check,
+        patch("litellm.proxy.auth.auth_checks.get_user_object", AsyncMock(return_value=None)),
+        patch("litellm.proxy.auth.auth_checks.can_user_call_model", AsyncMock(return_value=True)) as user_check,
+        patch("litellm.ahealth_check", AsyncMock(return_value={"status": "healthy"})) as health_check,
+    ):
+        result = await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"id": "non-team-deployment-id"},
+            user_api_key_dict=_internal_user(),
+        )
+
+    assert result["status"] == "success"
+    assert key_check.await_args.kwargs["model"] == "gpt-4o"
+    assert user_check.await_args.kwargs["model"] == "gpt-4o"
+    assert health_check.await_args.kwargs["model_params"]["api_key"] == "CONFIGURED-API-KEY"
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_denies_internal_user_without_model_access():
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = _configured_non_team_deployment()
+    denied = ProxyException(
+        message="Key not allowed to access model. Tried to access gpt-4o",
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="model",
+        code=403,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", AsyncMock(side_effect=denied)),
+        patch("litellm.ahealth_check", AsyncMock()) as health_check,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "openai/gpt-4o"},
+            model_info={"id": "non-team-deployment-id"},
+            user_api_key_dict=_internal_user(),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "not allowed to access model" in exc_info.value.detail["error"]
+    health_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_keeps_connection_overrides_admin_only():
+    from fastapi import HTTPException
+
+    """
+    A request that sets its own connection fields describes a different
+    endpoint than the configured one; probing that stays a management
+    operation, so an internal user is denied before any access check runs.
+    """
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = _configured_non_team_deployment()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.auth.auth_checks.can_key_call_model", AsyncMock(return_value=True)) as key_check,
+        patch("litellm.ahealth_check", AsyncMock()) as health_check,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={
+                "model": "openai/gpt-4o",
+                "api_base": "https://somewhere-else.invalid/v1",
+            },
+            model_info={"id": "non-team-deployment-id"},
+            user_api_key_dict=_internal_user(),
+        )
+
+    assert exc_info.value.status_code == 403
+    key_check.assert_not_awaited()
+    health_check.assert_not_awaited()

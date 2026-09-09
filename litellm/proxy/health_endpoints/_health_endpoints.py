@@ -1961,6 +1961,69 @@ async def health_liveliness_options():
     return Response(headers=response_headers, status_code=200)
 
 
+async def _authorize_test_connection(
+    *,
+    model_params: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Any,
+    premium_user: bool,
+    llm_router: Any,
+    configured_model_name: str | None,
+    request_litellm_params: Mapping[str, object],
+) -> None:
+    """Decide whether the caller may probe this model.
+
+    Proxy admins and team admins may probe any model they manage, as before.
+    Any other user may probe a configured model they are allowed to call, but
+    only as configured: a request that sets its own connection fields describes
+    a different endpoint, and probing that stays a management operation.
+    """
+    from litellm.proxy.auth.auth_checks import (
+        can_key_call_model,
+        can_user_call_model,
+        get_user_object,
+    )
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+    from litellm.proxy.proxy_server import llm_model_list, user_api_key_cache
+
+    try:
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=model_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+        )
+        return
+    except HTTPException as management_denial:
+        if management_denial.status_code != 403:
+            raise
+        if configured_model_name is None or any(field in request_litellm_params for field in _CONFIG_CONNECTION_FIELDS):
+            raise
+
+    try:
+        await can_key_call_model(
+            model=configured_model_name,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+        user_object = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+        )
+        await can_user_call_model(
+            model=configured_model_name,
+            llm_router=llm_router,
+            user_object=user_object,
+        )
+    except ProxyException as e:
+        raise HTTPException(status_code=403, detail={"error": str(e.message)}) from e
+
+
 @router.post(
     "/health/test_connection",
     tags=["health"],
@@ -2047,9 +2110,6 @@ async def test_model_connection(
         dict: A dictionary containing the health check result with either success information or error details.
     """
     from litellm.proxy._types import CommonProxyErrors
-    from litellm.proxy.management_endpoints.model_management_endpoints import (
-        ModelManagementAuthChecks,
-    )
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -2079,6 +2139,7 @@ async def test_model_connection(
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
         loaded_model_info: dict | None = None
+        configured_model_name: str | None = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -2098,6 +2159,7 @@ async def test_model_connection(
                 if deployment_by_id is not None:
                     config_litellm_params = deployment_by_id.litellm_params.model_dump(exclude_none=True)
                     loaded_model_info = deployment_by_id.model_info.model_dump(exclude_none=True)
+                    configured_model_name = deployment_by_id.model_name
                 elif model_name:
                     # Fall back to model_name lookup for callers (e.g. the
                     # "Add Model" wizard, or curl) that don't supply an id.
@@ -2120,6 +2182,7 @@ async def test_model_connection(
                         # variables from proxy config.
                         config_litellm_params = dict(deployments[0].get("litellm_params", {}))
                         loaded_model_info = dict(deployments[0].get("model_info") or {})
+                        configured_model_name = deployments[0].get("model_name")
             except Exception as e:
                 verbose_proxy_logger.debug(
                     "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
@@ -2142,7 +2205,7 @@ async def test_model_connection(
         )
 
         ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
-        await ModelManagementAuthChecks.can_user_make_model_call(
+        await _authorize_test_connection(
             model_params=Deployment(
                 model_name="test_model",
                 litellm_params=LiteLLM_Params(**litellm_params),
@@ -2151,6 +2214,9 @@ async def test_model_connection(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            llm_router=llm_router,
+            configured_model_name=configured_model_name,
+            request_litellm_params=request_litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
 
