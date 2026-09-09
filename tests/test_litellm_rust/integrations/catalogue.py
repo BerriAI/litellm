@@ -127,6 +127,17 @@ class CoverageObligation:
     behavioral_cases: tuple[str, ...]
 
 
+REQUIRED_LOGGER_BEHAVIOR: Final = frozenset({"generic_api", "gcs_bucket", "literalai", "prometheus", "opentelemetry"})
+REQUIRED_GUARDRAIL_BEHAVIOR: Final = frozenset(
+    {
+        "azure/text_moderations",
+        "crowdstrike_aidr",
+        "litellm_content_filter",
+        "microsoft_purview",
+        "rubrik",
+    }
+)
+
 LOGGER_BEHAVIORAL_CASES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "generic_api": ("generic-api-success",),

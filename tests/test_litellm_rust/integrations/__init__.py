@@ -5,6 +5,8 @@ from tests.test_litellm_rust.integrations.catalogue import (
     GUARDRAIL_OBLIGATIONS,
     LOGGER_OBLIGATIONS,
     OSS_LOGGER_NAMES,
+    REQUIRED_GUARDRAIL_BEHAVIOR,
+    REQUIRED_LOGGER_BEHAVIOR,
 )
 from tests.test_litellm_rust.integrations.harness import (
     AsyncBoundaryLogger,
@@ -50,6 +52,8 @@ __all__ = (
     "OCR_ASYNC",
     "OCR_SYNC",
     "OSS_LOGGER_NAMES",
+    "REQUIRED_GUARDRAIL_BEHAVIOR",
+    "REQUIRED_LOGGER_BEHAVIOR",
     "AsyncBoundaryLogger",
     "GCSLiteralAIHarness",
     "GenericAPIExportHarness",

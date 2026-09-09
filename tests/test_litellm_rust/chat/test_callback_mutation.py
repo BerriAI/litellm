@@ -265,25 +265,36 @@ async def test_native_chat_concurrent_calls_keep_callback_roots_isolated(
     recording_server: RecordingServer,
 ) -> None:
     import asyncio
+    import threading
 
     from litellm.integrations.custom_logger import CustomLogger
+    from tests.test_litellm_rust.support.callback_recorder import drain_logging
     from tests.test_litellm_rust.support.requests import MESSAGES_RESPONSE
 
     call_ids: Final = tuple(f"chat-{index}" for index in range(4))
     recording_server.expected_requests = len(call_ids)
-    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    accepted: Final = tuple(threading.Event() for _ in call_ids)
+    release: Final = threading.Event()
+    for signal in accepted:
+        recording_server.enqueue(ResponseSpec(body=MESSAGES_RESPONSE, accepted=signal, release_before_response=release))
+    tokens: Final = {call_id: object() for call_id in call_ids}
+    terminal_state: Final = []
 
     class Correlate(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             body: Final = kwargs["additional_args"]["complete_input_dict"]
-            body["messages"][0]["content"][0]["text"] = kwargs["litellm_call_id"]
+            body["messages"][0]["content"][0]["text"] = f"callback-{kwargs['litellm_call_id']}"
+            kwargs["correlation-token"] = tokens[kwargs["litellm_call_id"]]
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            terminal_state.append((kwargs["litellm_call_id"], kwargs["correlation-token"]))
 
     logger: Final = Correlate()
 
     async def invoke(call_id: str) -> None:
         await litellm.acompletion(
             model="anthropic/claude-opus-5",
-            messages=[{"role": "user", "content": call_id}],
+            messages=[{"role": "user", "content": f"original-{call_id}"}],
             max_tokens=16,
             api_key="test-key",
             api_base=recording_server.base_url,
@@ -292,10 +303,18 @@ async def test_native_chat_concurrent_calls_keep_callback_roots_isolated(
             num_retries=0,
         )
 
-    await asyncio.gather(*(invoke(call_id) for call_id in call_ids))
+    tasks: Final = tuple(asyncio.create_task(invoke(call_id)) for call_id in call_ids)
+    try:
+        assert all(await asyncio.gather(*(asyncio.to_thread(signal.wait, 3) for signal in accepted)))
+    finally:
+        release.set()
+    await asyncio.gather(*tasks)
+    await drain_logging()
 
     sent: Final = {request.body["messages"][0]["content"][0]["text"] for request in recording_server.requests}
-    assert sent == set(call_ids)
+    assert sent == {f"callback-{call_id}" for call_id in call_ids}
+    assert len(terminal_state) == len(call_ids)
+    assert all(token is tokens[call_id] for call_id, token in terminal_state)
 
 
 @pytest.mark.asyncio
