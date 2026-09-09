@@ -1139,7 +1139,10 @@ async def get_file(
                 include_internal_credentials=True,
             )
 
-            response = await litellm.afile_retrieve(**data)
+            response = await litellm.afile_retrieve(
+                custom_llm_provider=credentials["custom_llm_provider"],
+                **data,
+            )
 
             # Keep the encoded ID in response if it was originally encoded
             if original_file_id and response and hasattr(response, "id") and response.id:
