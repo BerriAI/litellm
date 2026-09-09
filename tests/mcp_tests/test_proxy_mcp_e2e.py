@@ -471,6 +471,7 @@ class ProxyCallRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.events: queue.Queue[str] = queue.Queue()
+        self.failures: queue.Queue[str] = queue.Queue()
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
@@ -478,6 +479,13 @@ class ProxyCallRecorder(CustomLogger):
         payload = kwargs.get("standard_logging_object")
         if isinstance(payload, dict) and payload.get("call_type") == "call_mcp_tool":
             self.events.put(json.dumps(payload, default=str))
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        payload = kwargs.get("standard_logging_object")
+        if isinstance(payload, dict) and payload.get("call_type") == "call_mcp_tool":
+            self.failures.put(json.dumps(payload, default=str))
 
 
 proxy_call_recorder = ProxyCallRecorder()
@@ -635,6 +643,28 @@ class TestProxyMcpAuthorizationScope:
             assert payload["metadata"]["mcp_tool_call_metadata"]["mcp_server_name"] == "math_restricted"
             assert payload["metadata"]["mcp_tool_call_metadata"]["name"] == "add"
             assert payload["metadata"]["mcp_tool_call_metadata"]["namespaced_tool_name"] == "math_restricted/add"
+
+    @pytest.mark.asyncio
+    async def test_proxy_scope_exception_returns_iserror_and_emits_failure_log(self, proxy_server_url: str) -> None:
+        async with _scoped_session(
+            proxy_server_url,
+            "sk-none",
+            **{"x-mcp-servers": "math_restricted", "x-litellm-call-id": "proxy-scope-denial"},
+        ) as session:
+            result = await session.call_tool("call_tool", {"tool_id": "denied-scope", "arguments": {}})
+            assert result.isError is True
+            assert result.content[0].text == (
+                "Error: The key is not allowed to access the requested MCP servers: math_restricted"
+            )
+            async with asyncio.timeout(10):
+                while True:
+                    payload = json.loads(await asyncio.to_thread(proxy_call_recorder.failures.get, True, 5))
+                    if payload["id"] == "proxy-scope-denial":
+                        break
+            assert payload["call_type"] == "call_mcp_tool"
+            assert payload["status"] == "failure"
+            assert payload["response_cost"] == 0
+            assert "math_restricted" in payload["error_str"]
 
     @pytest.mark.parametrize("arguments", ["wrong", False, None, [], 0])
     def test_handler_rejects_non_object_arguments(
