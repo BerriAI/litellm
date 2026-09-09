@@ -41,6 +41,20 @@ export const excludeProxyWideSentinel = (models: string[]): string[] =>
 export const hasAllModelsSentinel = (models: string[]): boolean =>
   models.includes("all-proxy-models") || models.includes("all-team-models");
 
+const MODEL_ACCESS_SENTINELS = ["all-proxy-models", "all-team-models", "no-default-models"] as const;
+
+export const isModelAccessSentinel = (model: string): boolean =>
+  MODEL_ACCESS_SENTINELS.some((sentinel) => sentinel === model);
+
+export const hasModelAccessSentinel = (models: string[]): boolean => models.some(isModelAccessSentinel);
+
+export const normalizeModelAccessSelection = (models: string[], previousModels: string[]): string[] => {
+  const newlySelectedSentinel = models.find((model) => isModelAccessSentinel(model) && !previousModels.includes(model));
+  if (newlySelectedSentinel) return [newlySelectedSentinel];
+  const selectedSentinel = models.find(isModelAccessSentinel);
+  return selectedSentinel ? [selectedSentinel] : models;
+};
+
 export const getModelDisplayName = (model: string) => {
   if (model === "all-proxy-models") {
     return "All Proxy Models";

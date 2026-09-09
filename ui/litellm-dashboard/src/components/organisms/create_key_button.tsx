@@ -57,7 +57,9 @@ import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRa
 import {
   excludeProxyWideSentinel,
   getModelDisplayName,
-  hasAllModelsSentinel,
+  hasModelAccessSentinel,
+  isModelAccessSentinel,
+  normalizeModelAccessSelection,
 } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -632,11 +634,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     ...(selectedProjectId === null && !selectedCreateKeyTeam
       ? [{ value: "all-proxy-models", label: "All Proxy Models" }]
       : []),
-    ...modelsToPick.map((model) => ({
-      value: model,
-      label: getModelDisplayName(model),
-      disabled: hasAllModelsSentinel(selectedModels),
-    })),
+    { value: "no-default-models", label: "No Direct Models" },
+    ...modelsToPick
+      .filter((model) => !isModelAccessSentinel(model))
+      .map((model) => ({
+        value: model,
+        label: getModelDisplayName(model),
+        disabled: hasModelAccessSentinel(selectedModels),
+      })),
   ];
 
   const changeKeyType = (write: FieldWrite) => (value: string) => {
@@ -887,7 +892,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     label={
                       <span>
                         Models{" "}
-                        <SimpleTooltip content="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team. Leave empty to allow access to all models.">
+                        <SimpleTooltip content="Select which models this key can access. Choose 'No Direct Models' for Access Group-only access. Leaving this empty allows access to all models.">
                           <Info className="ml-1 inline size-3.5 align-text-bottom" />
                         </SimpleTooltip>
                       </span>
@@ -896,7 +901,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     help={
                       keyType === "management" || keyType === "read_only"
                         ? "Models field is disabled for this key type"
-                        : "optional - leave empty to allow access to all models"
+                        : "Select No Direct Models for Access Group-only access. Leaving this empty allows all models"
                     }
                     className="mt-4"
                   >
@@ -907,14 +912,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         value={(control.value as string[] | undefined) ?? []}
                         placeholder="Select models"
                         disabled={keyType === "management" || keyType === "read_only"}
-                        onValueChange={(values) => {
-                          control.onChange(values);
-                          if (values.includes("all-team-models")) {
-                            form.setValue("models", ["all-team-models"]);
-                          } else if (values.includes("all-proxy-models")) {
-                            form.setValue("models", ["all-proxy-models"]);
-                          }
-                        }}
+                        onValueChange={(values) =>
+                          control.onChange(normalizeModelAccessSelection(values, selectedModels))
+                        }
                       />
                     )}
                   </MountedFormField>

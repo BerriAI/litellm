@@ -1530,6 +1530,7 @@ describe("KeyEditView", () => {
       });
 
       expect(screen.getAllByText("All Proxy Models").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("No Direct Models").length).toBeGreaterThan(0);
       expect(screen.queryAllByText("All Team Models")).toHaveLength(0);
     });
 
@@ -1561,8 +1562,40 @@ describe("KeyEditView", () => {
       });
 
       expect(screen.getAllByText("All Team Models").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("No Direct Models").length).toBeGreaterThan(0);
       expect(screen.queryAllByText("All Proxy Models")).toHaveLength(0);
       expect(screen.queryAllByText("all-proxy-models")).toHaveLength(0);
+    });
+
+    it("should save an Access Group-only key with no direct model grants", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken="test-token"
+          userID="user-123"
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await openModelsDropdown();
+      fireEvent.click(await screen.findByRole("option", { name: "gpt-4" }));
+      fireEvent.click(screen.getByRole("option", { name: "No Direct Models" }));
+
+      expect(screen.getByRole("option", { name: "gpt-4" })).toHaveAttribute("aria-disabled", "true");
+      await userEvent.keyboard("{Escape}");
+      fireEvent.change(screen.getByTestId("access-group-selector"), { target: { value: "ag-1" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].models).toEqual(["no-default-models"]);
+      expect(onSubmitMock.mock.calls[0][0].access_group_ids).toEqual(["ag-1"]);
     });
 
     it("should not offer all-team-models for a team key whose team has not loaded yet", async () => {

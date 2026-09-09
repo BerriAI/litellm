@@ -737,6 +737,7 @@ describe("CreateKey", () => {
       await userEvent.click(await screen.findByLabelText("Models"));
 
       expect(await screen.findByRole("option", { name: "All Proxy Models" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "No Direct Models" })).toBeInTheDocument();
       expect(screen.queryByRole("option", { name: "All Team Models" })).not.toBeInTheDocument();
     });
 
@@ -750,7 +751,30 @@ describe("CreateKey", () => {
       await userEvent.click(await screen.findByLabelText("Models"));
 
       expect(await screen.findByRole("option", { name: "All Team Models" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "No Direct Models" })).toBeInTheDocument();
       expect(screen.queryByRole("option", { name: "All Proxy Models" })).not.toBeInTheDocument();
+    });
+
+    it("creates an Access Group-only key with no direct model grants", async () => {
+      state.accessGroups = [{ access_group_id: "ag-1", access_group_name: "Group One" }];
+      await openModal();
+      await nameTheKey();
+
+      await userEvent.click(await screen.findByLabelText("Models"));
+      await userEvent.click(await screen.findByRole("option", { name: "gpt-4" }));
+      await userEvent.click(screen.getByRole("option", { name: "No Direct Models" }));
+
+      expect(screen.getByRole("option", { name: "gpt-4" })).toHaveAttribute("aria-disabled", "true");
+      await userEvent.keyboard("{Escape}");
+      await openSection(/Optional Settings/i);
+      await userEvent.click(await screen.findByLabelText("Select access groups (optional)"));
+      await userEvent.click(await screen.findByRole("option", { name: /Group One/ }));
+      await userEvent.keyboard("{Escape}");
+      await submit();
+
+      const payload = await createdPayload();
+      expect(payload.models).toEqual(["no-default-models"]);
+      expect(payload.access_group_ids).toEqual(["ag-1"]);
     });
   });
 
