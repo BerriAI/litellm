@@ -2305,6 +2305,29 @@ async def test_reservation_lease_keeps_renewing_after_transient_redis_failure(
 
 
 @pytest.mark.asyncio
+async def test_reservation_lease_stops_when_request_task_ends_without_reconciling(
+    spend_counter_state,
+):
+    """A request whose task ends without reconciling (client disconnect path that skips the
+    cost callbacks) must not keep renewing: the counter falls back to its plain TTL instead of
+    pinning the reservation until the request timeout."""
+    counter_cache, key_cache = spend_counter_state
+    redis_cache = _ExpiringRedisCache(default_ttl=0.2)
+    counter_cache.redis_cache = redis_cache
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-lease-orphan", spend=0.0, max_budget=1.0)
+    counter_key = "spend:key:key-lease-orphan"
+
+    reservation = await asyncio.create_task(_reserve(valid_token, 0.6, key_cache, proxy_logging_obj))
+    assert reservation is not None
+    assert reservation["finalized"] is False
+
+    await asyncio.sleep(0.5)
+    assert redis_cache.refresh_count == 0
+    assert await redis_cache.async_get_cache(key=counter_key) is None
+
+
+@pytest.mark.asyncio
 async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
     spend_counter_state,
 ):
