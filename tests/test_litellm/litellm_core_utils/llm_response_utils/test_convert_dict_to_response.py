@@ -167,9 +167,9 @@ def test_convert_missing_choices_raises_api_error() -> None:
     assert "no 'choices'" in str(exc_info.value)
 
 
-@pytest.mark.parametrize("choices", [{}, "", None, 0])
+@pytest.mark.parametrize(("choices", "type_name"), [({}, "dict"), ("", "str"), (None, "NoneType"), (0, "int")])
 @pytest.mark.asyncio
-async def test_convert_non_list_choices_raises_api_error(choices: object) -> None:
+async def test_convert_non_list_choices_raises_api_error(choices: object, type_name: str) -> None:
     from litellm.exceptions import APIError
     from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
         convert_to_streaming_response,
@@ -183,14 +183,15 @@ async def test_convert_non_list_choices_raises_api_error(choices: object) -> Non
         "object": "chat.completion",
         "choices": choices,
     }
-    with pytest.raises(APIError, match="no 'choices'"):
+    expected: Final = f"'choices' that is not a list \\({type_name}\\)"
+    with pytest.raises(APIError, match=expected):
         convert_to_model_response_object(
             response_object=resp,
             model_response_object=ModelResponse(),
             response_type="completion",
         )
-    with pytest.raises(APIError, match="no 'choices'"):
+    with pytest.raises(APIError, match=expected):
         list(convert_to_streaming_response(response_object=resp))
-    with pytest.raises(APIError, match="no 'choices'"):
+    with pytest.raises(APIError, match=expected):
         async for _ in convert_to_streaming_response_async(response_object=resp):
             pass
