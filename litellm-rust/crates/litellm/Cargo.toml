@@ -1,0 +1,26 @@
+[package]
+name = "litellm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LiteLLM Rust SDK and AI gateway CLI"
+readme = "README.md"
+
+[lib]
+name = "litellm"
+
+[[bin]]
+name = "litellm"
+path = "src/main.rs"
+required-features = ["gateway"]
+
+[dependencies]
+litellm-core = { workspace = true, features = ["bedrock-auth"] }
+litellm-ai-gateway = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"], optional = true }
+
+[features]
+default = ["gateway"]
+gateway = ["dep:litellm-ai-gateway", "dep:tokio", "litellm-ai-gateway/server"]
+python-config = ["gateway", "litellm-ai-gateway/python-config"]

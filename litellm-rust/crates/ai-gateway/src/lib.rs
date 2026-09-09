@@ -13,6 +13,8 @@ pub mod io;
 #[cfg(feature = "server")]
 pub mod routes;
 #[cfg(feature = "server")]
+pub mod server;
+#[cfg(feature = "server")]
 pub mod state;
 
 mod constants;
