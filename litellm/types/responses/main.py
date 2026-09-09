@@ -27,6 +27,20 @@ class OutputText(BaseLiteLLMOpenAIResponseObject):
     annotations: list[GenericResponseOutputItemContentAnnotation] | None
 
 
+class OutputReasoningText(BaseLiteLLMOpenAIResponseObject):
+    """Reasoning text content inside a ``reasoning`` output item.
+
+    Distinct from :class:`OutputText`: the Responses API types a reasoning
+    item's content parts as ``reasoning_text`` with a ``text`` field and no
+    annotations, while a message's content parts are ``output_text``. Emitting
+    the latter inside a reasoning item makes ``openai-python`` warn on every
+    reasoning-bearing response.
+    """
+
+    type: Literal["reasoning_text"]
+    text: str | None
+
+
 class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     """A tool call to run a function"""
 
@@ -110,7 +124,9 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     id: str
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
-    content: list[OutputText]
+    # `reasoning` items carry `reasoning_text` parts; `message` items carry
+    # `output_text` ones.
+    content: list[Union[OutputText, OutputReasoningText]]
     phase: Phase = None
 
 

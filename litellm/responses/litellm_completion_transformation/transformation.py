@@ -78,6 +78,7 @@ from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
+    OutputReasoningText,
     OutputText,
 )
 from litellm.types.utils import (
@@ -1305,8 +1306,9 @@ class LiteLLMCompletionResponsesConfig:
         Plaintext a ResponseReasoningItemParam carries in ``content``.
 
         Handles content as a string and content as a list of blocks
-        (output_text / summary_text / text). Returns None when the item has
-        no content, or only opaque blocks (e.g. encrypted_content).
+        (reasoning_text / output_text / summary_text / text). Returns None when
+        the item has no content, or only opaque blocks (e.g.
+        encrypted_content).
         """
         content: Final[object] = input_item.get("content")
         if isinstance(content, str) and content.strip():
@@ -2401,11 +2403,17 @@ class LiteLLMCompletionResponsesConfig:
                                 choice.finish_reason
                             ),
                             role="assistant",
+                            # `reasoning_text`, not `output_text`: the
+                            # Responses API types a reasoning item's content
+                            # parts differently from a message's. Emitting
+                            # `output_text` here is accepted on the wire but
+                            # makes `openai-python` raise a
+                            # PydanticSerializationUnexpectedValue warning for
+                            # every reasoning-bearing response.
                             content=[
-                                OutputText(
-                                    type="output_text",
+                                OutputReasoningText(
+                                    type="reasoning_text",
                                     text=text,
-                                    annotations=[],
                                 )
                                 for text in (reasoning_content,)
                                 if text

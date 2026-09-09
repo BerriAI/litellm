@@ -1,6 +1,8 @@
 import json
+import warnings
 
 import pytest
+from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 
 
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -332,7 +334,7 @@ class TestLiteLLMCompletionResponsesConfig:
         assert reasoning_item.status == "completed"
         assert reasoning_item.role == "assistant"
         assert len(reasoning_item.content) == 1
-        assert reasoning_item.content[0].type == "output_text"
+        assert reasoning_item.content[0].type == "reasoning_text"
         assert "step by step" in reasoning_item.content[0].text
         assert "42" in reasoning_item.content[0].text
 
@@ -343,6 +345,69 @@ class TestLiteLLMCompletionResponsesConfig:
 
         message_item = message_items[0]
         assert message_item.content[0].text == "The answer is 42."
+        # A message's parts stay `output_text`; only the reasoning item changes.
+        assert message_item.content[0].type == "output_text"
+
+    def test_reasoning_content_part_validates_against_the_openai_reasoning_item(self):
+        """A reasoning item must survive openai-python's own model without warnings.
+
+        The Responses API types a reasoning item's content parts as
+        `reasoning_text` with a `text` field, while a message's parts are
+        `output_text` with annotations. Emitting the latter inside a reasoning
+        item is accepted on the wire, so the response is usable, but
+        `openai-python` then raises a PydanticSerializationUnexpectedValue
+        warning for every affected field on every reasoning-bearing response:
+
+            Expected `literal['reasoning_text']` - serialized value may not be
+            as expected [field_name='type', input_value='output_text']
+        """
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="42.",
+                        role="assistant",
+                        reasoning_content="Working it out.",
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="What is the meaning of life?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        reasoning_item = next(
+            item for item in responses_api_response.output if item.type == "reasoning"
+        )
+        part = reasoning_item.content[0].model_dump()
+
+        assert part["type"] == "reasoning_text"
+        assert part["text"] == "Working it out."
+        # `annotations` belongs to `output_text`, not to a reasoning part.
+        assert "annotations" not in part
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ResponseReasoningItem.model_validate(
+                {
+                    "id": "rs_test",
+                    "type": "reasoning",
+                    "summary": [],
+                    "content": [part],
+                }
+            ).model_dump()
+
+        unexpected = [w for w in caught if "reasoning_text" in str(w.message)]
+        assert not unexpected, f"openai-python warned on the reasoning part: {unexpected}"
 
     def test_transform_chat_completion_response_without_reasoning_content(self):
         """Test that transformation works normally when no reasoning content is present"""
