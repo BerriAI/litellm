@@ -379,3 +379,15 @@ async def test_async_post_call_success_hook_safe_exception_handling():
     resp = SimpleNamespace(choices=[BrokenChoice()])
     g = SpandaGuardrail()
     await g.async_post_call_success_hook({}, None, resp)
+
+
+def test_evaluate_texts_json_serializable():
+    import json
+
+    g = SpandaGuardrail()
+    result = g.evaluate_texts(["The capital of France is Paris.", "Berlin is the capital of Germany."])
+    encoded = json.dumps(result)
+    decoded = json.loads(encoded)
+    assert decoded["decision"] == "FLAG_HIGH_UNCERTAINTY"
+    assert "rsc" in decoded
+    assert isinstance(decoded["rsc"], float)

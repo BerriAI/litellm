@@ -13,8 +13,9 @@ import difflib
 import importlib.util
 import re
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Literal
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -24,6 +25,16 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+
+class SpandaReceipt(TypedDict):
+    rsc: ReadOnly[float]
+    grounding_residual: ReadOnly[float]
+    is_safe: ReadOnly[bool]
+    decision: ReadOnly[str]
+    tier_used: ReadOnly[int]
+    samples_analyzed: ReadOnly[int]
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -161,7 +172,6 @@ class SpandaGuardrail(CustomGuardrail):
     ) -> list[GuardrailEventHooks]:  # mutable-ok: overrides CustomGuardrail signature
         return [  # mutable-ok: framework expects list
             GuardrailEventHooks.post_call,
-            GuardrailEventHooks.logging_only,
         ]
 
     @staticmethod
@@ -201,16 +211,14 @@ class SpandaGuardrail(CustomGuardrail):
         is_safe: Final[bool] = outcome[0]
         decision: Final[str] = outcome[1]
 
-        receipt_dict: Final = MappingProxyType(
-            {
-                "rsc": round(rsc, 4),
-                "grounding_residual": round(gr, 4),
-                "is_safe": is_safe,
-                "decision": decision,
-                "tier_used": 2 if gr > 0 else 1,
-                "samples_analyzed": len(texts),
-            }
-        )
+        receipt_dict: Final[SpandaReceipt] = {
+            "rsc": round(rsc, 4),
+            "grounding_residual": round(gr, 4),
+            "is_safe": is_safe,
+            "decision": decision,
+            "tier_used": 2 if gr > 0 else 1,
+            "samples_analyzed": len(texts),
+        }
         return receipt_dict
 
     def _extract_context(self, data: Mapping[str, object]) -> str | None:
