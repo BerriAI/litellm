@@ -15,32 +15,39 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from itertools import chain, repeat
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 import pytest
-
 from e2e_config import parse_replica_urls
 from e2e_http import Result, Success
 from models import KeyInfo, KeyInfoResponse, ModelInfoEntry, ModelInfoResponse, ModelListEntry, ModelsListResponse
 from proxy_client import (
     BodyReader,
     BodyConverged,
-    NeverConvergedOn,
+    BodyNeverConvergedOn,
     await_body_converged_everywhere,
-    Poller,
     ConvergeOutcome,
     Converged,
+    EverywhereConverged,
     ModelsPoller,
+    NeverConvergedOn,
     NotConverged,
     NotServableOn,
+    Poller,
+    ProxyClient,
+    ReplicaRead,
     Servable,
     await_converged_everywhere,
+    await_everywhere,
     await_servable_everywhere,
-    first_lagging_replica,
+    build_proxy_client,
     converge_timeout_message,
+    first_lagging_replica,
 )
+from transport import Transport
 
 MODEL: Final = "gpt-under-test"
+_NO_TRANSPORTS: Final = cast(Transport, None)
 TIMEOUT: Final = 10.0
 INTERVAL: Final = 2.0
 RPM_BEFORE_UPDATE: Final = 100
@@ -193,6 +200,86 @@ class TestParseReplicaUrls:
         assert parse_replica_urls("", "http://lb") == ("http://lb",)
 
 
+def _answers(answers: Iterable[str]) -> ReplicaRead[str]:
+    it: Final = iter(answers)
+    return lambda _timeout: next(it)
+
+
+def _await_everywhere(reads: Mapping[str, ReplicaRead[str]]) -> EverywhereConverged[str] | NeverConvergedOn[str]:
+    clock: Final = FakeClock()
+    return await_everywhere(
+        reads,
+        settled=lambda answer: answer == "renamed",
+        timeout=TIMEOUT,
+        interval=INTERVAL,
+        request_timeout=5.0,
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+
+class TestAwaitEverywhere:
+    def test_waits_for_the_lagging_replica_and_returns_every_settled_answer(self) -> None:
+        reads: Final = {
+            "gateway-1": _answers(repeat("renamed")),
+            "gateway-2": _answers(chain(repeat("stale", 2), repeat("renamed"))),
+        }
+        outcome: Final = _await_everywhere(reads)
+        assert isinstance(outcome, EverywhereConverged)
+        assert dict(outcome.answers) == {"gateway-1": "renamed", "gateway-2": "renamed"}
+
+    def test_names_the_replica_that_never_converges_with_what_it_last_served(self) -> None:
+        reads: Final = {
+            "gateway-1": _answers(repeat("renamed")),
+            "gateway-2": _answers(repeat("stale")),
+        }
+        assert _await_everywhere(reads) == NeverConvergedOn(replica="gateway-2", last="stale")
+
+    def test_polls_until_the_deadline_before_giving_up(self) -> None:
+        lagging: Final = chain(repeat("stale", int(TIMEOUT / INTERVAL)), repeat("renamed"))
+        outcome: Final = _await_everywhere({"gateway-1": _answers(lagging)})
+        assert isinstance(outcome, EverywhereConverged), outcome
+
+
+class TestReplicasFor:
+    def test_split_deployment_reads_management_routes_back_from_the_control_plane(self) -> None:
+        client: Final = build_proxy_client(
+            base_url="http://lb",
+            control_plane_base_url="http://backend",
+            replica_urls=("http://gateway-1", "http://gateway-2"),
+        )
+        assert set(client.replicas_for("/key/info")) == {"http://backend"}
+        assert set(client.replicas_for("/v1/models")) == {"http://gateway-1", "http://gateway-2"}
+
+    def test_monolith_reads_management_routes_back_from_every_replica(self) -> None:
+        client: Final = build_proxy_client(
+            base_url="http://lb",
+            control_plane_base_url="http://lb",
+            replica_urls=("http://pod-1", "http://pod-2"),
+        )
+        assert set(client.replicas_for("/key/info")) == {"http://pod-1", "http://pod-2"}
+
+    def test_mcp_admin_routes_read_back_from_every_data_plane_replica(self) -> None:
+        """/v1/mcp/* is a lazily mounted feature, so a data-plane replica serves it
+        too and answers from its own in-memory registry. Routing it to the control
+        plane would leave every replica but that one unproven, and would move the
+        tools/list barrier in mcp_client off the plane that serves tools/list."""
+        client: Final = build_proxy_client(
+            base_url="http://lb",
+            control_plane_base_url="http://backend",
+            replica_urls=("http://gateway-1", "http://gateway-2"),
+        )
+        assert set(client.replicas_for("/v1/mcp/server/abc")) == {"http://gateway-1", "http://gateway-2"}
+        assert set(client.replicas_for("/v1/mcp/toolset/abc")) == {"http://gateway-1", "http://gateway-2"}
+
+    def test_a_route_no_replica_serves_is_refused_rather_than_read_back_vacuously(self) -> None:
+        """A read-back over zero replicas would satisfy every predicate and assert
+        nothing, so asking for one fails instead of passing silently."""
+        client: Final = ProxyClient(transport=_NO_TRANSPORTS, replicas={}, control_replicas={})
+        with pytest.raises(AssertionError, match="no replica is configured"):
+            _ = client.replicas_for("/v1/models")
+
+
 def _info(*model_names: str) -> Success[ModelInfoResponse]:
     entries: Final = [ModelInfoEntry(model_name=model_name) for model_name in model_names]
     return Success(status_code=200, data=ModelInfoResponse(data=entries))
@@ -209,7 +296,7 @@ def _lists_model(body: ModelInfoResponse) -> bool:
 
 def _read_back(
     readers: Mapping[str, BodyReader[ModelInfoResponse]],
-) -> tuple[BodyConverged[ModelInfoResponse] | NeverConvergedOn[ModelInfoResponse], FakeClock]:
+) -> tuple[BodyConverged[ModelInfoResponse] | BodyNeverConvergedOn[ModelInfoResponse], FakeClock]:
     clock: Final = FakeClock()
     outcome: Final = await_body_converged_everywhere(
         readers,
@@ -240,5 +327,5 @@ class TestAwaitBodyConvergedEverywhere:
             "gateway-2": _reader(repeat(_info(MODEL))),
         } | {lagging: _reader(repeat(_info()))}
         outcome, clock = _read_back(readers)
-        assert outcome == NeverConvergedOn(replica=lagging, last_result=_info())
+        assert outcome == BodyNeverConvergedOn(replica=lagging, last_result=_info())
         assert clock.elapsed >= TIMEOUT

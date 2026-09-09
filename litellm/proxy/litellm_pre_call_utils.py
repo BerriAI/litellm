@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
@@ -24,9 +25,11 @@ from litellm.constants import (
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -158,6 +161,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
+    StandardCallbackDynamicParams,
     StandardLoggingUserAPIKeyMetadata,
     SupportedCacheControls,
 )
@@ -171,6 +175,7 @@ _ENABLE_TEAM_STALE_ALIAS_BYPASS: bool | None = None
 
 
 if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
 
@@ -290,6 +295,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
     "proxy_server_request",
@@ -971,6 +977,145 @@ def _get_dynamic_logging_metadata(
             team_id=user_api_key_dict.team_id, proxy_config=proxy_config
         )
     return callback_settings_obj
+
+
+_TENANT_OTEL_PARAMS: Final = TypeAdapter(StandardCallbackDynamicParams)
+
+
+def _tenant_otel_params(callback_vars: Mapping[str, str]) -> StandardCallbackDynamicParams:
+    try:
+        return _TENANT_OTEL_PARAMS.validate_python(callback_vars)
+    except PydanticValidationError:
+        return StandardCallbackDynamicParams()
+
+
+_NO_REQUEST_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def _dynamically_disabled_backends(
+    user_api_key_dict: UserAPIKeyAuth,
+    request_headers: Mapping[str, str] | None,
+) -> frozenset[str]:
+    """The callbacks this request turned off, read the way dispatch reads them.
+
+    Same sources, precedence, and premium gate ``EnterpriseCallbackControls`` applies
+    before it skips a callback: the ``x-litellm-disable-callbacks`` header wins over the
+    key's stored list, team settings are not a source, and a non-premium proxy honours
+    neither. A destination has to agree with that decision, or a backend the key turned
+    off would still be exported to, now through the fan-out instead of the callback.
+    """
+    from litellm.proxy.proxy_server import premium_user
+
+    if litellm.allow_dynamic_callback_disabling is not True or not premium_user:
+        return frozenset()
+    header: Final = (request_headers if request_headers is not None else _NO_REQUEST_HEADERS).get(
+        X_LITELLM_DISABLE_CALLBACKS
+    )
+    if header is not None:
+        return frozenset(name.strip().lower() for name in header.split(","))
+    metadata: Final = user_api_key_dict.metadata
+    disabled: Final = metadata.get("litellm_disabled_callbacks") if metadata else None
+    if not isinstance(disabled, list):
+        return frozenset()
+    return frozenset(name.lower() for name in disabled if isinstance(name, str))
+
+
+def resolve_tenant_otel_destinations(
+    user_api_key_dict: UserAPIKeyAuth,
+    request_headers: Mapping[str, str] | None = None,
+) -> "tuple[OtelDestination, ...]":
+    """The OTLP destinations this request's key or team config overrides its traces to.
+
+    Key settings win over team settings outright, the same precedence
+    ``_get_dynamic_logging_metadata`` applies, so one caller never exports the same
+    backend to two accounts. An empty key-level list counts as configured, since that
+    is what disabling a key's callbacks writes. Returns empty when OTEL V2 is off, when
+    neither level named a destination-capable backend, or when the config is
+    incomplete, and the request then keeps the operator's own exporters.
+
+    Two entries naming the same backend merge their ``callback_vars`` last-wins, the
+    way ``convert_key_logging_metadata_to_callback`` merges them, so the destination
+    and the per-request tracer routing cannot read one config two ways.
+
+    A ``failure``-only entry is skipped: a destination is resolved during auth, before
+    the request has an outcome, so honouring the filter would mean holding every span
+    back until the call finishes. Those entries keep today's behaviour instead, where
+    the tenant's credentials reach the backend through per-request tracer routing and
+    the operator's exporter is left alone. Its ``callback_vars`` still take part in the
+    merge for a backend another entry made eligible, so the destination carries the
+    same credentials the runtime parser resolves for that request.
+
+    A backend the request disabled dynamically, through the key's
+    ``litellm_disabled_callbacks`` or the ``x-litellm-disable-callbacks`` header in
+    ``request_headers``, resolves to no destination, so the fan-out never carries the
+    request tree to that account and the operator's exporter is never suppressed for
+    it. That leaves the request exactly where it stood before destinations existed:
+    the OTel V2 logger itself is not on the disable list's class registry, so its own
+    span still routes to the tenant's credentials the way it did then.
+    """
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.presets.destinations import destination_for
+
+    if not is_otel_v2_enabled():
+        return ()
+    key_entries: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
+    entries: Final = (
+        key_entries
+        if key_entries is not None
+        else KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(user_api_key_dict)
+    )
+    if not entries:
+        return ()
+    disabled: Final = _dynamically_disabled_backends(user_api_key_dict, request_headers)
+    callbacks: Final = tuple(
+        callback
+        for item in entries
+        if (callback := _get_validated_callback_metadata(item=item, source="otel-destination")) is not None
+        if callback.callback_name.lower() not in disabled
+    )
+    return tuple(
+        destination
+        for name in dict.fromkeys(
+            callback.callback_name for callback in callbacks if callback.callback_type != "failure"
+        )
+        if (
+            destination := destination_for(
+                name,
+                _tenant_otel_params(
+                    MappingProxyType(
+                        {
+                            var: value
+                            for callback in callbacks
+                            if callback.callback_name == name
+                            for var, value in callback.callback_vars.items()
+                        }
+                    )
+                ),
+                _tenant_service_name(user_api_key_dict),
+            )
+        )
+        is not None
+    )
+
+
+def _tenant_service_name(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    """The ``service.name`` this key or team configured, the key winning over its team.
+
+    Same fields and same precedence the request-metadata build applies, read straight
+    off the auth object because destinations resolve during auth, before that metadata
+    is assembled.
+    """
+    sources: Final = (user_api_key_dict.metadata, user_api_key_dict.team_metadata)
+    return next(
+        (
+            stripped
+            for source in sources
+            if source
+            for field in OTEL_SERVICE_NAME_METADATA_KEYS
+            if isinstance(value := source.get(field), str) and (stripped := value.strip())
+        ),
+        None,
+    )
 
 
 def clean_headers(
@@ -3078,10 +3223,9 @@ def _apply_resolved_guardrails_to_metadata(
     if metadata_variable_name not in data:
         data[metadata_variable_name] = {}
 
-    # Track pipeline-managed guardrails to exclude from independent execution
-    pipeline_managed_guardrails: set = set()
+    # Record the pipelines and the guardrails they step; the hook loops skip those per pipeline mode
     if pipelines:
-        pipeline_managed_guardrails = PolicyResolver.get_pipeline_managed_guardrails(pipelines)
+        pipeline_managed_guardrails: Final = PolicyResolver.get_pipeline_managed_guardrails(pipelines)
         data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
         data[metadata_variable_name]["_pipeline_managed_guardrails"] = pipeline_managed_guardrails
         verbose_proxy_logger.debug(
@@ -3098,10 +3242,8 @@ def _apply_resolved_guardrails_to_metadata(
         existing_guardrails = []
 
     # Combine existing guardrails with policy-resolved guardrails (no duplicates)
-    # Exclude pipeline-managed guardrails from the flat list
     combined = set(existing_guardrails)
     combined.update(resolved_guardrails)
-    combined -= pipeline_managed_guardrails
     data[metadata_variable_name]["guardrails"] = list(combined)
 
     verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", list(combined))
