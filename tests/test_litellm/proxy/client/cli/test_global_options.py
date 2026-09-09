@@ -1,13 +1,15 @@
 # stdlib imports
 import json
 import os
+import shutil
+import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 from click.testing import CliRunner
-
-
 
 import litellm.proxy.client.cli
 from litellm._version import version as litellm_version
@@ -33,6 +35,56 @@ def test_cli_version_flag(cli_runner):
     assert f"LiteLLM Proxy CLI Version: {litellm_version}" in result.output
     assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
     assert "LiteLLM Proxy Server Version: 1.2.3" in result.output
+
+
+def test_lite_version_does_not_fetch_model_cost_map():
+    lite_path = shutil.which("lite")
+    if lite_path is None:
+        pytest.skip("lite executable is unavailable")
+
+    requests = []
+
+    class _CostMapHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            body = b'{"test-model": {"litellm_provider": "openai", "mode": "chat"}}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _CostMapHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        env = {key: value for key, value in os.environ.items() if key != "LITELLM_LOCAL_MODEL_COST_MAP"}
+        source_root = str(Path(__file__).resolve().parents[5])
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, (source_root, env.get("PYTHONPATH"))))
+        env.update(
+            {
+                "LITELLM_MODEL_COST_MAP_URL": f"http://127.0.0.1:{server.server_port}/map.json",
+                "LITELLM_PROXY_URL": "http://127.0.0.1:9",
+            }
+        )
+        result = subprocess.run(
+            [lite_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+
+    assert result.returncode == 0
+    assert "LiteLLM Proxy CLI Version" in result.stdout
+    assert requests == []
 
 
 def test_cli_source_is_ascii_only():
