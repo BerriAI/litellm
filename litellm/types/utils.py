@@ -138,6 +138,10 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_system_messages: bool | None
     supports_response_schema: bool | None
     supports_vision: bool | None
+    supports_image_input: ReadOnly[bool | None]
+    supports_video_input: ReadOnly[bool | None]
+    supported_modalities: ReadOnly[Sequence[str] | None]
+    supported_output_modalities: ReadOnly[Sequence[str] | None]
     supports_function_calling: bool | None
     supports_tool_choice: bool | None
     supports_assistant_prefill: bool | None
@@ -4005,6 +4009,7 @@ class LlmProviders(str, Enum):
     SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
     META = "meta"
+    STREAMLAKE = "streamlake"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"

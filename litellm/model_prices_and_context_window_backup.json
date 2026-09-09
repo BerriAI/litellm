@@ -55997,6 +55997,228 @@
         "supports_reasoning": true,
         "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
     },
+    "streamlake/deepseek-v4-flash-0731": {
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "litellm_provider": "streamlake",
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "rpm": 60,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "tpm": 600000,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/DeepSeek-V4-Pro-0813": {
+        "cache_read_input_token_cost": 4.4e-08,
+        "input_cost_per_token": 1.32e-06,
+        "litellm_provider": "streamlake",
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 3.96e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "rpm": 30,
+        "tpm": 600000,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/DeepSeek-V3": {
+        "cache_read_input_token_cost": 1.14e-07,
+        "input_cost_per_token": 2.86e-07,
+        "litellm_provider": "streamlake",
+        "max_input_tokens": 56000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "output_cost_per_token": 1.143e-06,
+        "supports_function_calling": true,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/GLM-5.3": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "streamlake",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "rpm": 10,
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true,
+        "tpm": 300000,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/GLM-5.3-Flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "streamlake",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "rpm": 30,
+        "supports_assistant_prefill": true,
+        "supports_prompt_caching": true,
+        "supports_image_input": true,
+        "supports_video_input": true,
+        "tpm": 300000,
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/KAT-Coder-Air-V2.5": {
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "streamlake",
+        "max_output_tokens": 80000,
+        "max_tokens": 80000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "supports_function_calling": true,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/KAT-Coder-Pro-V1": {
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "streamlake",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "supports_function_calling": true,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/KAT-Coder-Pro-V2": {
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "streamlake",
+        "max_output_tokens": 80000,
+        "max_tokens": 80000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/KAT-Coder-Pro-V2.5": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 7.4e-07,
+        "litellm_provider": "streamlake",
+        "max_output_tokens": 80000,
+        "max_tokens": 80000,
+        "mode": "chat",
+        "output_cost_per_token": 2.96e-06,
+        "supports_function_calling": true,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/Kimi-K2-Instruct-0905": {
+        "cache_read_input_token_cost": 1.43e-07,
+        "input_cost_per_token": 5.71e-07,
+        "litellm_provider": "streamlake",
+        "max_input_tokens": 224000,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 2.286e-06,
+        "supports_function_calling": true,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/Qwen3-235B-A22B-Instruct-2507": {
+        "cache_read_input_token_cost": 7e-08,
+        "input_cost_per_token": 3.5e-07,
+        "litellm_provider": "streamlake",
+        "max_input_tokens": 126000,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-06,
+        "supports_function_calling": true,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/Qwen3-30B-A3B": {
+        "cache_read_input_token_cost": 4.3e-08,
+        "input_cost_per_token": 1.07e-07,
+        "litellm_provider": "streamlake",
+        "max_input_tokens": 30000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "mode": "chat",
+        "output_cost_per_token": 1.071e-06,
+        "supports_function_calling": true,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/Qwen3-30B-A3B-Instruct-2507": {
+        "cache_read_input_token_cost": 2.2e-08,
+        "input_cost_per_token": 1.07e-07,
+        "litellm_provider": "streamlake",
+        "max_input_tokens": 126000,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 4.29e-07,
+        "supports_function_calling": true,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/Qwen3-Coder-480B-A35B-Instruct-FP8": {
+        "cache_read_input_token_cost": 1.8e-07,
+        "input_cost_per_token": 9e-07,
+        "litellm_provider": "streamlake",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
+        "supports_function_calling": true,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
+    "streamlake/Qwen3-Coder-Next": {
+        "cache_read_input_token_cost": 6e-08,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "streamlake",
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://www.streamlake.ai/document/DOC/mgrnm4xm362hvp5wyce"
+    },
     "deepseek-v4-flash": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 1.4e-08,

@@ -879,6 +879,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
+    "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
 ]
 
 
@@ -950,6 +951,7 @@ openai_compatible_providers: Final[list] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "scx-ai",
+    "streamlake",
 ]
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",
