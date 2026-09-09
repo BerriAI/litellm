@@ -5356,6 +5356,9 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
     async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
         return 999.0 if counter_key == "spend:user:u1" else 0.0
 
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),
         patch("litellm.proxy.proxy_server.get_current_spend", _spend_by_counter),
@@ -5370,10 +5373,11 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
                 general_settings={},
                 route="/chat/completions",
                 llm_router=None,
-                proxy_logging_obj=MagicMock(),
+                proxy_logging_obj=proxy_logging_obj,
                 valid_token=token,
                 request=MagicMock(spec=Request),
             )
+        await asyncio.sleep(0)
     assert "User=u1" in str(over.value)
 
 
@@ -5412,6 +5416,7 @@ async def _run_internal_user_budget_alert(
         type: Literal["user_budget"],
         user_info: CallInfo,
     ) -> None:
+        assert type == "user_budget"
         try:
             await slack_alerting.budget_alerts(type=type, user_info=user_info)
         finally:
@@ -5568,6 +5573,9 @@ async def test_common_checks_personal_user_budget_enforced_on_team_key_when_flag
     async def _no_membership(*args, **kwargs):
         return None
 
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),
         patch("litellm.proxy.proxy_server.get_current_spend", _spend_by_counter),
@@ -5583,10 +5591,11 @@ async def test_common_checks_personal_user_budget_enforced_on_team_key_when_flag
                 general_settings={"apply_user_budget_to_team_keys": True},
                 route="/chat/completions",
                 llm_router=None,
-                proxy_logging_obj=MagicMock(),
+                proxy_logging_obj=proxy_logging_obj,
                 valid_token=token,
                 request=MagicMock(spec=Request),
             )
+        await asyncio.sleep(0)
     assert "ExceededBudget: User=u1" in str(exc_info.value)
 
 
@@ -5603,6 +5612,9 @@ async def test_common_checks_personal_user_budget_still_enforced_on_personal_key
     async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
         return 999.0 if counter_key == "spend:user:u1" else 0.0
 
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
     with (
         patch("litellm.proxy.proxy_server.prisma_client", None),
         patch("litellm.proxy.proxy_server.get_current_spend", _spend_by_counter),
@@ -5617,10 +5629,11 @@ async def test_common_checks_personal_user_budget_still_enforced_on_personal_key
                 general_settings={"apply_user_budget_to_team_keys": True},
                 route="/chat/completions",
                 llm_router=None,
-                proxy_logging_obj=MagicMock(),
+                proxy_logging_obj=proxy_logging_obj,
                 valid_token=token,
                 request=MagicMock(spec=Request),
             )
+        await asyncio.sleep(0)
 
 
 @pytest.mark.parametrize(
