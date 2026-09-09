@@ -342,3 +342,41 @@ tests:
     asserts:
       - notExists:
           path: spec.activeDeadlineSeconds
+
+  - it: should not label its pods with the Service selector labels
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+    asserts:
+      # app.kubernetes.io/name must differ from "litellm.selectorLabels", or the
+      # litellm Service, metrics Service, ServiceMonitor and PDB all select this
+      # pod even though its container exposes no ports.
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: litellm-migrations
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: migrations
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  - it: should keep podLabels on its pods and let them override chart labels
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      podLabels:
+        team: platform
+        app.kubernetes.io/component: custom-component
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels.team
+          value: platform
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: custom-component
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: litellm-migrations
