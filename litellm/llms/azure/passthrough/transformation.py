@@ -82,11 +82,10 @@ def foreign_azure_deployment(
     if match is None:
         return None
     deployment: Final = match.group(1)
-    folded: Final = deployment.casefold()
-    if folded == model_group.casefold():
+    if deployment == model_group:
         return None
     served: Final = frozenset(name.casefold() for name in served_models())
-    return None if folded in served else deployment
+    return None if deployment.casefold() in served else deployment
 
 
 def without_api_version(api_base: str) -> str:
