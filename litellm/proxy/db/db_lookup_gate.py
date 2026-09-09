@@ -1,8 +1,3 @@
-"""
-Bounds concurrent hot-path DB point lookups so a cache-miss burst cannot flood the prisma
-query-engine HTTP pool, whose per-request bookkeeping is O(queued requests x connections).
-"""
-
 import asyncio
 from typing import Final
 
