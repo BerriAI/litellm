@@ -2,3 +2,4 @@
 mod support;
 
 mod primitives;
+mod streaming;

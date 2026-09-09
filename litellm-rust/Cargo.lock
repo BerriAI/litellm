@@ -1522,6 +1522,8 @@ dependencies = [
 name = "litellm-python-interop"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "criterion",
  "futures-util",
  "pyo3",
  "pyo3-async-runtimes",

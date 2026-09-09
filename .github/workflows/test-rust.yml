@@ -119,6 +119,10 @@ jobs:
       - run: cargo test --workspace --locked
         working-directory: litellm-rust
 
+      - name: Smoke test byte-stream handoff benchmarks
+        run: cargo bench --profile dev -p litellm-python-interop --features pyo3/abi3-py310 --bench streaming --locked -- --test
+        working-directory: litellm-rust
+
       - run: cargo test -p litellm-core --features bedrock-auth --locked
         working-directory: litellm-rust
 

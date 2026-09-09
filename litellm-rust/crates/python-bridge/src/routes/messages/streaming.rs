@@ -98,10 +98,9 @@ pub(super) fn send(
         .await
         .map_err(messages_provider_error_to_pyerr)?;
         let completion = call.completion.register();
-        let stream = call.stream.map(|item| {
-            item.map(|bytes| bytes.to_vec())
-                .map_err(messages_provider_error_to_pyerr)
-        });
+        let stream = call
+            .stream
+            .map(|item| item.map_err(messages_provider_error_to_pyerr));
         Ok(AsyncByteStream::new(
             Box::pin(stream),
             Box::pin(async move {

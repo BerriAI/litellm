@@ -11,14 +11,20 @@ name = "synthetic"
 path = "tests/synthetic/mod.rs"
 
 [dependencies]
+bytes.workspace = true
 futures-util.workspace = true
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
 pythonize.workspace = true
 serde.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+criterion = "0.8.2"
 rstest.workspace = true
 serial_test.workspace = true
 serde_json.workspace = true
+
+[[bench]]
+name = "streaming"
+harness = false
