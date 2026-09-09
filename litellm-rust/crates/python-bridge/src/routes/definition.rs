@@ -326,7 +326,8 @@ mod tests {
             assert!(sync_ocr_error.to_string().contains("invalid OCR request"));
             assert_eq!(async_ocr_error.to_string(), sync_ocr_error.to_string());
 
-            for (sync_name, async_name) in [("transcription", "atranscription")] {
+            {
+                let (sync_name, async_name) = ("transcription", "atranscription");
                 let sync_error = module
                     .getattr(sync_name)
                     .and_then(|function| function.call(("model", &document), Some(&kwargs)))
