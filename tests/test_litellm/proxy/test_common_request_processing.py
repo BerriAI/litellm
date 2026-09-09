@@ -3,7 +3,7 @@ import copy
 import datetime
 import json
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Optional
+from typing import AsyncGenerator, Callable, Final, Iterator, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -8303,7 +8303,7 @@ class TestBackgroundResponseRetrievalGovernance:
     GOVERNED_MODEL_ID = "deployment-governed"
 
     @pytest.fixture
-    def policy_engine(self):
+    def policy_engine(self) -> Iterator[None]:
         from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
@@ -8353,10 +8353,14 @@ class TestBackgroundResponseRetrievalGovernance:
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {}
 
-        async def passthrough_add_litellm_data_to_request(data, **kwargs):
+        async def passthrough_add_litellm_data_to_request(
+            data: dict[str, object], **kwargs: object
+        ) -> dict[str, object]:
             return data
 
-        async def decrypting_pre_call_hook(user_api_key_dict, data, call_type):
+        async def decrypting_pre_call_hook(
+            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+        ) -> dict[str, object]:
             if data.get("response_id") == client_facing_response_id:
                 data["response_id"] = encoded_response_id
             return data
@@ -8383,8 +8387,8 @@ class TestBackgroundResponseRetrievalGovernance:
 
     @pytest.mark.asyncio
     async def test_retrieving_a_background_response_attaches_its_model_post_call_pipeline(
-        self, policy_engine, monkeypatch
-    ):
+        self, policy_engine: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         data = await self._pre_call("aget_responses", monkeypatch)
 
         assert data["response_id"].startswith("resp_bGl0ZWxsbTpjdXN0b21f")
@@ -8397,8 +8401,8 @@ class TestBackgroundResponseRetrievalGovernance:
 
     @pytest.mark.asyncio
     async def test_submitting_a_response_does_not_attach_pipelines_from_its_response_id(
-        self, policy_engine, monkeypatch
-    ):
+        self, policy_engine: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         data = await self._pre_call("aresponses", monkeypatch)
 
         assert "_guardrail_pipelines" not in data["litellm_metadata"]
