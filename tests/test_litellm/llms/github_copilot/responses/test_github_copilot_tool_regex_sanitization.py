@@ -5,7 +5,7 @@ Regression tests for Issue #40358:
 https://github.com/BerriAI/litellm/issues/40358
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -33,9 +33,8 @@ class TestGithubCopilotToolRegexSanitization:
     built-in Artifact tool) or patterns that fail to compile under standard regex engines.
     """
 
-    def _config(self):
-        with patch("litellm.llms.github_copilot.responses.transformation.Authenticator"):
-            return GithubCopilotResponsesAPIConfig()
+    def _config(self) -> GithubCopilotResponsesAPIConfig:
+        return GithubCopilotResponsesAPIConfig()
 
     def test_sanitize_claude_code_artifact_tool_pattern(self):
         """Claude Code built-in Artifact tool uses Unicode-property escapes in pattern.
