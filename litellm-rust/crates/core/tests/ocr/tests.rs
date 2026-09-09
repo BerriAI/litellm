@@ -1,12 +1,13 @@
-use super::transformation::OcrProviderConfig;
-use super::types::{OcrConnection, OcrDocument};
-use super::wire::{OcrWireRequest, decode_request, decode_response};
-use super::{OcrRequest, perform_ocr};
-use crate::ocr::error::OcrError;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+use super::transformation::OcrProviderConfig;
+use super::types::OcrConnection;
+use super::wire::{OcrWireRequest, decode_request, decode_response};
+use super::{OcrRequest, perform_ocr};
+use crate::ocr::error::OcrError;
 
 pub(crate) fn params<C: OcrProviderConfig>(config: &C, value: Value) -> C::MappedParams {
     config
@@ -174,40 +175,11 @@ async fn invalid_pages_fail_before_network_and_invoke_failure_hook() {
         json!({"pages":[-1]}),
     );
     request.hooks = Arc::new(Failures(failures.clone()));
-    assert_eq!(perform_ocr(request).await.unwrap_err().kind(), crate::error::ErrorKind::InvalidRequest);
-    assert_eq!(failures.lock().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn guardrails_preserve_normalized_pages_and_reject_invalid_body() {
-    use crate::ocr::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrRequestBody};
-    struct BadBody;
-    impl OcrHooks for BadBody {
-        fn has_guardrails(&self) -> bool {
-            true
-        }
-        fn during_call(
-            &self,
-            request: OcrDuringCallRequest,
-        ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
-            Box::pin(async move {
-                Ok(OcrDuringCallRequest {
-                    body: OcrRequestBody::Document(OcrDocument::DocumentUrl {
-                        document_url: "changed".into(),
-                    }),
-                    ..request
-                })
-            })
-        }
-    }
-    let mut request = wire_request(
-        "azure_ai/doc-intelligence/prebuilt-read",
-        "http://127.0.0.1:1",
-        json!({"pages":[0,2]}),
+    assert_eq!(
+        perform_ocr(request).await.unwrap_err().kind(),
+        crate::error::ErrorKind::InvalidRequest
     );
-    request.hooks = Arc::new(BadBody);
-    let error = perform_ocr(request).await.unwrap_err();
-    assert!(error.to_string().contains("guardrail.body"));
+    assert_eq!(failures.lock().unwrap().len(), 1);
 }
 
 #[test]

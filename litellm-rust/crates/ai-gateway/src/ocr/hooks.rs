@@ -1,4 +1,15 @@
+use serde_json::json;
+use std::sync::Arc;
+
+use litellm_core::Error;
+use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
 use litellm_core::error::ErrorKind;
+use litellm_core::ocr::hooks::{
+    OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture, OcrPreCallRequest,
+};
+use litellm_core::ocr::types::OcrResponseData;
+use litellm_core::ocr::wire::{decode_during_call_result, decode_pre_call_result};
+
 use crate::integrations::custom_guardrail::{
     CustomGuardrail, CustomGuardrailRunner, GuardrailContext, GuardrailRequest,
 };
@@ -9,15 +20,6 @@ use crate::integrations::custom_logger::{
 use crate::integrations::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
 };
-use litellm_core::Error;
-use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
-use litellm_core::ocr::hooks::{
-    OcrDuringCallRequest, OcrHookFuture, OcrHooks, OcrLogFuture, OcrPreCallRequest,
-};
-use litellm_core::ocr::types::OcrResponseData;
-use litellm_core::ocr::wire::{decode_during_call_result, decode_pre_call_result};
-use serde_json::json;
-use std::sync::Arc;
 
 pub(super) struct OcrGatewayHooks {
     logger_runner: CustomLoggerRunner,
