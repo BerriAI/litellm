@@ -2,7 +2,7 @@
 //!
 //! `core` (the Rust SDK), `config` (the config-loading boundary),
 //! `ai-gateway` (the HTTP/WebSocket host),
-//! `gateway-auth` (the gateway authentication boundary),
+//! `litellm-gateway-auth` (the gateway authentication boundary),
 //! `python-interop` (domain-neutral PyO3 primitives), and `python-bridge` (the
 //! PyO3 cdylib). Adding or removing a crate must be a
 //! deliberate act: this test fails until the allowlist here is updated, forcing
@@ -23,7 +23,7 @@ const EXPECTED_MEMBERS: &[&str] = &[
     "crates/core",
     "crates/config",
     "crates/ai-gateway",
-    "crates/gateway-auth",
+    "crates/litellm-gateway-auth",
     "crates/python-interop",
     "crates/python-bridge",
 ];
@@ -33,7 +33,7 @@ const EXPECTED_CRATE_DIRS: &[&str] = &[
     "core",
     "config",
     "ai-gateway",
-    "gateway-auth",
+    "litellm-gateway-auth",
     "python-interop",
     "python-bridge",
 ];
