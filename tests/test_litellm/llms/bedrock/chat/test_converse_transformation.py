@@ -6727,3 +6727,41 @@ def test_forced_tool_choice_forwarded_on_converse_models_that_support_it(
     )
 
     assert result == {"any": {}}
+
+
+def test_transform_response_honors_json_mode_kwarg_when_optional_params_lack_it():
+    response_json = {
+        "metrics": {"latencyMs": 900},
+        "output": {
+            "message": {
+                "content": [
+                    {
+                        "toolUse": {
+                            "input": {"city": "Paris", "population": 2100000},
+                            "name": "json_tool_call",
+                            "toolUseId": "tooluse_invoke_nova_json",
+                        }
+                    }
+                ],
+                "role": "assistant",
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {"inputTokens": 40, "outputTokens": 20, "totalTokens": 60},
+    }
+    raw_response = httpx.Response(200, json=response_json, request=httpx.Request("POST", "https://bedrock.test"))
+    logging_obj = MagicMock()
+    result = AmazonConverseConfig().transform_response(
+        model="bedrock/invoke/us.amazon.nova-micro-v1:0",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[],
+        optional_params={"tools": [{"type": "function", "function": {"name": "json_tool_call", "parameters": {}}}]},
+        litellm_params={},
+        encoding=None,
+        json_mode=True,
+    )
+    assert result.choices[0].message.tool_calls is None
+    assert json.loads(result.choices[0].message.content) == {"city": "Paris", "population": 2100000}

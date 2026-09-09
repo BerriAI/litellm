@@ -1805,6 +1805,7 @@ class AmazonConverseConfig(BaseConfig):
             data=request_data,
             messages=messages,
             encoding=encoding,
+            json_mode=json_mode,
         )
 
     def _transform_reasoning_content(self, reasoning_content_blocks: list[BedrockConverseReasoningContentBlock]) -> str:
@@ -2237,6 +2238,7 @@ class AmazonConverseConfig(BaseConfig):
         data: dict | str,
         messages: list,
         encoding,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         if logging_obj is not None:
@@ -2247,7 +2249,9 @@ class AmazonConverseConfig(BaseConfig):
                 additional_args={"complete_input_dict": data},
             )
 
-        json_mode: Final[bool | None] = optional_params.get("json_mode", None)
+        resolved_json_mode: Final[bool | None] = (
+            json_mode if json_mode is not None else optional_params.get("json_mode", None)
+        )
         ## RESPONSE OBJECT
         try:
             completion_response: Final = ConverseResponseBlock(**response.json())
@@ -2339,7 +2343,7 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["thinking_blocks"] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         filtered_tools: Final = self._filter_json_mode_tools(
-            json_mode=json_mode,
+            json_mode=resolved_json_mode,
             tools=tools,
             chat_completion_message=chat_completion_message,
         )
@@ -2363,7 +2367,7 @@ class AmazonConverseConfig(BaseConfig):
         # When json_mode filtered out all synthetic tool calls the response
         # is plain content, not a pending tool invocation. Fix finish_reason
         # so callers (e.g. OpenAI SDK) don't misinterpret it.
-        if json_mode and not filtered_tools and tools:
+        if resolved_json_mode and not filtered_tools and tools:
             initial_finish_reason = "stop"
 
         (

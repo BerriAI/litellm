@@ -29407,8 +29407,7 @@
             "search_context_size_high": 0.025,
             "search_context_size_low": 0.025,
             "search_context_size_medium": 0.025
-        },
-        "supports_web_search": true
+        }
     },
     "gpt-4o-mini-2024-07-18": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -29436,8 +29435,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "supports_vision": true
     },
     "gpt-4o-mini-audio-preview": {
         "deprecation_date": "2026-05-07",
