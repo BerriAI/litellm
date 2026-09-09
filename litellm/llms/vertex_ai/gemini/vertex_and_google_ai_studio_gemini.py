@@ -1556,14 +1556,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ]:
         function: ChatCompletionToolCallFunctionChunk | None = None
         _tools: Final[list[ChatCompletionToolCallChunk]] = []
+        # Gemini 3+ may emit the thought signature on a preceding thought part
+        # instead of on the functionCall part itself. Carry it forward so it is
+        # not dropped; consume it on the first function call that follows, since
+        # in parallel calls only the first one carries a signature.
+        pending_thought_signature: str | None = None
         for part in parts:
+            if part.get("thought") and part.get("thoughtSignature"):
+                pending_thought_signature = part.get("thoughtSignature")
+                continue
             if "functionCall" in part:
                 _function_chunk: ChatCompletionToolCallFunctionChunk = {
                     "name": part["functionCall"]["name"],
                     "arguments": json.dumps(part["functionCall"]["args"], ensure_ascii=False),
                 }
                 # Extract thought signature if present
-                thought_signature = part.get("thoughtSignature")
+                # Extract thought signature if present. Fall back to the one
+                # carried by a preceding thought part (Gemini 3+ places it there).
+                thought_signature = part.get("thoughtSignature") or pending_thought_signature
+                pending_thought_signature = None
                 # Gemini 3.5+ returns a stable `id` per function call to enable
                 # strict response matching. Preserve it as the OpenAI
                 # tool_call_id so it can be echoed back unchanged.
