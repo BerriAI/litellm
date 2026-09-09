@@ -60,6 +60,13 @@ class BaseTranslation(ABC):
     text rewrites on every other translation, are undeliverable: the pipeline
     executor discards them and releases the original chunks."""
 
+    assembles_streamed_response: ClassVar[bool] = False
+    """Whether ``process_output_streaming_response`` stores the assembled response of an
+    ended stream under ``request_data["response"]`` before scanning it, the way the chat,
+    Responses, and Messages translations do. A streaming pipeline runs a guardrail that only
+    has the legacy post-call hook against that response, so on a translation without it such
+    a guardrail keeps running on its own."""
+
     def post_call_hook_response(self, response: object) -> object:
         """The ``response`` this endpoint's non-streaming post-call hooks receive, derived from
         the object the translation stores under ``request_data["response"]`` while scanning an

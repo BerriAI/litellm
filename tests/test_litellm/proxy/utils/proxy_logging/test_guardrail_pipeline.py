@@ -28,7 +28,7 @@ from litellm.integrations.custom_guardrail import (
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
-from litellm.proxy.utils import ProxyLogging, _streamable_post_call_pipelines
+from litellm.proxy.utils import ProxyLogging, _streamable_post_call_pipelines, stream_gated_guardrail_names
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
@@ -1539,6 +1539,21 @@ def _iterator_hook_only_guardrail(name: str, seen: Dict[str, Any]) -> CustomGuar
     return IteratorHookGuardrail(guardrail_name=name, event_hook=GuardrailEventHooks.post_call, default_on=True)
 
 
+def _iterator_and_legacy_hook_guardrail(name: str, seen: Dict[str, Any]) -> CustomGuardrail:
+    class IteratorAndLegacyHookGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            seen["success_hook_calls"] = seen.get("success_hook_calls", 0) + 1
+            return None
+
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            seen["iterator_hook_calls"] = seen.get("iterator_hook_calls", 0) + 1
+            async for item in response:
+                item.choices[0].delta.content = f"[governed] {item.choices[0].delta.content}"
+                yield item
+
+    return IteratorAndLegacyHookGuardrail(guardrail_name=name, event_hook=GuardrailEventHooks.post_call, default_on=True)
+
+
 def _rewritten_model_response(response: Any) -> litellm.ModelResponse:
     payload = response.model_dump()
     payload["choices"][0]["message"]["content"] = "[REWRITTEN] " + payload["choices"][0]["message"]["content"]
@@ -1570,6 +1585,42 @@ def test_streamable_post_call_pipelines_keeps_hook_guardrails_and_drops_iterator
     assert streamable == (("governed", governed),)
     assert any("'ungoverned'" in message and "gr-iterator" in message for message in _warnings(caplog))
     assert not any("'governed'" in message or "gr-legacy" in message for message in _warnings(caplog))
+
+
+@pytest.mark.parametrize(
+    "request_route",
+    [None, "/v1/completions", "/v1beta/models/gemini-2.5-flash:streamGenerateContent", "/a2a/agent"],
+)
+def test_streamable_post_call_pipelines_keeps_legacy_hooks_off_routes_that_assemble_no_response(
+    make_user_api_key_auth, monkeypatch, caplog, request_route
+):
+    monkeypatch.setattr(litellm, "callbacks", [_legacy_hook_stream_guardrail({})])
+    legacy = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="gr-post", on_fail="block")])
+    data = {"metadata": {"_guardrail_pipelines": [("legacy-governance", legacy)]}}
+    auth = make_user_api_key_auth(request_route=request_route)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        streamable = _streamable_post_call_pipelines(data, auth)
+
+    assert streamable == ()
+    assert stream_gated_guardrail_names(data, auth) == frozenset()
+    assert any("'legacy-governance'" in message and "gr-post" in message for message in _warnings(caplog))
+
+
+def test_streamable_post_call_pipelines_keeps_guardrails_with_their_own_iterator_hook_on_their_own_path(
+    make_user_api_key_auth, monkeypatch, caplog
+):
+    monkeypatch.setattr(litellm, "callbacks", [_iterator_and_legacy_hook_guardrail("gr-post", {})])
+    both_hooks = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="gr-post", on_fail="block")])
+    data = {"metadata": {"_guardrail_pipelines": [("both-hooks", both_hooks)]}}
+    auth = make_user_api_key_auth(request_route="/v1/chat/completions")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        streamable = _streamable_post_call_pipelines(data, auth)
+
+    assert streamable == ()
+    assert stream_gated_guardrail_names(data, auth) == frozenset()
+    assert any("'both-hooks'" in message and "gr-post" in message for message in _warnings(caplog))
 
 
 def test_streamable_post_call_pipelines_is_empty_on_route_without_translation(
@@ -1758,6 +1809,30 @@ async def test_streaming_iterator_hook_runs_iterator_hook_guardrail_whose_pipeli
         ]
 
     assert seen["count"] == 1
+    assert [item.choices[0].delta.content for item in delivered] == ["[governed] hello ", "[governed] world"]
+    assert any("'response-governance'" in message and "gr-post" in message for message in _warnings(caplog))
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_runs_the_iterator_hook_of_a_guardrail_that_also_has_a_post_call_hook(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
+):
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_iterator_and_legacy_hook_guardrail("gr-post", seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+                response=_async_chunk_iter(_stream_chunks()),
+                request_data=data,
+            )
+        ]
+
+    assert seen == {"iterator_hook_calls": 1}
     assert [item.choices[0].delta.content for item in delivered] == ["[governed] hello ", "[governed] world"]
     assert any("'response-governance'" in message and "gr-post" in message for message in _warnings(caplog))
 

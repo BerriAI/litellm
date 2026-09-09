@@ -171,6 +171,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     """
 
     delivers_ended_stream_text_rewrites = True
+    assembles_streamed_response = True
 
     def __init__(self):
         super().__init__()

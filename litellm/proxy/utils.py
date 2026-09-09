@@ -192,6 +192,7 @@ if TYPE_CHECKING:
     from prisma.types import HttpConfig
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
@@ -517,9 +518,17 @@ def _merge_pipeline_metadata_writes(
         _merge_pipeline_metadata_bucket(data, bucket_key, modified_data.get(bucket_key))
 
 
-def _pipeline_step_supports_streaming(guardrail_name: str) -> bool:
+def _pipeline_step_supports_streaming(guardrail_name: str, translation: "BaseTranslation | None") -> bool:
     callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
-    return callback is not None and PipelineExecutor.supports_streaming_execution(callback)
+    if callback is None:
+        return False
+    if PipelineExecutor.supports_unified_execution(callback):
+        return True
+    return (
+        translation is not None
+        and type(translation).assembles_streamed_response
+        and PipelineExecutor.supports_streaming_execution(callback)
+    )
 
 
 def _post_call_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
@@ -541,42 +550,57 @@ def _warn_background_skips_post_call_pipelines(data: Mapping[str, object]) -> No
     )
 
 
-def _pipeline_unsupported_streaming_guardrails(pipeline: "GuardrailPipeline") -> tuple[str, ...]:
+def _pipeline_unsupported_streaming_guardrails(
+    pipeline: "GuardrailPipeline", translation: "BaseTranslation | None"
+) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
-            step.guardrail for step in pipeline.steps if not _pipeline_step_supports_streaming(step.guardrail)
+            step.guardrail
+            for step in pipeline.steps
+            if not _pipeline_step_supports_streaming(step.guardrail, translation)
         )
     )
 
 
-def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> bool:
-    unsupported: Final = _pipeline_unsupported_streaming_guardrails(pipeline)
+def _pipeline_is_streamable(
+    policy_name: str, pipeline: "GuardrailPipeline", translation: "BaseTranslation | None"
+) -> bool:
+    unsupported: Final = _pipeline_unsupported_streaming_guardrails(pipeline, translation)
     if not unsupported:
         return True
     verbose_proxy_logger.warning(
-        "Policy '%s' has post_call pipeline guardrails with neither the unified apply_guardrail interface nor a "
-        "post-call hook, one of which streaming pipelines need; the stream skips the pipeline and its guardrails "
-        "run on their own: %s",
+        "Policy '%s' has post_call pipeline guardrails a streaming pipeline cannot run on this route yet; they "
+        "need the unified apply_guardrail interface, or a post-call hook without a streaming iterator hook on a "
+        "route whose translation assembles the streamed response. The stream skips the pipeline and its "
+        "guardrails run on their own: %s",
         policy_name,
         ", ".join(unsupported),
     )
     return False
 
 
-def _route_supports_streaming_pipelines(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    return not user_api_key_dict.request_route or resolve_endpoint_translation(user_api_key_dict, None) is not None
+def _streaming_pipeline_translation(user_api_key_dict: UserAPIKeyAuth) -> "BaseTranslation | None":
+    resolved: Final = resolve_endpoint_translation(user_api_key_dict, None)
+    return None if resolved is None else resolved[1]
+
+
+def _route_supports_streaming_pipelines(
+    user_api_key_dict: UserAPIKeyAuth, translation: "BaseTranslation | None"
+) -> bool:
+    return not user_api_key_dict.request_route or translation is not None
 
 
 def stream_gated_guardrail_names(
     request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
 ) -> frozenset[str]:
-    if not _route_supports_streaming_pipelines(user_api_key_dict):
+    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
+    if not _route_supports_streaming_pipelines(user_api_key_dict, translation):
         return frozenset()
     return _pipeline_step_guardrail_names(
         tuple(
             (policy_name, pipeline)
             for policy_name, pipeline in _post_call_pipelines(request_data)
-            if not _pipeline_unsupported_streaming_guardrails(pipeline)
+            if not _pipeline_unsupported_streaming_guardrails(pipeline, translation)
         )
     )
 
@@ -589,8 +613,9 @@ def _streamable_post_call_pipelines(
 
     Streaming pipelines scan the buffered stream through the endpoint guardrail
     translation of the request route, so every step's guardrail needs either the
-    unified apply_guardrail interface or a post-call hook to run against the
-    assembled response, and the route needs a translation. A pipeline that
+    unified apply_guardrail interface or, on a route whose translation assembles
+    the streamed response, a post-call hook that is its only streaming path, and
+    the route needs a translation. A pipeline that
     cannot be run that way yet is left out and its guardrails run on the stream
     on their own, the way they did before pipelines ran on streams at all, with
     a warning naming the pipeline.
@@ -598,7 +623,8 @@ def _streamable_post_call_pipelines(
     post_call_pipelines: Final = _post_call_pipelines(request_data)
     if not post_call_pipelines:
         return ()
-    if not _route_supports_streaming_pipelines(user_api_key_dict):
+    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
+    if not _route_supports_streaming_pipelines(user_api_key_dict, translation):
         verbose_proxy_logger.warning(
             "Policies with post_call guardrail pipelines cannot scan streaming responses on route %s yet "
             "(no endpoint guardrail translation); the stream skips the pipelines and their guardrails run "
@@ -610,7 +636,7 @@ def _streamable_post_call_pipelines(
     return tuple(
         (policy_name, pipeline)
         for policy_name, pipeline in post_call_pipelines
-        if _pipeline_is_streamable(policy_name, pipeline)
+        if _pipeline_is_streamable(policy_name, pipeline, translation)
     )
 
 
