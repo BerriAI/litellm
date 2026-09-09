@@ -4,7 +4,7 @@ import pytest
 
 import litellm
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.provenance import has_rust_response_marker
+from tests.test_litellm_rust.support.response_marker import has_rust_response_marker
 from tests.test_litellm_rust.support.requests import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -16,7 +16,7 @@ def ocr_server(recording_server: RecordingServer) -> RecordingServer:
     return recording_server
 
 
-def test_public_ocr_entrypoint_uses_native_transport_when_enabled(ocr_server: RecordingServer) -> None:
+def test_sync_ocr_response_is_marked_as_rust_when_native_dispatch_is_enabled(ocr_server: RecordingServer) -> None:
     response: Final = litellm.ocr(
         model=OCR_MODEL,
         document=OCR_DOCUMENT,
@@ -29,7 +29,9 @@ def test_public_ocr_entrypoint_uses_native_transport_when_enabled(ocr_server: Re
 
 
 @pytest.mark.asyncio
-async def test_public_aocr_entrypoint_uses_native_transport_when_enabled(ocr_server: RecordingServer) -> None:
+async def test_async_ocr_response_is_marked_as_rust_when_native_dispatch_is_enabled(
+    ocr_server: RecordingServer,
+) -> None:
     response: Final = await litellm.aocr(
         model=OCR_MODEL,
         document=OCR_DOCUMENT,
@@ -41,7 +43,7 @@ async def test_public_aocr_entrypoint_uses_native_transport_when_enabled(ocr_ser
     assert has_rust_response_marker(response)
 
 
-def test_public_ocr_falls_back_when_native_transport_declines(ocr_server: RecordingServer) -> None:
+def test_public_ocr_falls_back_to_python_for_unsupported_file_document(ocr_server: RecordingServer) -> None:
     response: Final = litellm.ocr(
         model=OCR_MODEL,
         document={"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
@@ -53,7 +55,9 @@ def test_public_ocr_falls_back_when_native_transport_declines(ocr_server: Record
     assert not has_rust_response_marker(response)
 
 
-def test_public_ocr_uses_python_transport_when_disabled(ocr_server: RecordingServer) -> None:
+def test_public_ocr_response_has_no_rust_marker_when_native_dispatch_is_disabled(
+    ocr_server: RecordingServer,
+) -> None:
     litellm.rust(False)
 
     response: Final = litellm.ocr(
@@ -67,7 +71,7 @@ def test_public_ocr_uses_python_transport_when_disabled(ocr_server: RecordingSer
     assert not has_rust_response_marker(response)
 
 
-def test_native_ocr_requests_an_uncompressed_response(ocr_server: RecordingServer) -> None:
+def test_native_ocr_sends_identity_accept_encoding_header(ocr_server: RecordingServer) -> None:
     litellm.ocr(
         model=OCR_MODEL,
         document=OCR_DOCUMENT,
