@@ -162,8 +162,6 @@ class ElastiCacheIAMCredentialProvider(CredentialProvider):
         self._credentials = credentials
 
         frozen_credentials: Final = credentials.get_frozen_credentials()
-        if frozen_credentials is None:
-            raise RuntimeError("Unable to resolve AWS credentials for ElastiCache IAM Redis authentication")
 
         try:
             from botocore.auth import SigV4QueryAuth
