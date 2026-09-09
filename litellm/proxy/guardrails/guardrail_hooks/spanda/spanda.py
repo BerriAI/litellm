@@ -13,7 +13,7 @@ import difflib
 import importlib.util
 import re
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, ClassVar, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -136,8 +136,6 @@ def _extract_choice_text(choice: object) -> str:
 
 
 class SpandaGuardrail(CustomGuardrail):
-    use_native_lifecycle_hooks: ClassVar[bool] = True
-
     def __init__(
         self,
         api_base: str | None = None,
@@ -167,11 +165,13 @@ class SpandaGuardrail(CustomGuardrail):
             **kwargs,  # pyright: ignore[reportArgumentType]  # kwargs-ok: forwarded to CustomGuardrail.__init__
         )
 
+    @classmethod
     def get_supported_event_hooks(
-        self,
+        cls,
     ) -> list[GuardrailEventHooks]:  # mutable-ok: overrides CustomGuardrail signature
         return [  # mutable-ok: framework expects list
             GuardrailEventHooks.post_call,
+            GuardrailEventHooks.logging_only,
         ]
 
     @staticmethod

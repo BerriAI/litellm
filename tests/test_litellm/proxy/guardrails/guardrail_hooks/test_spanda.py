@@ -7,7 +7,11 @@ from litellm.proxy.guardrails.guardrail_hooks.spanda import (
     SpandaGuardrail,
     initialize_guardrail,
 )
-from litellm.types.guardrails import LitellmParams, SupportedGuardrailIntegrations
+from litellm.types.guardrails import (
+    GuardrailEventHooks,
+    LitellmParams,
+    SupportedGuardrailIntegrations,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.spanda import (
     SpandaGuardrailConfigModel,
 )
@@ -202,8 +206,11 @@ def test_zero_threshold_preservation():
     assert cb.grounding_threshold == 0.0
 
 
-def test_use_native_lifecycle_hooks_flag():
-    assert SpandaGuardrail.use_native_lifecycle_hooks is True
+def test_unified_lifecycle_hooks_configuration():
+    assert SpandaGuardrail.use_native_lifecycle_hooks is False
+    hooks = SpandaGuardrail.get_supported_event_hooks()
+    assert GuardrailEventHooks.post_call in hooks
+    assert GuardrailEventHooks.logging_only in hooks
 
 
 def test_is_spanda_available_utility():
@@ -351,6 +358,7 @@ async def test_async_post_call_success_hook_slotted_response():
 
     g = SpandaGuardrail()
     await g.async_post_call_success_hook({}, None, resp)
+    assert not hasattr(resp, "_spanda_receipt")
 
 
 @pytest.mark.asyncio
@@ -367,6 +375,7 @@ async def test_async_post_call_success_hook_read_only_setattr():
     ro_resp = ReadOnlyObject(choices=[SimpleNamespace(text="Choice A")])
     g = SpandaGuardrail()
     await g.async_post_call_success_hook({}, None, ro_resp)
+    assert "_spanda_receipt" not in ro_resp.__dict__
 
 
 @pytest.mark.asyncio
@@ -379,6 +388,7 @@ async def test_async_post_call_success_hook_safe_exception_handling():
     resp = SimpleNamespace(choices=[BrokenChoice()])
     g = SpandaGuardrail()
     await g.async_post_call_success_hook({}, None, resp)
+    assert not hasattr(resp, "_spanda_receipt")
 
 
 def test_evaluate_texts_json_serializable():
