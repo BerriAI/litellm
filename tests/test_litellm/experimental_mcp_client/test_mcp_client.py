@@ -36,9 +36,9 @@ import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
     MCP_STREAMABLE_HTTP_REQUIREMENT,
     MCPClient,
-    _as_read_timeout,
     _first_non_cancelled_cause,
     _TransportContext,
+    as_mcp_read_timeout,
     missing_streamable_http_client_error,
     strip_auth_scheme,
 )
@@ -867,25 +867,25 @@ def _raise_mcp_error_while_handling_a_timeout(code: int, message: str) -> McpErr
         return raised
 
 
-def test_as_read_timeout_separates_the_sdk_timeout_from_a_relayed_upstream_error():
+def test_as_mcp_read_timeout_separates_the_sdk_timeout_from_a_relayed_upstream_error():
     """Neither signal alone is enough. The code alone cannot separate the SDK's own timeout from an
     upstream JSON-RPC error that happens to use 408, and the context chain alone cannot separate it
     from any other relayed error that surfaces while a timeout is being handled, so both must hold.
     """
     timeout_code = int(httpx.codes.REQUEST_TIMEOUT)
 
-    translated = _as_read_timeout(_raise_mcp_error_while_handling_a_timeout(timeout_code, "Timed out while waiting"))
+    translated = as_mcp_read_timeout(_raise_mcp_error_while_handling_a_timeout(timeout_code, "Timed out while waiting"))
     assert isinstance(translated, TimeoutError)
     assert str(translated) == "Timed out while waiting"
 
     relayed_408 = McpError(ErrorData(code=timeout_code, message="upstream said 408"))
-    assert _as_read_timeout(relayed_408) is None, "an upstream 408 with no elapsed timeout is not our timeout"
+    assert as_mcp_read_timeout(relayed_408) is None, "an upstream 408 with no elapsed timeout is not our timeout"
 
     relayed_other = _raise_mcp_error_while_handling_a_timeout(-32603, "upstream internal error")
-    assert _as_read_timeout(relayed_other) is None, "a non-timeout code is not our timeout, whatever the chain"
+    assert as_mcp_read_timeout(relayed_other) is None, "a non-timeout code is not our timeout, whatever the chain"
 
-    assert _as_read_timeout(McpError(ErrorData(code=-32603, message="boom"))) is None
-    assert _as_read_timeout(RuntimeError("not an McpError")) is None
+    assert as_mcp_read_timeout(McpError(ErrorData(code=-32603, message="boom"))) is None
+    assert as_mcp_read_timeout(RuntimeError("not an McpError")) is None
 
 
 @pytest.mark.asyncio
@@ -1619,7 +1619,7 @@ async def test_transport_completion_and_normal_messages(transport: MCPTransport,
         if mode == "closed":
             assert "connection was closed" in _connection_error_message(caught.value, client.server_url, 0.2)
         else:
-            assert isinstance(_as_read_timeout(caught.value), TimeoutError)
+            assert isinstance(as_mcp_read_timeout(caught.value), TimeoutError)
 
 
 @pytest.mark.asyncio
@@ -1685,4 +1685,4 @@ async def test_empty_http_event_stream_uses_the_existing_request_deadline() -> N
                 ),
                 timeout=3,
             )
-    assert isinstance(_as_read_timeout(caught.value), TimeoutError)
+    assert isinstance(as_mcp_read_timeout(caught.value), TimeoutError)
