@@ -149,7 +149,7 @@ async def test_rubrik_block_preserves_context_for_error_exporters(
             litellm.callbacks.append(rubrik)
 
             try:
-                with pytest.raises(ModifyResponseException, match="Response blocked by policy"):
+                with pytest.raises(ModifyResponseException, match="Response blocked by policy") as raised:
                     await litellm.acompletion(
                         model=CHAT_MODEL,
                         messages=CHAT_MESSAGES,
@@ -158,6 +158,7 @@ async def test_rubrik_block_preserves_context_for_error_exporters(
                         callbacks=[generic_api_export.logger, recorder],
                         guardrails=[rubrik.guardrail_name],
                     )
+                assert has_native_response_marker(raised.value.original_response) is (backend == "rust")
                 await drain_logging()
                 await rubrik.flush_queue()
 

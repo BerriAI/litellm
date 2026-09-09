@@ -146,11 +146,12 @@ async def test_terminal_callbacks_share_live_objects_within_one_run(backend: Bac
             provider.default_response = provider_response(MESSAGES_ROUTE)
             first: Final = LiveReferenceLogger()
             second: Final = SecondaryLiveReferenceLogger()
-            await MESSAGES_ROUTE.invoke(provider, callbacks=[first, second])
+            response: Final = await MESSAGES_ROUTE.invoke(provider, callbacks=[first, second])
             first_event: Final = (await first.wait_for_async())[0]
             second_event: Final = (await second.wait_for_async())[0]
             assert first_event.kwargs is second_event.kwargs
             assert first_event.response is second_event.response
+            assert has_native_response_marker(response) is (backend == "rust")
             first.release()
             second.release()
 
@@ -247,6 +248,7 @@ async def test_interrupted_stream_emits_terminal_only_when_consumer_closes(backe
             first_chunk: Final = await anext(stream)
             await drain_logging()
             assert otel.spans() == ()
+            assert has_native_response_marker(stream) is (backend == "rust")
             await stream.aclose()
             await drain_logging()
             assert first_chunk is not None
