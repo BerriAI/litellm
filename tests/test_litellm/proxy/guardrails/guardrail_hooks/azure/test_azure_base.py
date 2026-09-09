@@ -129,7 +129,7 @@ async def test_token_minting_failure_keeps_credential_detail_out_of_the_error(ap
 async def test_token_is_minted_off_the_event_loop_thread(api_base, capturing_handler):
     """Credential sources block: IMDS probes time out and the az CLI credential spawns a subprocess."""
     handler, _ = capturing_handler
-    minting_threads: Final[list[int]] = []
+    minting_threads: Final[list[int]] = []  # mutable-ok: callee-filled thread log
 
     def _record_thread() -> str:
         minting_threads.append(threading.get_ident())
@@ -150,7 +150,7 @@ async def test_token_is_minted_off_the_event_loop_thread(api_base, capturing_han
 
 def test_default_credential_is_built_once_per_process(monkeypatch):
     """Rebuilding it per request costs a fresh credential and token round trip on every scan."""
-    builds: Final[list[str]] = []
+    builds: Final[list[str]] = []  # mutable-ok: callee-filled scope log
 
     def _build(azure_scope: str):
         builds.append(azure_scope)

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Final
 
 import httpx
@@ -31,9 +32,9 @@ def api_base() -> str:
 
 
 @pytest.fixture
-def capturing_handler() -> tuple[AsyncHTTPHandler, list[httpx.Request]]:
+def capturing_handler() -> tuple[AsyncHTTPHandler, Sequence[httpx.Request]]:
     """An HTTP handler answering every Content Safety call, paired with the requests it saw."""
-    sent: Final[list[httpx.Request]] = []
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: callee-filled request log, handed back read-only
 
     def _record(request: httpx.Request) -> httpx.Response:
         sent.append(request)
