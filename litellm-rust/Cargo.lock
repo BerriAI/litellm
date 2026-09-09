@@ -1414,13 +1414,12 @@ dependencies = [
  "futures-util",
  "litellm-config",
  "litellm-core",
+ "litellm-gateway-auth",
  "reqwest",
  "rustls 0.23.42",
  "rustls-native-certs",
  "serde",
  "serde_json",
- "sha2 0.10.9",
- "subtle",
  "tokio",
  "tokio-tungstenite",
  "tower",
@@ -1458,6 +1457,17 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "litellm-gateway-auth"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "sha2 0.10.9",
+ "subtle",
+ "tokio",
 ]
 
 [[package]]

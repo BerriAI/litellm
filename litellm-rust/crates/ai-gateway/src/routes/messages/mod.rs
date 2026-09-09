@@ -10,9 +10,9 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use litellm_core::Error;
+use litellm_gateway_auth::RequireMasterKey;
 use serde_json::{Map, Value};
 
-use crate::auth::RequireMasterKey;
 use crate::constants::{MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH};
 use crate::state::AppState;
 

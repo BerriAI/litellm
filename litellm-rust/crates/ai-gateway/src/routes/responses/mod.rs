@@ -13,9 +13,9 @@ use axum::routing::get;
 use futures_util::{Sink, SinkExt, StreamExt};
 use litellm_core::responses::types::{ResponsesErrorFrame, ResponsesWsEvent, ResponsesWsEventType};
 use litellm_core::router::Router as ModelRouter;
+use litellm_gateway_auth::{RequireMasterKey, hash_token};
 use serde::Deserialize;
 
-use crate::auth::RequireMasterKey;
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::RequestMetadata;
 use crate::state::AppState;
@@ -207,7 +207,7 @@ async fn bridge(
 
     let call_id = new_call_id();
     let metadata = RequestMetadata {
-        user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
+        user_api_key_hash: master_key.as_deref().map(hash_token),
         ..RequestMetadata::default()
     };
     let client_in = Box::pin(stream.filter_map(|message| async move {

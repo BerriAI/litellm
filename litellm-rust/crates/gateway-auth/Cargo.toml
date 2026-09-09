@@ -1,0 +1,15 @@
+[package]
+name = "litellm-gateway-auth"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

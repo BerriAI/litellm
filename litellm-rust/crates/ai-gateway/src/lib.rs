@@ -8,7 +8,7 @@
 //!   rule that a route's entrypoint and handler live in `litellm-core` (see
 //!   `litellm_core::messages`) and move there as they are touched.
 //! - [`io`]: compatibility exports and realtime WebSocket splice helpers.
-//! - The server modules ([`auth`], [`routes`], [`state`]) and anything pulling
+//! - The server modules ([`routes`], [`state`]) and anything pulling
 //!   `axum` are gated behind the `server` feature, which the `litellm-ai-gateway`
 //!   binary turns on.
 
@@ -17,8 +17,6 @@ mod client;
 pub mod io;
 pub mod ocr;
 
-#[cfg(feature = "server")]
-pub mod auth;
 #[cfg(feature = "server")]
 pub mod routes;
 #[cfg(feature = "server")]

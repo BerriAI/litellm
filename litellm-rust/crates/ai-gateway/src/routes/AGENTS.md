@@ -33,8 +33,8 @@ genuinely gets hard to read.
 
 ## Invariants
 - **Auth is an extractor, not a manual call.** A handler requires auth by adding
-  `crate::auth::RequireMasterKey` to its arguments; it runs during extraction.
-  Never re-implement the check per route.
+  `litellm_gateway_auth::RequireMasterKey` to its arguments; it runs during
+  extraction. Never re-implement the check per route.
 - **Handlers contain no business logic; `service` contains no axum types.**
 - **No provider handlers in this crate.** Transforms, auth headers, and the
   provider HTTP call live in `core/src/<route>/`.

@@ -20,9 +20,9 @@ use axum::routing::get;
 use futures_util::{SinkExt, StreamExt};
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
+use litellm_gateway_auth::{RequireMasterKey, hash_token};
 use serde::Deserialize;
 
-use crate::auth::RequireMasterKey;
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::RequestMetadata;
 use crate::realtime::streaming::{RealTimeStreaming, SessionStatus};
@@ -111,7 +111,7 @@ async fn bridge(
     // proxy's hash_token) keeps the plaintext master key out of all of them while
     // still matching the key's hash in LiteLLM_SpendLogs.
     let metadata = RequestMetadata {
-        user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
+        user_api_key_hash: master_key.as_deref().map(hash_token),
         ..RequestMetadata::default()
     };
 
