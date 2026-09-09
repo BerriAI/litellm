@@ -1489,7 +1489,9 @@ def _output_passing_callbacks() -> list[CustomGuardrail]:
     return [OutputPassingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)]
 
 
-def _claimed_post_call_pipeline_data(*policy_names: str, extra_guardrails: dict[str, list[str]] | None = None):
+def _claimed_post_call_pipeline_data(
+    *policy_names: str, extra_guardrails: dict[str, list[str]] | None = None, policy_source: str = "model:m"
+):
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
     step = {"guardrail": "gr-post", "on_pass": "allow", "on_fail": "block"}
@@ -1511,7 +1513,7 @@ def _claimed_post_call_pipeline_data(*policy_names: str, extra_guardrails: dict[
             "_pipeline_managed_guardrails": {"gr-post"},
             "applied_policies": list(policy_names),
             "applied_guardrails": ["gr-post", *(g for gs in (extra_guardrails or {}).values() for g in gs)],
-            "policy_sources": {policy_name: "model:m" for policy_name in policy_names},
+            "policy_sources": {policy_name: policy_source for policy_name in policy_names},
         },
     }
 
@@ -1540,6 +1542,47 @@ async def test_pending_background_response_withdraws_the_deferred_policy_claims(
     assert "applied_policies" not in data["metadata"]
     assert "policy_sources" not in data["metadata"]
     assert "applied_guardrails" not in data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_pending_background_response_warns_when_the_deferred_policy_was_matched_through_a_tag(
+    proxy_logging, make_user_api_key_auth, monkeypatch, clear_policy_registry, caplog
+):
+    monkeypatch.setattr(litellm, "callbacks", _output_blocking_callbacks({}))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _claimed_post_call_pipeline_data("response-governance", policy_source="tag:governed+model:m")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        out = await proxy_logging.post_call_success_hook(
+            data=data, response=_background_response("queued"), user_api_key_dict=make_user_api_key_auth()
+        )
+
+    assert out.status == "queued"
+    assert "policy_sources" not in data["metadata"]
+    assert [
+        message for message in _warnings(caplog) if "response-governance (tag:governed+model:m)" in message
+    ] == [
+        "Policy engine: background response resp_bg matched post_call policies through a request tag at submit; "
+        "retrieval re-matches only the key, team, and model scopes, so a tag carried in the request body "
+        "does not govern the completed response: response-governance (tag:governed+model:m)"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pending_background_response_matched_through_its_model_does_not_warn(
+    proxy_logging, make_user_api_key_auth, monkeypatch, clear_policy_registry, caplog
+):
+    monkeypatch.setattr(litellm, "callbacks", _output_blocking_callbacks({}))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await proxy_logging.post_call_success_hook(
+            data=_claimed_post_call_pipeline_data("response-governance"),
+            response=_background_response("queued"),
+            user_api_key_dict=make_user_api_key_auth(),
+        )
+
+    assert _warnings(caplog) == []
 
 
 @pytest.mark.asyncio

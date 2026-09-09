@@ -68,6 +68,7 @@ def policy_engine():
             "response-governance": _pipeline_policy("output-word-filter"),
             "input-governance": _pipeline_policy("input-word-filter", mode="pre_call"),
             "team-governance": _pipeline_policy("team-word-filter"),
+            "tag-governance": _pipeline_policy("tag-word-filter"),
         }
     )
     attachment_registry.load_attachments(
@@ -75,6 +76,7 @@ def policy_engine():
             {"policy": "response-governance", "models": [GOVERNED_MODEL_GROUP]},
             {"policy": "input-governance", "models": [GOVERNED_MODEL_GROUP]},
             {"policy": "team-governance", "teams": ["governed-team"]},
+            {"policy": "tag-governance", "tags": ["governed"]},
         ]
     )
     yield
@@ -117,6 +119,26 @@ def test_key_and_team_context_also_governs_retrieval(policy_engine):
     )
 
     assert _attached_pipelines(data) == (("team-governance", "team-word-filter"),)
+
+
+def test_tag_attached_policy_is_not_re_matched_when_the_retrieval_carries_no_tag(policy_engine):
+    data = _retrieval_data(GOVERNED_MODEL_ID)
+
+    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+
+    assert _attached_pipelines(data) == (("response-governance", "output-word-filter"),)
+
+
+def test_tag_attached_policy_governs_a_retrieval_whose_metadata_carries_the_tag(policy_engine):
+    data: dict[str, object] = {
+        "response_id": _encoded_response_id(UNGOVERNED_MODEL_ID),
+        "litellm_metadata": {"tags": ["governed"]},
+    }
+
+    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+
+    assert _attached_pipelines(data) == (("tag-governance", "tag-word-filter"),)
+    assert data["litellm_metadata"]["policy_sources"] == {"tag-governance": "tag:governed"}
 
 
 def test_retrieval_of_an_ungoverned_model_attaches_nothing(policy_engine):

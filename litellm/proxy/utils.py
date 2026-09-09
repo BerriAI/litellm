@@ -613,7 +613,29 @@ def _defer_post_call_pipelines(
         response.status,
         ", ".join(policy_name for policy_name, _pipeline in deferred),
     )
+    tag_matched: Final = _tag_matched_deferrals(data, deferred)
+    if tag_matched:
+        verbose_proxy_logger.warning(
+            "Policy engine: background response %s matched post_call policies through a request tag at submit; "
+            "retrieval re-matches only the key, team, and model scopes, so a tag carried in the request body "
+            "does not govern the completed response: %s",
+            response.id,
+            ", ".join(f"{policy_name} ({source})" for policy_name, source in tag_matched),
+        )
     _withdraw_deferred_claims(data, deferred)
+
+
+def _tag_matched_deferrals(
+    data: Mapping[str, object], deferred: Sequence[tuple[str, "GuardrailPipeline"]]
+) -> tuple[tuple[str, str], ...]:
+    sources: Final = _policy_state_metadata(data).get("policy_sources")
+    if not isinstance(sources, dict):
+        return ()
+    return tuple(
+        (policy_name, str(sources[policy_name]))
+        for policy_name, _pipeline in deferred
+        if policy_name in sources and "tag:" in str(sources[policy_name])
+    )
 
 
 def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> bool:
