@@ -2836,7 +2836,6 @@ async def _authorize_authenticated_request(
     return None
 
 
-@tracer.wrap()
 def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> None:
     """Anchor the OTLP destinations this key or team overrides its traces to.
 
@@ -2874,6 +2873,7 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Reque
         verbose_proxy_logger.debug("OTel V2: tenant destination resolution failed: %s", exc)
 
 
+@tracer.wrap()
 async def user_api_key_auth(
     request: Request,
     api_key: str = fastapi.Security(api_key_header),

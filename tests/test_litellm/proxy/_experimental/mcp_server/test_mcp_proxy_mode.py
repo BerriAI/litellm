@@ -7,7 +7,6 @@ from mcp.types import CallToolResult, TextContent, Tool
 
 from litellm.proxy._experimental.mcp_server import server
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy._experimental.mcp_server.tool_search import (
     MCP_PROXY_CALL_TOOL_NAME,
     MCP_PROXY_SCHEMA_TOOL_NAME,
@@ -271,6 +270,8 @@ class TestMcpProxyAuthorizationScope:
 
     @pytest.fixture
     def rig(self) -> Iterator[AsyncMock]:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
         upstream = {
             "srv-alpha": [_upstream_tool("alpha", "add"), _upstream_tool("alpha", "multiply")],
             "srv-beta": [_upstream_tool("beta", "add")],
