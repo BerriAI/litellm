@@ -5,7 +5,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 import json
 import re
 from collections.abc import Sequence
-from typing import Any, Literal, cast
+from typing import Any, Dict, Literal, cast
 
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
@@ -1263,22 +1263,28 @@ class LiteLLMCompletionResponsesConfig:
         chat_completion_tools: list[ChatCompletionToolParam | OpenAIMcpServerTool] = []
         web_search_options: OpenAIWebSearchOptions | None = None
         for tool in tools:
-            if tool.get("type") == "mcp":
-                chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
-            elif tool.get("type") == "web_search_preview" or tool.get("type") == "web_search":
+            if isinstance(tool, dict):
+                tool_dict: dict[str, Any] = tool
+            elif hasattr(tool, "model_dump") and callable(getattr(tool, "model_dump")):
+                tool_dict = cast(dict[str, Any], tool.model_dump(exclude_none=True))
+            else:
+                tool_dict = cast(dict[str, Any], tool)
+            if tool_dict.get("type") == "mcp":
+                chat_completion_tools.append(cast(OpenAIMcpServerTool, tool_dict))
+            elif tool_dict.get("type") == "web_search_preview" or tool_dict.get("type") == "web_search":
                 _search_context_size: Literal["low", "medium", "high"] = cast(
-                    Literal["low", "medium", "high"], tool.get("search_context_size")
+                    Literal["low", "medium", "high"], tool_dict.get("search_context_size")
                 )
                 _user_location: OpenAIWebSearchUserLocation | None = cast(
                     OpenAIWebSearchUserLocation | None,
-                    tool.get("user_location") or None,
+                    tool_dict.get("user_location") or None,
                 )
                 web_search_options = OpenAIWebSearchOptions(
                     search_context_size=_search_context_size,
                     user_location=_user_location,
                 )
-            elif tool.get("type") == "function":
-                typed_tool = cast(FunctionToolParam, tool)
+            elif tool_dict.get("type") == "function":
+                typed_tool = cast(FunctionToolParam, tool_dict)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
                 parameters = dict(typed_tool.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
@@ -1292,21 +1298,21 @@ class LiteLLMCompletionResponsesConfig:
                         "strict": typed_tool.get("strict", False) or False,
                     },
                 }
-                if tool.get("cache_control"):
-                    chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
-                if tool.get("defer_loading"):
-                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
-                if tool.get("allowed_callers"):
-                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
-                if tool.get("input_examples"):
-                    chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
+                if tool_dict.get("cache_control"):
+                    chat_completion_tool["cache_control"] = tool_dict.get("cache_control")  # type: ignore
+                if tool_dict.get("defer_loading"):
+                    chat_completion_tool["defer_loading"] = tool_dict.get("defer_loading")  # type: ignore
+                if tool_dict.get("allowed_callers"):
+                    chat_completion_tool["allowed_callers"] = tool_dict.get("allowed_callers")  # type: ignore
+                if tool_dict.get("input_examples"):
+                    chat_completion_tool["input_examples"] = tool_dict.get("input_examples")  # type: ignore
                 chat_completion_tools.append(cast(ChatCompletionToolParam, chat_completion_tool))
-            elif tool.get("type") == "custom":
-                converted = convert_custom_tool_to_function_tool(tool)
+            elif tool_dict.get("type") == "custom":
+                converted = convert_custom_tool_to_function_tool(tool_dict)
                 if converted is not None:
                     chat_completion_tools.append(converted)
             else:
-                _tool_type = tool.get("type")
+                _tool_type = tool_dict.get("type")
                 if _tool_type in ("computer_use", "image_generation", "namespace", "shell"):
                     # Drop unsupported Responses-API-only tool types that have no
                     # Chat Completions equivalent. Passing them through verbatim
@@ -1318,7 +1324,7 @@ class LiteLLMCompletionResponsesConfig:
                         _tool_type,
                     )
                     continue
-                chat_completion_tools.append(cast(ChatCompletionToolParam | OpenAIMcpServerTool, tool))
+                chat_completion_tools.append(cast(ChatCompletionToolParam | OpenAIMcpServerTool, tool_dict))
         return chat_completion_tools, web_search_options
 
     @staticmethod
@@ -2035,40 +2041,23 @@ class LiteLLMCompletionResponsesConfig:
         # BaseLiteLLMOpenAIResponseObject has extra="allow", so setattr ensures
         # they survive serialization and can be extracted by the inference proxy
         # before the lossy api.Usage unmarshal.
-        if (
-            hasattr(usage, "cache_creation_input_tokens")
-            and usage.cache_creation_input_tokens
-        ):
+        if hasattr(usage, "cache_creation_input_tokens") and usage.cache_creation_input_tokens:
             setattr(
                 response_usage,
                 "cache_creation_input_tokens",
                 usage.cache_creation_input_tokens,
             )
         if hasattr(usage, "cache_read_input_tokens") and usage.cache_read_input_tokens:
-            setattr(
-                response_usage, "cache_read_input_tokens", usage.cache_read_input_tokens
-            )
-        if (
-            hasattr(usage, "prompt_tokens_details")
-            and usage.prompt_tokens_details is not None
-        ):
+            setattr(response_usage, "cache_read_input_tokens", usage.cache_read_input_tokens)
+        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details is not None:
             ptd = usage.prompt_tokens_details
-            if (
-                hasattr(ptd, "cache_creation_token_details")
-                and ptd.cache_creation_token_details is not None
-            ):
+            if hasattr(ptd, "cache_creation_token_details") and ptd.cache_creation_token_details is not None:
                 cache_creation_dict: Dict[str, int] = {}
-                if (
-                    ptd.cache_creation_token_details.ephemeral_5m_input_tokens
-                    is not None
-                ):
+                if ptd.cache_creation_token_details.ephemeral_5m_input_tokens is not None:
                     cache_creation_dict["ephemeral_5m_input_tokens"] = (
                         ptd.cache_creation_token_details.ephemeral_5m_input_tokens
                     )
-                if (
-                    ptd.cache_creation_token_details.ephemeral_1h_input_tokens
-                    is not None
-                ):
+                if ptd.cache_creation_token_details.ephemeral_1h_input_tokens is not None:
                     cache_creation_dict["ephemeral_1h_input_tokens"] = (
                         ptd.cache_creation_token_details.ephemeral_1h_input_tokens
                     )
