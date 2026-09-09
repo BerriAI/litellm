@@ -370,6 +370,9 @@ def get_vertex_base_model_name(model: str) -> str:
     return model
 
 
+VERTEX_CUSTOM_ENDPOINT_KEY_FIELD: Final = "litellm_custom_id"
+
+
 def get_vertex_ai_fine_tuned_endpoint_id(model: str) -> str | None:
     """
     Fine-tuned Gemini deployments are addressed by a numeric endpoint id,

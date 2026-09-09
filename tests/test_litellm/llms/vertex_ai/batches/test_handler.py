@@ -257,6 +257,123 @@ def test_create_batch_sync_resolves_fine_tuned_endpoint_to_tuned_model():
     assert sent["model"] == TUNED_MODEL_RESOURCE
 
 
+CUSTOM_ENDPOINT_ID = "4980511146650894336"
+CUSTOM_ENDPOINT_CREATE_DATA = {
+    "input_file_id": (f"gs://bucket/litellm-vertex-files/custom-endpoints/{CUSTOM_ENDPOINT_ID}/file-uuid")
+}
+CONTAINER_MODEL_RESOURCE = f"projects/{PROJECT}/locations/{LOCATION}/models/google-gemma2-123"
+CONTAINER_SPEC = {
+    "imageUri": "us-docker.pkg.dev/vertex-ai/pytorch-vllm-serve:x",
+    "args": ["python", "-m", "vllm.entrypoints.api_server"],
+    "predictRoute": "/generate",
+    "healthRoute": "/ping",
+}
+MACHINE_SPEC = {"machineType": "g2-standard-12", "acceleratorType": "NVIDIA_L4", "acceleratorCount": 1}
+
+
+def _custom_endpoint_get_response() -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "name": f"projects/{PROJECT}/locations/{LOCATION}/endpoints/{CUSTOM_ENDPOINT_ID}",
+        "deployedModels": [
+            {
+                "model": CONTAINER_MODEL_RESOURCE,
+                "dedicatedResources": {"machineSpec": MACHINE_SPEC, "minReplicaCount": 1, "maxReplicaCount": 2},
+            }
+        ],
+    }
+    return resp
+
+
+def _container_model_get_response(container_spec: dict | None = CONTAINER_SPEC) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = (
+        {"name": CONTAINER_MODEL_RESOURCE, "containerSpec": container_spec}
+        if container_spec is not None
+        else {"name": CONTAINER_MODEL_RESOURCE}
+    )
+    return resp
+
+
+def test_create_batch_sync_custom_endpoint_builds_unmanaged_container_job():
+    """A custom_endpoint batch must run batch-owned replicas of the endpoint's own serving
+    container: the live API refuses both the v1beta1 BYOE `endpoint` field and Model-Garden model
+    resources, and a hand-built containerSpec crash-loops, so the job carries the deployed
+    model's containerSpec verbatim under `unmanagedContainerModel` on the v1beta1 route with the
+    custom_id extracted server-side via instanceConfig.keyField (LIT-7387)."""
+    h = _make_handler()
+    client = MagicMock()
+    client.post.return_value = _http_response()
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(
+            f"{HMOD}.safe_get",
+            side_effect=[_custom_endpoint_get_response(), _container_model_get_response()],
+        ) as safe_get,
+    ):
+        out = h.create_batch(
+            _is_async=False,
+            create_batch_data=CUSTOM_ENDPOINT_CREATE_DATA,
+            api_base=None,
+            vertex_credentials=None,
+            vertex_project=PROJECT,
+            vertex_location=LOCATION,
+            timeout=600.0,
+            max_retries=None,
+            custom_endpoint=True,
+        )
+
+    assert isinstance(out, LiteLLMBatch)
+    endpoint_get_url = safe_get.call_args_list[0].args[1]
+    assert endpoint_get_url.endswith(f"/endpoints/{CUSTOM_ENDPOINT_ID}")
+    model_get_url = safe_get.call_args_list[1].args[1]
+    assert model_get_url.endswith(CONTAINER_MODEL_RESOURCE)
+
+    post_url = client.post.call_args.kwargs["url"]
+    assert "/v1beta1/" in post_url
+    sent = json.loads(client.post.call_args.kwargs["data"])
+    assert "model" not in sent
+    assert sent["unmanagedContainerModel"] == {"containerSpec": CONTAINER_SPEC}
+    assert sent["dedicatedResources"] == {
+        "machineSpec": MACHINE_SPEC,
+        "startingReplicaCount": 1,
+        "maxReplicaCount": 2,
+    }
+    assert sent["instanceConfig"] == {"instanceType": "object", "keyField": "litellm_custom_id"}
+
+
+def test_create_batch_sync_custom_endpoint_without_container_spec_raises_400():
+    h = _make_handler()
+    client = MagicMock()
+
+    with (
+        patch(f"{HMOD}._get_httpx_client", return_value=client),
+        patch(
+            f"{HMOD}.safe_get",
+            side_effect=[_custom_endpoint_get_response(), _container_model_get_response(container_spec=None)],
+        ),
+    ):
+        with pytest.raises(VertexAIError) as exc_info:
+            h.create_batch(
+                _is_async=False,
+                create_batch_data=CUSTOM_ENDPOINT_CREATE_DATA,
+                api_base=None,
+                vertex_credentials=None,
+                vertex_project=PROJECT,
+                vertex_location=LOCATION,
+                timeout=600.0,
+                max_retries=None,
+                custom_endpoint=True,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "containerSpec" in str(exc_info.value)
+    client.post.assert_not_called()
+
+
 def test_create_batch_sync_ignores_resource_shaped_api_base():
     """A deployment api_base like `.../endpoints/<id>:rawPredict` targets online inference, not
     the Vertex API root; grafting batch urls onto it yields guaranteed 404s, so batch operations
@@ -356,9 +473,9 @@ def test_create_batch_sync_endpoint_resolution_error_raises():
     client.post.assert_not_called()
 
 
-def test_create_batch_custom_endpoint_raises_400_without_io():
-    """custom_endpoint deployments have no Vertex batch surface; creating a job would target a
-    nonexistent publisher model, so the handler must 400 before any auth or HTTP work (LIT-6899)."""
+def test_create_batch_custom_endpoint_rejects_non_custom_endpoint_file():
+    """A custom_endpoint batch create over a file staged for a publisher model would run the wrong
+    workload on batch replicas of the container; the handler must 400 before any HTTP work."""
     h = _make_handler()
     client = MagicMock()
 
@@ -378,8 +495,8 @@ def test_create_batch_custom_endpoint_raises_400_without_io():
 
     assert exc_info.value.status_code == 400
     assert "custom_endpoint" in str(exc_info.value)
-    h._ensure_access_token.assert_not_called()
     client.post.assert_not_called()
+    client.get.assert_not_called()
 
 
 def test_create_batch_sync_endpoint_without_deployed_model_raises_400():

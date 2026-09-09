@@ -1,5 +1,5 @@
 import json
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import urlparse
 
@@ -17,12 +17,18 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import (
+    VERTEX_CUSTOM_ENDPOINT_KEY_FIELD,
+    VertexAIError,
+    get_vertex_base_url,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.llms.vertex_ai.vertex_llm_base import _graft_default_vertex_path
 from litellm.types.llms.openai import CreateBatchRequest
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
+    BatchDedicatedResources,
+    UnmanagedContainerModel,
     VertexAIBatchPredictionJob,
     VertexBatchPredictionResponse,
 )
@@ -58,8 +64,18 @@ class _FetchedResponseView(TypedDict):
     response: ReadOnly[httpx.Response]
 
 
+class _VertexOnlineDedicatedResources(TypedDict, total=False):
+    """The dedicatedResources block on an online endpoint deployment; replica bounds are named
+    min/max there, unlike the batch job's starting/max."""
+
+    machineSpec: ReadOnly[Mapping[str, object]]
+    minReplicaCount: ReadOnly[int]
+    maxReplicaCount: ReadOnly[int]
+
+
 class _VertexEndpointDeployedModel(TypedDict, total=False):
     model: ReadOnly[str]
+    dedicatedResources: ReadOnly[_VertexOnlineDedicatedResources]
 
 
 class _VertexEndpointResponse(TypedDict, total=False):
@@ -70,6 +86,16 @@ class _VertexEndpointPayloadView(TypedDict):
     """Holds one decoded GET endpoints/<id> response so the payload reads back typed."""
 
     payload: ReadOnly[_VertexEndpointResponse]
+
+
+class _VertexModelResourceResponse(TypedDict, total=False):
+    containerSpec: ReadOnly[Mapping[str, object]]
+
+
+class _VertexModelResourcePayloadView(TypedDict):
+    """Holds one decoded GET models/<id> response so the payload reads back typed."""
+
+    payload: ReadOnly[_VertexModelResourceResponse]
 
 
 def _gateway_api_base_or_none(api_base: str | None) -> str | None:
@@ -110,15 +136,6 @@ class VertexAIBatchPrediction(VertexLLM):
         max_retries: int | None,
         custom_endpoint: bool | None = None,
     ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
-        if custom_endpoint:
-            raise VertexAIError(
-                status_code=400,
-                message=(
-                    "Vertex AI batch prediction is not supported for `custom_endpoint` deployments. "
-                    "The OpenAI-compatible custom endpoint path has no batch surface in LiteLLM; "
-                    "use a publisher model or fine-tuned Gemini endpoint deployment instead."
-                ),
-            )
         sync_handler: Final = _get_httpx_client()
 
         access_token, project_id = self._ensure_access_token(
@@ -139,18 +156,37 @@ class VertexAIBatchPrediction(VertexLLM):
                 vertex_location=vertex_location or "us-central1",
             )
         )
+        if custom_endpoint and "/custom-endpoints/" not in transformed_batch_request.get("model", ""):
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    "Vertex AI batch prediction on a `custom_endpoint` deployment requires an input "
+                    "file uploaded through LiteLLM against that deployment (its file id carries a "
+                    "custom-endpoints/<endpoint id> path); this input file targets a publisher or "
+                    "fine-tuned Gemini model instead."
+                ),
+            )
         gateway_api_base: Final = _gateway_api_base_or_none(api_base)
-        vertex_batch_request: Final = self._resolve_fine_tuned_endpoint_model(
+        resolved_batch_request: Final = self._resolve_fine_tuned_endpoint_model(
             vertex_batch_request=transformed_batch_request,
             headers=headers,
             sync_handler=sync_handler,
             api_base=gateway_api_base,
             vertex_location=vertex_location or "us-central1",
         )
+        vertex_batch_request: Final = self._resolve_custom_endpoint_container(
+            vertex_batch_request=resolved_batch_request,
+            headers=headers,
+            sync_handler=sync_handler,
+            api_base=gateway_api_base,
+            vertex_location=vertex_location or "us-central1",
+        )
+        is_unmanaged_container_job: Final = "unmanagedContainerModel" in vertex_batch_request
 
         default_api_base: Final = self.create_vertex_batch_url(
             vertex_location=vertex_location or "us-central1",
             vertex_project=vertex_project or project_id,
+            vertex_api_version="v1beta1" if is_unmanaged_container_job else "v1",
         )
 
         if len(default_api_base.split(":")) > 1:
@@ -169,7 +205,7 @@ class VertexAIBatchPrediction(VertexLLM):
             model=None,
             vertex_project=vertex_project or project_id,
             vertex_location=vertex_location or "us-central1",
-            vertex_api_version="v1",
+            vertex_api_version="v1beta1" if is_unmanaged_container_job else "v1",
         )
 
         if _is_async is True:
@@ -263,6 +299,113 @@ class VertexAIBatchPrediction(VertexLLM):
         resolved_request: Final[VertexAIBatchPredictionJob] = {**vertex_batch_request, "model": deployed_model}
         return resolved_request
 
+    def _resolve_custom_endpoint_container(
+        self,
+        vertex_batch_request: VertexAIBatchPredictionJob,
+        headers: dict[str, str],  # mutable-ok: HTTPHandler.get only accepts dict headers
+        sync_handler: HTTPHandler,
+        api_base: str | None,
+        vertex_location: str,
+    ) -> VertexAIBatchPredictionJob:
+        """
+        A `custom_endpoint` deployment serves an OpenAI-compatible container on a Vertex endpoint.
+        The batch API accepts neither that endpoint (the v1beta1 BYOE `endpoint` field is refused
+        with "specify model or unmanaged_container_model") nor its Model-Garden-sourced model
+        resource ("Unknown ModelSource source_type: MODEL_GARDEN"), so the job instead runs
+        batch-owned replicas of the same container: `unmanagedContainerModel` with the
+        containerSpec read verbatim from the endpoint's deployed model (a hand-built spec loses
+        model-source args and crash-loops) plus `dedicatedResources` copied from the endpoint's
+        own deployment.
+        """
+        model: Final = vertex_batch_request.get("model", "")
+        if "/custom-endpoints/" not in model:
+            return vertex_batch_request
+        endpoint_resource: Final = model.replace("/custom-endpoints/", "/endpoints/")
+
+        endpoint_url: Final = self._build_endpoint_resolution_url(
+            api_base=api_base,
+            model=endpoint_resource,
+            vertex_location=vertex_location,
+        )
+        endpoint_fetched: Final[_FetchedResponseView] = {
+            "response": safe_get(sync_handler, endpoint_url, headers=headers)
+        }
+        endpoint_response: Final = endpoint_fetched["response"]
+        if endpoint_response.status_code != 200:
+            raise VertexAIError(
+                status_code=endpoint_response.status_code,
+                message=f"Failed to resolve custom Vertex endpoint '{endpoint_resource}': {endpoint_response.text}",
+            )
+        endpoint_view: Final[_VertexEndpointPayloadView] = {"payload": endpoint_response.json()}
+        deployed_models: Final = endpoint_view["payload"].get("deployedModels") or ()
+        deployed: Final = deployed_models[0] if deployed_models else _VertexEndpointDeployedModel()
+        deployed_model_resource: Final = deployed.get("model", "")
+        if not deployed_model_resource:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    f"Vertex endpoint '{endpoint_resource}' has no deployed model, so there is no "
+                    "serving container to run batch predictions with"
+                ),
+            )
+
+        model_url: Final = self._build_endpoint_resolution_url(
+            api_base=api_base,
+            model=deployed_model_resource,
+            vertex_location=vertex_location,
+        )
+        model_fetched: Final[_FetchedResponseView] = {
+            "response": safe_get(sync_handler, model_url, headers=headers)
+        }
+        model_response: Final = model_fetched["response"]
+        if model_response.status_code != 200:
+            raise VertexAIError(
+                status_code=model_response.status_code,
+                message=f"Failed to read model resource '{deployed_model_resource}': {model_response.text}",
+            )
+        model_view: Final[_VertexModelResourcePayloadView] = {"payload": model_response.json()}
+        container_spec: Final = model_view["payload"].get("containerSpec")
+        if not container_spec:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    f"Model resource '{deployed_model_resource}' carries no containerSpec, so its "
+                    "serving container cannot be replicated for batch prediction"
+                ),
+            )
+
+        online_resources: Final = deployed.get("dedicatedResources") or _VertexOnlineDedicatedResources()
+        machine_spec: Final = online_resources.get("machineSpec")
+        if not machine_spec:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    f"Vertex endpoint '{endpoint_resource}' exposes no dedicatedResources machine "
+                    "spec to size the batch replicas from"
+                ),
+            )
+        batch_resources: Final[BatchDedicatedResources] = {
+            "machineSpec": machine_spec,
+            "startingReplicaCount": online_resources.get("minReplicaCount", 1),
+            "maxReplicaCount": online_resources.get("maxReplicaCount", 1),
+        }
+        unmanaged: Final[UnmanagedContainerModel] = {"containerSpec": container_spec}
+        resolved: Final[VertexAIBatchPredictionJob] = {
+            "displayName": vertex_batch_request["displayName"],
+            "inputConfig": vertex_batch_request["inputConfig"],
+            "outputConfig": vertex_batch_request["outputConfig"],
+            "unmanagedContainerModel": unmanaged,
+            "dedicatedResources": batch_resources,
+            # keyField strips the custom_id tag from each instance before it reaches the
+            # container (vLLM rejects unknown fields) and echoes it back as `key` in the output
+            # row; it only takes effect alongside an explicit instanceType.
+            "instanceConfig": {
+                "instanceType": "object",
+                "keyField": VERTEX_CUSTOM_ENDPOINT_KEY_FIELD,
+            },
+        }
+        return resolved
+
     async def _async_create_batch(
         self,
         vertex_batch_request: VertexAIBatchPredictionJob,
@@ -298,11 +441,12 @@ class VertexAIBatchPrediction(VertexLLM):
         self,
         vertex_location: str,
         vertex_project: str,
+        vertex_api_version: str = "v1",
     ) -> str:
         """Return the base url for the vertex garden models"""
         #  POST https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/batchPredictionJobs
         base_url: Final = get_vertex_base_url(vertex_location)
-        return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/batchPredictionJobs"
+        return f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/batchPredictionJobs"
 
     def retrieve_batch(
         self,

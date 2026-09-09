@@ -234,10 +234,41 @@ class TestBatchObjectNaming:
         assert "9999999999999999999" not in object_name
 
 
+CUSTOM_ENDPOINT_ID = "4980511146650894336"
+CUSTOM_ENDPOINT_API_BASE = (
+    "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project"
+    f"/locations/us-central1/endpoints/{CUSTOM_ENDPOINT_ID}:rawPredict"
+)
+
+
 class TestCustomEndpointBatchUpload:
-    def test_should_reject_batch_upload_for_custom_endpoint_deployment(self, config):
-        """custom_endpoint deployments have no Vertex batch surface; the upload must 400 instead
-        of staging a file that can only produce a doomed batch job (LIT-6899)."""
+    def test_should_stage_batch_upload_under_custom_endpoints_path(self, config):
+        """The GCS path is how the later batch create learns which serving container to
+        replicate, so a custom_endpoint upload must record the endpoint id from the api_base
+        under the custom-endpoints/ marker (LIT-7387)."""
+        url = config.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={
+                "gcs_bucket_name": "my-bucket",
+                "custom_endpoint": True,
+                "api_base": CUSTOM_ENDPOINT_API_BASE,
+                "model": "vertex_ai/openai/gemma-2-2b-it",
+            },
+            data={
+                "file": ("batch.jsonl", b'{"body": {"model": "openai/gemma-2-2b-it"}}', "application/jsonl"),
+                "purpose": "batch",
+            },
+        )
+        assert url.startswith("https://storage.googleapis.com/")
+        object_name = parse_qs(urlparse(url).query)["name"][0]
+        assert object_name.startswith(f"litellm-vertex-files/custom-endpoints/{CUSTOM_ENDPOINT_ID}/")
+
+    def test_should_reject_batch_upload_when_api_base_names_no_endpoint(self, config):
+        """Without an endpoint id in the api_base there is no container to run the batch with, so
+        the upload must fail with a clear 400 instead of staging a doomed file."""
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
         with pytest.raises(VertexAIError) as exc_info:
@@ -246,14 +277,18 @@ class TestCustomEndpointBatchUpload:
                 api_key=None,
                 model="",
                 optional_params={},
-                litellm_params={"gcs_bucket_name": "my-bucket", "custom_endpoint": True},
+                litellm_params={
+                    "gcs_bucket_name": "my-bucket",
+                    "custom_endpoint": True,
+                    "api_base": "https://my-gateway.internal/v1",
+                },
                 data={
                     "file": ("batch.jsonl", b'{"body": {"model": "openai/gemma-2-2b-it"}}', "application/jsonl"),
                     "purpose": "batch",
                 },
             )
         assert exc_info.value.status_code == 400
-        assert "custom_endpoint" in str(exc_info.value)
+        assert "api_base" in str(exc_info.value)
 
     def test_should_allow_non_batch_upload_for_custom_endpoint_deployment(self, config):
         url = config.get_complete_file_url(
@@ -268,6 +303,63 @@ class TestCustomEndpointBatchUpload:
             },
         )
         assert "/b/my-bucket/" in url
+
+
+class TestCustomEndpointBatchRows:
+    def test_upload_stream_emits_chat_completions_instances(self):
+        """Each OpenAI batch line must become a `@requestFormat: chatCompletions` instance the
+        vLLM container accepts natively, with `model` dropped (the batch replica serves exactly
+        one model) and the custom_id under the keyField name the batch job strips server-side."""
+        from litellm.llms.vertex_ai.files.transformation import (
+            _OpenAIToCustomEndpointBatchUploadStream,
+        )
+
+        openai_jsonl = (
+            b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions",'
+            b' "body": {"model": "gemma", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 5}}\n'
+            b'{"custom_id": "req-2", "method": "POST", "url": "/v1/chat/completions",'
+            b' "body": {"model": "gemma", "messages": [{"role": "user", "content": "yo"}]}}'
+        )
+        stream = _OpenAIToCustomEndpointBatchUploadStream(("batch.jsonl", openai_jsonl, "application/jsonl"))
+        rows = [json.loads(line) for line in b"".join(stream.iter_bytes()).split(b"\n")]
+        assert rows == [
+            {
+                "@requestFormat": "chatCompletions",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 5,
+                "litellm_custom_id": "req-1",
+            },
+            {
+                "@requestFormat": "chatCompletions",
+                "messages": [{"role": "user", "content": "yo"}],
+                "litellm_custom_id": "req-2",
+            },
+        ]
+
+    def test_output_rows_unwrap_to_openai_batch_format(self, config):
+        """An unmanaged-container output row already carries a full OpenAI chat.completion under
+        prediction.predictions; the transform must unwrap it and recover the custom_id from the
+        keyField echo, and a failed row must become an OpenAI batch error row."""
+        vertex_output = (
+            b'{"key": "req-1", "prediction": {"predictions": {"id": "chatcmpl-1", "object": "chat.completion",'
+            b' "model": "google/gemma2-2b-it", "choices": [{"index": 0, "message": {"role": "assistant",'
+            b' "content": "Hello"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 5,'
+            b' "completion_tokens": 2, "total_tokens": 7}}}}\n'
+            b'{"key": "req-2", "prediction": "Post request fails.", "status": "Post request fails."}'
+        )
+        transformed = config._try_transform_vertex_batch_output_to_openai(content=vertex_output)
+        rows = [json.loads(line) for line in transformed.split(b"\n")]
+
+        assert rows[0]["custom_id"] == "req-1"
+        assert rows[0]["error"] is None
+        assert rows[0]["response"]["status_code"] == 200
+        assert rows[0]["response"]["body"]["choices"][0]["message"]["content"] == "Hello"
+        assert rows[0]["response"]["body"]["usage"]["total_tokens"] == 7
+
+        assert rows[1]["custom_id"] == "req-2"
+        assert rows[1]["response"] is None
+        assert rows[1]["error"]["code"] == "vertex_ai_error"
+        assert "Post request fails." in rows[1]["error"]["message"]
 
 
 class TestTransformRetrieveFile:
