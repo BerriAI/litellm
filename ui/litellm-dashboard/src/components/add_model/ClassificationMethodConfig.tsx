@@ -17,6 +17,7 @@ import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import ClassifierVisionConfig from "./ClassifierVisionConfig";
 import type { ReasoningEffort } from "./complexity_router_tiers";
+import { nonReasoningTierFields } from "./nonReasoningTierFields";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassificationFrequency,
@@ -288,6 +289,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           : undefined,
       hybrid_boundary_margin:
         classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
+      ...nonReasoningTierFields(classifierType, value),
     };
     onChange(nextValue);
   };

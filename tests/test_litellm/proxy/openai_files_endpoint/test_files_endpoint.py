@@ -2920,9 +2920,9 @@ def test_unscoped_list_files_accepts_every_documented_purpose(
 def test_list_files_reports_a_bad_target_model_names_as_a_400(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
-    """The exception tail reports an HTTPException with its own status and error
-    type rather than relabelling it, so a client that branches on either keeps
-    reading the same thing off a bad request."""
+    """The exception tail answers with the OpenAI error object a client can branch on:
+    the type its 400 status stands for, and a JSON null param rather than the literal
+    string "None" no OpenAI SDK has a case for."""
     _setup_unscoped_list_files_route(mocker, monkeypatch, llm_router, _permissive_afile_list)
 
     response = _get_list_files("/v1/files?target_model_names=gpt-3.5-turbo,gpt-4o")
@@ -2931,8 +2931,8 @@ def test_list_files_reports_a_bad_target_model_names_as_a_400(
     assert response.json() == {
         "error": {
             "message": "target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
-            "type": "None",
-            "param": "None",
+            "type": "invalid_request_error",
+            "param": None,
             "code": "400",
         }
     }
@@ -4666,3 +4666,156 @@ def test_create_file_path_traversal_filename_rejected_before_forwarding(monkeypa
     assert error["param"] == "file"
     assert "traversal" in error["message"].lower()
     assert forwarded_calls == []
+
+
+def _setup_managed_file_route_answering_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    """Wire the single-file routes to a managed file store that knows no file, the way the
+    managed files hook answers once a file has been deleted or was never the caller's."""
+    import litellm.proxy.proxy_server as ps
+    from fastapi import HTTPException
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    async def _file_not_found(file_id: str, **kwargs: object) -> None:
+        raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.afile_retrieve = mocker.AsyncMock(side_effect=_file_not_found)
+    managed_files.afile_delete = mocker.AsyncMock(side_effect=_file_not_found)
+    managed_files.afile_content = mocker.AsyncMock(side_effect=_file_not_found)
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+
+def _call_managed_file_route(method: str, path: str) -> httpx.Response:
+    try:
+        return client.request(method, path, headers={"Authorization": "Bearer test-key"})
+    finally:
+        import litellm.proxy.proxy_server as ps
+
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _missing_managed_file_error(file_id: str) -> dict[str, dict[str, str | None]]:
+    return {
+        "error": {
+            "message": f"File not found: {file_id}",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "404",
+        }
+    }
+
+
+def test_create_file_reports_a_half_specified_expires_after_as_a_400(
+    monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    """A 400 raised inside the route answers with the type a 400 stands for and a JSON null
+    param, not the literal string "None" in both fields, so a client can classify it."""
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    response = client.post(
+        "/v1/files",
+        files={"file": ("mydata.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+        data={"purpose": "batch", "target_model_names": "gpt-3.5-turbo", "expires_after[anchor]": "created_at"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert "expires_after[seconds]" in error["message"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] is None
+    assert error["code"] == "400"
+
+
+def test_get_file_reports_a_missing_managed_file_as_a_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    _setup_managed_file_route_answering_404(mocker, monkeypatch, llm_router)
+    file_id = _unified_managed_file_id()
+
+    response = _call_managed_file_route("GET", f"/v1/files/{file_id}")
+
+    assert response.status_code == 404, response.text
+    assert response.json() == _missing_managed_file_error(file_id)
+
+
+def test_delete_file_reports_a_missing_managed_file_as_a_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    _setup_managed_file_route_answering_404(mocker, monkeypatch, llm_router)
+    file_id = _unified_managed_file_id()
+
+    response = _call_managed_file_route("DELETE", f"/v1/files/{file_id}")
+
+    assert response.status_code == 404, response.text
+    assert response.json() == _missing_managed_file_error(file_id)
+
+
+def test_get_file_content_reports_a_missing_managed_file_as_a_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    _setup_managed_file_route_answering_404(mocker, monkeypatch, llm_router)
+    file_id = _unified_managed_file_id()
+
+    response = _call_managed_file_route("GET", f"/v1/files/{file_id}/content")
+
+    assert response.status_code == 404, response.text
+    assert response.json() == _missing_managed_file_error(file_id)
+
+
+def _setup_managed_file_stored_in_an_unknown_storage_backend(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    """Wire the content route to a managed file whose row names a storage backend the
+    factory does not know, which is the one in-route ProxyException on these routes."""
+    from types import SimpleNamespace
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.prisma_client = mocker.MagicMock()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    repository = mocker.MagicMock()
+    repository.table.find_first = mocker.AsyncMock(
+        return_value=SimpleNamespace(storage_backend="ftp", storage_url="ftp://bucket/file")
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.ManagedFileRepository", lambda _prisma: repository
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+
+def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_route(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    """A ProxyException raised inside the route carries its status as the string ``code``,
+    and the tail used to rebuild it as a 500 because it only read ``status_code``."""
+    _setup_managed_file_stored_in_an_unknown_storage_backend(mocker, monkeypatch, llm_router)
+
+    response = _call_managed_file_route("GET", f"/v1/files/{_unified_managed_file_id()}/content")
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["message"].startswith("Storage backend error")
+    assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "file_id", "400")

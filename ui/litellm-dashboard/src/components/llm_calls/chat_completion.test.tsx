@@ -20,7 +20,9 @@ const mockClient = {
 
 vi.mock("openai", () => ({
   default: {
-    OpenAI: vi.fn(() => mockClient),
+    OpenAI: vi.fn(function () {
+      return mockClient;
+    }),
   },
 }));
 
