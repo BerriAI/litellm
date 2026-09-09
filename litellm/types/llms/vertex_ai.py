@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
@@ -700,7 +700,7 @@ class UnmanagedContainerModel(TypedDict, total=False):
 class BatchInstanceConfig(TypedDict, total=False):
     instanceType: ReadOnly[str]
     keyField: ReadOnly[str]
-    excludedFields: ReadOnly[list[str]]
+    excludedFields: ReadOnly[Sequence[str]]
 
 
 class VertexAIBatchPredictionJob(TypedDict, total=False):

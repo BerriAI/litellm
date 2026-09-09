@@ -6,6 +6,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, Final, TypedDict
 from urllib.parse import quote, unquote, urlparse
 
@@ -664,12 +665,11 @@ def _custom_endpoint_row_to_openai_batch_output_row(row: Mapping[str, object]) -
     """
     key: Final = row.get("key")
     instance: Final = row.get("instance")
-    instance_map: Final = instance if isinstance(instance, Mapping) else {}
-    custom_id: Final = str(key if key is not None else instance_map.get(VERTEX_CUSTOM_ENDPOINT_KEY_FIELD, ""))
+    tagged_custom_id: Final = instance.get(VERTEX_CUSTOM_ENDPOINT_KEY_FIELD, "") if isinstance(instance, Mapping) else ""
+    custom_id: Final = str(key if key is not None else tagged_custom_id)
 
     prediction: Final = row.get("prediction")
-    prediction_map: Final = prediction if isinstance(prediction, Mapping) else {}
-    body: Final = prediction_map.get("predictions")
+    body: Final = prediction.get("predictions") if isinstance(prediction, Mapping) else None
     if not isinstance(body, Mapping):
         error_text: Final = str(row.get("status") or prediction or "prediction carries no response body")
         return _openai_batch_output_row(
@@ -710,6 +710,7 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
 
 VERTEX_CUSTOM_ENDPOINT_GCS_SEGMENT: Final = "custom-endpoints"
 _VERTEX_CHAT_COMPLETIONS_REQUEST_FORMAT: Final = "chatCompletions"
+_EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def get_custom_endpoint_id_from_api_base(api_base: str | None) -> str | None:
@@ -729,20 +730,26 @@ def get_custom_endpoint_id_from_api_base(api_base: str | None) -> str | None:
     return after_endpoints[-1].split(":")[0] or None
 
 
-def _openai_batch_jsonl_entry_to_custom_endpoint_row(openai_entry: dict[str, Any]) -> Mapping[str, object]:
+def _openai_batch_jsonl_entry_to_custom_endpoint_row(openai_entry: Mapping[str, object]) -> Mapping[str, object]:
     """
     One OpenAI batch JSONL line as the instance a vLLM-serving Vertex container consumes:
     the OpenAI request body itself tagged `@requestFormat: chatCompletions` (the container
     speaks OpenAI natively, so no Gemini translation), minus `model` (the batch replica
-    serves exactly one model) plus the custom_id under the job's `instanceConfig.keyField`.
+    serves exactly one model) plus the custom_id tag the job's `instanceConfig.excludedFields`
+    strips back out before the container sees it.
     """
-    body: Final = openai_entry.get("body") or {}
-    row: Final = {k: v for k, v in body.items() if k != "model"}
-    return {
-        "@requestFormat": _VERTEX_CHAT_COMPLETIONS_REQUEST_FORMAT,
-        **row,
-        VERTEX_CUSTOM_ENDPOINT_KEY_FIELD: str(openai_entry.get("custom_id", "")),
-    }
+    raw_body: Final = openai_entry.get("body")
+    body: Final = raw_body if isinstance(raw_body, Mapping) else _EMPTY_MAPPING
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in itertools.chain(
+                (("@requestFormat", _VERTEX_CHAT_COMPLETIONS_REQUEST_FORMAT),),
+                ((k, v) for k, v in body.items() if k != "model"),
+                ((VERTEX_CUSTOM_ENDPOINT_KEY_FIELD, str(openai_entry.get("custom_id", ""))),),
+            )
+        }
+    )
 
 
 class _OpenAIToCustomEndpointBatchUploadStream(BaseFileUploadStream):
@@ -758,7 +765,7 @@ class _OpenAIToCustomEndpointBatchUploadStream(BaseFileUploadStream):
             row = _openai_batch_jsonl_entry_to_custom_endpoint_row(entry)
             prefix = b"" if first else b"\n"
             first = False
-            yield prefix + json.dumps(row).encode("utf-8")
+            yield prefix + json.dumps(row, default=dict).encode("utf-8")
 
 
 class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
@@ -1231,6 +1238,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # passthrough below, leaving the content untouched.
             first_row: Final = _parse_vertex_batch_output_row(first_line)
             is_custom_endpoint_output: Final = _is_custom_endpoint_batch_output_row(first_row)
+            first_row_response: Final = first_row.get("response") or ()
             is_vertex_batch_output: Final = (
                 is_custom_endpoint_output
                 or _is_vertex_embeddings_batch_output_row(first_row)
@@ -1239,8 +1247,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                     and "response" in first_row
                     and "processed_time" in first_row
                     and (
-                        "candidates" in first_row.get("response", {})
-                        or "promptFeedback" in first_row.get("response", {})
+                        "candidates" in first_row_response
+                        or "promptFeedback" in first_row_response
                         or bool(first_row.get("status"))
                     )
                 )

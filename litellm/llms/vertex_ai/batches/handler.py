@@ -402,7 +402,7 @@ class VertexAIBatchPrediction(VertexLLM):
             # the tag and 400'd every row).
             "instanceConfig": {
                 "instanceType": "object",
-                "excludedFields": [VERTEX_CUSTOM_ENDPOINT_KEY_FIELD],
+                "excludedFields": (VERTEX_CUSTOM_ENDPOINT_KEY_FIELD,),
             },
         }
         return resolved
