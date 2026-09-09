@@ -1861,6 +1861,33 @@ class TestBedrockFileDeletion:
     S3_URI: Final = "s3://my-bucket/litellm-bedrock-files-model-abc.jsonl"
     URL: Final = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files-model-abc.jsonl"
 
+    def test_interleaved_deletions_keep_their_own_file_ids(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        config: Final = BedrockFilesConfig()
+        params: Final = {
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "test-secret",
+            "aws_region_name": "us-west-2",
+        }
+        file_ids: Final = (self.S3_URI, "s3://my-bucket/litellm-bedrock-files-model-second.jsonl")
+        for file_id in file_ids:
+            config.transform_delete_file_request(file_id=file_id, optional_params={}, litellm_params=params)
+
+        deleted: Final = tuple(
+            config.transform_delete_file_response(
+                raw_response=httpx.Response(204),
+                logging_obj=MagicMock(model_call_details={"additional_args": {"file_id": file_id}}),
+                litellm_params=params,
+            ).id
+            for file_id in file_ids
+        )
+
+        assert deleted == file_ids
+
     def test_delete_file_sends_signed_delete_and_returns_matching_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import httpx
         import respx

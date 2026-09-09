@@ -13,7 +13,7 @@ from urllib.parse import unquote
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
@@ -61,7 +61,11 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, merge_bedrock_aws_request_params, resolve_s3_encryption_key_id
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
-S3_DELETE_FILE_ID_PARAM: Final = "_s3_delete_file_id"
+
+
+class _S3DeleteContext(BaseModel):
+    file_id: str = Field(min_length=1)
+
 
 # litellm_params key carrying the size of the body uploaded to S3, handed from
 # `transform_create_file_request` to `transform_create_file_response`.
@@ -1187,11 +1191,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         optional_params: Mapping[str, object],
         litellm_params: MutableMapping[str, object],
     ) -> tuple[str, dict[str, str]]:
-        request: Final = self._transform_s3_file_request(
+        return self._transform_s3_file_request(
             file_id=file_id, method="DELETE", optional_params=optional_params, litellm_params=litellm_params
         )
-        litellm_params[S3_DELETE_FILE_ID_PARAM] = file_id
-        return request
 
     def transform_delete_file_response(
         self,
@@ -1205,10 +1207,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 message=raw_response.text or f"S3 file deletion returned HTTP {raw_response.status_code}",
                 headers=raw_response.headers,
             )
-        file_id: Final = litellm_params.get(S3_DELETE_FILE_ID_PARAM)
-        if not isinstance(file_id, str) or not file_id:
-            raise ValueError("Missing file id for Bedrock file deletion response")
-        return FileDeleted(id=file_id, deleted=True, object="file")
+        context: Final = _S3DeleteContext.model_validate(logging_obj.model_call_details.get("additional_args"))
+        return FileDeleted(id=context.file_id, deleted=True, object="file")
 
     def transform_list_files_request(
         self,
