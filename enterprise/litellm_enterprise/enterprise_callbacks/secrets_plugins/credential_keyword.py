@@ -1,5 +1,6 @@
 import re
 from collections.abc import Generator, Mapping
+from string import punctuation
 from typing import Final
 
 from detect_secrets.plugins.keyword import (
@@ -15,6 +16,13 @@ _ISO_8601_TIMESTAMP: Final = re.compile(
     r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?"
 )
 _URL_WITHOUT_USERINFO_OR_QUERY: Final = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s@?]*")
+_BENIGN_VALUES: Final = (
+    _ENVIRONMENT_REFERENCE,
+    _ENVIRONMENT_VARIABLE_NAME,
+    _LOWERCASE_WORD_SEQUENCE,
+    _ISO_8601_TIMESTAMP,
+    _URL_WITHOUT_USERINFO_OR_QUERY,
+)
 
 
 class CredentialKeywordDetector(KeywordDetector):  # pyright: ignore[reportUntypedBaseClass]  # detect_secrets ships no type information
@@ -30,14 +38,11 @@ class CredentialKeywordDetector(KeywordDetector):  # pyright: ignore[reportUntyp
         self.minimum_length = minimum_length
 
     def _is_credential(self, value: str) -> bool:
+        core: Final = value.strip(punctuation)
         return (
             len(value) >= self.minimum_length
             and _CREDENTIAL_VALUE.fullmatch(value) is not None
-            and _ENVIRONMENT_REFERENCE.fullmatch(value) is None
-            and _ENVIRONMENT_VARIABLE_NAME.fullmatch(value) is None
-            and _LOWERCASE_WORD_SEQUENCE.fullmatch(value) is None
-            and _ISO_8601_TIMESTAMP.fullmatch(value) is None
-            and _URL_WITHOUT_USERINFO_OR_QUERY.fullmatch(value) is None
+            and all(benign.fullmatch(core) is None for benign in _BENIGN_VALUES)
         )
 
     def analyze_string(

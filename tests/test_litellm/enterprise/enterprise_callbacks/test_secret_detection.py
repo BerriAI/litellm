@@ -113,6 +113,10 @@ def test_scan_message_preserves_quoted_benign_identifiers():
             '{"password": "YOUR_API_KEY_HERE", "client_secret": "correcthorsebattery"}',
             "correcthorsebattery",
         ),
+        ("docker run -e REDIS_PASSWORD=aB3dE6gH9jK2mN5p \\\n  -e REDIS_PORT=6379 redis", "aB3dE6gH9jK2mN5p"),
+        ("DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt && echo done", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("password = Zx4Kp9Lm2Qr7Ns3Vt  # rotate me", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("my db password: Zx4Kp9Lm2Qr7Ns3Vt.", "Zx4Kp9Lm2Qr7Ns3Vt"),
     ],
     ids=[
         "env-password",
@@ -139,12 +143,33 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         "password-only-url-under-a-credential-key",
         "timestamp-prefixed-password",
         "credential-after-a-rejected-placeholder",
+        "docker-flag-with-a-line-continuation",
+        "shell-command-after-the-value",
+        "inline-comment-after-the-value",
+        "sentence-ending-in-the-value",
     ],
 )
 def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, secret):
     guardrail = _guardrail()
 
     assert secret not in guardrail.redact_text(content)
+
+
+def test_scan_message_redacts_only_the_first_token_of_a_shell_assignment():
+    guardrail = _guardrail()
+    content = "docker run -e REDIS_PASSWORD=aB3dE6gH9jK2mN5p \\\n  -e REDIS_PORT=6379 redis && echo done"
+
+    assert (
+        guardrail.redact_text(content)
+        == "docker run -e REDIS_PASSWORD=[REDACTED] \\\n  -e REDIS_PORT=6379 redis && echo done"
+    )
+
+
+def test_scan_message_closes_a_yaml_block_at_the_next_unindented_line():
+    guardrail = _guardrail()
+    content = "api_key: >\n  aB3dE6gH9jK2mN5p\nSteps\n  Rotate-Before-Friday please"
+
+    assert guardrail.redact_text(content) == "api_key: >\n  [REDACTED]\nSteps\n  Rotate-Before-Friday please"
 
 
 def test_scan_message_redacts_every_credential_on_one_line():
@@ -204,6 +229,13 @@ def test_scan_message_redacts_every_credential_on_one_line():
         'password_reset_url: "https://example.com/reset-password/flow"',
         'secret_docs_url: "https://example.com/reset-password/flow#step-2"',
         '{"api_key_created_at": "2026-09-08T17:38:40Z", "password_reset_url": "https://example.com/reset/flow"}',
+        "secret_sauce: tomatoes-basil-garlic-oregano.",
+        "secret_docs_url: https://example.com/docs/keys, then rotate",
+        "api_key_created_at: 2026-09-08T17:38:40Z; api_key_env: OPENAI_API_KEY!",
+        "api_key: $OPENAI_API_KEY",
+        'api_key: "${OPENAI_API_KEY}"',
+        "private_key_path: /keys/prod/server-cert.pem",
+        "password_hint: your usual one followed by Ticket-LIT7049-Suffix",
     ],
     ids=[
         "prose-password",
@@ -251,6 +283,13 @@ def test_scan_message_redacts_every_credential_on_one_line():
         "url-under-a-credential-key",
         "fragment-url-under-a-credential-key",
         "metadata-object-under-credential-keys",
+        "hyphenated-english-ending-a-sentence",
+        "url-followed-by-a-clause",
+        "timestamp-and-env-name-with-trailing-punctuation",
+        "shell-variable-reference",
+        "quoted-braced-shell-variable-reference",
+        "absolute-path-under-a-credential-key",
+        "sentence-holding-a-later-mixed-case-token",
     ],
 )
 def test_scan_message_keeps_benign_values(content):

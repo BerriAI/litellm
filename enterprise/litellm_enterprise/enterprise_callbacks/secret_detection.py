@@ -513,8 +513,9 @@ def _quoted_assignments(text: str) -> tuple[str, ...]:
         f'{key} = "{value}"'
         for section in parser
         for key, values in parser.items(section)
-        for value in values.splitlines()
-        if value and '"' not in value
+        for line in values.splitlines()
+        for value in line.split()[:1]
+        if '"' not in value
     )
 
 
