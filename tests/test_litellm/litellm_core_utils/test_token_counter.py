@@ -2,8 +2,10 @@
 #    This tests litellm.token_counter.token_counter() function
 import asyncio
 import importlib
+import threading
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -16,6 +18,7 @@ import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
+from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
     _get_exact_count_function,
@@ -160,6 +163,34 @@ def test_count_at_or_below_the_cap_is_exact():
 
     assert _get_extrapolating_count_function(count_exactly, max_exact_chars=5_000)("a" * 5_000) == 5_000
     assert count_exactly.call_args_list == [(("a" * 5_000,),)]
+
+
+class _SlowEncoder:
+    def __init__(self) -> None:
+        self._lock: Final = threading.Lock()
+        self.in_flight = 0
+        self.peak_in_flight = 0
+
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
+        with self._lock:
+            self.in_flight += 1
+            self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        time.sleep(0.1)
+        with self._lock:
+            self.in_flight -= 1
+        return [[0] * len(text) for text in texts]
+
+
+def test_huggingface_counts_run_at_most_the_configured_number_at_once():
+    encoder: Final = _SlowEncoder()
+    count: Final = _get_exact_count_function(None, {"type": "huggingface_tokenizer", "tokenizer": encoder})
+    burst: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES
+
+    with ThreadPoolExecutor(max_workers=burst) as pool:
+        counts: Final = tuple(pool.map(count, ["abc"] * burst))
+
+    assert counts == (3,) * burst
+    assert 1 < encoder.peak_in_flight <= TOKEN_COUNTER_MAX_CONCURRENT_HF_ENCODES
 
 
 def test_token_counter_applies_the_default_cap():
