@@ -9241,6 +9241,10 @@ class ProviderConfigManager:
             from litellm.llms.openai.image_edit import get_openai_image_edit_config
 
             return get_openai_image_edit_config(model=model)
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
+
+            return get_hosted_vllm_image_edit_config(model=model)
         elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,

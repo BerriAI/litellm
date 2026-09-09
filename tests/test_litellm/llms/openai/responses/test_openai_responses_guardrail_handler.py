@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from openai.types.responses import ResponseFunctionToolCall
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
@@ -1194,6 +1195,230 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[3]["part"]["text"] == "hello [MASKED]"
         assert events[4]["item"]["content"][0]["text"] == "hello [MASKED]"
         assert events[5]["response"]["output"][0]["content"][0]["text"] == "hello [MASKED]"
+
+    @staticmethod
+    def _ended_function_call_stream_events() -> List[dict]:
+        def item(arguments: str, status: str) -> dict:
+            return {
+                "type": "function_call",
+                "id": "fc_123",
+                "call_id": "call_123",
+                "name": "lookup_fruit",
+                "arguments": arguments,
+                "status": status,
+            }
+
+        return [
+            {"type": "response.output_item.added", "output_index": 0, "item": item("", "in_progress")},
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_123", "output_index": 0, "delta": '{"fruit":'},
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_123", "output_index": 0, "delta": ' "persimmon"}'},
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_123",
+                "output_index": 0,
+                "arguments": '{"fruit": "persimmon"}',
+            },
+            {"type": "response.output_item.done", "output_index": 0, "item": item('{"fruit": "persimmon"}', "completed")},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "created_at": 1,
+                    "model": "gpt-4o",
+                    "output": [item('{"fruit": "persimmon"}', "completed")],
+                    "status": "completed",
+                },
+            },
+        ]
+
+    @staticmethod
+    def _argument_masking_guardrail() -> CustomGuardrail:
+        class MaskArguments(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: LiteLLMLoggingObj | None = None,
+            ) -> GenericGuardrailAPIInputs:
+                tool_calls = [
+                    {**tool_call, "function": {**tool_call["function"], "arguments": '{"fruit": "[MASKED]"}'}}
+                    for tool_call in inputs.get("tool_calls", [])
+                ]
+                return {**inputs, "tool_calls": tool_calls}
+
+        return MaskArguments(guardrail_name="test-mask-arguments")
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_syncs_function_call_events(self):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_function_call_stream_events()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert events[0]["item"]["arguments"] == ""
+        assert events[1]["delta"] == '{"fruit": "[MASKED]"}'
+        assert events[2]["delta"] == ""
+        assert events[3]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[4]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[5]["response"]["output"][0]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[5]["response"]["output"][0]["name"] == "lookup_fruit"
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_syncs_typed_function_call_events(self):
+        from litellm.types.llms.openai import (
+            FunctionCallArgumentsDeltaEvent,
+            FunctionCallArgumentsDoneEvent,
+            OutputItemAddedEvent,
+            OutputItemDoneEvent,
+            ResponseCompletedEvent,
+            ResponsesAPIResponse,
+        )
+
+        handler = OpenAIResponsesHandler()
+        typed_events: List[Any] = [
+            model.model_validate(event)
+            for model, event in zip(
+                (
+                    OutputItemAddedEvent,
+                    FunctionCallArgumentsDeltaEvent,
+                    FunctionCallArgumentsDeltaEvent,
+                    FunctionCallArgumentsDoneEvent,
+                    OutputItemDoneEvent,
+                    ResponseCompletedEvent,
+                ),
+                self._ended_function_call_stream_events(),
+            )
+        ]
+        completed_event = typed_events[5]
+        assert isinstance(completed_event, ResponseCompletedEvent)
+        assert isinstance(completed_event.response, ResponsesAPIResponse)
+        assert isinstance(completed_event.response.output[0], ResponseFunctionToolCall)
+
+        await handler.process_output_streaming_response(
+            responses_so_far=typed_events,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert typed_events[1].delta == '{"fruit": "[MASKED]"}'
+        assert typed_events[2].delta == ""
+        assert typed_events[3].arguments == '{"fruit": "[MASKED]"}'
+        assert typed_events[4].item.arguments == '{"fruit": "[MASKED]"}'
+        assert completed_event.response.output[0].arguments == '{"fruit": "[MASKED]"}'
+        assert completed_event.response.output[0].name == "lookup_fruit"
+
+    @staticmethod
+    def _bridged_function_call_stream_events() -> List[dict]:
+        reasoning = {"type": "reasoning", "id": "rs_1", "summary": []}
+        text = {"type": "output_text", "text": "Looking that up", "annotations": []}
+        message = {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed", "content": [text]}
+
+        def function_call(arguments: str, status: str) -> dict:
+            return {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "lookup_fruit",
+                "arguments": arguments,
+                "status": status,
+            }
+
+        return [
+            {"type": "response.output_item.added", "output_index": 0, "item": dict(reasoning)},
+            {"type": "response.output_item.done", "output_index": 0, "item": dict(reasoning)},
+            {"type": "response.output_item.added", "output_index": 0, "item": {**message, "status": "in_progress", "content": []}},
+            {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "Looking that up"},
+            {"type": "response.output_item.done", "output_index": 0, "item": {**message, "content": [dict(text)]}},
+            {"type": "response.output_item.added", "output_index": 1, "item": function_call("", "in_progress")},
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": '{"fruit":'},
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": ' "persimmon"}'},
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "arguments": '{"fruit": "persimmon"}',
+            },
+            {"type": "response.output_item.done", "output_index": 1, "item": function_call('{"fruit": "persimmon"}', "completed")},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "claude-haiku-4-5",
+                    "output": [
+                        dict(reasoning),
+                        {**message, "content": [dict(text)]},
+                        function_call('{"fruit": "persimmon"}', "completed"),
+                    ],
+                },
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_keys_bridged_function_call_events_by_call_id(self):
+        handler = OpenAIResponsesHandler()
+        events = self._bridged_function_call_stream_events()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert events[6]["delta"] == '{"fruit": "[MASKED]"}'
+        assert events[7]["delta"] == ""
+        assert events[8]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[5]["item"]["name"] == "lookup_fruit"
+        assert events[9]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[10]["response"]["output"][2]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[3]["delta"] == "Looking that up"
+        assert events[4]["item"]["content"][0]["text"] == "Looking that up"
+        assert events[10]["response"]["output"][1]["content"][0]["text"] == "Looking that up"
+        assert events[1]["item"] == {"type": "reasoning", "id": "rs_1", "summary": []}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mismatch", ["orphan_call_id", "duplicate_call_id"])
+    async def test_deliver_ended_stream_function_call_rewrite_without_matching_events_fails_closed(self, mismatch):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = OpenAIResponsesHandler()
+        events = self._ended_function_call_stream_events()
+        envelope_item = events[5]["response"]["output"][0]
+        if mismatch == "orphan_call_id":
+            events[5]["response"]["output"] = [{**envelope_item, "call_id": "call_999"}]
+        else:
+            events[5]["response"]["output"] = [dict(envelope_item), dict(envelope_item)]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=events,
+                guardrail_to_apply=self._argument_masking_guardrail(),
+                litellm_logging_obj=None,
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_function_call_rewrite_leaves_events_untouched_by_default(self):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_function_call_stream_events()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=None,
+        )
+
+        assert events[1]["delta"] == '{"fruit":'
+        assert events[3]["arguments"] == '{"fruit": "persimmon"}'
+        assert events[5]["response"]["output"][0]["arguments"] == '{"fruit": "persimmon"}'
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("terminal_type", ["response.incomplete", "response.failed"])

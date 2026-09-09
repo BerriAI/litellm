@@ -7679,6 +7679,107 @@ async def test_missing_session_id_omit_keeps_client_supplied_session_id():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_body",
+    [
+        {"model": "gpt-4o", "messages": [], "litellm_session_id": "cust-sess-1"},
+        {"model": "gpt-4o", "messages": [], "litellm_session_id": "cust-sess-1", "metadata": {"trace_id": "trace-1"}},
+    ],
+)
+async def test_missing_session_id_omit_keeps_body_litellm_session_id(
+    monkeypatch: pytest.MonkeyPatch, client_body: dict[str, object]
+):
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+
+    updated = await add_litellm_data_to_request(
+        data=client_body,
+        request=_request_for("/v1/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "omit"},
+    )
+
+    callback_session_id = StandardLoggingPayloadSetup.get_standard_logging_payload_session_id(
+        logging_obj=SimpleNamespace(litellm_session_id=""),
+        litellm_params=get_litellm_params(litellm_session_id="cust-sess-1", metadata=updated["metadata"]),
+    )
+    assert callback_session_id == "cust-sess-1"
+    assert updated["metadata"]["session_id"] == "cust-sess-1"
+    assert _spend_log_session_id(updated) == "cust-sess-1"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_omit_body_litellm_session_id_does_not_override_metadata_session_id():
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "messages": [],
+            "litellm_session_id": "cust-sess-1",
+            "metadata": {"session_id": "meta-sess-1"},
+        },
+        request=_request_for("/v1/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "omit"},
+    )
+
+    assert updated["metadata"]["session_id"] == "meta-sess-1"
+    assert _spend_log_session_id(updated) == "meta-sess-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+async def test_missing_session_id_omit_keeps_metadata_session_id_on_litellm_metadata_routes(path: str):
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "input": "hi",
+            "litellm_session_id": "cust-sess-1",
+            "metadata": {"session_id": "meta-sess-1"},
+        },
+        request=_request_for(path),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "omit"},
+    )
+
+    assert updated["litellm_metadata"]["session_id"] == "meta-sess-1"
+    assert _spend_log_session_id(updated, "litellm_metadata") == "meta-sess-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+async def test_missing_session_id_omit_keeps_body_litellm_session_id_on_litellm_metadata_routes(path: str):
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "input": "hi", "litellm_session_id": "cust-sess-1"},
+        request=_request_for(path),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "omit"},
+    )
+
+    assert updated["litellm_metadata"]["session_id"] == "cust-sess-1"
+    assert _spend_log_session_id(updated, "litellm_metadata") == "cust-sess-1"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_omit_ignores_empty_body_litellm_session_id():
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "messages": [], "litellm_session_id": ""},
+        request=_request_for("/v1/chat/completions"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "omit"},
+    )
+
+    assert "session_id" not in updated["metadata"]
+    assert _spend_log_session_id(updated) is None
+
+
+@pytest.mark.asyncio
 async def test_missing_session_id_generate_reuses_traceparent_trace_id():
     """A W3C traceparent already decides SpendLogs.session_id, so the callback session id must reuse it."""
     request = _request_for("/v1/chat/completions")
