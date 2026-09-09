@@ -31,6 +31,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 # Import shared proxy test helpers from conftest
 from tests.test_litellm.proxy.conftest import create_proxy_test_client
@@ -3221,9 +3222,7 @@ async def test_health_services_endpoint_pointfive_blocks_non_admin(monkeypatch, 
     logger_class.assert_not_called()
 
 
-def _configured_non_team_deployment(mode: str | None = "chat"):
-    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
-
+def _configured_non_team_deployment(mode: str | None = "chat") -> Deployment:
     return Deployment(
         model_name="gpt-4o",
         litellm_params=LiteLLM_Params(
@@ -3235,7 +3234,7 @@ def _configured_non_team_deployment(mode: str | None = "chat"):
     )
 
 
-def _internal_user():
+def _internal_user() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(
         token="internal-user-token",
         user_id="internal-user",
@@ -3245,7 +3244,7 @@ def _internal_user():
 
 @contextmanager
 def _probe_environment(
-    deployment,
+    deployment: Deployment,
     *,
     key_check: AsyncMock | None = None,
     user_lookup: AsyncMock | None = None,
@@ -3297,7 +3296,9 @@ def _probe_environment(
         yield
 
 
-async def _probe_as_internal_user(litellm_params, mode="chat", deployment_id="non-team-deployment-id"):
+async def _probe_as_internal_user(
+    litellm_params: dict[str, object], mode: str | None = "chat", deployment_id: str = "non-team-deployment-id"
+) -> dict[str, object]:
     return await health_test_model_connection(
         request=MagicMock(),
         mode=mode,
@@ -3367,7 +3368,7 @@ async def test_test_model_connection_denies_internal_user_without_model_access()
     ],
     ids=["api_base", "model", "mode"],
 )
-async def test_test_model_connection_keeps_overrides_admin_only(litellm_params, mode):
+async def test_test_model_connection_keeps_overrides_admin_only(litellm_params: dict[str, object], mode: str) -> None:
     from fastapi import HTTPException
 
     key_check = AsyncMock(return_value=True)
@@ -3389,7 +3390,6 @@ async def test_test_model_connection_keeps_team_deployments_admin_only_for_non_a
     from fastapi import HTTPException
 
     from litellm.proxy._types import LiteLLM_TeamTable
-    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
     team_deployment = Deployment(
         model_name="gpt-4o",
@@ -3439,8 +3439,7 @@ async def test_test_model_connection_tolerates_missing_user_record_for_non_admin
 
 
 @pytest.mark.asyncio
-async def test_test_model_connection_accepts_mode_the_probe_would_infer():
-    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+async def test_test_model_connection_accepts_mode_the_probe_would_infer() -> None:
 
     deployment = Deployment(
         model_name="gpt-4o",
