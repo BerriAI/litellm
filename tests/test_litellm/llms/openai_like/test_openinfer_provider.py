@@ -107,7 +107,7 @@ class TestOpenInferProviderConfig:
             ("openinfer/@oi/Llama-3.2-1B-Instruct", 2e-08, 2e-08),
             ("openinfer/@oi/Qwen3.5-9B", 1.5e-07, 1.8e-07),
             ("openinfer/@oi/Qwen3.5-27B", 7.2e-07, 7.2e-07),
-            ("openinfer/@oi/Gemma4-31B", 5.2e-07, 7.5e-07),
+            ("openinfer/@oi/Gemma4-31B-It", 5.2e-07, 7.5e-07),
         ),
     )
     def test_catalog_token_rates_match_vendor_per_million_prices(
