@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 from copy import deepcopy
-from typing import Final, List, cast
+from typing import Final, List, Literal, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1217,6 +1217,34 @@ def test_vertex_ai_map_tools():
     print(new_tools)
 
     assert tools == new_tools
+
+
+@pytest.mark.parametrize("legacy_functions", [False, True])
+def test_gemini_map_tool_converts_pydantic_consts_to_enums(legacy_functions: bool):
+    class Operation(BaseModel):
+        kind: Literal["create"]
+        resource_name: str
+
+    class ToolInput(BaseModel):
+        status: Literal["pending"]
+        operation: Operation
+
+    function = {
+        "name": "perform_action",
+        "description": "Perform an action",
+        "parameters": ToolInput.model_json_schema(),
+    }
+    tools_input = [function] if legacy_functions else [{"type": "function", "function": function}]
+
+    tools = VertexGeminiConfig()._map_function(value=tools_input, optional_params={})
+    parameters = tools[0]["function_declarations"][0]["parameters"]
+
+    assert parameters["properties"]["status"]["enum"] == ["pending"]
+    assert parameters["properties"]["operation"]["properties"]["kind"]["enum"] == ["create"]
+    assert parameters["properties"]["operation"]["properties"]["resource_name"]["type"] == "string"
+    assert parameters["properties"]["operation"]["required"] == ["kind", "resource_name"]
+    assert "const" not in json.dumps(parameters)
+    assert "$ref" not in json.dumps(parameters)
 
 
 def test_vertex_ai_map_tool_with_anyof():

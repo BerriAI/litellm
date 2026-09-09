@@ -699,7 +699,7 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
 
 
 def _convert_consts_to_enums(
-    schema: dict[str, object],  # mutable-ok: response schema is normalized in place
+    schema: dict[str, object],  # mutable-ok: Gemini schema is normalized in place
     depth: int = 0,
 ) -> None:
     """
