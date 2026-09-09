@@ -163,9 +163,22 @@ impl ChatCompletionsProviderConfig for OllamaChatConfig {
             .get("thinking")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let field = |name: &str| body.get(name).and_then(Value::as_u64).unwrap_or(0);
-        let prompt_tokens = field("prompt_eval_count");
-        let completion_tokens = field("eval_count");
+        // Ollama reports usage as `prompt_eval_count` and `eval_count` on the
+        // `done: true` response. Non-streaming `/api/chat` always returns both.
+        // 
+        // When both are present report them verbatim; when they are absent,
+        // leave `usage` `None` so the Python bridge estimates it.
+        let prompt_tokens = body.get("prompt_eval_count").and_then(Value::as_u64);
+        let completion_tokens = body.get("eval_count").and_then(Value::as_u64);
+        let usage = match (prompt_tokens, completion_tokens) {
+            (Some(prompt_tokens), Some(completion_tokens)) => Some(ChatCompletionsUsage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens: prompt_tokens + completion_tokens,
+                prompt_tokens_details: None,
+            }),
+            _ => None,
+        };
 
         Ok(ChatCompletionsResponse {
             created: unix_now(),
@@ -187,15 +200,7 @@ impl ChatCompletionsProviderConfig for OllamaChatConfig {
                 )
                 .to_string(),
             }],
-            // Python's ollama transform reports a bare three-field usage with no
-            // `prompt_tokens_details` (it has no cache split), so omit it here too.
-            // Anthropic and Bedrock, which do report cache tokens, set `Some(...)`.
-            usage: ChatCompletionsUsage {
-                prompt_tokens,
-                completion_tokens,
-                total_tokens: prompt_tokens + completion_tokens,
-                prompt_tokens_details: None,
-            },
+            usage,
         })
     }
 

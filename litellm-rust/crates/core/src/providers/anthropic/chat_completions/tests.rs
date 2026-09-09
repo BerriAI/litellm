@@ -293,9 +293,10 @@ fn normalizes_a_text_response_into_openai_shape() {
         Some("hello there")
     );
     assert_eq!(response.choices[0].finish_reason, "stop");
-    assert_eq!(response.usage.prompt_tokens, 11);
-    assert_eq!(response.usage.completion_tokens, 4);
-    assert_eq!(response.usage.total_tokens, 15);
+    let usage = response.usage.as_ref().expect("usage reported");
+    assert_eq!(usage.prompt_tokens, 11);
+    assert_eq!(usage.completion_tokens, 4);
+    assert_eq!(usage.total_tokens, 15);
 }
 
 #[test]
@@ -312,11 +313,12 @@ fn folds_cache_tokens_into_prompt_tokens_like_python() {
         }
     }))
     .expect("response transforms");
-    assert_eq!(response.usage.prompt_tokens, 18);
-    assert_eq!(response.usage.total_tokens, 20);
-    let details = response
-        .usage
+    let usage = response.usage.as_ref().expect("usage reported");
+    assert_eq!(usage.prompt_tokens, 18);
+    assert_eq!(usage.total_tokens, 20);
+    let details = usage
         .prompt_tokens_details
+        .as_ref()
         .expect("unexpceted prompt_tokens_details missing");
     assert_eq!(details.cached_tokens, 5);
     assert_eq!(details.cache_creation_tokens, 3);

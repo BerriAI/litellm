@@ -126,5 +126,9 @@ pub struct ChatCompletionsResponse {
     pub created: u64,
     pub model: String,
     pub choices: Vec<ChatCompletionsChoice>,
-    pub usage: ChatCompletionsUsage,
+    // `None` means the provider returned no token counters; the Python bridge then
+    // estimates them with `litellm.token_counter`, mirroring the Python ollama
+    // transform. Present-but-zero stays `Some({0,0,0})` and is not estimated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ChatCompletionsUsage>,
 }

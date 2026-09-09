@@ -346,9 +346,10 @@ fn normalizes_a_converse_response_into_openai_shape() {
         Some("hello there")
     );
     assert_eq!(response.choices[0].finish_reason, "stop");
-    assert_eq!(response.usage.prompt_tokens, 11);
-    assert_eq!(response.usage.completion_tokens, 4);
-    assert_eq!(response.usage.total_tokens, 15);
+    let usage = response.usage.as_ref().expect("usage reported");
+    assert_eq!(usage.prompt_tokens, 11);
+    assert_eq!(usage.completion_tokens, 4);
+    assert_eq!(usage.total_tokens, 15);
 }
 
 #[test]
@@ -407,12 +408,10 @@ fn reports_the_total_tokens_converse_sent_rather_than_recomputing_them() {
         "usage": {"inputTokens": 10, "outputTokens": 4, "cacheReadInputTokens": 7, "totalTokens": 14}
     }))
     .expect("response transforms");
-    assert_eq!(
-        response.usage.total_tokens, 14,
-        "provider total was recomputed"
-    );
-    assert_eq!(response.usage.prompt_tokens, 17);
-    assert_eq!(response.usage.completion_tokens, 4);
+    let usage = response.usage.as_ref().expect("usage reported");
+    assert_eq!(usage.total_tokens, 14, "provider total was recomputed");
+    assert_eq!(usage.prompt_tokens, 17);
+    assert_eq!(usage.completion_tokens, 4);
 }
 
 #[test]
@@ -426,7 +425,8 @@ fn falls_back_to_the_computed_total_when_converse_omits_it() {
         "usage": {"inputTokens": 10, "outputTokens": 4}
     }))
     .expect("response transforms");
-    assert_eq!(response.usage.total_tokens, 14);
+    let usage = response.usage.as_ref().expect("usage reported");
+    assert_eq!(usage.total_tokens, 14);
 }
 
 #[test]
@@ -460,10 +460,11 @@ fn folds_converse_cache_tokens_into_prompt_tokens() {
         }
     }))
     .expect("response transforms");
-    assert_eq!(response.usage.prompt_tokens, 18);
-    let details = response
-        .usage
+    let usage = response.usage.as_ref().expect("usage reported");
+    assert_eq!(usage.prompt_tokens, 18);
+    let details = usage
         .prompt_tokens_details
+        .as_ref()
         .expect("unexpected prompt_tokens_details missing");
     assert_eq!(details.cached_tokens, 5);
     assert_eq!(details.cache_creation_tokens, 3);

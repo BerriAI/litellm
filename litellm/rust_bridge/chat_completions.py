@@ -42,6 +42,12 @@ RUST_CHAT_COMPLETIONS_PROVIDERS: Final = frozenset({"anthropic", "bedrock", "oll
 # rather than narrowing an unparameterized `Mapping` and typing the result Any.
 _LITELLM_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
+# The Rust response's `choices`/`message` arrive as `object`; validate them to a
+# typed `Mapping[str, object]` instead of narrowing with `isinstance(x, Mapping)`,
+# which yields `Mapping[Unknown, Unknown]` and the unknown-type noise that brings.
+_BRIDGE_CHOICES_ADAPTER: Final = TypeAdapter(list[Mapping[str, object]])
+_BRIDGE_MESSAGE_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
 RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
 
 
@@ -339,6 +345,57 @@ def _build_model_response(
     return built
 
 
+def _estimate_absent_usage(
+    rust_response: Mapping[str, object],
+    messages: Sequence[object],
+) -> Mapping[str, object]:
+    """Fill ``usage`` when the Rust core returned no token counters.
+
+    Ollama omits ``prompt_eval_count``/``eval_count`` when it cannot count, and
+    the Rust core signals that by leaving ``usage`` out of the response. Python's
+    ollama transform estimates with ``litellm.token_counter`` in that case, so the
+    bridge does the same to keep spend and the returned ``ModelResponse`` on par
+    with the Python path. Present counters, including present-but-zero, are
+    reported verbatim and never estimated.
+    """
+    if rust_response.get("usage") is not None:
+        return rust_response
+    import litellm
+
+    prompt_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # litellm.token_counter's `custom_tokenizer: dict` param is untyped upstream
+        messages=messages
+    )
+    raw_choices: Final[object | None] = rust_response.get("choices")
+    choices: Final[tuple[Mapping[str, object], ...]] = (
+        tuple(_BRIDGE_CHOICES_ADAPTER.validate_python(raw_choices))
+        if raw_choices is not None
+        else ()
+    )
+    first_choice: Final[Mapping[str, object] | None] = (
+        choices[0] if len(choices) > 0 else None
+    )
+    raw_message: Final[object | None] = first_choice.get("message") if first_choice is not None else None
+    message: Final[Mapping[str, object] | None] = (
+        _BRIDGE_MESSAGE_ADAPTER.validate_python(raw_message)
+        if isinstance(raw_message, Mapping)
+        else None
+    )
+    content: Final[object | None] = (
+        message.get("content") if message is not None else None
+    )
+    completion_tokens: Final = (
+        litellm.token_counter(text=content)  # pyright: ignore[reportUnknownMemberType]  # same upstream-untyped token_counter as above
+        if isinstance(content, str) and content
+        else 0
+    )
+    usage: Final = {  # mutable-ok: filled once with the estimate, never grown
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+    }
+    return {**rust_response, "usage": usage}  # mutable-ok: single-shot merge so the converter sees the estimated usage
+
+
 def chat_completions(
     *,
     model: str,
@@ -369,8 +426,9 @@ def chat_completions(
     except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
         _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
         return None
-    on_response(rust_response)
-    return _build_model_response(rust_response, model_response)
+    response: Final = _estimate_absent_usage(rust_response, messages)
+    on_response(response)
+    return _build_model_response(response, model_response)
 
 
 async def achat_completions(
@@ -403,8 +461,9 @@ async def achat_completions(
     except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
         _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
         return None
-    on_response(rust_response)
-    return _build_model_response(rust_response, model_response)
+    response: Final = _estimate_absent_usage(rust_response, messages)
+    on_response(response)
+    return _build_model_response(response, model_response)
 
 
 async def achat_completions_or_fallback(
