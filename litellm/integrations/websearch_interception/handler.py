@@ -1646,18 +1646,25 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
         if not isinstance(tool_input, Mapping):
             return None
-        rich: RichWebSearchInput = {}
         objective = tool_input.get("objective")
-        if isinstance(objective, str) and objective.strip():
-            rich["objective"] = objective
+        valid_objective = (
+            objective if isinstance(objective, str) and objective.strip() else None
+        )
         raw_queries = tool_input.get("search_queries")
+        valid_queries: list[str] | None = None
         if isinstance(raw_queries, Sequence) and not isinstance(raw_queries, str):
             queries = [q for q in raw_queries if isinstance(q, str) and q.strip()]
             if queries:
                 # Providers cap multi-query requests (Parallel drops queries
                 # past the fifth); trim here so nothing is silently ignored.
-                rich["search_queries"] = queries[:5]
-        return rich or None
+                valid_queries = queries[:5]
+        if valid_objective is not None and valid_queries is not None:
+            return {"objective": valid_objective, "search_queries": valid_queries}
+        if valid_objective is not None:
+            return {"objective": valid_objective}
+        if valid_queries is not None:
+            return {"search_queries": valid_queries}
+        return None
 
     @staticmethod
     def _provider_supports_rich_search(search_provider: str | None) -> bool:
@@ -1672,7 +1679,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # misses the config map and returns None rather than raising.
         config = ProviderConfigManager.get_provider_search_config(
             search_provider
-        )  # pyright: ignore[reportArgumentType]
+        )  # pyright: ignore[reportArgumentType] -- SearchProviders is a str enum, so the router's provider string hashes to the matching member; unknown strings miss the map and yield None
         return config is not None and config.supports_rich_search_input()
 
     async def _execute_search(
