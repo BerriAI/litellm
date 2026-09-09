@@ -567,12 +567,13 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
 
 
 class _InFlightCountingPrisma:
-
     def __init__(self) -> None:
         self.in_flight = 0
         self.max_in_flight = 0
 
-    async def get_data(self, token: str, table_name: str, parent_otel_span, proxy_logging_obj) -> UserAPIKeyAuth:
+    async def get_data(
+        self, token: str, table_name: str, parent_otel_span: None, proxy_logging_obj: None
+    ) -> UserAPIKeyAuth:
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
         await asyncio.sleep(0.001)
@@ -582,8 +583,6 @@ class _InFlightCountingPrisma:
 
 @pytest.mark.asyncio
 async def test_fetch_key_object_from_db_bounds_in_flight_prisma_requests():
-    """A cache-miss burst must not hand every lookup to the prisma engine HTTP pool at once;
-    httpcore bookkeeping is O(queued x connections) and starves the loop (LIT-6435)."""
     prisma: Final = _InFlightCountingPrisma()
     burst: Final = PROXY_DB_LOOKUP_MAX_CONCURRENCY * 5
 
