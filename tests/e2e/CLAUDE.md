@@ -188,7 +188,8 @@ quota_management.<behavior>.<variant>.<assertion>
               | routes_to_fallback | reseed_matches_db | reports_spend | logs_cost | zero_cost
               | matches_sum_of_logs | loses_no_spend | attributes_spend | writes_own_rows
               | writes_failure_row | returns_cost | keeps_total | joins_key | reports_alias_and_email
-              | health_rows_keep_service_account | batch_cost_joins_key
+              | health_rows_keep_service_account | retrieve_batch_cost_joins_retrieving_key
+              | poller_batch_cost_joins_creating_key
   e.g.  quota_management.ratelimit.rpm.blocks_over_limit           exercised_on=[chat_completions, messages]
         quota_management.budget.key.blocks_over_limit              exercised_on=[chat_completions]
 ```
