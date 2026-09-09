@@ -13,7 +13,12 @@ fn prepare_ocr(
     let wire: OcrWireRequest =
         litellm_core::ocr::wire::decode_request_value(inputs.request, "request")
             .map_err(|error| ocr_error_to_pyerr(error.into()))?;
-    let request = decode_request(wire).map_err(ocr_error_to_pyerr)?;
+    let mut request = decode_request(wire).map_err(ocr_error_to_pyerr)?;
+    request.connection.max_download_bytes = litellm_core::ocr::types::download_limit_bytes(
+        std::env::var("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB")
+            .ok()
+            .as_deref(),
+    );
     Ok(async move {
         client
             .perform(request)

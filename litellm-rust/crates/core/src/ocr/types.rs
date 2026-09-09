@@ -6,9 +6,7 @@ use serde_json::{Map, Value};
 
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::registry::OcrIntegrationRequest;
-use crate::auth::azure::AzureAuthInputs;
 use crate::constants::{OCR_DOWNLOAD_MAX_BYTES, OCR_HTTP_TIMEOUT_SECS};
-use crate::providers::vertex_ai::auth::VertexAuthInputs;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -144,20 +142,11 @@ impl OcrResponseData {
     }
 }
 
-#[derive(Clone, Default)]
-pub struct VertexOcrSettings {
-    pub project: Option<String>,
-    pub location: Option<String>,
-}
-
 #[derive(Clone)]
 pub struct OcrConnection {
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub extra_headers: Vec<(String, String)>,
-    pub azure_auth: Option<AzureAuthInputs>,
-    pub vertex_auth: VertexAuthInputs,
-    pub vertex: VertexOcrSettings,
     pub timeout: Duration,
     pub poll_timeout: Duration,
     pub max_download_bytes: u64,
@@ -169,14 +158,18 @@ impl Default for OcrConnection {
             api_key: None,
             api_base: None,
             extra_headers: Vec::new(),
-            azure_auth: None,
-            vertex_auth: VertexAuthInputs::default(),
-            vertex: VertexOcrSettings::default(),
             timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
             poll_timeout: Duration::from_secs(crate::constants::OCR_POLL_TIMEOUT_SECS),
             max_download_bytes: OCR_DOWNLOAD_MAX_BYTES,
         }
     }
+}
+
+pub fn download_limit_bytes(megabytes: Option<&str>) -> u64 {
+    megabytes
+        .and_then(|value| value.parse::<f64>().ok())
+        .map(|value| (value.max(0.0) * 1024.0 * 1024.0) as u64)
+        .unwrap_or(OCR_DOWNLOAD_MAX_BYTES)
 }
 
 pub struct OcrRequest {

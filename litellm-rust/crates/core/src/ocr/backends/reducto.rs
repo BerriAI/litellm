@@ -1,6 +1,5 @@
-use crate::auth::AuthError;
 use crate::constants::{REDUCTO_ID_PREFIX, REDUCTO_OCR_API_BASE};
-use crate::ocr::backends::OcrBackend;
+use crate::ocr::backends::{OcrBackend, PreparedOcrBackend};
 use crate::ocr::document::InlineDocument;
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::formats::reducto::{
@@ -55,7 +54,7 @@ async fn prepare_reducto_document(
     let response = crate::http_utils::http_request(builder)
         .await
         .map_err(crate::error::TransportError::from)?;
-    let response = crate::ocr::wire::read_json_response::<ReductoUploadResponse>(response, false)
+    let response = crate::ocr::client::read_json_response::<ReductoUploadResponse>(response, false)
         .await?
         .data;
     if response.file_id.is_empty() {
@@ -70,16 +69,32 @@ async fn prepare_reducto_document(
 macro_rules! impl_reducto_backend {
     ($format:ty, $params:ty) => {
         impl OcrBackend<$format> for ReductoOcrBackend {
-            fn complete_url(
+            type Config = ();
+
+            fn provider_name(&self) -> &'static str {
+                "reducto"
+            }
+
+            async fn prepare(
                 &self,
                 connection: &OcrConnection,
+                _config: &Self::Config,
                 _model: &str,
                 _params: &$params,
-            ) -> Result<String, OcrError> {
-                Ok(format!(
-                    "{}/parse",
-                    normalize_api_base(connection.api_base.as_deref())
-                ))
+                env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+            ) -> Result<PreparedOcrBackend, OcrError> {
+                let headers = auth::validate_environment(
+                    connection.extra_headers.clone(),
+                    connection.api_key.as_deref(),
+                    env_lookup,
+                )?;
+                Ok(PreparedOcrBackend {
+                    url: format!(
+                        "{}/parse",
+                        normalize_api_base(connection.api_base.as_deref())
+                    ),
+                    headers,
+                })
             }
 
             async fn prepare_document(
@@ -98,17 +113,6 @@ macro_rules! impl_reducto_backend {
 
             fn preserve_native_response(&self, _params: &$params) -> bool {
                 true
-            }
-
-            async fn authenticate(
-                &self,
-                connection: &OcrConnection,
-            ) -> Result<Vec<(String, String)>, AuthError> {
-                auth::validate_environment(
-                    connection.extra_headers.clone(),
-                    connection.api_key.as_deref(),
-                    &|name| std::env::var(name).ok(),
-                )
             }
         }
     };

@@ -6,8 +6,8 @@ use super::formats::{OcrFormat, request_error};
 use super::hooks::{OcrDuringCallRequest, OcrHooks, OcrLifecycleHooks};
 use super::prepare::{PreparedOcrRequest, prepare_ocr_call};
 use super::registry::{
-    AZURE_DOCUMENT_INTELLIGENCE, AZURE_MISTRAL, MISTRAL, OcrIntegrationRequest, REDUCTO_LEGACY,
-    REDUCTO_V3, VERTEX_DEEPSEEK, VERTEX_MISTRAL,
+    AZURE_DOCUMENT_INTELLIGENCE, AZURE_MISTRAL, MISTRAL, OcrIntegrationInput,
+    OcrIntegrationRequest, REDUCTO_LEGACY, REDUCTO_V3, VERTEX_DEEPSEEK, VERTEX_MISTRAL,
 };
 use super::types::{OcrConnection, OcrDocument, OcrRequest, OcrResponseData};
 use crate::Error;
@@ -43,17 +43,15 @@ pub(crate) async fn perform_ocr_request(
         hooks: request.hooks,
     };
     match request.integration {
-        OcrIntegrationRequest::Mistral(params) => execution.run(MISTRAL, params).await,
-        OcrIntegrationRequest::AzureMistral(params) => execution.run(AZURE_MISTRAL, params).await,
-        OcrIntegrationRequest::AzureDocumentIntelligence(params) => {
-            execution.run(AZURE_DOCUMENT_INTELLIGENCE, params).await
+        OcrIntegrationRequest::Mistral(input) => execution.run(MISTRAL, input).await,
+        OcrIntegrationRequest::AzureMistral(input) => execution.run(AZURE_MISTRAL, input).await,
+        OcrIntegrationRequest::AzureDocumentIntelligence(input) => {
+            execution.run(AZURE_DOCUMENT_INTELLIGENCE, input).await
         }
-        OcrIntegrationRequest::VertexMistral(params) => execution.run(VERTEX_MISTRAL, params).await,
-        OcrIntegrationRequest::VertexDeepSeek(params) => {
-            execution.run(VERTEX_DEEPSEEK, params).await
-        }
-        OcrIntegrationRequest::ReductoV3(params) => execution.run(REDUCTO_V3, params).await,
-        OcrIntegrationRequest::ReductoLegacy(params) => execution.run(REDUCTO_LEGACY, params).await,
+        OcrIntegrationRequest::VertexMistral(input) => execution.run(VERTEX_MISTRAL, input).await,
+        OcrIntegrationRequest::VertexDeepSeek(input) => execution.run(VERTEX_DEEPSEEK, input).await,
+        OcrIntegrationRequest::ReductoV3(input) => execution.run(REDUCTO_V3, input).await,
+        OcrIntegrationRequest::ReductoLegacy(input) => execution.run(REDUCTO_LEGACY, input).await,
     }
 }
 
@@ -61,7 +59,7 @@ impl OcrExecution<'_> {
     async fn run<F, B>(
         self,
         integration: super::registry::OcrIntegration<F, B>,
-        params: F::InputParams,
+        input: OcrIntegrationInput<F::InputParams, B::Config>,
     ) -> Result<OcrResponseData, Error>
     where
         F: OcrFormat,
@@ -75,7 +73,14 @@ impl OcrExecution<'_> {
             lifecycle_context,
             hooks,
         } = self;
-        let request = prepare_ocr_call(integration, model, document, params, connection);
+        let request = prepare_ocr_call(
+            integration,
+            model,
+            document,
+            input.params,
+            input.backend_config,
+            connection,
+        );
         let lifecycle_hooks = OcrLifecycleHooks {
             hooks: hooks.clone(),
             provider_name: lifecycle_context.custom_llm_provider.clone(),
@@ -107,8 +112,17 @@ where
 {
     let backend = &request.integration.backend;
     let format = &request.integration.format;
-    let url = backend.complete_url(&request.connection, &request.model, &request.params)?;
-    let headers = backend.authenticate(&request.connection).await?;
+    let prepared_backend = backend
+        .prepare(
+            &request.connection,
+            &request.backend_config,
+            &request.model,
+            &request.params,
+            &super::prepare::credential_env,
+        )
+        .await?;
+    let url = prepared_backend.url;
+    let headers = prepared_backend.headers;
     let document = if backend.guard_document_before_preparation() && hooks.has_guardrails() {
         let guarded = hooks
             .during_call(OcrDuringCallRequest {

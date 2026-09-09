@@ -1,64 +1,64 @@
-use crate::auth::AuthError;
 use crate::constants::{VERTEX_DEEPSEEK_API_BASE, VERTEX_OCR_DEFAULT_LOCATION};
-use crate::ocr::backends::OcrBackend;
+use crate::ocr::backends::{OcrBackend, PreparedOcrBackend};
 use crate::ocr::error::OcrError;
-use crate::ocr::error::OcrRequestError;
 use crate::ocr::formats::deepseek::{DeepSeekOcrFormat, types::DeepSeekOcrParams};
 use crate::ocr::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
 use crate::ocr::types::{OcrConnection, OcrDocument};
-use crate::providers::vertex_ai::auth;
+use crate::providers::vertex_ai::auth::{self, VertexAuthInputs};
 
 pub struct VertexAiOcrBackend;
 
-fn project(connection: &OcrConnection) -> Result<&str, OcrRequestError> {
-    connection
-        .vertex
-        .project
-        .as_deref()
-        .ok_or(OcrRequestError::MissingField("vertex_project"))
-}
-
-fn location(connection: &OcrConnection) -> &str {
-    connection
-        .vertex
-        .location
-        .as_deref()
-        .unwrap_or(VERTEX_OCR_DEFAULT_LOCATION)
-}
-
-async fn authenticate_vertex(
+async fn authenticate(
     connection: &OcrConnection,
-) -> Result<Vec<(String, String)>, AuthError> {
-    auth::authenticate(
+    config: &VertexAuthInputs,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<auth::VertexAuthentication, OcrError> {
+    Ok(auth::authenticate(
         connection.extra_headers.clone(),
         connection.api_key.as_deref(),
-        &connection.vertex_auth,
-        connection.vertex.project.clone(),
-        &|name| std::env::var(name).ok(),
+        config,
+        None,
+        env_lookup,
     )
-    .await
-    .map(|authentication| authentication.headers)
+    .await?)
+}
+
+fn location(config: &VertexAuthInputs, env_lookup: &dyn Fn(&str) -> Option<String>) -> String {
+    auth::resolve_location(config, env_lookup)
+        .unwrap_or_else(|| VERTEX_OCR_DEFAULT_LOCATION.to_string())
 }
 
 impl OcrBackend<MistralOcrFormat> for VertexAiOcrBackend {
+    type Config = VertexAuthInputs;
+
+    fn provider_name(&self) -> &'static str {
+        "vertex_ai"
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn complete_url(
+    async fn prepare(
         &self,
         connection: &OcrConnection,
+        config: &Self::Config,
         model: &str,
         _params: &MistralOcrParams,
-    ) -> Result<String, OcrError> {
-        let location = location(connection);
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<PreparedOcrBackend, OcrError> {
+        let authentication = authenticate(connection, config, env_lookup).await?;
+        let location = location(config, env_lookup);
         let default_base = format!("https://{location}-aiplatform.googleapis.com");
         let base = connection
             .api_base
             .as_deref()
             .unwrap_or(&default_base)
             .trim_end_matches('/');
-        Ok(format!(
-            "{base}/v1/projects/{}/locations/{location}/publishers/mistralai/models/{model}:rawPredict",
-            project(connection)?
-        ))
+        Ok(PreparedOcrBackend {
+            url: format!(
+                "{base}/v1/projects/{}/locations/{location}/publishers/mistralai/models/{model}:rawPredict",
+                authentication.project_id
+            ),
+            headers: authentication.headers,
+        })
     }
 
     async fn prepare_document(
@@ -75,32 +75,37 @@ impl OcrBackend<MistralOcrFormat> for VertexAiOcrBackend {
         )
         .await
     }
-
-    async fn authenticate(
-        &self,
-        connection: &OcrConnection,
-    ) -> Result<Vec<(String, String)>, AuthError> {
-        authenticate_vertex(connection).await
-    }
 }
 
 impl OcrBackend<DeepSeekOcrFormat> for VertexAiOcrBackend {
-    fn complete_url(
+    type Config = VertexAuthInputs;
+
+    fn provider_name(&self) -> &'static str {
+        "vertex_ai"
+    }
+
+    async fn prepare(
         &self,
         connection: &OcrConnection,
+        config: &Self::Config,
         _model: &str,
         _params: &DeepSeekOcrParams,
-    ) -> Result<String, OcrError> {
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<PreparedOcrBackend, OcrError> {
+        let authentication = authenticate(connection, config, env_lookup).await?;
+        let location = location(config, env_lookup);
         let base = connection
             .api_base
             .as_deref()
             .unwrap_or(VERTEX_DEEPSEEK_API_BASE)
             .trim_end_matches('/');
-        Ok(format!(
-            "{base}/v1/projects/{}/locations/{}/endpoints/openapi/chat/completions",
-            project(connection)?,
-            location(connection)
-        ))
+        Ok(PreparedOcrBackend {
+            url: format!(
+                "{base}/v1/projects/{}/locations/{location}/endpoints/openapi/chat/completions",
+                authentication.project_id
+            ),
+            headers: authentication.headers,
+        })
     }
 
     async fn prepare_document(
@@ -111,12 +116,5 @@ impl OcrBackend<DeepSeekOcrFormat> for VertexAiOcrBackend {
         _headers: &[(String, String)],
     ) -> Result<OcrDocument, OcrError> {
         Ok(document)
-    }
-
-    async fn authenticate(
-        &self,
-        connection: &OcrConnection,
-    ) -> Result<Vec<(String, String)>, AuthError> {
-        authenticate_vertex(connection).await
     }
 }

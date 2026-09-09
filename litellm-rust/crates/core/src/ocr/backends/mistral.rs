@@ -1,6 +1,5 @@
-use crate::auth::AuthError;
 use crate::constants::MISTRAL_OCR_API_BASE;
-use crate::ocr::backends::OcrBackend;
+use crate::ocr::backends::{OcrBackend, PreparedOcrBackend};
 use crate::ocr::error::OcrError;
 use crate::ocr::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
 use crate::ocr::types::{OcrConnection, OcrDocument};
@@ -22,13 +21,29 @@ pub fn complete_url(api_base: Option<&str>) -> String {
 }
 
 impl OcrBackend<MistralOcrFormat> for MistralOcrBackend {
-    fn complete_url(
+    type Config = ();
+
+    fn provider_name(&self) -> &'static str {
+        "mistral"
+    }
+
+    async fn prepare(
         &self,
         connection: &OcrConnection,
+        _config: &Self::Config,
         _model: &str,
         _params: &MistralOcrParams,
-    ) -> Result<String, OcrError> {
-        Ok(complete_url(connection.api_base.as_deref()))
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<PreparedOcrBackend, OcrError> {
+        let headers = auth::validate_environment(
+            connection.extra_headers.clone(),
+            connection.api_key.as_deref(),
+            env_lookup,
+        )?;
+        Ok(PreparedOcrBackend {
+            url: complete_url(connection.api_base.as_deref()),
+            headers,
+        })
     }
 
     async fn prepare_document(
@@ -39,16 +54,5 @@ impl OcrBackend<MistralOcrFormat> for MistralOcrBackend {
         _headers: &[(String, String)],
     ) -> Result<OcrDocument, OcrError> {
         Ok(document)
-    }
-
-    async fn authenticate(
-        &self,
-        connection: &OcrConnection,
-    ) -> Result<Vec<(String, String)>, AuthError> {
-        auth::validate_environment(
-            connection.extra_headers.clone(),
-            connection.api_key.as_deref(),
-            &|name| std::env::var(name).ok(),
-        )
     }
 }

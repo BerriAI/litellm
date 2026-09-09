@@ -11,6 +11,26 @@ use self::types::*;
 use crate::constants::{AZURE_DI_DEFAULT_DPI, AZURE_DI_DEFAULT_HEIGHT, AZURE_DI_DEFAULT_WIDTH};
 use crate::ocr::formats::OcrFormat;
 use crate::ocr::types::{OcrDocument, OcrPage, OcrPageDimensions, OcrResponseData, OcrUsageInfo};
+use serde_json::{Map, Value};
+
+fn validate_input_params(params: &Map<String, Value>) -> Result<(), OcrRequestError> {
+    let Some(Value::Array(pages)) = params.get("pages") else {
+        return Ok(());
+    };
+    if pages.iter().any(Value::is_boolean) {
+        return Err(PagesError::BooleanIndex.into());
+    }
+    if pages
+        .iter()
+        .any(|page| page.is_number() && page.as_i64().is_none())
+    {
+        return Err(PagesError::IndexOutOfRange.into());
+    }
+    if !pages.iter().all(Value::is_i64) && !pages.iter().all(Value::is_string) {
+        return Err(PagesError::MixedElementTypes.into());
+    }
+    Ok(())
+}
 
 fn pages_token_is_valid(token: &str) -> bool {
     let mut parts = token.split('-');
@@ -147,6 +167,10 @@ impl OcrFormat for AzureDocumentIntelligenceOcrFormat {
     type PreparedDocument = OcrDocument;
     type RequestBody = DocumentIntelligenceRequest;
     type ResponseBody = AzureDocumentIntelligenceOperation;
+
+    fn validate_input_params(params: &Map<String, Value>) -> Result<(), OcrRequestError> {
+        validate_input_params(params)
+    }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_ocr_params(

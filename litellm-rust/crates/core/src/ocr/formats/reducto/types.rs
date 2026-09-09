@@ -35,11 +35,17 @@ pub struct ReductoUploadResponse {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReductoResponse {
-    #[serde(default, deserialize_with = "crate::ocr::wire::present_nullable")]
+    #[serde(default, deserialize_with = "present_nullable")]
     pub result: Option<Option<ReductoResult>>,
     pub usage: Option<ReductoUsage>,
     #[serde(default)]
     pub chunks: Option<Vec<ReductoChunk>>,
+}
+
+fn present_nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ReductoResult {
@@ -68,8 +74,28 @@ pub struct ReductoBlock {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReductoBoundingBox {
-    #[serde(default, deserialize_with = "crate::ocr::wire::reducto_page")]
+    #[serde(default, deserialize_with = "reducto_page")]
     pub page: Option<i64>,
     #[serde(flatten)]
     pub extra_fields: Map<String, Value>,
+}
+
+fn reducto_page<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<i64>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(match value {
+        Value::Number(number) => number.as_i64().or_else(|| {
+            number.as_f64().and_then(|value| {
+                let truncated = value.trunc();
+                (truncated.is_finite()
+                    && truncated >= i64::MIN as f64
+                    && truncated < -(i64::MIN as f64))
+                    .then_some(truncated as i64)
+            })
+        }),
+        Value::String(value) => value.trim().parse().ok(),
+        Value::Bool(value) => Some(i64::from(value)),
+        _ => None,
+    })
 }

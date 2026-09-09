@@ -102,6 +102,33 @@ pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> OcrReques
     .unwrap()
 }
 
+#[test]
+fn provider_options_are_decoded_only_for_the_selected_backend() {
+    let mistral = decode_request(OcrWireRequest {
+        model: "mistral/model".into(),
+        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        api_key: Some("key".into()),
+        api_base: None,
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: json!({"vertex_project":42}).as_object().unwrap().clone(),
+        timeout_seconds: None,
+    });
+    assert!(mistral.is_ok());
+
+    let vertex = decode_request(OcrWireRequest {
+        model: "vertex_ai/model".into(),
+        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        api_key: Some("key".into()),
+        api_base: None,
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: json!({"vertex_project":42}).as_object().unwrap().clone(),
+        timeout_seconds: None,
+    });
+    assert!(vertex.is_err());
+}
+
 pub(crate) struct MockResponse {
     pub status: u16,
     pub headers: Vec<(&'static str, String)>,
@@ -269,6 +296,41 @@ async fn invalid_pages_fail_before_network_and_invoke_failure_hook() {
         crate::error::ErrorKind::InvalidRequest
     );
     assert_eq!(failures.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn pre_call_hook_params_use_the_same_validation_as_wire_params() {
+    use crate::ocr::hooks::{OcrHookFuture, OcrHooks, OcrPreCallRequest};
+
+    struct InvalidPages;
+    impl OcrHooks for InvalidPages {
+        fn has_guardrails(&self) -> bool {
+            true
+        }
+
+        fn pre_call(&self, request: OcrPreCallRequest) -> OcrHookFuture<'_, OcrPreCallRequest> {
+            Box::pin(async move {
+                Ok(OcrPreCallRequest {
+                    optional_params: json!({"pages":[true]}),
+                    ..request
+                })
+            })
+        }
+    }
+
+    let mut request = wire_request(
+        "azure_ai/doc-intelligence/prebuilt-read",
+        "http://127.0.0.1:1",
+        json!({}),
+    );
+    request.hooks = Arc::new(InvalidPages);
+    let error = perform_ocr(request).await.unwrap_err();
+    assert!(matches!(
+        error,
+        crate::Error::OcrRequest(crate::ocr::error::OcrRequestError::Pages(
+            crate::ocr::error::PagesError::BooleanIndex
+        ))
+    ));
 }
 
 #[test]

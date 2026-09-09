@@ -5,8 +5,21 @@ use crate::ocr::error::OcrRequestError;
 use crate::ocr::error::OcrResponseError;
 use crate::ocr::formats::OcrFormat;
 use crate::ocr::types::{OcrDocument, OcrPage, OcrResponseData};
+use serde::de::IntoDeserializer;
+use serde_json::Value;
 
 pub struct DeepSeekOcrFormat;
+
+fn decode_content(text: &str) -> Result<Option<DeepSeekOcrResult>, OcrResponseError> {
+    match serde_json::from_str::<Value>(text) {
+        Err(_) => Ok(None),
+        Ok(value) => serde_path_to_error::deserialize(value.into_deserializer())
+            .map(Some)
+            .map_err(|error| OcrResponseError::ResponseField {
+                path: format!("choices[0].message.content.{}", error.path()),
+            }),
+    }
+}
 
 impl OcrFormat for DeepSeekOcrFormat {
     type InputParams = DeepSeekOcrParams;
@@ -66,7 +79,7 @@ impl OcrFormat for DeepSeekOcrFormat {
             }
             DeepSeekContent::Text(text) => {
                 let result = if text.trim_start().starts_with('{') {
-                    crate::ocr::wire::decode_deepseek_content(&text)?
+                    decode_content(&text)?
                 } else {
                     None
                 };

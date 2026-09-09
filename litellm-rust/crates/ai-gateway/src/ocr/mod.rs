@@ -21,6 +21,11 @@ pub async fn ocr(client: &OcrClient, request: OcrRequest<'_>) -> Result<Value, E
         optional_params: request.optional_params,
         timeout_seconds: request.timeout.map(|timeout| timeout.as_secs_f64()),
     })?;
+    core_request.connection.max_download_bytes = litellm_core::ocr::types::download_limit_bytes(
+        std::env::var("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB")
+            .ok()
+            .as_deref(),
+    );
     core_request.litellm_call_id = request.litellm_call_id.map(str::to_string);
     core_request.hooks = Arc::new(hooks::OcrGatewayHooks::new(
         request.callbacks,

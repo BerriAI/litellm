@@ -13,6 +13,9 @@ const GOOGLE_APPLICATION_CREDENTIALS_ENV: &str = "GOOGLE_APPLICATION_CREDENTIALS
 const VERTEX_AI_API_KEY_ENV: &str = "VERTEX_AI_API_KEY";
 const VERTEXAI_API_KEY_ENV: &str = "VERTEXAI_API_KEY";
 const VERTEXAI_CREDENTIALS_ENV: &str = "VERTEXAI_CREDENTIALS";
+const VERTEXAI_PROJECT_ENV: &str = "VERTEXAI_PROJECT";
+const VERTEXAI_LOCATION_ENV: &str = "VERTEXAI_LOCATION";
+const VERTEX_LOCATION_ENV: &str = "VERTEX_LOCATION";
 
 #[derive(Clone, Debug, Default)]
 pub struct VertexAuthInputs {
@@ -63,6 +66,27 @@ pub struct VertexAuthentication {
     pub project_id: String,
 }
 
+pub fn resolve_project_id(
+    auth_inputs: &VertexAuthInputs,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    auth_inputs
+        .project_id()
+        .map(str::to_string)
+        .or_else(|| non_empty_env(env_lookup, VERTEXAI_PROJECT_ENV))
+}
+
+pub fn resolve_location(
+    auth_inputs: &VertexAuthInputs,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    auth_inputs
+        .location()
+        .map(str::to_string)
+        .or_else(|| non_empty_env(env_lookup, VERTEXAI_LOCATION_ENV))
+        .or_else(|| non_empty_env(env_lookup, VERTEX_LOCATION_ENV))
+}
+
 pub async fn authenticate(
     headers: Vec<(String, String)>,
     api_key: Option<&str>,
@@ -79,6 +103,7 @@ pub async fn authenticate(
         .map(str::to_string)
         .or_else(|| non_empty_env(env_lookup, VERTEX_AI_API_KEY_ENV))
         .or_else(|| non_empty_env(env_lookup, VERTEXAI_API_KEY_ENV));
+    let project_id = project_id.or_else(|| resolve_project_id(auth_inputs, env_lookup));
     let needs_provider = !has_authorization && static_token.is_none() || project_id.is_none();
     let provider = if needs_provider {
         Some(resolve_provider(auth_inputs, env_lookup).await?)
@@ -222,8 +247,13 @@ mod tests {
         let authentication = authenticate(
             Vec::new(),
             Some("access-token"),
-            &VertexAuthInputs::default(),
-            Some("project-1".to_string()),
+            &VertexAuthInputs::from_optional_params(
+                json!({"vertex_project": "project-1"})
+                    .as_object()
+                    .expect("object"),
+            )
+            .expect("inputs parse"),
+            None,
             &|_| None,
         )
         .await

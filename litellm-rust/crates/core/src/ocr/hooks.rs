@@ -112,14 +112,19 @@ where
                     })?,
                 })
                 .await?;
-            let params =
-                request
-                    .integration
-                    .format
-                    .map_ocr_params(super::wire::decode_request_value(
-                        changed.optional_params,
-                        "guardrail.optional_params",
-                    )?)?;
+            let params = request
+                .integration
+                .decode_input_params(
+                    changed
+                        .optional_params
+                        .as_object()
+                        .cloned()
+                        .ok_or_else(|| super::error::OcrRequestError::RequestField {
+                            path: "guardrail.optional_params".into(),
+                        })?,
+                    "guardrail.optional_params",
+                )
+                .and_then(|params| request.integration.format.map_ocr_params(params))?;
             Ok(Ok(PreparedOcrRequest {
                 document: changed.document,
                 params,

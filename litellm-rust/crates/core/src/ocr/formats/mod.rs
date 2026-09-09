@@ -4,6 +4,7 @@ use crate::ocr::error::OcrResponseError;
 use super::types::OcrResponseData;
 use crate::Error;
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::{Map, Value};
 
 pub mod deepseek;
 pub mod document_intelligence;
@@ -16,6 +17,10 @@ pub trait OcrFormat: Send + Sync + Sized + 'static {
     type PreparedDocument: Send;
     type RequestBody: Serialize + DeserializeOwned + Send + Sync;
     type ResponseBody: DeserializeOwned + Send;
+
+    fn validate_input_params(_params: &Map<String, Value>) -> Result<(), OcrRequestError> {
+        Ok(())
+    }
 
     fn map_ocr_params(
         &self,

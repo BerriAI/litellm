@@ -1,3 +1,4 @@
+use crate::ocr::backends::OcrBackend;
 use crate::ocr::registry::{AZURE_MISTRAL, MISTRAL};
 use crate::ocr::tests::body;
 use crate::ocr::types::OcrConnection;
@@ -14,16 +15,26 @@ async fn azure_ai_reuses_mistral_body_transform() {
         body(&MISTRAL, "model", document, params).await.unwrap()
     );
 }
-#[test]
-fn azure_ai_mistral_ocr_uses_generic_api_base() {
+#[tokio::test]
+async fn azure_ai_mistral_ocr_uses_generic_api_base() {
     let connection = OcrConnection {
+        api_key: Some("key".into()),
         api_base: Some("https://example.com/".into()),
         ..Default::default()
     };
+    let prepared = AZURE_MISTRAL
+        .backend
+        .prepare(
+            &connection,
+            &Default::default(),
+            "model",
+            &Default::default(),
+            &|_| None,
+        )
+        .await
+        .unwrap();
     assert_eq!(
-        AZURE_MISTRAL
-            .complete_url(&connection, "model", &Default::default())
-            .unwrap(),
+        prepared.url,
         "https://example.com/providers/mistral/azure/ocr"
     );
 }

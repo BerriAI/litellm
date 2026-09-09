@@ -4,11 +4,12 @@ use crate::ocr::error::OcrResponseError;
 use std::time::Duration;
 
 use crate::constants::{AZURE_DI_SUBSCRIPTION_HEADER, OCR_POLL_RETRY_SECS};
+use crate::ocr::client::read_json_response;
 use crate::ocr::formats::document_intelligence::types::{
     AzureDocumentIntelligenceOperation, OperationStatus,
 };
 use crate::ocr::types::OcrConnection;
-use crate::ocr::wire::{DecodedOcrResponse, read_json_response};
+use crate::ocr::wire::DecodedOcrResponse;
 use reqwest::Url;
 use tokio::time::Instant;
 

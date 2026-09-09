@@ -17,6 +17,7 @@ where
     pub model: String,
     pub document: OcrDocument,
     pub params: F::MappedParams,
+    pub backend_config: B::Config,
     pub connection: OcrConnection,
 }
 
@@ -26,6 +27,7 @@ pub(crate) fn prepare_ocr_call<F, B>(
     model: String,
     document: OcrDocument,
     params: F::InputParams,
+    backend_config: B::Config,
     connection: OcrConnection,
 ) -> Result<PreparedOcrRequest<F, B>, Error>
 where
@@ -38,8 +40,13 @@ where
         model,
         document,
         params,
+        backend_config,
         connection,
     })
+}
+
+pub(crate) fn credential_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
 }
 
 #[cfg(test)]

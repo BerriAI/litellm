@@ -1,30 +1,60 @@
-use crate::auth::AuthError;
+use crate::auth::azure::AzureAuthInputs;
 use crate::constants::{AZURE_AI_OCR_PATH, AZURE_DI_API_VERSION};
-use crate::ocr::backends::OcrBackend;
-use crate::ocr::error::OcrError;
+use crate::ocr::backends::{OcrBackend, PreparedOcrBackend};
+use crate::ocr::error::{OcrError, OcrRequestError};
 use crate::ocr::formats::document_intelligence::{
     AzureDocumentIntelligenceOcrFormat,
     types::{AzureDocumentIntelligenceOperation, DocumentIntelligenceParams},
 };
 use crate::ocr::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
 use crate::ocr::types::{OcrConnection, OcrDocument, OcrRequestFormat};
-use crate::ocr::wire::{DecodedOcrResponse, encode_model_id};
+use crate::ocr::wire::DecodedOcrResponse;
 use crate::providers::azure_ai::auth;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+
+fn encode_model_id(model: &str) -> Result<String, OcrRequestError> {
+    const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'_')
+        .remove(b'.')
+        .remove(b'~');
+    let model = model.rsplit('/').next().unwrap_or(model);
+    if matches!(model, "." | "..") {
+        return Err(OcrRequestError::DotModel);
+    }
+    Ok(utf8_percent_encode(model, PATH_SEGMENT).to_string())
+}
 
 pub struct AzureMistralOcrBackend;
 
 impl OcrBackend<MistralOcrFormat> for AzureMistralOcrBackend {
+    type Config = AzureAuthInputs;
+
+    fn provider_name(&self) -> &'static str {
+        "azure_ai"
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn complete_url(
+    async fn prepare(
         &self,
         connection: &OcrConnection,
+        config: &Self::Config,
         _model: &str,
         _params: &MistralOcrParams,
-    ) -> Result<String, OcrError> {
-        let base = auth::resolve_api_base(connection.api_base.as_deref(), &|name| {
-            std::env::var(name).ok()
-        })?;
-        Ok(format!("{}{AZURE_AI_OCR_PATH}", base.trim_end_matches('/')))
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<PreparedOcrBackend, OcrError> {
+        let base = auth::resolve_api_base(connection.api_base.as_deref(), env_lookup)?;
+        let headers = auth::authenticate(
+            connection.extra_headers.clone(),
+            connection.api_key.as_deref(),
+            Some(config),
+            env_lookup,
+        )
+        .await?;
+        Ok(PreparedOcrBackend {
+            url: format!("{}{AZURE_AI_OCR_PATH}", base.trim_end_matches('/')),
+            headers,
+        })
     }
 
     async fn prepare_document(
@@ -41,33 +71,28 @@ impl OcrBackend<MistralOcrFormat> for AzureMistralOcrBackend {
         )
         .await
     }
-
-    async fn authenticate(
-        &self,
-        connection: &OcrConnection,
-    ) -> Result<Vec<(String, String)>, AuthError> {
-        auth::authenticate(
-            connection.extra_headers.clone(),
-            connection.api_key.as_deref(),
-            connection.azure_auth.as_ref(),
-            &|name| std::env::var(name).ok(),
-        )
-        .await
-    }
 }
 
 pub struct AzureDocumentIntelligenceOcrBackend;
 
 impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenceOcrBackend {
-    fn complete_url(
+    type Config = AzureAuthInputs;
+
+    fn provider_name(&self) -> &'static str {
+        "azure_ai"
+    }
+
+    async fn prepare(
         &self,
         connection: &OcrConnection,
+        config: &Self::Config,
         model: &str,
         params: &DocumentIntelligenceParams,
-    ) -> Result<String, OcrError> {
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<PreparedOcrBackend, OcrError> {
         let endpoint = auth::resolve_document_intelligence_endpoint(
             connection.api_base.as_deref(),
-            &|name| std::env::var(name).ok(),
+            env_lookup,
         )?;
         let mut url = format!(
             "{}/documentintelligence/documentModels/{}:analyze?api-version={}",
@@ -83,7 +108,14 @@ impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenc
             url.push_str("&features=");
             url.push_str(&features.0);
         }
-        Ok(url)
+        let headers = auth::authenticate_document_intelligence(
+            connection.extra_headers.clone(),
+            connection.api_key.as_deref(),
+            Some(config),
+            env_lookup,
+        )
+        .await?;
+        Ok(PreparedOcrBackend { url, headers })
     }
 
     async fn prepare_document(
@@ -98,6 +130,10 @@ impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenc
 
     fn preserve_native_response(&self, params: &DocumentIntelligenceParams) -> bool {
         params.request_format == OcrRequestFormat::Native
+    }
+
+    fn supports_native_request_format(&self) -> bool {
+        true
     }
 
     async fn read_response(
@@ -116,19 +152,6 @@ impl OcrBackend<AzureDocumentIntelligenceOcrFormat> for AzureDocumentIntelligenc
             headers,
             connection,
             params.request_format == OcrRequestFormat::Native,
-        )
-        .await
-    }
-
-    async fn authenticate(
-        &self,
-        connection: &OcrConnection,
-    ) -> Result<Vec<(String, String)>, AuthError> {
-        auth::authenticate_document_intelligence(
-            connection.extra_headers.clone(),
-            connection.api_key.as_deref(),
-            connection.azure_auth.as_ref(),
-            &|name| std::env::var(name).ok(),
         )
         .await
     }

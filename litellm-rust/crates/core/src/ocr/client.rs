@@ -1,8 +1,12 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use serde::de::DeserializeOwned;
+
+use super::error::OcrError;
 use super::handler::perform_ocr_request;
 use super::types::{OcrRequest, OcrResponseData};
+use super::wire::{DecodedOcrResponse, decode_response};
 use crate::Error;
 use crate::constants::OCR_CONNECT_TIMEOUT_SECS;
 use crate::error::TransportError;
@@ -65,4 +69,23 @@ pub async fn ocr(request: OcrRequest) -> Result<OcrResponseData, Error> {
         .as_ref()
         .map_err(|error| TransportError::Network(error.clone()))?;
     client.perform(request).await
+}
+
+pub async fn read_json_response<T: DeserializeOwned>(
+    response: reqwest::Response,
+    native: bool,
+) -> Result<DecodedOcrResponse<T>, OcrError> {
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(crate::error::TransportError::from)?;
+    if !status.is_success() {
+        return Err(crate::error::TransportError::Http {
+            status: status.as_u16(),
+            body: crate::http_utils::truncate_error_body(&String::from_utf8_lossy(&bytes)),
+        }
+        .into());
+    }
+    Ok(decode_response(&bytes, native)?)
 }

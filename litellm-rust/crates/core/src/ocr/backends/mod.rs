@@ -1,7 +1,5 @@
 use std::future::Future;
 
-use crate::auth::AuthError;
-
 use super::OcrClient;
 use super::error::OcrError;
 use super::formats::OcrFormat;
@@ -14,18 +12,24 @@ pub(crate) mod mistral;
 pub(crate) mod reducto;
 pub(crate) mod vertex_ai;
 
+pub struct PreparedOcrBackend {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+}
+
 pub trait OcrBackend<F: OcrFormat>: Send + Sync + Sized + 'static {
-    fn complete_url(
+    type Config: Clone + Send + Sync + 'static;
+
+    fn provider_name(&self) -> &'static str;
+
+    fn prepare(
         &self,
         connection: &OcrConnection,
+        config: &Self::Config,
         model: &str,
         params: &F::MappedParams,
-    ) -> Result<String, OcrError>;
-
-    fn authenticate(
-        &self,
-        connection: &OcrConnection,
-    ) -> impl Future<Output = Result<Vec<(String, String)>, AuthError>> + Send;
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> impl Future<Output = Result<PreparedOcrBackend, OcrError>> + Send;
 
     fn prepare_document(
         &self,
@@ -52,6 +56,10 @@ pub trait OcrBackend<F: OcrFormat>: Send + Sync + Sized + 'static {
         _connection: &OcrConnection,
         params: &F::MappedParams,
     ) -> impl Future<Output = Result<DecodedOcrResponse<F::ResponseBody>, OcrError>> + Send {
-        super::wire::read_json_response(response, self.preserve_native_response(params))
+        super::client::read_json_response(response, self.preserve_native_response(params))
+    }
+
+    fn supports_native_request_format(&self) -> bool {
+        false
     }
 }
