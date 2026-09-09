@@ -1317,6 +1317,43 @@ class Router:
         if isinstance(litellm.input_callback, list):
             litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
 
+    def _apply_updated_routing_strategy_args(self) -> None:
+        """
+        Re-link the default group's selector to the current `routing_strategy_args`.
+
+        Selectors freeze their `RoutingArgs` at construction, so a runtime args
+        update would otherwise keep serving the boot-time values until restart.
+        Latency/usage state survives the rebuild: it lives in the shared router
+        cache, not on the selector.
+        """
+        strategy: Final = self._normalize_strategy(self.routing_strategy)
+        if strategy == "lar1":
+            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
+
+            apply_lar1_routing_strategy(self, self.routing_strategy_args)
+            return
+
+        attr: Final = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy or "")
+        current: Final = getattr(self, attr, None) if attr is not None else None
+        if attr is None or current is None:
+            return
+
+        try:
+            rebuilt: Final = self._build_strategy_selector(
+                strategy=strategy or "",
+                routing_strategy_args=self.routing_strategy_args,
+            )
+        except (TypeError, ValidationError):
+            verbose_router_logger.exception(
+                "Invalid routing_strategy_args %s for '%s'; keeping the previous ones",
+                self.routing_strategy_args,
+                strategy,
+            )
+            return
+
+        self._unregister_router_selectors((current,))
+        setattr(self, attr, rebuilt)
+
     def routing_strategy_init(self, routing_strategy: RoutingStrategy | str, routing_strategy_args: dict):
         verbose_router_logger.info("Routing strategy: %s", routing_strategy)
         self._validate_routing_strategy(routing_strategy)
@@ -3656,6 +3693,13 @@ class Router:
         effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
         self._set_failed_deployment_id_on_exception(exception, MappingProxyType({"model_info": effective_model_info}))
 
+    @staticmethod
+    def _stamp_retry_skip_deployment_id(exception: Exception, kwargs: Mapping[str, object]) -> None:
+        effective_model_info: Final = kwargs.get("model_info")
+        deployment_id: Final = effective_model_info.get("id") if isinstance(effective_model_info, Mapping) else None
+        if isinstance(deployment_id, str) and deployment_id:
+            exception.retry_skip_deployment_id = deployment_id  # pyright: ignore[reportAttributeAccessIssue]  # dynamic stamp, read by _deployment_ids_to_skip_on_retry
+
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: str | None = "metadata"
     ) -> None:
@@ -4358,6 +4402,7 @@ class Router:
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
@@ -4388,6 +4433,7 @@ class Router:
             verbose_router_logger.info("litellm.image_generation(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aimage_generation(self, prompt: str, model: str, **kwargs):
@@ -4472,6 +4518,7 @@ class Router:
             verbose_router_logger.info("litellm.aimage_generation(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def atranscription(self, file: FileTypes, model: str, **kwargs):
@@ -4576,6 +4623,7 @@ class Router:
             verbose_router_logger.info("litellm.atranscription(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
@@ -4690,6 +4738,7 @@ class Router:
             verbose_router_logger.info("litellm.aspeech(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def arerank(self, model: str, **kwargs):
@@ -4748,6 +4797,7 @@ class Router:
             verbose_router_logger.info("litellm.arerank(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     def text_completion(
@@ -4882,6 +4932,7 @@ class Router:
             verbose_router_logger.info("litellm.atext_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model, e)
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aadapter_completion(
@@ -4972,6 +5023,7 @@ class Router:
             verbose_router_logger.info("litellm.aadapter_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model, e)
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs):
@@ -5754,6 +5806,7 @@ class Router:
                 model=model,
                 input=input,
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
@@ -5792,6 +5845,7 @@ class Router:
             verbose_router_logger.info("litellm.embedding(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aembedding(
@@ -5879,6 +5933,7 @@ class Router:
             verbose_router_logger.info("litellm.aembedding(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     #### FILES API ####
@@ -6252,6 +6307,7 @@ class Router:
             )
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aretrieve_batch(
@@ -6472,6 +6528,7 @@ class Router:
             )
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def alist_batches(
@@ -7589,7 +7646,9 @@ class Router:
 
     @staticmethod
     def _deployment_ids_to_skip_on_retry(exception: Exception, already_skipped: object) -> tuple[str, ...]:
-        failed_deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
+        failed_deployment_id: Final[str | None] = getattr(exception, "retry_skip_deployment_id", None) or getattr(
+            exception, "failed_deployment_id", None
+        )
         status_code: Final = getattr(exception, "status_code", None)
         if not failed_deployment_id or not isinstance(status_code, int):
             return ()
@@ -11108,6 +11167,40 @@ class Router:
 
         return ids
 
+    def get_candidate_model_ids_for_route(self, model: str, team_id: str | None = None) -> frozenset[str]:
+        """
+        Deployment ids that could serve ``model`` for ``team_id``, unioned across the paths
+        the router resolves a route through: ``model_group_alias``, a routing group, the
+        ``model_name`` and team indexes, and wildcard pattern routes. Read-only and
+        side-effect-free, unlike ``_common_checks_available_deployment`` which also applies
+        fallbacks and can raise. Lets a pre-call check tell a genuine cross-group route from
+        same-group unavailability without re-deriving that precedence at the call site, and
+        without leaking deployment ids into request kwargs bound for the provider.
+        """
+        resolved: Final = self._get_model_from_alias(model=model) or model
+        routing_group_members: Final = self._get_routing_group_deployments(model=resolved, team_id=team_id)
+        if routing_group_members is not None:
+            return self._deployment_ids(routing_group_members)
+        if resolved in self.model_names:
+            return self._deployment_ids(self._get_all_deployments(model_name=resolved, team_id=team_id))
+        team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
+        return self._deployment_ids(
+            (
+                *self._get_all_deployments(model_name=resolved, team_id=team_id),
+                *(self.pattern_router.route(resolved) or ()),
+                *((team_router.route(resolved) or ()) if team_router is not None else ()),
+            )
+        )
+
+    @staticmethod
+    def _deployment_ids(deployments: Sequence[Mapping[str, object]]) -> frozenset[str]:
+        return frozenset(
+            str(model_info["id"])
+            for deployment in deployments
+            for model_info in (deployment.get("model_info"),)
+            if isinstance(model_info, Mapping) and model_info.get("id") is not None
+        )
+
     def has_model_id(self, candidate_id: str) -> bool:
         """
         O(1) membership check for a deployment ID without allocating large lists.
@@ -11825,7 +11918,7 @@ class Router:
 
         _existing_router_settings: Final = self.get_settings()
         rebuild_routing_groups = False
-        relink_lar1_from_args = False
+        routing_args_updated = False
         for var in kwargs:
             if var in RUNTIME_UPDATABLE_ROUTER_SETTINGS:
                 if var in _int_settings:
@@ -11864,15 +11957,13 @@ class Router:
                                 )
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
-                        relink_lar1_from_args = True
+                        routing_args_updated = True
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting %s is not allowed", var)
 
-        if relink_lar1_from_args and self._normalize_strategy(self.routing_strategy) == "lar1":
-            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
-
-            apply_lar1_routing_strategy(self, self.routing_strategy_args)
+        if routing_args_updated:
+            self._apply_updated_routing_strategy_args()
 
         if rebuild_routing_groups:
             self._init_routing_groups(self._routing_groups_input)

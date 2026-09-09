@@ -3079,7 +3079,7 @@ def register_model(
         # Convert stringified numbers to appropriate numeric types
         loaded_model_cost = model_cost
     elif isinstance(model_cost, str):
-        loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
+        loaded_model_cost = litellm.get_model_cost_map(url=model_cost, max_attempts=1)
 
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
@@ -3632,7 +3632,7 @@ def get_optional_params_embeddings(
         elif "cohere.embed" in model:
             object = litellm.BedrockCohereEmbeddingConfig()
         elif "twelvelabs" in model or "marengo" in model:
-            object = litellm.TwelveLabsMarengoEmbeddingConfig()
+            object = litellm.TwelveLabsMarengoEmbeddingConfig(model=model)
         elif "nova" in model.lower():
             object = litellm.AmazonNovaEmbeddingConfig()
         else:  # unmapped model
@@ -6043,7 +6043,7 @@ def get_model_info(
             input_cost_per_character_above_128k_tokens: Optional[
                 float
             ]  # only for vertex ai models
-            input_cost_per_query: Optional[float] # only for rerank models
+            input_cost_per_query: Optional[float] # per-request pricing: rerank, search, and Bedrock Marengo embeddings
             input_cost_per_image: Optional[float]  # only for vertex ai models
             input_cost_per_audio_token: Optional[float]
             input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models

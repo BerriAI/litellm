@@ -6074,15 +6074,17 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
         for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
 def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
-    """With LITELLM_OTEL_V2 on, the "newrelic" callback builds the OTel v2
-    logger (per-team credential routing); with the flag off (default) it keeps
-    the legacy agent-based logger, so existing deployments are untouched."""
+    """With LITELLM_OTEL_V2 on and operator credentials present, the "newrelic"
+    callback builds the OTel v2 logger (per-team credential routing); with the
+    flag off (default) it keeps the legacy agent-based logger, so existing
+    deployments are untouched."""
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
     try:
         v2_logger = logging_module._init_custom_logger_compatible_class(
@@ -6137,6 +6139,7 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
 
     logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
     try:
         created = logging_module._init_custom_logger_compatible_class(
