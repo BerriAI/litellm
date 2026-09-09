@@ -42,10 +42,10 @@ def test_lite_version_does_not_fetch_model_cost_map():
     if lite_path is None:
         pytest.skip("lite executable is unavailable")
 
-    requests = []
+    requests: list[str] = []
 
     class _CostMapHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
+        def do_GET(self) -> None:
             requests.append(self.path)
             body = b'{"test-model": {"litellm_provider": "openai", "mode": "chat"}}'
             self.send_response(200)
@@ -54,7 +54,7 @@ def test_lite_version_does_not_fetch_model_cost_map():
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, format, *args):
+        def log_message(self, format: str, *args: object) -> None:
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _CostMapHandler)
