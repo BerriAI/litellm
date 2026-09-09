@@ -934,3 +934,135 @@ class TestOllamaAuthHeaders:
                 pytest.fail(
                     f"Ollama completion with ollama.com without api_key failed: {e}"
                 )
+
+
+class TestOllamaChatRustDispatch:
+    """Rust bridge dispatch in ollama_chat_completion (litellm/llms/ollama/chat/handler.py).
+
+    The auth-header tests above mock the Python handler, so ``serves_via_rust`` is
+    always False and the Rust branch never runs. These force the Rust branch and
+    cover its synchronous serve, decline-to-Python, and async paths.
+    """
+
+    _HANDLER = "litellm.llms.ollama.chat.handler"
+    _PY_COMPLETION = "litellm.main.base_llm_http_handler.completion"
+
+    @staticmethod
+    def _rust_model_response(content="from rust"):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        return ModelResponse(
+            id="rust-resp-1",
+            model="ollama_chat/llama2",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content=content, role="assistant"),
+                )
+            ],
+        )
+
+    def test_rust_serve_returns_rust_response(self):
+        import litellm
+        from unittest.mock import MagicMock, patch
+
+        rust_resp = self._rust_model_response()
+        bridge = MagicMock()
+        bridge.chat_completions.return_value = rust_resp
+        bridge.response_logger.return_value = MagicMock()
+
+        with (
+            patch(f"{self._HANDLER}.rust_chat_completions_accepts", return_value=True),
+            patch(f"{self._HANDLER}.rust_chat_completions_bridge", bridge),
+            patch(
+                self._PY_COMPLETION,
+                side_effect=AssertionError(
+                    "python fallback must not run when Rust serves"
+                ),
+            ),
+        ):
+            result = litellm.completion(
+                model="ollama_chat/llama2",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-key",
+                api_base="http://localhost:11434",
+            )
+
+        assert result is rust_resp
+        bridge.chat_completions.assert_called_once()
+        call = bridge.chat_completions.call_args
+        assert call.kwargs["custom_llm_provider"] == "ollama_chat"
+        assert str(call.kwargs["model"]).endswith("llama2")
+        assert call.kwargs["api_base"] == "http://localhost:11434"
+        assert call.kwargs["api_key"] == "test-key"
+        bridge.achat_completions_or_fallback.assert_not_called()
+
+    def test_rust_decline_falls_back_to_python(self):
+        import litellm
+        from unittest.mock import MagicMock, patch
+
+        py_resp = self._rust_model_response(content="from python")
+        bridge = MagicMock()
+        bridge.chat_completions.return_value = None
+        bridge.response_logger.return_value = MagicMock()
+
+        captured = {}
+
+        def fake_python_completion(**kwargs):
+            captured["skip_pre_call_logging"] = kwargs.get("skip_pre_call_logging")
+            captured["custom_llm_provider"] = kwargs.get("custom_llm_provider")
+            return py_resp
+
+        with (
+            patch(f"{self._HANDLER}.rust_chat_completions_accepts", return_value=True),
+            patch(f"{self._HANDLER}.rust_chat_completions_bridge", bridge),
+            patch(self._PY_COMPLETION, side_effect=fake_python_completion),
+        ):
+            result = litellm.completion(
+                model="ollama_chat/llama2",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-key",
+                api_base="http://localhost:11434",
+            )
+
+        assert result is py_resp
+        bridge.chat_completions.assert_called_once()
+        assert captured["skip_pre_call_logging"] is True
+        assert captured["custom_llm_provider"] == "ollama_chat"
+
+    def test_rust_async_serve_returns_rust_response(self):
+        import asyncio
+        import litellm
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        rust_resp = self._rust_model_response(content="from rust async")
+        bridge = MagicMock()
+        bridge.achat_completions_or_fallback = AsyncMock(return_value=rust_resp)
+        bridge.response_logger.return_value = MagicMock()
+
+        with (
+            patch(f"{self._HANDLER}.rust_chat_completions_accepts", return_value=True),
+            patch(f"{self._HANDLER}.rust_chat_completions_bridge", bridge),
+            patch(
+                self._PY_COMPLETION,
+                side_effect=AssertionError(
+                    "python fallback must not run when Rust async serves"
+                ),
+            ),
+        ):
+            result = asyncio.run(
+                litellm.acompletion(
+                    model="ollama_chat/llama2",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    api_key="test-key",
+                    api_base="http://localhost:11434",
+                )
+            )
+
+        assert result is rust_resp
+        bridge.achat_completions_or_fallback.assert_called_once()
+        call = bridge.achat_completions_or_fallback.call_args
+        assert call.kwargs["custom_llm_provider"] == "ollama_chat"
+        assert str(call.kwargs["model"]).endswith("llama2")
+        bridge.chat_completions.assert_not_called()
