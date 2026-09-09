@@ -2,10 +2,12 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 from jsonschema import validate
@@ -2380,6 +2382,28 @@ def test_register_model_with_scientific_notation():
     if test_model_name in litellm.model_cost:
         del litellm.model_cost[test_model_name]
     _invalidate_model_cost_lowercase_map()
+
+
+@respx.mock
+def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    before = dict(litellm.model_cost)
+    threads_before = {thread.name for thread in threading.enumerate()}
+    route = respx.get("https://example.invalid/custom_pricing.json").mock(
+        return_value=httpx.Response(503)
+    )
+
+    litellm.register_model(model_cost="https://example.invalid/custom_pricing.json")
+
+    threads_after = {thread.name for thread in threading.enumerate()}
+    assert route.call_count == 1
+    assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
+    assert not any(
+        thread.name == "litellm-model-cost-map-retry" and thread.is_alive()
+        for thread in threading.enumerate()
+    )
+    assert litellm.model_cost.keys() >= before.keys()
 
 
 def test_register_model_openrouter_without_slash():
@@ -6092,6 +6116,34 @@ class TestFinalOptionalParamsLineRedaction:
 
         assert "'max_tokens': 17" in printed
         assert "'temperature': 0.25" in printed
+
+
+class TestDropParamsStringCoercion:
+    @pytest.mark.parametrize("drop_params", ["true", "True", True])
+    def test_truthy_drop_params_drops_unsupported_temperature(self, drop_params, monkeypatch):
+        from litellm.utils import get_optional_params
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result = get_optional_params(
+            model="gpt-5-nano",
+            custom_llm_provider="openai",
+            temperature=0.1,
+            drop_params=drop_params,
+        )
+        assert "temperature" not in result
+
+    @pytest.mark.parametrize("drop_params", ["false", False, None])
+    def test_falsy_drop_params_still_raises(self, drop_params, monkeypatch):
+        from litellm.utils import get_optional_params
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(litellm.UnsupportedParamsError):
+            get_optional_params(
+                model="gpt-5-nano",
+                custom_llm_provider="openai",
+                temperature=0.1,
+                drop_params=drop_params,
+            )
 
 
 def _credential_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:

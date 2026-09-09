@@ -1525,7 +1525,12 @@ class TestProxyInitializationHelpers:
         def capture_run(self):
             captured["options"] = dict(self.options)
 
-        with patch("gunicorn.app.base.BaseApplication.run", capture_run):
+        with (
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
             ProxyInitializationHelpers._run_gunicorn_server(
                 host="127.0.0.1",
                 port=4010,
@@ -1553,6 +1558,9 @@ class TestProxyInitializationHelpers:
         with (
             patch("gunicorn.app.base.BaseApplication.run", capture_run),
             patch("builtins.print") as mock_print,
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
         ):
             ProxyInitializationHelpers._run_gunicorn_server(
                 host="127.0.0.1",
