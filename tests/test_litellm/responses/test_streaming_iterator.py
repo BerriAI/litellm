@@ -368,6 +368,57 @@ def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
     logging_obj._response_cost_calculator.assert_not_called()
 
 
+def _unvalidated_response_with_dict_usage(usage: dict) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse.model_construct(
+        id="resp_lit7391",
+        created_at=int(datetime(2025, 1, 1).timestamp()),
+        status="completed",
+        model="perplexity/deepseek-v4-flash-0731",
+        object="response",
+        output=[],
+        truncation="",
+        usage=usage,
+    )
+
+
+def test_stamp_responses_usage_cost_keeps_provider_cost_from_dict_usage():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+    from litellm.types.llms.openai import ResponseAPIUsage
+
+    response = _unvalidated_response_with_dict_usage(
+        {
+            "input_tokens": 29,
+            "output_tokens": 120,
+            "output_tokens_details": {"reasoning_tokens": 117},
+            "total_tokens": 149,
+            "cost": {"currency": "USD", "input_cost": 0, "output_cost": 3e-05, "total_cost": 3e-05},
+        }
+    )
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert isinstance(response.usage, ResponseAPIUsage)
+    assert response.usage.cost == pytest.approx(3e-05)
+    assert response.usage.output_tokens_details.reasoning_tokens == 117
+    logging_obj._response_cost_calculator.assert_not_called()
+
+
+def test_stamp_responses_usage_cost_computes_cost_for_dict_usage_without_cost():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+    from litellm.types.llms.openai import ResponseAPIUsage
+
+    response = _unvalidated_response_with_dict_usage({"input_tokens": 29, "output_tokens": 120, "total_tokens": 149})
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj._response_cost_calculator.return_value = 0.000704
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert isinstance(response.usage, ResponseAPIUsage)
+    assert response.usage.cost == pytest.approx(0.000704)
+    logging_obj._response_cost_calculator.assert_called_once_with(result=response)
+
+
 def test_stamp_responses_usage_cost_survives_calculator_failure():
     from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
 
