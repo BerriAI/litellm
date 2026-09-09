@@ -24,6 +24,7 @@ from mcp.types import (
     JSONRPCError,
     JSONRPCMessage,
     JSONRPCResponse,
+    LoggingMessageNotificationParams,
     ServerCapabilities,
 )
 
@@ -1356,6 +1357,58 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
             with pytest.raises(httpx.HTTPStatusError) as caught:
                 await asyncio.wait_for(operation, timeout=3)
             assert caught.value.response.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_http_response_handler_preserves_notifications_and_tool_listing() -> None:
+    notification: Final = {
+        "jsonrpc": "2.0",
+        "method": "notifications/message",
+        "params": {"level": "info", "data": "Listing tools"},
+    }
+    logging_callback: Final = AsyncMock()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(200)
+        payload: Final = json.loads(request.content)
+        if "id" not in payload:
+            return httpx.Response(202)
+        if payload["method"] == "initialize":
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "protocolVersion": LATEST_PROTOCOL_VERSION,
+                        "capabilities": {"logging": {}, "tools": {}},
+                        "serverInfo": {"name": "test", "version": "1"},
+                    },
+                },
+            )
+        response: Final = {
+            "jsonrpc": "2.0",
+            "id": payload["id"],
+            "result": {"tools": [{"name": "search", "inputSchema": {"type": "object"}}]},
+        }
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            content="".join(f"event: message\ndata: {json.dumps(message)}\n\n" for message in (notification, response)),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30, logging_callback=logging_callback)
+        result: Final = await asyncio.wait_for(
+            client._execute_session_operation(
+                streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
+            ),
+            timeout=3,
+        )
+
+    assert [tool.name for tool in result.tools] == ["search"]
+    logging_callback.assert_awaited_once_with(LoggingMessageNotificationParams(level="info", data="Listing tools"))
 
 
 @pytest.mark.asyncio
