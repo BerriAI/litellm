@@ -9,6 +9,7 @@ import asyncio
 import contextvars
 from collections.abc import AsyncIterator, Coroutine, Iterator
 from functools import partial
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 import litellm
@@ -579,27 +580,27 @@ def anthropic_messages_handler(
         )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        _shared_kwargs: Final = dict(
-            max_tokens=max_tokens,
-            messages=messages,
-            model=original_model,
-            metadata=metadata,
-            stop_sequences=stop_sequences,
-            stream=stream,
-            system=system,
-            temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
-            top_k=top_k,
-            top_p=top_p,
-            _is_async=is_async,
-            api_key=api_key,
-            api_base=api_base,
-            client=client,
-            custom_llm_provider=custom_llm_provider,
+        _shared_kwargs: Final = MappingProxyType({
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "model": original_model,
+            "metadata": metadata,
+            "stop_sequences": stop_sequences,
+            "stream": stream,
+            "system": system,
+            "temperature": temperature,
+            "thinking": thinking,
+            "tool_choice": tool_choice,
+            "tools": tools,
+            "top_k": top_k,
+            "top_p": top_p,
+            "_is_async": is_async,
+            "api_key": api_key,
+            "api_base": api_base,
+            "client": client,
+            "custom_llm_provider": custom_llm_provider,
             **kwargs,
-        )
+        })
         if _should_route_to_responses_api(
             custom_llm_provider=custom_llm_provider,
             requested_model=original_model,
