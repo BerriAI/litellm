@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
+from botocore.credentials import RefreshableCredentials
 
 import litellm
 from litellm._logging import verbose_logger
@@ -822,7 +823,10 @@ class _ProbedBedrockMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         super().__init__()
         self._probe = probe
 
-    def get_credentials(self, **kwargs):
+    def get_credentials(
+        self,
+        **kwargs: object,  # kwargs-ok: mirrors the base resolver's keyword contract, which the probe ignores
+    ) -> RefreshableCredentials:
         return self._probe.credentials()
 
 
