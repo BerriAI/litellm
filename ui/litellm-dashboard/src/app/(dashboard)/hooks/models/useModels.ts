@@ -212,27 +212,23 @@ export const useAutoRouterModelGroups = (): ReadonlySet<string> => {
   return data ?? NO_AUTO_ROUTERS;
 };
 
-export const usePlainModelGroups = (): ReadonlySet<string> => {
+const useSelectedPlainModelGroups = (
+  select: (deployments: AutoRouterCandidateDeployment[]) => ReadonlySet<string>,
+): ReadonlySet<string> => {
   const { accessToken, userId, userRole } = useAuthorized();
   const { data } = useQuery<AutoRouterDeployment[], Error, ReadonlySet<string>>({
     queryKey: autoRouterListKey(userId, userRole),
     queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
     enabled: Boolean(accessToken && userId && userRole),
-    select: selectPlainModelGroups,
+    select,
   });
   return data ?? NO_AUTO_ROUTERS;
 };
 
-export const usePlainChatModelGroups = (): ReadonlySet<string> => {
-  const { accessToken, userId, userRole } = useAuthorized();
-  const { data } = useQuery<AutoRouterDeployment[], Error, ReadonlySet<string>>({
-    queryKey: autoRouterListKey(userId, userRole),
-    queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
-    enabled: Boolean(accessToken && userId && userRole),
-    select: selectPlainChatModelGroups,
-  });
-  return data ?? NO_AUTO_ROUTERS;
-};
+export const usePlainModelGroups = (): ReadonlySet<string> => useSelectedPlainModelGroups(selectPlainModelGroups);
+
+export const usePlainChatModelGroups = (): ReadonlySet<string> =>
+  useSelectedPlainModelGroups(selectPlainChatModelGroups);
 
 export const useAutoRouters = (): UseQueryResult<AutoRouterDeployment[], Error> => {
   const { accessToken, userId, userRole } = useAuthorized();
