@@ -6,6 +6,7 @@ count actual model entries, not reserved meta keys) and the extraction of the
 
 import json
 import os
+import sys
 import threading
 
 import pytest
@@ -749,3 +750,29 @@ def test_boot_load_that_fails_the_integrity_check_reports_the_backup_not_the_rej
     assert source["etag"] is None
     assert source["source_revision"] == _bundled_blob_id()
     assert source["source_revision"] != git_blob_id(shrunk_body)
+
+
+@pytest.mark.parametrize(
+    ("argv0", "request_count"),
+    [
+        ("/some/venv/bin/lite", 0),
+        ("/some/venv/bin/lite.exe", 0),
+        ("/some/venv/bin/python", 1),
+    ],
+)
+def test_boot_load_skips_remote_fetch_for_cli_processes(
+    monkeypatch: pytest.MonkeyPatch, argv0: str, request_count: int
+) -> None:
+    monkeypatch.setattr(sys, "argv", [argv0, "--version"])
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    client, calls = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
+
+    cost_map = get_model_cost_map(url=_URL, client=client)
+
+    assert calls["count"] == request_count
+    assert cost_map
+    source = get_model_cost_map_source_info()
+    if request_count == 0:
+        assert source["source"] == "local"
+    else:
+        assert source["source"] == "remote"
