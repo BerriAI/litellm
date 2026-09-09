@@ -168,8 +168,11 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                # First check local cache
-                current_tpm: Final = self.dual_cache.get_cache(key=tpm_key, local_only=True)
+                current_tpm: Final = (
+                    self.dual_cache.redis_cache.get_cache(key=tpm_key)
+                    if self.dual_cache.redis_cache is not None
+                    else self.dual_cache.get_cache(key=tpm_key, local_only=True)
+                )
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -249,8 +252,11 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                # First check local cache
-                current_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
+                current_tpm: Final = (
+                    await self.dual_cache.redis_cache.async_get_cache(key=tpm_key, parent_otel_span=parent_otel_span)
+                    if self.dual_cache.redis_cache is not None
+                    else await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
+                )
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",

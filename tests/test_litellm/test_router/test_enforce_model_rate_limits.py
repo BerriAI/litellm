@@ -6,16 +6,114 @@ regardless of the routing strategy being used.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from datetime import datetime, timezone
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("local_tpm", [None, 100])
+@pytest.mark.parametrize("shared_tpm", [1000, 1100])
+async def test_deployment_tpm_reads_shared_usage(use_async: bool, local_tpm: int | None, shared_tpm: int) -> None:
+    shared_store: Final = InMemoryCache()
+    redis: Final = MagicMock(spec=RedisCache)
+    redis.get_cache.side_effect = shared_store.get_cache
+    redis.async_get_cache = AsyncMock(side_effect=shared_store.async_get_cache)
+    redis.increment_cache.side_effect = shared_store.increment_cache
+    redis.async_increment = AsyncMock(side_effect=shared_store.async_increment)
+    first_cache: Final = DualCache(redis_cache=redis)
+    second_cache: Final = DualCache(redis_cache=redis)
+    first_worker: Final = ModelRateLimitingCheck(first_cache)
+    second_worker: Final = ModelRateLimitingCheck(second_cache)
+    deployment: Final = {
+        "model_name": "test-model",
+        "tpm": 1000,
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {"id": "test-id"},
+    }
+    fixed_time: Final = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+    tpm_key: Final = "test-id:gpt-4:tpm:12-00"
+    if local_tpm is not None:
+        second_cache.in_memory_cache.set_cache(tpm_key, local_tpm)
+    success_kwargs: Final = {
+        "standard_logging_object": {
+            "model_id": "test-id",
+            "total_tokens": shared_tpm,
+            "hidden_params": {"litellm_model_name": "gpt-4"},
+        }
+    }
+    with patch(  # test-quality-ok: Freeze only the clock to keep callbacks and checks in the same minute
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime",
+        return_value=fixed_time,
+    ):
+        if use_async:
+            assert await second_worker.async_pre_call_check(deployment) == deployment
+            await first_worker.async_log_success_event(success_kwargs, None, None, None)
+            with pytest.raises(litellm.RateLimitError, match="TPM limit=1000"):
+                await second_worker.async_pre_call_check(deployment)
+        else:
+            assert second_worker.pre_call_check(deployment) == deployment
+            first_worker.log_success_event(success_kwargs, None, None, None)
+            with pytest.raises(litellm.RateLimitError, match="TPM limit=1000"):
+                second_worker.pre_call_check(deployment)
+    assert shared_store.get_cache(tpm_key) == shared_tpm
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("shared_tpm", [None, 999])
+async def test_deployment_tpm_ignores_stale_local_limit(use_async: bool, shared_tpm: int | None) -> None:
+    redis: Final = MagicMock(spec=RedisCache)
+    redis.get_cache.return_value = shared_tpm
+    redis.async_get_cache = AsyncMock(return_value=shared_tpm)
+    cache: Final = DualCache(redis_cache=redis)
+    cache.in_memory_cache.set_cache("test-id:gpt-4:tpm:12-00", 1000)
+    check: Final = ModelRateLimitingCheck(cache)
+    deployment: Final = {
+        "model_name": "test-model",
+        "tpm": 1000,
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {"id": "test-id"},
+    }
+    with patch(  # test-quality-ok: Freeze only the clock to read the seeded minute's counter deterministically
+        "litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime",
+        return_value=datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc),
+    ):
+        if use_async:
+            assert await check.async_pre_call_check(deployment) == deployment
+        else:
+            assert check.pre_call_check(deployment) == deployment
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_deployment_tpm_redis_error_fails_open(use_async: bool) -> None:
+    redis: Final = MagicMock(spec=RedisCache)
+    redis.get_cache.side_effect = ConnectionError("Redis unavailable")
+    redis.async_get_cache = AsyncMock(side_effect=ConnectionError("Redis unavailable"))
+    check: Final = ModelRateLimitingCheck(DualCache(redis_cache=redis))
+    deployment: Final = {
+        "model_name": "test-model",
+        "tpm": 1000,
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {"id": "test-id"},
+    }
+    if use_async:
+        assert await check.async_pre_call_check(deployment) == deployment
+    else:
+        assert check.pre_call_check(deployment) == deployment
 
 
 class TestModelRateLimitingCheck:
@@ -128,6 +226,7 @@ class TestModelRateLimitingCheck:
         """Test that RateLimitError is raised when TPM limit is exceeded."""
         mock_cache = MagicMock()
         mock_cache.get_cache.return_value = 1000  # Already at limit
+        mock_cache.redis_cache = None
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
@@ -230,6 +329,7 @@ class TestModelRateLimitingCheckAsync:
         """Test that RateLimitError is raised when TPM limit is exceeded (async)."""
         mock_cache = MagicMock()
         mock_cache.async_get_cache = AsyncMock(return_value=1000)  # Already at limit
+        mock_cache.redis_cache = None
 
         check = ModelRateLimitingCheck(dual_cache=mock_cache)
 
