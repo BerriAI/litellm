@@ -268,6 +268,78 @@ class TestModelRateLimitingCheckAsync:
         assert "test-id:gpt-4:tpm:" in kwarg_params["key"]
         assert kwarg_params["value"] == 50
 
+    @pytest.mark.asyncio
+    async def test_async_log_success_event_recovers_model_id_from_kwargs(self):
+        """An empty model_id in the payload falls back to the router's model_info.
+
+        On the streaming path the standard logging payload is built from a
+        litellm_params snapshot taken before the router stamped model_info in,
+        so model_id arrives as "". The deployment id is still on kwargs.
+        """
+        mock_cache = MagicMock()
+        mock_cache.async_increment_cache = AsyncMock()
+        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+
+        kwargs = {
+            "standard_logging_object": {
+                "model_id": "",
+                "total_tokens": 50,
+                "hidden_params": {"litellm_model_name": "gpt-4"},
+            },
+            "model_info": {"id": "deployment-1"},
+        }
+
+        await check.async_log_success_event(kwargs, None, None, None)
+
+        mock_cache.async_increment_cache.assert_called_once()
+        _, kwarg_params = mock_cache.async_increment_cache.call_args
+        assert "deployment-1:gpt-4:tpm:" in kwarg_params["key"]
+        assert kwarg_params["value"] == 50
+
+    @pytest.mark.asyncio
+    async def test_async_log_success_event_falls_back_to_litellm_params(self):
+        """model_info nested under litellm_params is also accepted."""
+        mock_cache = MagicMock()
+        mock_cache.async_increment_cache = AsyncMock()
+        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+
+        kwargs = {
+            "standard_logging_object": {
+                "model_id": "",
+                "total_tokens": 10,
+                "hidden_params": {"litellm_model_name": "gpt-4"},
+            },
+            "litellm_params": {"model_info": {"id": "deployment-2"}},
+        }
+
+        await check.async_log_success_event(kwargs, None, None, None)
+
+        _, kwarg_params = mock_cache.async_increment_cache.call_args
+        assert "deployment-2:gpt-4:tpm:" in kwarg_params["key"]
+
+    @pytest.mark.asyncio
+    async def test_async_log_success_event_skips_when_no_model_id_anywhere(self):
+        """With no deployment id at all, nothing is counted.
+
+        Incrementing on an empty model_id would bucket unrelated deployments
+        under a shared ":<model>:tpm:<minute>" key.
+        """
+        mock_cache = MagicMock()
+        mock_cache.async_increment_cache = AsyncMock()
+        check = ModelRateLimitingCheck(dual_cache=mock_cache)
+
+        kwargs = {
+            "standard_logging_object": {
+                "model_id": "",
+                "total_tokens": 50,
+                "hidden_params": {"litellm_model_name": "gpt-4"},
+            }
+        }
+
+        await check.async_log_success_event(kwargs, None, None, None)
+
+        mock_cache.async_increment_cache.assert_not_called()
+
 
 class TestRouterWithEnforceModelRateLimits:
     """Test Router integration with enforce_model_rate_limits."""
