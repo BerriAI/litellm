@@ -722,7 +722,9 @@ def test_boot_load_that_fails_the_integrity_check_reports_the_backup_not_the_rej
         ("/some/venv/bin/python", 1),
     ],
 )
-def test_boot_load_skips_remote_fetch_for_cli_processes(monkeypatch, argv0, request_count):
+def test_boot_load_skips_remote_fetch_for_cli_processes(
+    monkeypatch: pytest.MonkeyPatch, argv0: str, request_count: int
+) -> None:
     monkeypatch.setattr(sys, "argv", [argv0, "--version"])
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     client, calls = _mock_client([httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client)
