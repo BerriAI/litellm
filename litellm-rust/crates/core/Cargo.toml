@@ -13,6 +13,7 @@ path = "tests/workspace_crate_allowlist.rs"
 [dependencies]
 data-url = "0.3.2"
 base64.workspace = true
+gcp_auth.workspace = true
 azure_core.workspace = true
 azure_identity.workspace = true
 moka.workspace = true

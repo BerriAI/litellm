@@ -58,6 +58,7 @@ class _PreparedOCRRequest:
 _RUST_OCR_PROVIDERS: Final = {
     "mistral",
     "azure_ai",
+    "vertex_ai",
 }
 
 _AZURE_RUST_AUTH_PARAMS: Final = (
@@ -69,6 +70,15 @@ _AZURE_RUST_AUTH_PARAMS: Final = (
     "azure_authority_host",
     "azure_credential",
     "azure_federated_token_file",
+)
+
+_VERTEX_RUST_PARAMS: Final = (
+    "vertex_project",
+    "vertex_ai_project",
+    "vertex_location",
+    "vertex_ai_location",
+    "vertex_credentials",
+    "vertex_ai_credentials",
 )
 
 
@@ -234,9 +244,19 @@ def _rust_bridge_optional_params(
         if prepared_request.custom_llm_provider == "azure_ai"
         else {}
     )
+    vertex_params: Final = (
+        {
+            name: raw_optional_params[name]
+            for name in _VERTEX_RUST_PARAMS
+            if name in raw_optional_params
+        }
+        if prepared_request.custom_llm_provider == "vertex_ai"
+        else {}
+    )
     return {
         **provider_params,
         **azure_auth_params,
+        **vertex_params,
     }
 
 
@@ -260,14 +280,7 @@ def _prepare_rust_ocr_call(
     caller_api_base: str | None,
     resolve_api_key: Callable[[str], str | None],
 ) -> dict[str, object]:
-    provider_config: Final = prepared_request.provider_config
     logging_api_base: Final = _rust_bridge_api_base(prepared_request, resolve_api_key)
-    resolved_complete_url: Final = provider_config.get_complete_url(
-        api_base=logging_api_base,
-        model=prepared_request.model,
-        optional_params=prepared_request.optional_params,
-        litellm_params=prepared_request.litellm_params,
-    )
     rust_optional_params: Final = _rust_bridge_optional_params(
         prepared_request,
         raw_optional_params,
@@ -281,7 +294,7 @@ def _prepare_rust_ocr_call(
                 "document": prepared_request.document,
                 **prepared_request.optional_params,
             },
-            "api_base": resolved_complete_url,
+            "api_base": logging_api_base or "",
             "headers": prepared_request.extra_headers or {},
         },
     )

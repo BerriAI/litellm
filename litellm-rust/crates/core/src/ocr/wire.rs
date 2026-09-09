@@ -8,9 +8,10 @@ use super::hooks::{OcrDuringCallRequest, OcrPreCallRequest};
 use super::prepare::{
     OcrModel, OcrProvider, OcrProviderKind, OcrProviderRequest, ocr_provider_config,
 };
-use super::types::{OcrConnection, OcrDocument, OcrRequest, OcrRequestFormat};
+use super::types::{OcrConnection, OcrDocument, OcrRequest, OcrRequestFormat, VertexOcrSettings};
 use crate::Error;
 use crate::auth::azure::AzureAuthInputs;
+use crate::providers::vertex_ai::auth::VertexAuthInputs;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{
@@ -64,6 +65,7 @@ pub fn decode_request_with_env(
         OcrProviderKind::Mistral => "MISTRAL_API_KEY",
         OcrProviderKind::AzureAi => "AZURE_AI_API_KEY",
         OcrProviderKind::AzureDocumentIntelligence => "AZURE_DOCUMENT_INTELLIGENCE_API_KEY",
+        OcrProviderKind::VertexAi | OcrProviderKind::VertexAiDeepSeek => "VERTEX_AI_API_KEY",
         OcrProviderKind::ReductoV3 | OcrProviderKind::ReductoLegacy => "REDUCTO_API_KEY",
     };
     let base_env = match kind {
@@ -80,6 +82,14 @@ pub fn decode_request_with_env(
         )?)
     } else {
         None
+    };
+    let vertex_auth = if matches!(
+        kind,
+        OcrProviderKind::VertexAi | OcrProviderKind::VertexAiDeepSeek
+    ) {
+        VertexAuthInputs::from_optional_params(&wire.optional_params)?
+    } else {
+        VertexAuthInputs::default()
     };
     let headers = wire
         .extra_headers
@@ -102,6 +112,19 @@ pub fn decode_request_with_env(
             })
         })
         .transpose()?;
+    let vertex = VertexOcrSettings {
+        project: string_setting(
+            &wire.optional_params,
+            &["vertex_project", "vertex_ai_project"],
+        )?
+        .or_else(|| nonblank(env("VERTEXAI_PROJECT"))),
+        location: string_setting(
+            &wire.optional_params,
+            &["vertex_location", "vertex_ai_location"],
+        )?
+        .or_else(|| nonblank(env("VERTEXAI_LOCATION")))
+        .or_else(|| nonblank(env("VERTEX_LOCATION"))),
+    };
     let defaults = OcrConnection::default();
     let max_download_bytes = env("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB")
         .and_then(|value| value.parse::<f64>().ok())
@@ -109,10 +132,21 @@ pub fn decode_request_with_env(
         .unwrap_or(defaults.max_download_bytes);
     let mut request = OcrRequest::new(model.as_str().to_string(), document, params);
     request.connection = OcrConnection {
-        api_key: nonblank(wire.api_key).or_else(|| nonblank(env(key_env))),
+        api_key: nonblank(wire.api_key)
+            .or_else(|| nonblank(env(key_env)))
+            .or_else(|| {
+                matches!(
+                    kind,
+                    OcrProviderKind::VertexAi | OcrProviderKind::VertexAiDeepSeek
+                )
+                .then(|| nonblank(env("VERTEXAI_API_KEY")))
+                .flatten()
+            }),
         api_base: nonblank(wire.api_base).or_else(|| base_env.and_then(|name| nonblank(env(name)))),
         extra_headers: headers,
         azure_auth,
+        vertex_auth,
+        vertex,
         timeout: timeout.unwrap_or(defaults.timeout),
         poll_timeout: timeout.unwrap_or(defaults.poll_timeout),
         max_download_bytes,
@@ -125,6 +159,25 @@ fn nonblank(value: Option<String>) -> Option<String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
+fn string_setting(
+    params: &Map<String, Value>,
+    keys: &[&str],
+) -> Result<Option<String>, OcrRequestError> {
+    for key in keys {
+        if let Some(value) = params.get(*key).filter(|value| !value.is_null()) {
+            let value = value
+                .as_str()
+                .ok_or_else(|| OcrRequestError::RequestField {
+                    path: (*key).into(),
+                })?;
+            if let Some(value) = nonblank(Some(value.into())) {
+                return Ok(Some(value));
+            }
+        }
+    }
+    Ok(None)
+}
+
 pub fn decode_params(
     kind: OcrProviderKind,
     params: Map<String, Value>,
@@ -163,6 +216,12 @@ pub fn decode_params(
                 value,
                 "optional_params",
             )?)
+        }
+        OcrProviderKind::VertexAi => {
+            OcrProviderRequest::VertexAi(decode_request_value(value, "optional_params")?)
+        }
+        OcrProviderKind::VertexAiDeepSeek => {
+            OcrProviderRequest::VertexAiDeepSeek(decode_request_value(value, "optional_params")?)
         }
         OcrProviderKind::ReductoV3 => {
             OcrProviderRequest::ReductoV3(decode_request_value(value, "optional_params")?)
@@ -346,4 +405,20 @@ pub fn reducto_page<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option
         Value::Bool(b) => Some(i64::from(b)),
         _ => None,
     })
+}
+
+pub(crate) fn decode_deepseek_content(
+    text: &str,
+) -> Result<
+    Option<crate::providers::vertex_ai::ocr::deepseek::types::DeepSeekOcrResult>,
+    OcrResponseError,
+> {
+    match serde_json::from_str::<Value>(text) {
+        Err(_) => Ok(None),
+        Ok(value) => serde_path_to_error::deserialize(value.into_deserializer())
+            .map(Some)
+            .map_err(|error| OcrResponseError::ResponseField {
+                path: format!("choices[0].message.content.{}", error.path()),
+            }),
+    }
 }

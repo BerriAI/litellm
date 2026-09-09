@@ -627,7 +627,7 @@ def test_run_rust_ocr_runs_pre_call_logging():
     complete_input = additional_args["complete_input_dict"]
     assert complete_input["document"] == DOCUMENT
     assert complete_input["include_image_base64"] is True
-    assert additional_args["api_base"] == "https://api.mistral.ai/v1/ocr"
+    assert additional_args["api_base"] == "https://api.mistral.ai/v1"
     assert additional_args["headers"] == {"x-trace-id": "trace-1"}
 
 
@@ -687,26 +687,25 @@ def test_ocr_routes_azure_entra_inputs_to_rust_without_python_auth(fake_bridge):
     }
 
 
-def test_ocr_keeps_vertex_on_python_path(fake_bridge, monkeypatch: pytest.MonkeyPatch):
-    captured: dict[str, object] = {}
-
-    def fake_handler_ocr(**kwargs: object) -> OCRResponse:
-        captured.update(kwargs)
-        return OCRResponse(pages=[], model="mistral-ocr-maas", object="ocr")
-
-    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", fake_handler_ocr)
-
+def test_ocr_routes_vertex_auth_inputs_to_rust(fake_bridge):
     response = litellm.ocr(
         model="vertex_ai/mistral-ocr-maas",
         document=DOCUMENT,
-        api_key="access-token",
         vertex_project="project-1",
         vertex_location="us-central1",
+        vertex_credentials={"type": "service_account", "private_key": "secret"},
+        include_image_base64=True,
     )
 
     assert isinstance(response, OCRResponse)
-    assert fake_bridge.calls == []
-    assert captured["custom_llm_provider"] == "vertex_ai"
+    assert fake_bridge.calls[0]["api_key"] is None
+    assert fake_bridge.calls[0]["custom_llm_provider"] == "vertex_ai"
+    assert fake_bridge.calls[0]["optional_params"] == {
+        "vertex_project": "project-1",
+        "vertex_location": "us-central1",
+        "vertex_credentials": {"type": "service_account", "private_key": "secret"},
+        "include_image_base64": True,
+    }
 
 
 def test_ocr_rust_path_converts_file_document_before_bridge(fake_bridge):
