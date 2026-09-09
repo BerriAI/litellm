@@ -2658,6 +2658,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
         "image_count": 0,
         "video_length_seconds": 0.0,
         "audio_length_seconds": 0.0,
+        "query_count": 0,
     }
 
     model_info: ModelInfo = {}
@@ -3237,6 +3238,37 @@ def test_image_count_prevents_text_tokens_fallback(_local_model_cost_map):
         f"got {prompt_cost}. text_tokens fallback may be double-charging."
     )
     assert completion_cost == 0.0
+
+
+def test_query_count_bills_input_cost_per_query(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+        prompt_tokens_details=PromptTokensDetailsWrapper(query_count=3, image_count=1),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="us.twelvelabs.marengo-embed-3-0-v1:0",
+        usage=usage,
+        custom_llm_provider="bedrock",
+    )
+
+    assert prompt_cost == pytest.approx(3 * 7e-05 + 1e-04)
+    assert completion_cost == 0.0
+
+
+def test_query_count_is_free_without_a_per_query_price(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=0,
+        prompt_tokens_details=PromptTokensDetailsWrapper(query_count=1),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(model="text-embedding-3-small", usage=usage, custom_llm_provider="openai")
+
+    assert prompt_cost == 0.0
 
 
 # ---------------------------------------------------------------------------
