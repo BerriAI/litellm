@@ -382,6 +382,8 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
         "us.openai.gpt-5.6-sol",
         "global.openai.gpt-5.6-terra",
         "bedrock/converse/us.openai.gpt-5.6-luna",
+        "us.openai.gpt-6-astra",
+        "bedrock/converse/global.openai.gpt-6-astra",
     ],
 )
 def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(model, local_model_cost_map):
@@ -412,6 +414,7 @@ def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(mode
     [
         "us.openai.gpt-5.6-sol",
         "bedrock/converse/global.openai.gpt-5.6-luna",
+        "us.openai.gpt-6-astra",
     ],
 )
 def test_openai_gpt5_converse_never_forwards_thinking(model, local_model_cost_map):

@@ -381,6 +381,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
@@ -400,6 +401,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
@@ -417,6 +419,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
@@ -436,6 +439,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
@@ -453,6 +457,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
@@ -472,6 +477,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
@@ -489,6 +495,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
@@ -508,6 +515,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
@@ -28578,6 +28586,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
