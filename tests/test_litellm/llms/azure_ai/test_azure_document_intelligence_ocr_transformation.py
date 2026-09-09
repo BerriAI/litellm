@@ -386,7 +386,9 @@ def test_validate_environment_falls_back_to_entra_token(monkeypatch):
         ),
     ),
 )
-def test_get_polling_target_preserves_request_authentication(request_headers, expected_poll_headers):
+def test_get_polling_target_preserves_request_authentication(
+    request_headers: dict[str, str], expected_poll_headers: dict[str, str]
+):
     response = httpx.Response(
         status_code=202,
         headers={"Operation-Location": "https://example.cognitiveservices.azure.com/operations/123"},
