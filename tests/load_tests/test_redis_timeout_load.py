@@ -8,9 +8,9 @@ except block turns the whole request metadata into the body of a failed-tracking
 v1.100.0 that body roughly doubled with every request in the process. This test asserts it
 stays flat.
 
-Part of the load test suite (see conftest.py in this directory). Per-request numbers are logged at INFO:
+Part of the tests/load_tests suite (see its conftest.py). Per-request numbers are logged at INFO:
 
-    make test-load
+    make test-load-suite
 """
 
 import asyncio

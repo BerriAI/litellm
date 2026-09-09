@@ -84,7 +84,7 @@ jobs:
         if: failure()
         run: tail -n 300 proxy.log
 
-  load-suite:
+  load-test-suite:
     if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -121,5 +121,5 @@ jobs:
         env:
           LITELLM_LOG: WARNING
         run: |
-          uv run --no-sync pytest tests/load_tests/suite -v --tb=short -rA \
+          uv run --no-sync pytest tests/load_tests -v --tb=short -rA \
             -o log_cli=true -o log_cli_level=INFO
