@@ -1909,15 +1909,11 @@ def _responses_reasoning_item(
     summary_list: Final = list(summary)  # mutable-ok: Responses API summary is a json list
     match (item_id, encrypted_content):
         case (str() as rid, str() as blob):
-            return ChatCompletionReasoningItem(
-                type="reasoning", id=rid, encrypted_content=blob, summary=summary_list
-            )
+            return ChatCompletionReasoningItem(type="reasoning", id=rid, encrypted_content=blob, summary=summary_list)
         case (str() as rid, None):
             return ChatCompletionReasoningItem(type="reasoning", id=rid, summary=summary_list)
         case (None, str() as blob):
-            return ChatCompletionReasoningItem(
-                type="reasoning", encrypted_content=blob, summary=summary_list
-            )
+            return ChatCompletionReasoningItem(type="reasoning", encrypted_content=blob, summary=summary_list)
         case _:
             return ChatCompletionReasoningItem(type="reasoning", summary=summary_list)
 
