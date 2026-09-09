@@ -1,12 +1,13 @@
 use pyo3::prelude::*;
 
-use crate::errors::RustBridgeDeclined;
+use crate::errors::Error;
 
 #[pyfunction]
 fn responses_websocket() -> PyResult<()> {
-    Err(RustBridgeDeclined::new_err(
-        "Responses WebSocket requires host per-frame guardrails and logging",
-    ))
+    Err(
+        Error::declined("Responses WebSocket requires host per-frame guardrails and logging")
+            .into(),
+    )
 }
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

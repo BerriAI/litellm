@@ -1,4 +1,4 @@
-use litellm_core::Error;
+use litellm_core::Error as CoreError;
 use litellm_core::chat_completions::lifecycle::{
     Admission, ChatCompletionsRoute, Observations, Operation, Options, machine,
 };
@@ -24,79 +24,59 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
-use crate::driver::{ADDITIONAL_ARGS, API_BASE, API_KEY, COMPLETE_INPUT_DICT, HEADERS, INPUT};
-use crate::errors::{RustBridgeDeclined, chat_completions_error_to_pyerr, core_error_to_pyerr};
+use crate::arguments::{ChatAdmissionArguments, ChatBuildArguments};
+use crate::callbacks::pre_call_args;
+use crate::errors::{Error, Route, chat_completions_error_to_pyerr, core_error_to_pyerr};
 use crate::marshal::optional_timeout;
-use crate::retained::RequestRoots;
+use crate::retained::{RequestRoots, RetainedCallback};
+
+struct PendingChatRequest {
+    request: ChatPreCallRequest,
+    context: CallLifecycleContext,
+}
 
 #[pyclass]
 struct ChatCompletionsState {
-    roots: Option<RequestRoots>,
-    logging: Option<Py<PyAny>>,
-    pre_call: Option<Py<PyDict>>,
-    pending: Option<ChatPreCallRequest>,
-    context: Option<CallLifecycleContext>,
+    callback: RetainedCallback,
+    pending: Option<PendingChatRequest>,
     terminal: Option<TerminalRecord>,
 }
 
 #[pymethods]
 impl ChatCompletionsState {
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        if let Some(roots) = &self.roots {
-            roots.traverse(&visit)?;
-        }
-        visit.call(&self.logging)?;
-        visit.call(&self.pre_call)
+        self.callback.traverse(&visit)
     }
 
     fn __clear__(slf: &Bound<'_, Self>) {
-        let roots = {
+        let retained = {
             let mut state = slf.borrow_mut();
             (
-                state.roots.take(),
-                state.logging.take(),
-                state.pre_call.take(),
+                state.callback.clear(),
                 state.pending.take(),
-                state.context.take(),
                 state.terminal.take(),
             )
         };
-        drop(roots);
+        drop(retained);
     }
 }
 
-fn scalar(arguments: &Bound<'_, PyDict>, name: &str) -> PyResult<Option<String>> {
-    arguments
-        .get_item(name)?
-        .filter(|value| !value.is_none())
-        .map(|value| value.extract::<String>())
-        .transpose()
-}
-
-fn value(arguments: &Bound<'_, PyDict>, name: &str) -> PyResult<Value> {
-    arguments
-        .get_item(name)?
-        .ok_or_else(|| PyValueError::new_err(format!("chat completions requires {name}")))
-        .and_then(|value| from_py(&value))
-}
-
-fn optional_map(arguments: &Bound<'_, PyDict>, name: &str) -> PyResult<Option<Map<String, Value>>> {
-    arguments
-        .get_item(name)?
-        .filter(|value| !value.is_none())
-        .map(|value| from_py(&value))
-        .transpose()
-}
-
-fn admission(arguments: &Bound<'_, PyDict>) -> PyResult<Admission> {
-    let messages = parse_messages(value(arguments, "messages")?)
-        .map_err(|_| RustBridgeDeclined::new_err("unreadable message list"))?;
+fn admission(arguments: &ChatAdmissionArguments<'_>) -> PyResult<Admission> {
+    let messages = parse_messages(from_py(&arguments.messages)?)
+        .map_err(|_| PyErr::from(Error::declined("unreadable message list")))?;
     Ok(Admission {
-        model: scalar(arguments, "model")?
+        model: arguments
+            .model
+            .clone()
             .ok_or_else(|| PyValueError::new_err("chat completions requires model"))?,
         messages,
-        optional_params: optional_map(arguments, "optional_params")?.unwrap_or_default(),
-        custom_llm_provider: scalar(arguments, "custom_llm_provider")?,
+        optional_params: arguments
+            .optional_params
+            .as_ref()
+            .map(from_py::<Map<String, Value>>)
+            .transpose()?
+            .unwrap_or_default(),
+        custom_llm_provider: arguments.custom_llm_provider.clone(),
     })
 }
 
@@ -114,8 +94,10 @@ impl ChatCompletionsLifecycle {
         asynchronous: bool,
         internal_call: bool,
     ) -> PyResult<Self> {
+        require_messages(arguments)?;
+        let arguments = arguments.extract::<ChatAdmissionArguments<'_>>()?;
         match machine(
-            &admission(arguments)?,
+            &admission(&arguments)?,
             Options {
                 asynchronous,
                 internal_call,
@@ -127,7 +109,7 @@ impl ChatCompletionsLifecycle {
                 machine,
                 asynchronous,
             }),
-            Err(decline) => Err(RustBridgeDeclined::new_err(decline.reason())),
+            Err(decline) => Err(Error::declined(decline.reason()).into()),
         }
     }
 
@@ -172,7 +154,7 @@ fn invoke(
         let machine = machine.borrow(py);
         (machine.machine.operation(), machine.asynchronous)
     };
-    crate::driver::invoke(py, operation, asynchronous, "chat completions", host)
+    crate::driver::invoke(py, operation, asynchronous, Route::ChatCompletions, host)
 }
 
 #[pyfunction]
@@ -182,22 +164,28 @@ fn build_request(
     logging: Py<PyAny>,
 ) -> PyResult<Py<ChatCompletionsState>> {
     let bag = arguments.bind(py);
-    let admission = admission(bag)?;
-    let api_key = scalar(bag, "api_key")?;
-    let api_base = scalar(bag, "api_base")?;
-    let timeout = optional_timeout(
-        bag.get_item("timeout_seconds")?
-            .filter(|value| !value.is_none())
-            .map(|value| value.extract::<f64>())
-            .transpose()?,
-    )?;
+    require_messages(bag)?;
+    let admission_arguments = bag.extract::<ChatAdmissionArguments<'_>>()?;
+    let build_arguments = bag.extract::<ChatBuildArguments<'_>>()?;
+    let admission = admission(&admission_arguments)?;
+    let api_key = build_arguments.api_key.clone();
+    let api_base = build_arguments
+        .api_base
+        .as_ref()
+        .map(|value| value.extract::<String>())
+        .transpose()?;
+    let timeout = optional_timeout(build_arguments.timeout_seconds)?;
     let context = CallLifecycleContext::new(
         "chat_completion",
         &admission.model,
         admission.custom_llm_provider.as_deref().unwrap_or_default(),
-        scalar(bag, "litellm_call_id")?.unwrap_or_default(),
+        build_arguments.litellm_call_id.clone().unwrap_or_default(),
     );
-    let extra_headers = optional_map(bag, "extra_headers")?;
+    let extra_headers = build_arguments
+        .extra_headers
+        .as_ref()
+        .map(from_py::<Map<String, Value>>)
+        .transpose()?;
     let built = run_sync_value(
         py,
         async move {
@@ -226,7 +214,7 @@ fn build_request(
             for (name, value) in generated {
                 body.set_item(name, to_py(py, &value)?)?;
             }
-            if let Some(params) = bag.get_item("optional_params")? {
+            if let Some(params) = &admission_arguments.optional_params {
                 for name in &built.parameter_fields {
                     body.set_item(name, params.get_item(name)?)?;
                 }
@@ -248,40 +236,35 @@ fn build_request(
         headers.set_item(name, value)?;
     }
     let headers = match built.headers_policy {
-        PreCallHeadersPolicy::PreserveInput => {
-            match bag
-                .get_item("extra_headers")?
-                .filter(|value| !value.is_none())
-            {
-                Some(original) => {
-                    original.call_method1("update", (&headers,))?;
-                    original
-                }
-                None => headers.into_any(),
+        PreCallHeadersPolicy::PreserveInput => match &build_arguments.extra_headers {
+            Some(original) => {
+                original.call_method1(pyo3::intern!(py, "update"), (&headers,))?;
+                original.clone()
             }
-        }
+            None => headers.into_any(),
+        },
         PreCallHeadersPolicy::CaseInsensitive => case_insensitive_headers(&headers)?,
     };
-    let additional = PyDict::new(py);
-    additional.set_item(COMPLETE_INPUT_DICT, &body)?;
-    additional.set_item(API_BASE, bag.get_item("api_base")?)?;
-    additional.set_item(HEADERS, &headers)?;
-    let kwargs = PyDict::new(py);
-    kwargs.set_item(INPUT, bag.get_item("messages")?)?;
-    kwargs.set_item(API_KEY, bag.get_item("logging_api_key")?)?;
-    kwargs.set_item(ADDITIONAL_ARGS, additional)?;
+    let kwargs = pre_call_args(
+        &admission_arguments.messages,
+        build_arguments.logging_api_key.as_ref(),
+        &body,
+        build_arguments.api_base.as_ref(),
+        &headers,
+    )
+    .into_pyobject(py)?;
     Py::new(
         py,
         ChatCompletionsState {
-            roots: Some(RequestRoots::new(
-                arguments,
-                body.unbind(),
-                headers.unbind(),
-            )),
-            logging: Some(logging),
-            pre_call: Some(kwargs.unbind()),
-            pending: Some(built),
-            context: Some(context),
+            callback: RetainedCallback::new(
+                RequestRoots::new(arguments, body.unbind(), headers.unbind()),
+                logging,
+                kwargs.unbind(),
+            ),
+            pending: Some(PendingChatRequest {
+                request: built,
+                context,
+            }),
             terminal: None,
         },
     )
@@ -291,17 +274,10 @@ fn build_request(
 fn pre_call(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<()> {
     let (logging, arguments) = {
         let state = state.borrow(py);
-        let logging = state
-            .logging
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("chat completions logging state was cleared"))?
-            .clone_ref(py);
-        let arguments = state
-            .pre_call
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("chat completions pre-call state was cleared"))?
-            .clone_ref(py);
-        (logging, arguments)
+        (
+            state.callback.logging(py, Route::ChatCompletions)?,
+            state.callback.pre_call(py, Route::ChatCompletions)?,
+        )
     };
     logging
         .bind(py)
@@ -316,27 +292,21 @@ struct OwnedRequest {
 }
 
 fn take_request(py: Python<'_>, state: &Py<ChatCompletionsState>) -> PyResult<OwnedRequest> {
-    let (pending, context, body, headers) = {
+    let (pending, body, headers) = {
         let mut state = state.borrow_mut(py);
-        let pending = state.pending.take().ok_or_else(|| {
-            PyRuntimeError::new_err("chat completions request was already sent or cleared")
-        })?;
-        let context = state
-            .context
+        let pending = state
+            .pending
             .take()
-            .ok_or_else(|| PyRuntimeError::new_err("chat completions context was cleared"))?;
-        let roots = state
-            .roots
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("chat completions roots were cleared"))?;
-        (pending, context, roots.body(py), roots.headers(py))
+            .ok_or(Error::RequestConsumed(Route::ChatCompletions))?;
+        let roots = state.callback.roots(Route::ChatCompletions)?;
+        (pending, roots.body(py), roots.headers(py))
     };
     let headers = headers
         .call_method0("items")?
         .try_iter()?
         .map(|item| item?.extract::<(String, String)>())
         .collect::<PyResult<_>>()?;
-    let readback = match &pending.body {
+    let readback = match &pending.request.body {
         litellm_core::lifecycle::PreCallBody::StructuredAtSend { .. } => {
             ChatPreCallReadback::StructuredAtSend {
                 body: litellm_core::lifecycle::WireBody::encode(
@@ -353,17 +323,17 @@ fn take_request(py: Python<'_>, state: &Py<ChatCompletionsState>) -> PyResult<Ow
         }
     };
     Ok(OwnedRequest {
-        request: pending,
+        request: pending.request,
         readback,
-        context,
+        context: pending.context,
     })
 }
 
 async fn execute(
     request: OwnedRequest,
 ) -> Result<
-    ExecutedCall<litellm_core::chat_completions::types::ChatCompletionsResponse, Error>,
-    Error,
+    ExecutedCall<litellm_core::chat_completions::types::ChatCompletionsResponse, CoreError>,
+    CoreError,
 > {
     let settled = settle_pre_call_request_with_services(
         crate::runtime::authorization_services().as_ref(),
@@ -377,7 +347,10 @@ async fn execute(
 fn store_result(
     py: Python<'_>,
     state: &Py<ChatCompletionsState>,
-    executed: ExecutedCall<litellm_core::chat_completions::types::ChatCompletionsResponse, Error>,
+    executed: ExecutedCall<
+        litellm_core::chat_completions::types::ChatCompletionsResponse,
+        CoreError,
+    >,
 ) -> PyResult<Py<PyAny>> {
     state.borrow_mut(py).terminal = Some(executed.terminal().clone());
     match executed {
@@ -406,36 +379,38 @@ fn send_sync(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<Py<PyA
 
 #[pyfunction]
 fn terminal_record(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<Py<PyAny>> {
-    let terminal = state.borrow(py).terminal.clone().ok_or_else(|| {
-        PyRuntimeError::new_err("chat completions terminal record is unavailable")
-    })?;
+    let terminal = state
+        .borrow(py)
+        .terminal
+        .clone()
+        .ok_or(Error::TerminalUnavailable(Route::ChatCompletions))?;
     to_py(py, &terminal)
 }
 
 fn validate_arguments(arguments: &Bound<'_, PyDict>) -> PyResult<()> {
-    let messages = arguments
-        .get_item("messages")?
-        .ok_or_else(|| PyValueError::new_err("chat completions requires messages"))?;
+    let messages = require_messages(arguments)?;
     if !messages.is_instance_of::<pyo3::types::PyList>() {
         return Err(PyTypeError::new_err("messages must be a list"));
     }
     Ok(())
 }
 
+fn require_messages<'py>(arguments: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyAny>> {
+    arguments
+        .get_item("messages")?
+        .ok_or_else(|| PyValueError::new_err("chat completions requires messages"))
+}
+
 #[pyfunction]
 fn chat_completions(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
     validate_arguments(arguments.bind(py))?;
-    runner(py)?
-        .getattr("_drive_sync")?
-        .call1((arguments, bindings(py)?))
+    crate::driver::drive_sync(py, runner(py)?, arguments, bindings(py)?)
 }
 
 #[pyfunction]
 fn achat_completions(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
     validate_arguments(arguments.bind(py))?;
-    runner(py)?
-        .getattr("_drive_async")?
-        .call1((arguments, bindings(py)?))
+    crate::driver::drive_async(py, runner(py)?, arguments, bindings(py)?)
 }
 
 #[pyfunction]
@@ -504,175 +479,5 @@ pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[pyfunction]
-    fn snapshot(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<Py<PyAny>> {
-        let request = take_request(py, &state)?;
-        let (body, headers) = match &request.readback {
-            ChatPreCallReadback::StructuredAtSend { body, headers } => {
-                (body.as_bytes(), headers.as_slice())
-            }
-            ChatPreCallReadback::CapturedAtBuild { headers } => (
-                request.request.body.authorized().unwrap().body(),
-                headers.as_slice(),
-            ),
-        };
-        to_py(
-            py,
-            &(serde_json::from_slice::<Value>(body).unwrap(), headers),
-        )
-    }
-
-    #[test]
-    #[ignore = "requires requests on PYTHONPATH"]
-    fn bedrock_callback_headers_work_without_botocore() {
-        Python::initialize();
-        Python::attach(|py| {
-            let module = PyModule::new(py, "chat_headers_test").unwrap();
-            module
-                .add_function(wrap_pyfunction!(build_request, &module).unwrap())
-                .unwrap();
-            module
-                .add_function(wrap_pyfunction!(pre_call, &module).unwrap())
-                .unwrap();
-            module
-                .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
-                .unwrap();
-            let globals = PyDict::new(py);
-            globals.set_item("native", module).unwrap();
-            py.run(
-                c"
-import sys
-from collections.abc import MutableMapping
-from unittest.mock import patch
-
-class Logger:
-    def pre_call(self, **kwargs):
-        view = kwargs['additional_args']
-        headers = view['headers']
-        assert isinstance(headers, MutableMapping)
-        assert headers is not original_headers
-        assert headers['X-ORIGINAL'] == 'original'
-        assert headers.get('CONTENT-TYPE') == 'application/json'
-        assert 'AUTHORIZATION' in headers
-        assert headers['Authorization'].startswith(expected_auth)
-        headers.update({'x-original': 'edited', 'X-Added': 'added'})
-        assert headers.setdefault('X-ORIGINAL', 'ignored') == 'edited'
-        assert sum(key.lower() == 'x-original' for key in headers) == 1
-        assert headers.pop('x-ADDED') == 'added'
-        del headers['X-DELETE']
-        copied = headers.copy()
-        copied['x-original'] = 'copy edit'
-        assert headers['X-Original'] == 'edited'
-        assert isinstance(view['complete_input_dict'], str)
-        view['headers'] = {'replacement': 'ignored'}
-        view['complete_input_dict'] = 'replacement'
-
-with patch.dict(sys.modules, {'botocore': None, 'botocore.awsrequest': None}):
-    for api_key, expected_auth in [('test-token', 'Bearer test-token'), ('', 'AWS4-HMAC-SHA256 ')]:
-        original_headers = {'X-Original': 'original', 'x-delete': 'delete'}
-        arguments = dict(
-            model='anthropic.claude-opus-5',
-            messages=[{'role': 'user', 'content': 'original'}],
-            optional_params={'maxTokens': 16, 'aws_region_name': 'us-west-2',
-                             'aws_access_key_id': 'test-access-key',
-                             'aws_secret_access_key': 'test-secret-key'},
-            extra_headers=original_headers, api_key=api_key,
-            custom_llm_provider='bedrock', api_base=None,
-        )
-        state = native.build_request(arguments, Logger())
-        native.pre_call(state)
-        wire_body, wire_headers = native.snapshot(state)
-        assert wire_body['messages'][0]['content'][0]['text'] == 'original'
-        headers = {key.lower(): value for key, value in wire_headers}
-        assert headers['x-original'] == 'edited'
-        assert 'x-delete' not in headers
-        assert 'x-added' not in headers
-        assert 'replacement' not in headers
-        assert headers['authorization'].startswith(expected_auth)
-        assert original_headers == {'X-Original': 'original', 'x-delete': 'delete'}
-",
-                Some(&globals),
-                Some(&globals),
-            )
-            .unwrap();
-        });
-    }
-
-    #[test]
-    #[ignore = "requires the Python SDK and its dependencies on PYTHONPATH"]
-    fn callback_roots_survive_rebinding_and_cycles_are_collected() {
-        Python::initialize();
-        Python::attach(|py| {
-            let module = PyModule::new(py, "chat_test").unwrap();
-            module
-                .add_function(wrap_pyfunction!(build_request, &module).unwrap())
-                .unwrap();
-            module
-                .add_function(wrap_pyfunction!(pre_call, &module).unwrap())
-                .unwrap();
-            module
-                .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
-                .unwrap();
-            let globals = PyDict::new(py);
-            globals.set_item("native", module).unwrap();
-            py.run(
-                c"
-import gc
-import weakref
-
-class Opaque:
-    pass
-
-class Logger:
-    def pre_call(self, **kwargs):
-        view = kwargs['additional_args']
-        self.body = view['complete_input_dict']
-        self.headers = view['headers']
-        assert kwargs['input'] is messages
-        assert self.body['messages'] is not messages
-        assert self.body['stop_sequences'] is stops
-        assert self.headers is headers
-        messages[0]['content'] = 'edited'
-        self.body['messages'][0]['content'][0]['text'] = 'body edit'
-        stops.append('second')
-        self.headers['x-hook'] = 'edited'
-        view['complete_input_dict'] = {'replacement': True}
-        view['headers'] = {'replacement': 'true'}
-
-messages = [{'role': 'user', 'content': 'original'}]
-stops = ['first']
-headers = {}
-opaque = Opaque()
-logger = Logger()
-arguments = dict(model='claude-opus-5', messages=messages,
-                 optional_params={'max_tokens': 16, 'stop_sequences': stops},
-                 extra_headers=headers, api_key='test',
-                 custom_llm_provider='anthropic', opaque=opaque,
-                 litellm_logging_obj=logger)
-state = native.build_request(arguments, logger)
-native.pre_call(state)
-wire_body, wire_headers = native.snapshot(state)
-assert wire_body['messages'][0]['content'][0]['text'] == 'body edit'
-assert wire_body['stop_sequences'] == ['first', 'second']
-assert dict(wire_headers)['x-hook'] == 'edited'
-arguments['cycle'] = state
-logger.body['cycle'] = state
-headers['cycle'] = state
-alive = weakref.ref(opaque)
-del arguments, logger, opaque, headers
-gc.collect()
-assert alive() is not None
-del state
-gc.collect()
-assert alive() is None
-",
-                Some(&globals),
-                Some(&globals),
-            )
-            .unwrap();
-        });
-    }
-}
+#[path = "../../tests/unit/routes/chat_completions.rs"]
+mod tests;
