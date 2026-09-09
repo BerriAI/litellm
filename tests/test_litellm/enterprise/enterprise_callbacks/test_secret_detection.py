@@ -96,6 +96,23 @@ def test_scan_message_preserves_quoted_benign_identifiers():
             'url: "postgresql://user:s3cr3t@db-host:5432/app"',
             "postgresql://user:s3cr3t@db-host:5432/app",
         ),
+        (
+            'db_password: "postgresql://user:s3cr3t@db-host:5432/app"',
+            "postgresql://user:s3cr3t@db-host:5432/app",
+        ),
+        (
+            'signing_secret_url: "https://example.com/cb?sig=Zx4Kp9Lm2Qr7Ns3Vt"',
+            "https://example.com/cb?sig=Zx4Kp9Lm2Qr7Ns3Vt",
+        ),
+        (
+            'redis_secret_url: "redis://:Zx4Kp9Lm2Qr7Ns3Vt@cache-host:6379/0"',
+            "Zx4Kp9Lm2Qr7Ns3Vt",
+        ),
+        ("password=2026-09-08T17:38:40Zbrahms", "2026-09-08T17:38:40Zbrahms"),
+        (
+            '{"password": "YOUR_API_KEY_HERE", "client_secret": "correcthorsebattery"}',
+            "correcthorsebattery",
+        ),
     ],
     ids=[
         "env-password",
@@ -116,13 +133,27 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         "shortest-accepted-value",
         "punctuation-bearing-password",
         "symbol-heavy-password",
+        "connection-string-under-a-url-key",
         "connection-string-under-a-credential-key",
+        "signed-url-under-a-credential-key",
+        "password-only-url-under-a-credential-key",
+        "timestamp-prefixed-password",
+        "credential-after-a-rejected-placeholder",
     ],
 )
 def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, secret):
     guardrail = _guardrail()
 
     assert secret not in guardrail.redact_text(content)
+
+
+def test_scan_message_redacts_every_credential_on_one_line():
+    """detect_secrets keeps the first hit per pattern, so a JSON object holding two credentials
+    would leave the second one in the prompt."""
+    guardrail = _guardrail()
+    content = '{"db_password": "Tq8Zm2XpLv9KdNbRcYw3", "client_secret": "correcthorsebattery"}'
+
+    assert guardrail.redact_text(content) == '{"db_password": "[REDACTED]", "client_secret": "[REDACTED]"}'
 
 
 @pytest.mark.parametrize(
@@ -168,6 +199,11 @@ def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, s
         "api_key = self.resolve_server_api_key(",
         "api_key = sys.argv[1]",
         "password = credentials[environment]",
+        'api_key_created_at: "2026-09-08T17:38:40Z"',
+        'api_key_expires_at: "2026-09-08T17:38:40.123456+05:30"',
+        'password_reset_url: "https://example.com/reset-password/flow"',
+        'secret_docs_url: "https://example.com/reset-password/flow#step-2"',
+        '{"api_key_created_at": "2026-09-08T17:38:40Z", "password_reset_url": "https://example.com/reset/flow"}',
     ],
     ids=[
         "prose-password",
@@ -210,6 +246,11 @@ def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, s
         "unclosed-call",
         "positional-subscript",
         "keyed-subscript",
+        "timestamp-under-a-credential-key",
+        "offset-timestamp-under-a-credential-key",
+        "url-under-a-credential-key",
+        "fragment-url-under-a-credential-key",
+        "metadata-object-under-credential-keys",
     ],
 )
 def test_scan_message_keeps_benign_values(content):
@@ -250,6 +291,24 @@ def test_credential_keyword_detector_defaults_its_minimum_length(value, redacted
     )
 
     assert (value not in guardrail.redact_text(f"password={value}")) is redacted
+
+
+def test_credential_keyword_detector_honours_keyword_exclude():
+    """The upstream plugin's opt-out for lines an operator names has to survive the override."""
+    guardrail = _ENTERPRISE_SecretDetection(
+        guardrail_name="hide-secrets",
+        event_hook="pre_call",
+        default_on=True,
+        detect_secrets_config={
+            "plugins_used": [
+                {**plugin, "keyword_exclude": "fixture_"} if plugin["name"] == "CredentialKeywordDetector" else plugin
+                for plugin in _default_detect_secrets_config["plugins_used"]
+            ]
+        },
+    )
+    content = "fixture_password=aB3dE6gH9jK2mN5p\npassword=Kp7Nq2Wz9Bt4Xr6Vm1Ls"
+
+    assert guardrail.redact_text(content) == "fixture_password=aB3dE6gH9jK2mN5p\npassword=[REDACTED]"
 
 
 @pytest.mark.parametrize("minimum_length", ["12", 0, -1, 1.5], ids=["string", "zero", "negative", "float"])
@@ -341,13 +400,11 @@ def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
             "aB3dE6gH9jK2mN5p",
         ),
         (
-            "Hi team\nplease rotate this before Friday\n"
-            "db_password=Zx4Kp9Lm2Qr7Ns3Vt\nthanks!",
+            "Hi team\nplease rotate this before Friday\ndb_password=Zx4Kp9Lm2Qr7Ns3Vt\nthanks!",
             "Zx4Kp9Lm2Qr7Ns3Vt",
         ),
         (
-            "model_list:\n  - model_name: gpt-4o\n    litellm_params:\n"
-            "      api_key: aB3dE6gH9jK2mN5p\n",
+            "model_list:\n  - model_name: gpt-4o\n    litellm_params:\n      api_key: aB3dE6gH9jK2mN5p\n",
             "aB3dE6gH9jK2mN5p",
         ),
         ("api_key: >\n  aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
@@ -357,6 +414,7 @@ def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
         ("api_key =\n; rotate me\n    aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
         ("  # pasted from the vault\napi_key=aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
         ("  [db]\napi_key=aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
+        ("    pasted with a leading indent\napi_key=aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
     ],
     ids=[
         "flat-assignment",
@@ -373,11 +431,10 @@ def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
         "semicolon-comment-inside-a-value",
         "indented-comment-above",
         "indented-section-header-above",
+        "indented-prose-above",
     ],
 )
-def test_scan_message_still_sees_assignments_sharing_a_message_with_a_vendor_key(
-    content, secret
-):
+def test_scan_message_still_sees_assignments_sharing_a_message_with_a_vendor_key(content, secret):
     """detect_secrets stops quoting assignments as soon as its first pass matches."""
     guardrail = _guardrail()
 
@@ -391,9 +448,7 @@ def test_environment_reference_filter_only_drops_the_whole_value():
 
     for reference in ("os.environ/OPENAI_API_KEY", "os.environ/e2b_api_key"):
         assert guardrail.redact_text(f"password={reference}") == f"password={reference}"
-    assert guardrail.redact_text("password=notos.environ/OPENAI_API_KEY") == (
-        "password=[REDACTED]"
-    )
+    assert guardrail.redact_text("password=notos.environ/OPENAI_API_KEY") == ("password=[REDACTED]")
 
 
 def test_environment_variable_names_are_dropped_only_for_the_keyword_plugin():
@@ -422,13 +477,10 @@ def test_masked_entity_count_keeps_the_vendor_type_beside_the_entropy_type():
     "content",
     [
         f"api_key: '{OPENAI_KEY}'\n"
-        + "a: &a [" + ", ".join(['"x"'] * 9) + "]\n"
-        + "".join(
-            f"{chr(98 + i)}: &{chr(98 + i)} ["
-            + ", ".join([f"*{chr(97 + i)}"] * 9)
-            + "]\n"
-            for i in range(7)
-        ),
+        + "a: &a ["
+        + ", ".join(['"x"'] * 9)
+        + "]\n"
+        + "".join(f"{chr(98 + i)}: &{chr(98 + i)} [" + ", ".join([f"*{chr(97 + i)}"] * 9) + "]\n" for i in range(7)),
         f"api_key: '{OPENAI_KEY}'\ndeep: " + "[" * 400 + "]" * 400,
         f"api_key: '{OPENAI_KEY}'\nbroken: [unclosed",
     ],
@@ -518,9 +570,7 @@ def test_scan_message_requires_ascii_digits_for_openai_like_values():
 def test_scan_message_redacts_openai_key_after_separator():
     guardrail = _guardrail()
 
-    assert guardrail.redact_text(f"openai_{OPENAI_KEY} key-{OPENAI_KEY}") == (
-        "openai_[REDACTED] key-[REDACTED]"
-    )
+    assert guardrail.redact_text(f"openai_{OPENAI_KEY} key-{OPENAI_KEY}") == ("openai_[REDACTED] key-[REDACTED]")
     assert guardrail.redact_text(URL_ENCODED_KEY) == "Bearer%20[REDACTED]"
 
 
@@ -546,8 +596,7 @@ def test_scan_message_stays_linear_on_repeated_sk_separators():
         f"api_key: '{OPENAI_KEY}'\npassword:" + '"' * 20_000,
         f"api_key: '{OPENAI_KEY}'\n" + "api_key:" * 10_000,
         f"api_key: '{OPENAI_KEY}'\nsecret=" + "aB3dE6gH9jK2mN5p " * 2_000,
-        f"api_key: '{OPENAI_KEY}'\n"
-        + "\n".join(f"password{i}=aB3dE6gH9jK2mN5p{i}" for i in range(3_000)),
+        f"api_key: '{OPENAI_KEY}'\n" + "\n".join(f"password{i}=aB3dE6gH9jK2mN5p{i}" for i in range(3_000)),
     ],
     ids=[
         "value-run",

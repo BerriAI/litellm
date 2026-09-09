@@ -13,9 +13,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import configparser
 import contextlib
+import itertools
 import re
 import tempfile
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 
@@ -480,30 +481,27 @@ def _scan_lines(lines: Sequence[str]) -> frozenset[tuple[str, str]]:
     )
 
 
-def _parseable_lines(text: str) -> Generator[str, None, None]:
-    open_option = False
-    for number, line in enumerate(text.splitlines()):
-        stripped = line.strip()
-        assignment = _ASSIGNMENT_LINE.match(stripped)
-        if not stripped:
-            yield line
-        elif stripped[0] in "#;":
-            yield line
-        elif assignment is not None:
-            open_option = True
-            yield f"{assignment.group()[:-1].strip()}_{number}{stripped[assignment.end() - 1:]}"
-        elif line[0].isspace() and open_option:
-            yield line
-        elif stripped[0] == "[":
-            open_option = False
-            if "]" in stripped[2:]:
-                yield line
-        else:
-            open_option = False
+def _classify_line(state: tuple[bool, str | None], numbered: tuple[int, str]) -> tuple[bool, str | None]:
+    open_option: Final = state[0]
+    number, line = numbered
+    stripped: Final = line.strip()
+    if not stripped or stripped[0] in "#;":
+        return open_option, None
+    assignment: Final = _ASSIGNMENT_LINE.match(stripped)
+    if assignment is not None:
+        return True, f"{assignment.group()[:-1].strip()}_{number}{stripped[assignment.end() - 1 :]}"
+    if line[0].isspace() and open_option:
+        return True, line
+    return False, None
+
+
+def _parseable_lines(text: str) -> Iterator[str]:
+    states: Final = itertools.accumulate(enumerate(text.splitlines()), _classify_line, initial=(False, None))
+    return (line for _, line in states if line is not None)
 
 
 def _quoted_assignments(text: str) -> tuple[str, ...]:
-    parser: Final = configparser.ConfigParser(interpolation=None, strict=False)
+    parser: Final = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str  # pyright: ignore[reportAttributeAccessIssue]  # configparser types optionxform as a method
     body: Final = "\n".join(_parseable_lines(text))
     try:
