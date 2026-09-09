@@ -6,7 +6,7 @@
 //! `python-interop` (domain-neutral PyO3 primitives), and `python-bridge` (the
 //! PyO3 cdylib). and `tests` (e2e integration tests).
 //!
-//! Adding or removing a crate must be a deliberate act: this test 
+//! Adding or removing a crate must be a deliberate act: this test
 //! fails until the allowlist here is updated, forcing
 //! whoever changes the crate set to justify the new crate per the rule that a
 //! crate is a layer needing independent compilation / its own deps / a separate
