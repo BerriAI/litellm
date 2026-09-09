@@ -4079,8 +4079,8 @@ def _apply_model_info_thinking_translation(
     passed_params: dict,
     non_default_params: dict,
 ) -> None:
-    prior_thinking: Final = non_default_params.get("thinking", passed_params.get("thinking"))
-    prior_effort: Final = non_default_params.get("reasoning_effort", passed_params.get("reasoning_effort"))
+    prior_thinking: Final = non_default_params.get("thinking")
+    prior_effort: Final = non_default_params.get("reasoning_effort")
     existing_extra_raw: Final = passed_params.get("extra_body")
     existing_extra: Final = existing_extra_raw if isinstance(existing_extra_raw, Mapping) else None
     translated: Final = apply_thinking_param_translation(

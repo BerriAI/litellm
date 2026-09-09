@@ -1,3 +1,4 @@
+import importlib
 from types import MappingProxyType
 
 from litellm.litellm_core_utils.thinking_param_translation import (
@@ -63,6 +64,20 @@ def test_translate_chat_template_kwargs():
         "chat_template_kwargs": {"enable_thinking": False},
         "reasoning_effort": "medium",
     }
+
+
+def test_translate_chat_template_kwargs_preserves_existing_nested_keys():
+    result = apply_thinking_param_translation(
+        model_info=_extra_body_model_info(
+            thinking_param="chat_template_kwargs",
+            thinking_values=[],
+        ),
+        thinking={"type": "enabled"},
+        reasoning_effort=None,
+        existing_extra_body={"chat_template_kwargs": {"reasoning_budget": 512}},
+    )
+    assert result.extra_body["chat_template_kwargs"]["reasoning_budget"] == 512
+    assert result.extra_body["chat_template_kwargs"]["enable_thinking"] is True
 
 
 def test_translate_clamps_effort_aliases():
@@ -139,3 +154,48 @@ def test_get_optional_params_openai_drop_without_model_info_drops_params():
     assert "reasoning_effort" not in extra_body
     assert optional_params.get("thinking") is None
     assert optional_params.get("reasoning_effort") is None
+
+
+def test_get_optional_params_does_not_reintroduce_dropped_thinking():
+    optional_params = get_optional_params(
+        model="deepseek-v4-flash",
+        custom_llm_provider="openai",
+        drop_params=True,
+        thinking={"type": "enabled"},
+        additional_drop_params=["thinking"],
+        model_info=_extra_body_model_info(
+            thinking_param="chat_template_kwargs",
+            thinking_values=[],
+        ),
+    )
+    extra_body = optional_params.get("extra_body") or {}
+    assert optional_params.get("thinking") is None
+    assert "enable_thinking" not in extra_body
+    assert "chat_template_kwargs" not in extra_body
+
+
+def test_batch_completion_vllm_passes_model_info(monkeypatch):
+    batch_completion_mod = importlib.import_module("litellm.batch_completion.main")
+
+    captured: dict[str, object] = {}
+    looked_up: dict[str, object] = _extra_body_model_info(thinking_param="enable_thinking")
+
+    def fake_get_optional_params(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {}
+
+    def fake_batch_completions(**kwargs: object) -> list[str]:
+        return ["ok"]
+
+    def fake_get_model_info(**kwargs: object) -> dict[str, object]:
+        return looked_up
+
+    monkeypatch.setattr(batch_completion_mod, "get_optional_params", fake_get_optional_params)
+    monkeypatch.setattr(batch_completion_mod.vllm_handler, "batch_completions", fake_batch_completions)
+    monkeypatch.setattr(batch_completion_mod, "get_model_info", fake_get_model_info)
+
+    batch_completion_mod.batch_completion(
+        model="vllm/some-model",
+        messages=[[{"role": "user", "content": "hi"}]],
+    )
+    assert captured.get("model_info") == looked_up
