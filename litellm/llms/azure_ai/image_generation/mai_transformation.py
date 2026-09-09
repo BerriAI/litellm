@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -21,16 +22,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_WIDTH = 1024
     DEFAULT_HEIGHT = 1024
 
-    # The MAI endpoint produces exactly one image per request. Its documented
-    # body is model/prompt/width/height (plus `image` for edits) — there is no
-    # count field, and `n` (or the native `sampleCount`) is accepted and
-    # ignored, so a request for more silently comes back with one.
     MAX_IMAGES_PER_REQUEST: Final = 1
-
-    # Provider-side bounds on the generated image. Both are enforced by the
-    # MAI endpoint, which 400s with "'width' must be at least 768 pixels."
-    # Only `size` is checked against them: `width`/`height` pass through
-    # unmapped, which keeps a future model with different bounds reachable.
     MIN_DIMENSION_PX: Final = 768
     MAX_TOTAL_PX: Final = 1024 * 1024
 
@@ -158,25 +150,27 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
             if k in supported_params:
                 if k == "size" and v:
-                    self._map_size_param(v, optional_params)
-                elif k == "n" and v is not None and v > self.MAX_IMAGES_PER_REQUEST:
+                    self._map_size_param(v, optional_params, model)
+                elif k == "n" and v is not None and int(v) > self.MAX_IMAGES_PER_REQUEST:
                     if not drop_params:
-                        raise ValueError(
+                        raise self._unsupported(
+                            model,
                             f"n={v} is not supported for model {model}. The Azure AI MAI image "
                             f"endpoint returns exactly {self.MAX_IMAGES_PER_REQUEST} image per "
                             "request and ignores any count, so a larger value would silently "
                             "return fewer images than requested. Send one request per image, or "
-                            "set drop_params=True to drop n."
+                            "set drop_params=True to drop n.",
                         )
                 else:
                     optional_params[k] = v
             elif k in ("width", "height"):
                 optional_params[k] = v
             elif not drop_params:
-                raise ValueError(
+                raise self._unsupported(
+                    model,
                     f"Parameter {k} is not supported for model {model}. "
                     f"Supported parameters are {supported_params} and width/height. "
-                    f"Set drop_params=True to drop unsupported parameters."
+                    f"Set drop_params=True to drop unsupported parameters.",
                 )
 
         if "width" not in optional_params:
@@ -187,7 +181,11 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         optional_params.pop("size", None)
         return optional_params
 
-    def _map_size_param(self, size: str, optional_params: dict) -> None:
+    @staticmethod
+    def _unsupported(model: str, message: str) -> UnsupportedParamsError:
+        return UnsupportedParamsError(message=message, llm_provider="azure_ai", model=model)
+
+    def _map_size_param(self, size: str, optional_params: dict, model: str) -> None:
         size_mapping: Final = {
             "1024x1024": (1024, 1024),
             "1792x1024": (1792, 1024),
@@ -202,34 +200,32 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
             try:
                 width, height = map(int, size.lower().split("x"))
             except ValueError:
-                raise ValueError(f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024').")
+                raise self._unsupported(
+                    model, f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024')."
+                )
         else:
-            raise ValueError(
+            raise self._unsupported(
+                model,
                 f"Unsupported size value: '{size}'. "
-                f"Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string."
+                f"Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string.",
             )
 
-        self._validate_dimensions(size=size, width=width, height=height)
+        self._validate_dimensions(model=model, size=size, width=width, height=height)
         optional_params["width"] = width
         optional_params["height"] = height
 
-    def _validate_dimensions(self, size: str, width: int, height: int) -> None:
-        """Reject a `size` the MAI endpoint would 400 on.
-
-        Several OpenAI-standard sizes are outside MAI's bounds: 512x512 and
-        256x256 fall under the per-side minimum, and 1792x1024 / 1024x1792
-        exceed the total pixel budget. Checking here turns an opaque provider
-        400 into an error that names the constraint.
-        """
+    def _validate_dimensions(self, model: str, size: str, width: int, height: int) -> None:
         if width < self.MIN_DIMENSION_PX or height < self.MIN_DIMENSION_PX:
-            raise ValueError(
+            raise self._unsupported(
+                model,
                 f"Unsupported size value: '{size}'. Azure AI MAI image models require width and "
-                f"height of at least {self.MIN_DIMENSION_PX} pixels."
+                f"height of at least {self.MIN_DIMENSION_PX} pixels.",
             )
         if width * height > self.MAX_TOTAL_PX:
-            raise ValueError(
+            raise self._unsupported(
+                model,
                 f"Unsupported size value: '{size}'. Azure AI MAI image models accept at most "
-                f"{self.MAX_TOTAL_PX} total pixels ({width}x{height} is {width * height})."
+                f"{self.MAX_TOTAL_PX} total pixels ({width}x{height} is {width * height}).",
             )
 
     def transform_image_generation_response(
