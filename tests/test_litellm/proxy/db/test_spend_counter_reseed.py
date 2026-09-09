@@ -49,7 +49,7 @@ class _InFlightCountingTable:
         self.in_flight = 0
         self.max_in_flight = 0
 
-    async def find_unique(self, where: dict):
+    async def find_unique(self, where: dict[str, str]) -> SimpleNamespace:
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
         await asyncio.sleep(0.001)
