@@ -4,8 +4,8 @@ Runs only against a proxy booted from tests/e2e/gateway/redis_timeout_ci_config.
 points cache_params at a real Redis with socket_timeout 0.001. The test holds that Redis in
 CLIENT PAUSE WRITE for its duration, so every write the proxy sends, the spend counter increment
 included, hangs past the timeout, and it proves the degradation was real from the breaker metrics on /metrics: fresh timeouts, a breaker transition,
-or an already-open breaker rejecting every call, which is the state a customer's worker sits in. Each request fails its primary deployment, whose api_base is a closed
-port, retries, falls back to the backup and succeeds, so it carries retry breadcrumbs; its cost
+or an already-open breaker rejecting every call, which is the state a customer's worker sits in. The test registers two deployments through /model/new: a primary whose api_base is a closed port
+and a backup that answers with a mock. Each request fails the primary, retries, falls back and succeeds, so it carries retry breadcrumbs; its cost
 tracking then fails on the spend counter increment and stringifies the request metadata into a
 failed-tracking alert. On v1.100.0 that string doubled per request until the worker hung
 (LIT-6780). Deselected unless E2E_REDIS_TIMEOUT is set, since it needs that dedicated proxy.
@@ -26,7 +26,7 @@ from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
 from e2e_http import NoBody, Result, Success
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody
+from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody, LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 
@@ -34,6 +34,8 @@ pytestmark = [pytest.mark.e2e, pytest.mark.redis_timeout]
 
 PRIMARY_MODEL: Final = "redis-timeout-primary"
 BACKUP_MODEL: Final = "redis-timeout-backup"
+BACKING_MODEL: Final = "openai/gpt-5-mini"
+CLOSED_PORT_API_BASE: Final = "http://127.0.0.1:1"
 REQUESTS: Final = 20
 MAX_SECONDS_PER_REQUEST: Final = 10.0
 MAX_LATENCY_GROWTH_RATIO: Final = 3.0
@@ -134,6 +136,18 @@ class TestRedisTimeout:
         self, client: ComplexityRouterClient, resources: ResourceManager, endpoint: Endpoint, paused_redis: None
     ) -> None:
         proxy = client.proxy
+        primary_id = proxy.create_model(
+            PRIMARY_MODEL,
+            LiteLLMParamsBody(
+                model=BACKING_MODEL, api_key="sk-redis-timeout-primary-not-used", api_base=CLOSED_PORT_API_BASE
+            ),
+        )
+        resources.defer(lambda: proxy.delete_model(primary_id))
+        backup_id = proxy.create_model(
+            BACKUP_MODEL,
+            LiteLLMParamsBody(model=BACKING_MODEL, api_key="sk-redis-timeout-backup-not-used", mock_response="ok"),
+        )
+        resources.defer(lambda: proxy.delete_model(backup_id))
         timeouts_before = _metric(proxy, TIMEOUT_FAILURES_RE)
         transitions_before = _metric(proxy, BREAKER_TRANSITIONS_RE)
         key = proxy.generate_key(
