@@ -653,7 +653,8 @@ def test_transform_choices_prefers_reasoning_blocks_over_top_level_field():
     assert choices[0].message.content == "391"
 
 
-def test_chunk_parser_surfaces_top_level_reasoning_delta():
+@pytest.mark.parametrize("reasoning_key", ["reasoning_content", "reasoning"])
+def test_chunk_parser_surfaces_top_level_reasoning_delta(reasoning_key: str) -> None:
     iterator = DatabricksChatResponseIterator(None, sync_stream=True)
     chunk = {
         "id": "1",
@@ -662,7 +663,7 @@ def test_chunk_parser_surfaces_top_level_reasoning_delta():
         "model": "lit-qa-deepseek-v4-flash",
         "choices": [
             {
-                "delta": {"role": "assistant", "content": "", "reasoning_content": "We need answer"},
+                "delta": {"role": "assistant", "content": None, reasoning_key: "We need answer"},
                 "index": 0,
                 "finish_reason": None,
             }
@@ -672,4 +673,4 @@ def test_chunk_parser_surfaces_top_level_reasoning_delta():
     parsed = iterator.chunk_parser(chunk)
 
     assert parsed.choices[0].delta.reasoning_content == "We need answer"
-    assert parsed.choices[0].delta.content == ""
+    assert parsed.choices[0].delta.content is None
