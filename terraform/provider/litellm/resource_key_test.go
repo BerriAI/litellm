@@ -259,6 +259,33 @@ func TestKeyStateUpgradeV0DropsMapModelMaxBudget(t *testing.T) {
 	}
 }
 
+func TestKeyModelMaxBudgetValidationRequiresBudgetObjects(t *testing.T) {
+	validate := resourceKey().Schema["model_max_budget"].ValidateFunc
+	for _, valid := range []string{
+		`{}`,
+		`{"gpt-4o-mini": {"budget_limit": 50, "time_period": "30d"}}`,
+		`{"gpt-4o-mini": {"max_budget": 50, "rpm_limit": 60}, "gpt-4o": {}}`,
+	} {
+		if _, errs := validate(valid, "model_max_budget"); len(errs) != 0 {
+			t.Errorf("validate(%s) = %v, want accepted", valid, errs)
+		}
+	}
+	for _, invalid := range []string{
+		`null`,
+		`[]`,
+		`"gpt-4o-mini"`,
+		`50`,
+		`{"gpt-4o-mini": 50}`,
+		`{"gpt-4o-mini": null}`,
+		`{"gpt-4o-mini": [50]}`,
+		`not json`,
+	} {
+		if _, errs := validate(invalid, "model_max_budget"); len(errs) == 0 {
+			t.Errorf("validate(%s) accepted a value that would send no per-model budget", invalid)
+		}
+	}
+}
+
 // The proxy 400s on budget_duration: "", so an unset duration must be
 // omitted from the update payload entirely.
 func TestUpdateKeyOmitsEmptyBudgetDuration(t *testing.T) {

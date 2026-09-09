@@ -8,7 +8,6 @@ import (
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 )
 
 func resourceKey() *schema.Resource {
@@ -110,7 +109,7 @@ func resourceKey() *schema.Resource {
 			"model_max_budget": {
 				Type:             schema.TypeString,
 				Optional:         true,
-				ValidateFunc:     validation.StringIsJSON,
+				ValidateFunc:     validateKeyModelMaxBudget,
 				DiffSuppressFunc: budgetSuppressEquivalentJSON,
 				Description:      "JSON string of per-model budget config (e.g. '{\"gpt-4o-mini\": {\"budget_limit\": 50, \"time_period\": \"30d\"}}')",
 			},
@@ -213,6 +212,20 @@ func resourceKeyV0Type(current map[string]*schema.Schema) cty.Type {
 func resourceKeyStateUpgradeV0(_ context.Context, rawState map[string]interface{}, _ interface{}) (map[string]interface{}, error) {
 	delete(rawState, "model_max_budget")
 	return rawState, nil
+}
+
+func validateKeyModelMaxBudget(v interface{}, k string) ([]string, []error) {
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(v.(string)), &parsed); err != nil || parsed == nil {
+		return nil, []error{fmt.Errorf("%q must be a JSON object keyed by model name, got %s", k, v)}
+	}
+	for model, cfg := range parsed {
+		var budget map[string]json.RawMessage
+		if err := json.Unmarshal(cfg, &budget); err != nil || budget == nil {
+			return nil, []error{fmt.Errorf("%q[%q] must be a budget object such as {\"budget_limit\": 50, \"time_period\": \"30d\"}, got %s", k, model, cfg)}
+		}
+	}
+	return nil, nil
 }
 
 func parseKeyModelMaxBudget(raw string) map[string]interface{} {
