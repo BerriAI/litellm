@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 if TYPE_CHECKING:
@@ -37,6 +37,7 @@ from litellm.proxy.auth.auth_checks import (
     _can_object_call_vector_stores,
     _check_end_user_budget,
     _check_team_member_budget,
+    _fetch_key_object_from_db_with_reconnect,
     _get_fuzzy_user_object,
     _get_team_db_check,
     _log_budget_lookup_failure,
@@ -55,6 +56,7 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    PROXY_DB_LOOKUP_MAX_CONCURRENCY,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
@@ -562,6 +564,44 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
         lock_timeout_seconds=0.1,
     )
     assert mock_prisma_client.get_data.await_count == 1
+
+
+class _InFlightCountingPrisma:
+
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def get_data(self, token: str, table_name: str, parent_otel_span, proxy_logging_obj) -> UserAPIKeyAuth:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0.001)
+        self.in_flight -= 1
+        return UserAPIKeyAuth(token=token)
+
+
+@pytest.mark.asyncio
+async def test_fetch_key_object_from_db_bounds_in_flight_prisma_requests():
+    """A cache-miss burst must not hand every lookup to the prisma engine HTTP pool at once;
+    httpcore bookkeeping is O(queued x connections) and starves the loop (LIT-6435)."""
+    prisma: Final = _InFlightCountingPrisma()
+    burst: Final = PROXY_DB_LOOKUP_MAX_CONCURRENCY * 5
+
+    results: Final = await asyncio.gather(
+        *(
+            _fetch_key_object_from_db_with_reconnect(
+                hashed_token=f"hashed-token-{i}",
+                prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+            for i in range(burst)
+        )
+    )
+
+    assert len(results) == burst
+    assert {r.token for r in results if r is not None} == {f"hashed-token-{i}" for i in range(burst)}
+    assert prisma.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
 
 
 def _fake_redis_cache():

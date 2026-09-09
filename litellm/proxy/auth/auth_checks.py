@@ -94,6 +94,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.db.db_lookup_gate import db_lookup_gate
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
@@ -3445,36 +3446,37 @@ async def _fetch_key_object_from_db_with_reconnect(
     """
     Fetch key object from DB and retry once if a DB connection error can be healed.
     """
-    try:
-        return await prisma_client.get_data(
-            token=hashed_token,
-            table_name="combined_view",
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except Exception as e:
-        if PrismaDBExceptionHandler.is_database_transport_error(e):
-            did_reconnect = False
-            if hasattr(prisma_client, "attempt_db_reconnect"):
-                auth_reconnect_timeout = getattr(prisma_client, "_db_auth_reconnect_timeout_seconds", 2.0)
-                if not isinstance(auth_reconnect_timeout, (int, float)):
-                    auth_reconnect_timeout = 2.0
-                auth_reconnect_lock_timeout = getattr(prisma_client, "_db_auth_reconnect_lock_timeout_seconds", 0.1)
-                if not isinstance(auth_reconnect_lock_timeout, (int, float)):
-                    auth_reconnect_lock_timeout = 0.1
-                did_reconnect = await prisma_client.attempt_db_reconnect(
-                    reason="auth_get_key_object_lookup_failure",
-                    timeout_seconds=auth_reconnect_timeout,
-                    lock_timeout_seconds=auth_reconnect_lock_timeout,
-                )
-            if did_reconnect:
-                return await prisma_client.get_data(
-                    token=hashed_token,
-                    table_name="combined_view",
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-        raise
+    async with db_lookup_gate.current():
+        try:
+            return await prisma_client.get_data(
+                token=hashed_token,
+                table_name="combined_view",
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            if PrismaDBExceptionHandler.is_database_transport_error(e):
+                did_reconnect = False
+                if hasattr(prisma_client, "attempt_db_reconnect"):
+                    auth_reconnect_timeout = getattr(prisma_client, "_db_auth_reconnect_timeout_seconds", 2.0)
+                    if not isinstance(auth_reconnect_timeout, (int, float)):
+                        auth_reconnect_timeout = 2.0
+                    auth_reconnect_lock_timeout = getattr(prisma_client, "_db_auth_reconnect_lock_timeout_seconds", 0.1)
+                    if not isinstance(auth_reconnect_lock_timeout, (int, float)):
+                        auth_reconnect_lock_timeout = 0.1
+                    did_reconnect = await prisma_client.attempt_db_reconnect(
+                        reason="auth_get_key_object_lookup_failure",
+                        timeout_seconds=auth_reconnect_timeout,
+                        lock_timeout_seconds=auth_reconnect_lock_timeout,
+                    )
+                if did_reconnect:
+                    return await prisma_client.get_data(
+                        token=hashed_token,
+                        table_name="combined_view",
+                        parent_otel_span=parent_otel_span,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+            raise
 
 
 def jwt_key_mapping_cache_key(jwt_claim_name: str, jwt_claim_value: str) -> str:
