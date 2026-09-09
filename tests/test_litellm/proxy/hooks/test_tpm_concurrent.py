@@ -3682,7 +3682,7 @@ async def test_the_project_itpm_reservation_counts_the_request_off_the_event_loo
     handler, _cache = rate_limiter
     stash = get_or_create_request_stash()
     warm_tokenizer("claude-fable-5")
-    data: Dict[str, Any] = {
+    data: dict[str, object] = {
         "model": "claude-fable-5",
         "messages": [{"role": "user", "content": text * 100}],
     }
