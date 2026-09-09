@@ -390,6 +390,24 @@ def test_scan_message_reads_a_config_with_a_broken_section_header(content):
     assert "Zx4Kp9Lm2Qr7Ns3Vt" not in guardrail.redact_text(content)
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        "=orphan\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n",
+        "  indented before any key\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n",
+        "greeting = %(name)s\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n",
+        "token = a\x00b\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n",
+    ],
+    ids=["empty-key", "leading-continuation", "interpolation", "nul-byte"],
+)
+def test_scan_message_reads_lines_that_a_stock_ini_parser_rejects(content):
+    """The parser has no error fallback, so every line shape must be filtered or
+    accepted before it reaches configparser, or one odd line would 500 the request."""
+    guardrail = _guardrail()
+
+    assert "Zx4Kp9Lm2Qr7Ns3Vt" not in guardrail.redact_text(content)
+
+
 def test_scan_message_reads_a_config_that_repeats_a_section():
     """A pasted ini can name the same section twice, and refusing to parse it would drop
     every assignment in the message, not just the repeated one."""

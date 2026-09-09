@@ -503,12 +503,7 @@ def _parseable_lines(text: str) -> Iterator[str]:
 def _quoted_assignments(text: str) -> tuple[str, ...]:
     parser: Final = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str  # pyright: ignore[reportAttributeAccessIssue]  # configparser types optionxform as a method
-    body: Final = "\n".join(_parseable_lines(text))
-    try:
-        parser.read_string(f"[{_CONFIG_SECTION}]\n{body}")
-    except (configparser.Error, UnicodeDecodeError):
-        return ()
-
+    parser.read_string(f"[{_CONFIG_SECTION}]\n" + "\n".join(_parseable_lines(text)))
     return tuple(
         f'{key} = "{value}"'
         for section in parser
