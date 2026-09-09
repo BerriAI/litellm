@@ -23,9 +23,8 @@ import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import NoBody
 from lifecycle import ResourceManager
-from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok
+from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
 from models import LiteLLMParamsBody
 from otel_client import JaegerSpan, JaegerTrace, OtelReader
 
@@ -48,11 +47,7 @@ def _assert_otel_destination_configured(client: LoggingClient) -> None:
     """Recorded state: the proxy reports the OTEL v2 logger among its active
     callbacks, so a missing/failed destination config fails here, before any
     traffic-based assertion can time out confusingly."""
-    result = client.proxy.probe("/health/readiness/details", params=NoBody())
-    assert result.status_code == 200, (
-        f"/health/readiness/details must answer 200, got {result.status_code}: {result.body[:300]}"
-    )
-    details = _ReadinessDetails.model_validate_json(result.body)
+    details = _ReadinessDetails.model_validate_json(readiness_details_body(client))
     assert OTEL_V2_LOGGER_NAME in details.success_callbacks, (
         f"the proxy must report the {OTEL_V2_LOGGER_NAME} callback active "
         f"(LITELLM_OTEL_V2 + arize_phoenix preset in the compose config); got: {details.success_callbacks}"
@@ -164,17 +159,14 @@ def served_genai_spans(trace: JaegerTrace, genai_span: str) -> list[JaegerSpan]:
     these tests fail whenever the upstream 429s, 529s, or hands back a stale
     credential on the first try."""
     return [
-        span
-        for span in trace.spans
-        if span.operation_name == genai_span and _tag(span, ERROR_STATUS_TAG) != "ERROR"
+        span for span in trace.spans if span.operation_name == genai_span and _tag(span, ERROR_STATUS_TAG) != "ERROR"
     ]
 
 
 def one_served_genai_span(trace: JaegerTrace, genai_span: str) -> JaegerSpan:
     served = served_genai_spans(trace, genai_span)
     assert len(served) == 1, (
-        f"a streamed call must produce exactly ONE served gen-AI span, got {len(served)}; "
-        f"spans: {trace.span_names()}"
+        f"a streamed call must produce exactly ONE served gen-AI span, got {len(served)}; spans: {trace.span_names()}"
     )
     return served[0]
 
@@ -190,8 +182,7 @@ def _assert_real_ttft(hits: list[JaegerTrace], *, genai_span: str) -> None:
         "(nothing tagged with its call id was found)"
     )
     assert len(hits) == 1, (
-        f"expected exactly ONE trace for the call, got {len(hits)}: "
-        f"{[(t.trace_id, t.span_names()) for t in hits]}"
+        f"expected exactly ONE trace for the call, got {len(hits)}: {[(t.trace_id, t.span_names()) for t in hits]}"
     )
     trace = hits[0]
     span = one_served_genai_span(trace, genai_span)
@@ -280,9 +271,7 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
         "the span status description must carry the same untruncated message as error.message"
     )
     stack = _tag(span, "litellm.provider.error.stack_trace")
-    assert isinstance(stack, str) and stack, (
-        "the error span must carry a non-empty litellm.provider.error.stack_trace"
-    )
+    assert isinstance(stack, str) and stack, "the error span must carry a non-empty litellm.provider.error.stack_trace"
 
 
 class TestOtelTraceCompleteness:
@@ -313,9 +302,7 @@ class TestOtelTraceCompleteness:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
-        outcome = first_ok(
-            client, lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16)
-        )
+        outcome = first_ok(client, lambda: client.chat_raw(key, MODEL, f"reply with one word {marker}", max_tokens=16))
         assert outcome.call_id is not None, "success response must carry x-litellm-call-id"
 
         hits = otel_reader.poll_traces_for_call(
@@ -520,9 +507,7 @@ class TestOtelTraceCompleteness:
         route = "/v1/responses"
         _assert_otel_destination_configured(client)
 
-        key = client.key_with_alias(
-            f"otel-stream-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL]
-        )
+        key = client.key_with_alias(f"otel-stream-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL])
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
@@ -660,9 +645,7 @@ class TestOtelTraceCompleteness:
         route = "/v1/responses"
         _assert_otel_destination_configured(client)
 
-        key = client.key_with_alias(
-            f"otel-ttft-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL]
-        )
+        key = client.key_with_alias(f"otel-ttft-responses-{unique_marker()}", models=[CHEAP_OPENAI_MODEL])
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()

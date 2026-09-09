@@ -37,7 +37,9 @@ CACHE_TTL_1H_SECONDS: Final = 3600
 AUTOROUTER_BENCHMARKS_SQL: Final = """
 WITH windowed AS (
     SELECT * FROM "LiteLLM_AutoRouterSession"
-    WHERE last_turn_at >= $1::timestamp AND first_turn_at < $2::timestamp
+    WHERE last_turn_at >= $1::timestamp
+      AND first_turn_at < $2::timestamp
+      AND ($3::text IS NULL OR api_key = $3::text)
 ),
 tier_maps AS (
     SELECT router_name, router_type, jsonb_object_agg(tier, tier_turns) AS tier_turns
@@ -73,6 +75,8 @@ SELECT
     COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
     COALESCE(SUM(spend), 0)::float8 AS spend,
     COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
+    COALESCE(SUM(classifier_cost), 0)::float8 AS classifier_cost,
+    COALESCE(SUM(classifier_cost_recorded_turns), 0)::int AS classifier_cost_recorded_turns,
     COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0)::float8 AS session_seconds
 FROM windowed
 GROUP BY router_name, router_type
@@ -93,6 +97,7 @@ class AutoRouterTurnTransaction:
     total_tokens: int
     spend: float
     saved_spend: float
+    classifier_cost: float
     covered: bool
     cache_hit: bool
     cache_ttl_seconds: int | None
@@ -185,8 +190,10 @@ def build_autorouter_turn_transaction(
     of a request through the router) are excluded by their internal_call_origin stamp:
     they are not traffic a user sent, so counting them would manufacture sessions and
     savings in the adoption metrics. Failed requests served nothing and are excluded.
-    Cache facts are derived from the payload's own usage record through the savings
-    owner, never handed in beside it.
+    The classifier's charge still lands here exactly once, via the decision's own
+    classifier_cost folded into this turn's spend: the excluded classifier row is how
+    it was billed, the decision is how it is attributed. Cache facts are derived from
+    the payload's own usage record through the savings owner, never handed in beside it.
     """
     if payload.get("status") != "success":
         return None
@@ -204,9 +211,12 @@ def build_autorouter_turn_transaction(
     turn_at: Final = _turn_time_utc(str(payload.get("startTime") or ""))
     if turn_at is None:
         return None
+    from litellm.proxy.spend_tracking.savings import classifier_cost_from_decision
+
     usage_object_raw: Final = metadata.get("usage_object")
     cache: Final = turn_cache_facts(usage_object_raw if isinstance(usage_object_raw, Mapping) else None)
     tier_raw: Final = routing_decision.get("tier")
+    classifier_cost: Final = classifier_cost_from_decision(routing_decision)
     return AutoRouterTurnTransaction(
         api_key=api_key,
         session_id=_bounded_session_id(session_id),
@@ -216,8 +226,9 @@ def build_autorouter_turn_transaction(
         model=model,
         turn_at=turn_at,
         total_tokens=int(payload.get("prompt_tokens") or 0) + int(payload.get("completion_tokens") or 0),
-        spend=float(payload.get("spend") or 0.0),
+        spend=float(payload.get("spend") or 0.0) + (classifier_cost or 0.0),
         saved_spend=saved_spend,
+        classifier_cost=classifier_cost or 0.0,
         covered=cache.covered,
         cache_hit=cache.read_tokens > 0,
         cache_ttl_seconds=cache.write_ttl_seconds,
@@ -259,7 +270,7 @@ INSERT INTO "LiteLLM_AutoRouterSession" AS t (
     last_model, models, turns, unordered_turns, covered_turns, cache_hits,
     same_model_turns, same_model_hits, first_visit_turns, first_visit_hits,
     return_turns, return_hits, return_expired_misses, return_within_ttl_misses,
-    ttl_5m_turns, ttl_1h_turns, total_tokens, spend, saved_spend, tier_turns
+    ttl_5m_turns, ttl_1h_turns, total_tokens, spend, saved_spend, classifier_cost, classifier_cost_recorded_turns, tier_turns
 )
 VALUES (
     {_p("api_key")}, {_p("session_id")}, {_p("router_name")}, {_p("router_type")}, {_TURN_AT}::timestamp, {_TURN_AT}::timestamp,
@@ -270,13 +281,15 @@ VALUES (
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_5M_SECONDS} THEN 1 ELSE 0 END),
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_1H_SECONDS} THEN 1 ELSE 0 END),
     {_p("total_tokens")}::bigint, {_p("spend")}::float8, {_p("saved_spend")}::float8,
-    {_TIER_DELTA}
+    {_p("classifier_cost")}::float8, 1, {_TIER_DELTA}
 )
 ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
     turns = t.turns + 1,
     total_tokens = t.total_tokens + EXCLUDED.total_tokens,
     spend = t.spend + EXCLUDED.spend,
     saved_spend = t.saved_spend + EXCLUDED.saved_spend,
+    classifier_cost = t.classifier_cost + EXCLUDED.classifier_cost,
+    classifier_cost_recorded_turns = t.classifier_cost_recorded_turns + 1,
     covered_turns = t.covered_turns + EXCLUDED.covered_turns,
     cache_hits = t.cache_hits + EXCLUDED.cache_hits,
     ttl_5m_turns = t.ttl_5m_turns + EXCLUDED.ttl_5m_turns,

@@ -50,6 +50,9 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.middleware.admission_control_middleware import (
+    get_admission_control_stats,
+)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
@@ -61,6 +64,13 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.secret_managers.main import get_secret_bool
 
 #### Health ENDPOINTS ####
+
+
+class _HealthBacklogResponse(TypedDict):
+    in_flight_requests: ReadOnly[int]
+    admitted_requests: ReadOnly[int]
+    queued_requests: ReadOnly[int]
+    rejected_requests: ReadOnly[int]
 
 
 def _reject_os_environ_references(params: dict) -> None:
@@ -105,6 +115,29 @@ _CONFIG_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset(
 )
 
 
+def _request_inherits_config_credentials(
+    config_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    allow_client_side_credentials: bool,
+) -> bool:
+    """Whether the configuration's credentials are this request's to be probed with.
+
+    The configuration reached here by matching the request's model string, which
+    also matches wildcard routes and unrelated deployments that merely serve the
+    same model, so a request naming a stored credential of its own has already
+    said where its credentials come from and does not borrow that one's. A blank
+    name is no name: ``load_credentials_from_list`` resolves nothing from it, so
+    it must not cost the request the credentials it would otherwise be probed
+    with.
+    """
+    requested_credential: Final = request_params.get("litellm_credential_name")
+    if requested_credential and requested_credential != config_params.get("litellm_credential_name"):
+        return False
+    if allow_client_side_credentials:
+        return True
+    return not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS)
+
+
 def _config_base_for_health_check(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
@@ -112,25 +145,19 @@ def _config_base_for_health_check(
 ) -> dict[str, object]:
     """Return the configured parameters to merge under a connection-test request.
 
-    A request that sets its own connection fields describes a connection of its
-    own, so the configuration's credentials are not carried into it: they belong
-    to the endpoint the configuration names. Anything the request does not set
-    still comes from the configuration, which is what lets a request name a
-    configured model and test it as configured.
+    A request that sets its own connection fields, or names its own stored
+    credential, describes a connection of its own, so the configuration's
+    credentials are not carried into it: they belong to the endpoint the
+    configuration names. Anything the request does not set still comes from the
+    configuration, which is what lets a request name a configured model and test
+    it as configured.
 
     ``litellm_credential_name`` is dropped alongside the literal credential
     fields: it names a stored credential that ``load_credentials_from_list``
     resolves into the same secrets further down the call, so leaving it in place
     would reintroduce them by reference.
-
-    ``general_settings.allow_client_side_credentials`` is the existing proxy-wide
-    opt-in for callers supplying their own connection parameters. Where an admin
-    has enabled it, a request may pair its own endpoint with the configured
-    credentials, as it could before.
     """
-    if allow_client_side_credentials:
-        return dict(config_params)
-    if not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS):
+    if _request_inherits_config_credentials(config_params, request_params, allow_client_side_credentials):
         return dict(config_params)
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
@@ -1372,8 +1399,25 @@ class DBHealthCache(TypedDict):
 
 db_health_cache: DBHealthCache = {"status": "unknown", "last_updated": datetime.now()}
 
+# Bounds each DB round-trip on the probe path so a hung connection during a
+# failover cannot make the probe fail by timeout (k8s default timeoutSeconds: 5).
+DB_READINESS_CHECK_TIMEOUT_SECONDS: Final = 2.0
+# One deadline for the whole probe-path DB check (initial check + reconnect +
+# re-check, including reconnect lock waits), kept under timeoutSeconds: 5.
+DB_READINESS_PROBE_DEADLINE_SECONDS: Final = 4.0
 
-async def _db_health_readiness_check():
+
+async def _db_health_readiness_check() -> DBHealthCache:
+    try:
+        return await asyncio.wait_for(
+            _db_health_readiness_check_unbounded(),
+            timeout=DB_READINESS_PROBE_DEADLINE_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return {"status": "disconnected", "last_updated": db_health_cache["last_updated"]}
+
+
+async def _db_health_readiness_check_unbounded() -> DBHealthCache:
     from litellm.proxy.proxy_server import prisma_client
 
     global db_health_cache
@@ -1387,7 +1431,7 @@ async def _db_health_readiness_check():
             db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
             return db_health_cache
 
-        await prisma_client.health_check()
+        await asyncio.wait_for(prisma_client.health_check(), timeout=DB_READINESS_CHECK_TIMEOUT_SECONDS)
         db_health_cache = {"status": "connected", "last_updated": datetime.now()}
         return db_health_cache
     except Exception as e:
@@ -1395,8 +1439,15 @@ async def _db_health_readiness_check():
         if PrismaDBExceptionHandler.is_database_transport_error(e):
             try:
                 verbose_proxy_logger.warning("_db_health_readiness_check: health_check failed, attempting reconnect")
-                await prisma_client.attempt_db_reconnect(reason="health_readiness_check")
-                await prisma_client.health_check()
+                await prisma_client.attempt_db_reconnect(
+                    reason="health_readiness_check",
+                    timeout_seconds=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                    lock_timeout_seconds=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                )
+                await asyncio.wait_for(
+                    prisma_client.health_check(),
+                    timeout=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                )
                 verbose_proxy_logger.info("_db_health_readiness_check: reconnect succeeded")
                 db_health_cache = {
                     "status": "connected",
@@ -1580,7 +1631,14 @@ async def _get_health_readiness_details(
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
             # rotation; "Not connected" (no DB configured at all) stays 200.
-            if response is not None and db_health_status["status"] != "connected":
+            # With allow_requests_on_db_unavailable the proxy keeps serving
+            # during a DB outage, so the pod must stay in rotation (200) and
+            # report the DB state through the body instead.
+            if (
+                response is not None
+                and db_health_status["status"] != "connected"
+                and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+            ):
                 response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
@@ -1671,7 +1729,10 @@ async def _resolve_public_readiness_db(response: Response) -> str:
         return "Not connected"
 
     db_health_status: Final = await _db_health_readiness_check()
-    if db_health_status["status"] != "connected":
+    if (
+        db_health_status["status"] != "connected"
+        and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+    ):
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return db_health_status["status"]
 
@@ -1725,7 +1786,14 @@ async def health_backlog():
     for the event loop to get to them, adding latency before LiteLLM even starts
     its own timer.
     """
-    return {"in_flight_requests": get_in_flight_requests()}
+    stats: Final = get_admission_control_stats()
+    response: Final[_HealthBacklogResponse] = {
+        "in_flight_requests": get_in_flight_requests(),
+        "admitted_requests": stats.admitted,
+        "queued_requests": stats.queued,
+        "rejected_requests": stats.rejected_total,
+    }
+    return response
 
 
 @router.get(
@@ -1908,6 +1976,9 @@ async def test_model_connection(
     Note: 
     - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.) 
       will be automatically loaded from the config (with resolved environment variables).
+    - A request naming a stored credential (`litellm_credential_name`) that the configuration
+      does not name is probed with that credential instead, and inherits no credentials
+      from the configuration its model string happened to match.
     - You can override specific params by including them in the request.
     - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
       which will be resolved automatically (same as in proxy_config.yaml).

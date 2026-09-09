@@ -85,7 +85,7 @@ _RATE_LIMIT_CATEGORY_VALUES: Final = frozenset(c.value for c in RateLimitErrorCa
 _RATE_LIMIT_TYPE_VALUES: Final = frozenset(t.value for t in RateLimitType)
 
 
-def validate_rate_limit_category(value: Any) -> str | None:
+def validate_rate_limit_category(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitErrorCategory`.
 
     Used at duck-typed read sites (StandardLoggingPayload extraction, Prometheus
@@ -100,7 +100,7 @@ def validate_rate_limit_category(value: Any) -> str | None:
     return None
 
 
-def validate_rate_limit_type(value: Any) -> str | None:
+def validate_rate_limit_type(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitType`.
 
     See :func:`validate_rate_limit_category` for the rationale.
@@ -338,6 +338,7 @@ class Timeout(openai.APITimeoutError):
         num_retries: int | None = None,
         headers: dict | None = None,
         exception_status_code: int | None = None,
+        response: httpx.Response | None = None,
     ):
         request: Final = httpx.Request(
             method="POST",
@@ -352,6 +353,8 @@ class Timeout(openai.APITimeoutError):
         self.max_retries = max_retries
         self.num_retries = num_retries
         self.headers = headers
+        if response is not None:
+            self.response = response
 
     # custom function to convert to str
     def __str__(self):

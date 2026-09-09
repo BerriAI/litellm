@@ -13,7 +13,8 @@ Covers:
   I) async path propagates optional params to downstream handler
 """
 
-from typing import List, cast
+from importlib import import_module
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,7 +35,7 @@ from litellm.types.llms.openai import (
 
 def _make_logging_obj(
     merged_model: str,
-    merged_messages: List[AllMessageValues],
+    merged_messages: list[AllMessageValues],
     should_run: bool = True,
     merged_optional_params: dict = None,
 ) -> MagicMock:
@@ -61,20 +62,24 @@ def _provider_by_model(model: str, **_: object) -> tuple[str, str, None, None]:
 def _patch_responses_dispatch():
     """Patch everything after the prompt management block so tests stay unit-level."""
     return [
-        patch(
-            "litellm.responses.main.litellm.get_llm_provider",
+        patch.object(
+            import_module("litellm.responses.main").litellm,
+            "get_llm_provider",
             side_effect=_provider_by_model,
         ),
-        patch(
-            "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway",
+        patch.object(
+            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
+            "_should_use_litellm_mcp_gateway",
             return_value=False,
         ),
-        patch(
-            "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+        patch.object(
+            import_module("litellm.responses.main").ProviderConfigManager,
+            "get_provider_responses_api_config",
             return_value=None,
         ),
-        patch(
-            "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler",
+        patch.object(
+            import_module("litellm.responses.main").litellm_completion_transformation_handler,
+            "response_api_handler",
             return_value=MagicMock(),
         ),
     ]
@@ -143,8 +148,12 @@ class TestResponsesAPIPromptManagement:
         prompt_manager = MagicMock()
         cache_hook = MagicMock(spec=AnthropicCacheControlHook)
         with (
-            patch("litellm.litellm_core_utils.litellm_logging.litellm.logging_callback_manager") as callback_manager,  # test-quality-ok: isolate callback registry
-            patch("litellm.litellm_core_utils.litellm_logging.AnthropicCacheControlHook") as hook_class,  # test-quality-ok: isolate cache hook construction
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.litellm.logging_callback_manager"
+            ) as callback_manager,  # test-quality-ok: isolate callback registry
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.AnthropicCacheControlHook"
+            ) as hook_class,  # test-quality-ok: isolate cache hook construction
         ):
             callback_manager.get_custom_loggers_for_type.return_value = [prompt_manager]
             hook_class.get_custom_logger_for_anthropic_cache_control_hook.return_value = cache_hook
@@ -168,10 +177,10 @@ class TestResponsesAPIPromptManagement:
 
     def test_str_input_coerced_and_merged(self):
         """[A] str input is wrapped into a message list before being passed to the hook."""
-        template_messages: List[AllMessageValues] = [
+        template_messages: list[AllMessageValues] = [
             {"role": "system", "content": "You are a summariser."},  # type: ignore[list-item]
         ]
-        client_message: List[AllMessageValues] = [
+        client_message: list[AllMessageValues] = [
             {"role": "user", "content": "Tell me about AI."},  # type: ignore[list-item]
         ]
         expected_merged = template_messages + client_message
@@ -201,7 +210,7 @@ class TestResponsesAPIPromptManagement:
 
     def test_list_input_merged_with_template(self):
         """[B] list input is passed directly to the hook and merged with the template."""
-        template_messages: List[AllMessageValues] = [
+        template_messages: list[AllMessageValues] = [
             {"role": "system", "content": "You are helpful."},  # type: ignore[list-item]
         ]
         client_messages = [
@@ -251,7 +260,7 @@ class TestResponsesAPIPromptManagement:
 
     def test_optional_params_from_template_applied(self):
         """[E] prompt_template_optional_params (e.g. temperature) flow into the request."""
-        template_messages: List[AllMessageValues] = [
+        template_messages: list[AllMessageValues] = [
             {"role": "user", "content": "Hello"},  # type: ignore[list-item]
         ]
         # Simulate get_chat_completion_prompt returning merged optional params
@@ -286,7 +295,7 @@ class TestResponsesAPIPromptManagement:
 
     def test_model_override_from_template(self):
         """[D] Model returned by the prompt hook overrides the original request model."""
-        template_messages: List[AllMessageValues] = [
+        template_messages: list[AllMessageValues] = [
             {"role": "user", "content": "{{query}}"},  # type: ignore[list-item]
         ]
         logging_obj = _make_logging_obj(
@@ -314,7 +323,7 @@ class TestResponsesAPIPromptManagement:
         """[F] Non-message items in ResponseInputParam (e.g. function_call_output) are
         filtered out before being passed to the prompt hook, avoiding malformed merges.
         """
-        template_messages: List[AllMessageValues] = [
+        template_messages: list[AllMessageValues] = [
             {"role": "system", "content": "You are helpful."},  # type: ignore[list-item]
         ]
         mixed_input = [
@@ -406,7 +415,7 @@ class TestResponsesAPIPromptManagement:
         """[G] When the prompt template overrides the model to a different provider,
         custom_llm_provider is re-resolved so downstream routing uses the correct provider.
         """
-        template_messages: List[AllMessageValues] = [
+        template_messages: list[AllMessageValues] = [
             {"role": "user", "content": "Hi"},  # type: ignore[list-item]
         ]
         logging_obj = _make_logging_obj(
@@ -416,8 +425,9 @@ class TestResponsesAPIPromptManagement:
 
         patches = _patch_responses_dispatch()
         with (
-            patch(
-                "litellm.responses.main.litellm.get_llm_provider",
+            patch.object(
+                import_module("litellm.responses.main").litellm,
+                "get_llm_provider",
                 side_effect=_provider_by_model,
             ),
             patches[1],
@@ -450,7 +460,7 @@ class TestAsyncResponsesAPIPromptManagement:
     async def test_async_calls_async_hook_not_sync(self):
         """[H] aresponses() invokes async_get_chat_completion_prompt and the
         sync get_chat_completion_prompt is NOT called (no double-merge)."""
-        template_messages: List[AllMessageValues] = [
+        template_messages: list[AllMessageValues] = [
             {"role": "system", "content": "You are helpful."},  # type: ignore[list-item]
         ]
         logging_obj = _make_logging_obj(
@@ -479,7 +489,7 @@ class TestAsyncResponsesAPIPromptManagement:
     async def test_async_optional_params_propagated(self):
         """[I] Template-defined optional params (e.g. temperature) from the async
         hook reach the downstream handler — they are NOT silently discarded."""
-        template_messages: List[AllMessageValues] = [
+        template_messages: list[AllMessageValues] = [
             {"role": "user", "content": "Hello"},  # type: ignore[list-item]
         ]
         logging_obj = _make_logging_obj(
@@ -507,7 +517,7 @@ class TestAsyncResponsesAPIPromptManagement:
     @pytest.mark.asyncio
     async def test_async_non_message_items_filtered(self):
         """[J] Non-message items are filtered in the async path too."""
-        template_messages: List[AllMessageValues] = [
+        template_messages: list[AllMessageValues] = [
             {"role": "system", "content": "Be helpful."},  # type: ignore[list-item]
         ]
         mixed_input = [
@@ -622,9 +632,13 @@ def test_sync_prompt_swap_resolves_credentials_for_swapped_provider(monkeypatch:
 
     monkeypatch.setenv("XAI_API_KEY", "sk-xai-test")
     logging_obj = _make_logging_obj("gpt-4o-mini", [{"role": "user", "content": "hi"}])
-    with patch(  # test-quality-ok: handler boundary stub proves creds resolve for the swapped provider without network
-        "litellm.responses.main.base_llm_http_handler.response_api_handler", return_value=MagicMock()
-    ) as mock_handler:
+    with (
+        patch.object(  # test-quality-ok: handler boundary stub proves creds resolve for the swapped provider without network
+            import_module("litellm.responses.main").base_llm_http_handler,
+            "response_api_handler",
+            return_value=MagicMock(),
+        ) as mock_handler
+    ):
         litellm.responses(input="hi", model="xai/grok-4", prompt_id="p1", litellm_logging_obj=logging_obj)
 
     handler_kwargs = mock_handler.call_args.kwargs

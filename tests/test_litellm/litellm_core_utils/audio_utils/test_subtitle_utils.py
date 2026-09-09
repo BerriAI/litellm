@@ -1,5 +1,6 @@
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
     SubtitleToken,
+    _merge_tokens_into_words,
     render_subtitle_tokens_as_srt,
     render_subtitle_tokens_as_vtt,
     synthesize_subtitle_document,
@@ -23,24 +24,58 @@ class TestRenderSubtitleTokensAsSrt:
             "1\n00:00:00,000 --> 00:00:01,000\nHi.\n\n2\n00:00:01,500 --> 00:00:02,500\nHey.\n"
         )
 
-    def test_token_cap_starts_a_new_cue_after_15_tokens(self):
-        tokens = tuple(
-            SubtitleToken(text=f"{index} ", start_ms=index * 100, end_ms=index * 100 + 100) for index in range(16)
+    def test_width_budget_starts_a_new_cue_at_word_boundaries(self):
+        tokens = tuple(SubtitleToken(text="abcdefghi ", start_ms=i * 100, end_ms=i * 100 + 90) for i in range(20))
+        result = render_subtitle_tokens_as_srt(tokens)
+        texts = [cue.split("\n", 2)[2] for cue in result.strip().split("\n\n")]
+        assert len(texts) == 3
+        assert all(len(text) <= 84 for text in texts)
+        assert all(set(text.split()) == {"abcdefghi"} for text in texts)
+
+    def test_duration_cap_starts_a_new_cue_before_word_crossing_7000ms(self):
+        tokens = (
+            SubtitleToken(text="Alpha ", start_ms=0, end_ms=3400),
+            SubtitleToken(text="beta ", start_ms=3400, end_ms=6800),
+            SubtitleToken(text="gamma", start_ms=6800, end_ms=7400),
         )
         assert render_subtitle_tokens_as_srt(tokens) == (
-            "1\n00:00:00,000 --> 00:00:01,500\n0 1 2 3 4 5 6 7 8 9 10 11 12 13 14\n"
-            "\n2\n00:00:01,500 --> 00:00:01,600\n15\n"
+            "1\n00:00:00,000 --> 00:00:06,800\nAlpha beta\n\n2\n00:00:06,800 --> 00:00:07,400\ngamma\n"
         )
 
-    def test_duration_cap_starts_a_new_cue_at_5000ms(self):
+    def test_silence_gap_starts_a_new_cue(self):
         tokens = (
             SubtitleToken(text="Alpha ", start_ms=0, end_ms=400),
-            SubtitleToken(text="beta ", start_ms=2000, end_ms=2400),
-            SubtitleToken(text="gamma.", start_ms=5000, end_ms=5400),
+            SubtitleToken(text="beta", start_ms=2000, end_ms=2400),
         )
         assert render_subtitle_tokens_as_srt(tokens) == (
-            "1\n00:00:00,000 --> 00:00:02,400\nAlpha beta\n\n2\n00:00:05,000 --> 00:00:05,400\ngamma.\n"
+            "1\n00:00:00,000 --> 00:00:00,400\nAlpha\n\n2\n00:00:02,000 --> 00:00:02,400\nbeta\n"
         )
+
+    def test_sentence_final_punctuation_starts_a_new_cue(self):
+        tokens = (
+            SubtitleToken(text="Done. ", start_ms=0, end_ms=400),
+            SubtitleToken(text="Next", start_ms=500, end_ms=800),
+        )
+        assert render_subtitle_tokens_as_srt(tokens) == (
+            "1\n00:00:00,000 --> 00:00:00,400\nDone.\n\n2\n00:00:00,500 --> 00:00:00,800\nNext\n"
+        )
+
+    def test_subword_tokens_merge_into_words_before_grouping(self):
+        tokens = (
+            SubtitleToken(text=" hel", start_ms=0, end_ms=150),
+            SubtitleToken(text="lo", start_ms=150, end_ms=300),
+            SubtitleToken(text=" world.", start_ms=350, end_ms=600),
+        )
+        assert render_subtitle_tokens_as_srt(tokens) == "1\n00:00:00,000 --> 00:00:00,600\nhello world.\n"
+
+    def test_cjk_tokens_merge_and_keep_punctuation_attached(self):
+        tokens = (
+            SubtitleToken(text="編", start_ms=0, end_ms=100),
+            SubtitleToken(text="集", start_ms=100, end_ms=200),
+            SubtitleToken(text="、", start_ms=200, end_ms=250),
+            SubtitleToken(text="保存", start_ms=250, end_ms=400),
+        )
+        assert [word.text for word in _merge_tokens_into_words(tokens)] == ["編", "集、", "保存"]
 
     def test_timestampless_token_joins_the_current_cue(self):
         tokens = (

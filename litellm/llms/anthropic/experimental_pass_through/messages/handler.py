@@ -18,6 +18,7 @@ from litellm.llms.anthropic.common_utils import (
     flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_content_blocks_from_anthropic_messages,
+    strip_provider_specific_fields_from_anthropic_messages,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -97,6 +98,10 @@ def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
         return False
     supported_endpoints: Final = model_info.get("supported_endpoints")
     return isinstance(supported_endpoints, (list, tuple)) and "/v1/messages" in supported_endpoints
+
+
+def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
+    return isinstance(model_info, dict) and model_info.get("cache_control_ttl") is True
 
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -568,10 +573,39 @@ def anthropic_messages_handler(
             OpenAILikeAnthropicMessagesConfig,
         )
 
-        anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig()
+        anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig(
+            cache_control_ttl=_deployment_supports_cache_control_ttl(kwargs.get("model_info")),
+        )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        _shared_kwargs: Final = dict(
+        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
+            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=original_model,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                _is_async=is_async,
+                api_key=api_key,
+                api_base=api_base,
+                client=client,
+                custom_llm_provider=custom_llm_provider,
+                **kwargs,
+            )
+
+        # The in-gateway context_management polyfill runs inside
+        # ``async_anthropic_messages_handler`` so it can ``await`` the
+        # summarization model for ``compact_20260112``. ``context_management``
+        # is passed through as a regular kwarg.
+        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
             model=original_model,
@@ -591,16 +625,6 @@ def anthropic_messages_handler(
             client=client,
             custom_llm_provider=custom_llm_provider,
             **kwargs,
-        )
-        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
-
-        # The in-gateway context_management polyfill runs inside
-        # ``async_anthropic_messages_handler`` so it can ``await`` the
-        # summarization model for ``compact_20260112``. ``context_management``
-        # is passed through as a regular kwarg.
-        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-            **_shared_kwargs,
         )
 
     if custom_llm_provider is None:
@@ -627,7 +651,7 @@ def anthropic_messages_handler(
 
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
-        messages=messages,
+        messages=strip_provider_specific_fields_from_anthropic_messages(messages),
         anthropic_messages_provider_config=anthropic_messages_provider_config,
         anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
         _is_async=is_async,

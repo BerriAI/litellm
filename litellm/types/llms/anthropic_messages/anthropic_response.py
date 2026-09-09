@@ -5,6 +5,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockToolUse,
+    AnthropicStopDetails,
     ContextManagementResponse,
     ServerToolUsage,
 )
@@ -90,7 +91,8 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     id: str
     model: str | None  # This represents the Model type from Anthropic
     role: Literal["assistant"] | None
-    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] | None
+    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal"] | None
+    stop_details: NotRequired[ReadOnly[AnthropicStopDetails | None]]
     stop_sequence: str | None
     type: Literal["message"] | None
     usage: AnthropicUsage | None

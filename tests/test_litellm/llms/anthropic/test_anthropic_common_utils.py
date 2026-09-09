@@ -26,6 +26,30 @@ FAKE_REGULAR_KEY = "sk-ant-api03-regular-key-for-testing-123456789"
 FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
 
 
+@pytest.mark.parametrize(
+    "messages,system,expected",
+    [
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: cc_is_subagent=true;", True),
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: =junk; cc_is_subagent=true;", False),
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: cc_version=; cc_is_subagent=true;", False),
+        ([{"role": "user", "content": "hi"}], "x-anthropic-billing-header: malformed", False),
+        ([{"content": "missing role"}], "x-anthropic-billing-header: cc_is_subagent=true;", False),
+        (["not-a-mapping"], "x-anthropic-billing-header: cc_is_subagent=true;", False),
+        ([{"role": "user", "content": "hi"}], ["not-a-mapping"], False),
+        ([{"role": "user", "content": "hi"}], None, False),
+    ],
+)
+def test_is_claude_code_one_shot_subagent_request(messages, system, expected):
+    from litellm.llms.anthropic.common_utils import is_claude_code_one_shot_subagent_request
+
+    assert is_claude_code_one_shot_subagent_request(
+        messages=messages,
+        system=system,
+        tools=None,
+        user_agent="claude-cli/2.1.263 (external, cli)",
+    ) is expected
+
+
 class TestOptionallyHandleAnthropicOAuth:
     """Tests for optionally_handle_anthropic_oauth function."""
 
@@ -1363,6 +1387,23 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert is_empty_thinking_block({"type": "redacted_thinking", "data": "opaque"}) is False
         assert is_empty_thinking_block({"type": "text", "text": ""}) is False
         assert is_empty_thinking_block("not a dict") is False
+
+    def test_is_empty_unsigned_thinking_block(self):
+        """Emit-side predicate: a signature-only block must be kept (Bedrock
+        Converse adaptive thinking emits empty text with only a signature, and
+        the client needs it to replay reasoning in tool-use turns); only an
+        empty block with nothing to preserve is droppable."""
+        from litellm.llms.anthropic.common_utils import is_empty_unsigned_thinking_block
+
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": ""}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": " \n\t "}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking"}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": "", "signature": ""}) is True
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": "", "signature": "sig_abc"}) is False
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": " ", "signature": "sig_abc"}) is False
+        assert is_empty_unsigned_thinking_block({"type": "thinking", "thinking": "plan"}) is False
+        assert is_empty_unsigned_thinking_block({"type": "redacted_thinking", "data": "opaque"}) is False
+        assert is_empty_unsigned_thinking_block("not a dict") is False
 
     def test_strip_empty_content_blocks_drops_empty_thinking_blocks(self):
         """LIT-6357 ingestion half: an assistant tool-loop turn carrying an
