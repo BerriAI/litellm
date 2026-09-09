@@ -1645,7 +1645,7 @@ class TestMissingChoicesGuard:
         assert result.usage.prompt_tokens == 10
 
     def test_convert_to_model_response_object_null_choices_raises_api_error(self):
-        """choices=None raises APIError."""
+        """choices=None raises APIError that names the type instead of claiming the key is missing."""
         from litellm.exceptions import APIError
 
         response_object = {
@@ -1661,7 +1661,7 @@ class TestMissingChoicesGuard:
                 model_response_object=ModelResponse(),
             )
 
-        assert "no 'choices'" in exc_info.value.message
+        assert "'choices' that is not a list (NoneType)" in exc_info.value.message
 
     def test_convert_to_streaming_response_no_choices_raises_api_error(self):
         """Missing choices in streaming cache-hit path raises APIError."""
