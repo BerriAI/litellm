@@ -3,7 +3,7 @@ import json
 import re
 import time
 import traceback
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from typing import Final, Literal, cast
 
 import litellm
@@ -179,7 +179,7 @@ async def convert_to_streaming_response_async(
 
     choice_list: Final[list[StreamingChoices]] = []
 
-    if "choices" not in response_object or not isinstance(response_object["choices"], Iterable):
+    if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
         raise APIError(
@@ -287,7 +287,7 @@ def convert_to_streaming_response(
     model_response_object: Final = ModelResponseStream()
     choice_list: Final[list[StreamingChoices]] = []
 
-    if "choices" not in response_object or not isinstance(response_object["choices"], Iterable):
+    if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
         raise APIError(
@@ -623,7 +623,7 @@ def convert_to_model_response_object(
                 return convert_to_streaming_response(response_object=response_object)
             choice_list: Final[list[Choices]] = []
 
-            if "choices" not in response_object or not isinstance(response_object["choices"], Iterable):
+            if not isinstance(response_object.get("choices"), list):
                 from litellm.exceptions import APIError
 
                 raise APIError(

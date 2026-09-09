@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
@@ -167,3 +169,31 @@ def test_convert_missing_choices_raises_api_error() -> None:
         )
     assert "no 'choices'" in str(exc_info.value)
 
+
+@pytest.mark.parametrize("choices", [{}, "", None, 0])
+@pytest.mark.asyncio
+async def test_convert_non_list_choices_raises_api_error(choices: object) -> None:
+    from litellm.exceptions import APIError
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_streaming_response,
+        convert_to_streaming_response_async,
+    )
+
+    resp: Final = {
+        "id": "x",
+        "created": 1,
+        "model": "gemini-3.5-flash",
+        "object": "chat.completion",
+        "choices": choices,
+    }
+    with pytest.raises(APIError, match="no 'choices'"):
+        convert_to_model_response_object(
+            response_object=resp,
+            model_response_object=ModelResponse(),
+            response_type="completion",
+        )
+    with pytest.raises(APIError, match="no 'choices'"):
+        list(convert_to_streaming_response(response_object=resp))
+    with pytest.raises(APIError, match="no 'choices'"):
+        async for _ in convert_to_streaming_response_async(response_object=resp):
+            pass
