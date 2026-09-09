@@ -1130,10 +1130,6 @@ async def test_combined_prefix_reflects_in_s3_object_key():
 
 
 def test_s3_object_key_sanitizes_slashes_and_colons_in_file_name():
-    """Response ids containing slashes (e.g. bedrock batch job ARNs) must not
-    create nested S3 folders, and colons must not survive into the filename:
-    Hadoop-style consumers reject a colon in the first segment of a relative
-    URI path (https://github.com/BerriAI/litellm/issues/40234)."""
     from litellm.integrations.s3 import get_s3_object_key
 
     start_time = datetime(2026, 2, 11, 0, 35, 18, 391582)
@@ -1160,8 +1156,6 @@ def test_s3_object_key_sanitizes_slashes_and_colons_in_file_name():
     ],
 )
 def test_s3_object_key_has_no_colon_for_cloud_uri_file_ids(response_id: str):
-    """Bedrock and Vertex batch file uploads use s3:// and gs:// URIs as
-    response ids; the generated log filename must be colon-free."""
     from litellm.integrations.s3 import get_s3_object_key
 
     key = get_s3_object_key(
