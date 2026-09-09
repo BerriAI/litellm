@@ -6175,11 +6175,6 @@ async def test_success_hook_leaves_stash_untouched_for_non_batch_responses():
 
 @pytest.mark.asyncio
 async def test_post_call_success_hook_attaches_ratelimit_headers_to_dict_response():
-    """
-    Non-streaming /v1/messages responses are plain dicts carrying the router's
-    ``_hidden_params`` as a key, not an attribute, so the descriptor headers used to
-    be dropped for that route.
-    """
     from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitResponse, RateLimitStatus
 
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
@@ -6217,10 +6212,6 @@ async def test_post_call_success_hook_attaches_ratelimit_headers_to_dict_respons
 
 @pytest.mark.asyncio
 async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
-    """
-    Passthrough routes hand the hook the raw provider JSON body and serialize whatever
-    comes back, so a dict without ``_hidden_params`` must not have one injected.
-    """
     from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitResponse, RateLimitStatus
 
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))

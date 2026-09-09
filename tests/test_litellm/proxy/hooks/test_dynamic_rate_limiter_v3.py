@@ -1865,11 +1865,6 @@ async def test_tpm_only_model_enforces_priority_and_model_capacity(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_post_call_success_hook_attaches_priority_headers_to_dict_response():
-    """
-    Non-streaming /v1/messages hands the success hook a plain dict, not a ModelResponse.
-    The router has already stamped ``_hidden_params`` on it, so both the v3 descriptor
-    headers and the priority headers must land next to the router's headers there.
-    """
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitResponse,
         RateLimitStatus,
@@ -1913,10 +1908,6 @@ async def test_post_call_success_hook_attaches_priority_headers_to_dict_response
 
 @pytest.mark.asyncio
 async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
-    """
-    Passthrough routes hand the hook the raw provider JSON body and serialize whatever
-    comes back, so a dict without ``_hidden_params`` must not have one injected.
-    """
     handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
     response = {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
 
