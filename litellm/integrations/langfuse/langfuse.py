@@ -70,7 +70,7 @@ def _widened_items(mapping: Mapping[str, object]) -> Iterable[tuple[object, obje
 
 
 def _is_session_header_trace(trace_id: object, session_id: object, proxy_server_request: object) -> bool:
-    if not isinstance(session_id, str) or trace_id != session_id:
+    if not isinstance(trace_id, str) or not isinstance(session_id, str):
         return False
     request: Final = _object_mapping(proxy_server_request)
     raw_headers: Final = _object_mapping(request.get("headers")) if request is not None else None
@@ -83,14 +83,16 @@ def _is_session_header_trace(trace_id: object, session_id: object, proxy_server_
         return False
     if headers.get("langfuse_trace_id") is not None:
         return False
-    if headers.get("x-litellm-session-id") == session_id:
+    if trace_id != session_id and headers.get("langfuse_session_id") != session_id:
+        return False
+    if headers.get("x-litellm-session-id") == trace_id:
         return True
-    if re.fullmatch(r"[a-zA-Z0-9_\-]{8,}", session_id) is None:
+    if re.fullmatch(r"[a-zA-Z0-9_\-]{8,}", trace_id) is None:
         return False
     user_agent: Final = headers.get("user-agent")
     codex: Final = isinstance(user_agent, str) and re.match(r"^codex[-_ /]", user_agent, re.IGNORECASE) is not None
     return any(
-        value == session_id
+        value == trace_id
         and (
             key == "x-session-id"
             or re.fullmatch(r"x-.+-session-id", key) is not None

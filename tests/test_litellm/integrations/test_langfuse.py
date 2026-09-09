@@ -1374,6 +1374,62 @@ def _emit(logger: LangFuseLogger, *, metadata=None, headers=None):
             {},
             "existing-trace",
         ),
+        (
+            {"x-litellm-session-id": "session-7125", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {"x-litellm-session-id": "short", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {"X-Claude-Code-Session-Id": "session-7125", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {"x-session-id": "session-7125", "langfuse_session_id": "custom-session"},
+            {},
+            "call",
+        ),
+        (
+            {
+                "session-id": "session-7125",
+                "user-agent": "codex_cli_rs/1.0",
+                "langfuse_session_id": "custom-session",
+            },
+            {},
+            "call",
+        ),
+        (
+            {
+                "x-litellm-session-id": "session-7125",
+                "langfuse_session_id": "custom-session",
+                "x-litellm-trace-id": "explicit-trace",
+            },
+            {},
+            "explicit-trace",
+        ),
+        (
+            {
+                "x-litellm-session-id": "session-7125",
+                "langfuse_session_id": "custom-session",
+                "langfuse_trace_id": "explicit-trace",
+            },
+            {},
+            "explicit-trace",
+        ),
+        (
+            {
+                "x-litellm-session-id": "session-7125",
+                "langfuse_session_id": "custom-session",
+                "langfuse_existing_trace_id": "existing-trace",
+            },
+            {},
+            "existing-trace",
+        ),
         ({}, {"trace_id": "session-7125", "session_id": "session-7125"}, "session-7125"),
         ({}, {"trace_id": "explicit-trace", "session_id": "session-7125"}, "explicit-trace"),
         (
@@ -1443,7 +1499,7 @@ def test_session_header_trace_provenance(headers, metadata, expected_id, level):
         assert trace_params["id"] == (call_id if expected_id == "call" else expected_id)
         assert result["trace_id"] == trace_params["id"]
         if expected_id != "existing-trace":
-            assert trace_params["session_id"] == original_metadata.get("session_id")
+            assert trace_params["session_id"] == headers.get("langfuse_session_id", original_metadata.get("session_id"))
         steering = {key[len("langfuse_") :]: value for key, value in headers.items() if key.startswith("langfuse_")}
         assert data["metadata"] == {**original_metadata, **steering}
 
