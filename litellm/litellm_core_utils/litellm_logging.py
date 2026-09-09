@@ -203,6 +203,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+    from litellm.litellm_core_utils.llm_cost_calc.utils import BilledTokenRates
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
@@ -590,6 +591,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
+        self.billed_token_rates: BilledTokenRates | None = None
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -1587,6 +1589,7 @@ class Logging(LiteLLMLoggingBaseClass):
         service_tier: str | None = None,
         data_residency: str | None = None,
         vertex_location: str | None = None,
+        billed_token_rates: "BilledTokenRates | None" = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1606,8 +1609,10 @@ class Logging(LiteLLMLoggingBaseClass):
             service_tier: Tier the costs above were priced on, already resolved
             data_residency: Region uplift the costs above were priced on, already resolved
             vertex_location: Vertex AI location the costs above were priced on, already resolved
+            billed_token_rates: Per-token rates the costs above were billed at, already resolved
         """
 
+        self.billed_token_rates = billed_token_rates
         self.cost_breakdown = CostBreakdown(
             input_cost=input_cost,
             output_cost=output_cost,
