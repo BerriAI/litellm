@@ -128,13 +128,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ github.job }}-
 
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked --exclude litellm-rust-tests
         working-directory: litellm-rust
 
       - run: cargo test -p litellm-core --features bedrock-auth --locked
         working-directory: litellm-rust
 
       - run: cargo test -p litellm-ai-gateway --features server --locked
+        working-directory: litellm-rust
+
+      - name: Set up venv with pinned maturin for parity tests
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python maturin==1.15.0
+
+      - run: cargo test -p litellm-rust-tests --test provider_parity --locked
         working-directory: litellm-rust
 
       - run: uv build --wheel --out-dir dist
