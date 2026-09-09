@@ -3,9 +3,8 @@ Dynamic configuration class generator for JSON-based providers.
 """
 
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload
+from typing import Any, Final, Literal, Protocol, overload, runtime_checkable
 
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
@@ -15,6 +14,20 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from .json_loader import SimpleProviderConfig
+
+
+@runtime_checkable
+class BaseModelAwareConfig(Protocol):
+    supports_base_model_hint: bool
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+        base_model: str | None = None,
+    ) -> dict: ...
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -89,37 +102,31 @@ def create_config_class(provider: SimpleProviderConfig):
 
             return api_base
 
-        def get_supported_openai_params(self, model: str) -> list:
-            """Get supported OpenAI params, excluding tool-related params for models
-            that don't support function calling."""
+        def _get_supported_openai_params_for_model(self, model: str) -> list:
             from litellm.utils import supports_function_calling, supports_reasoning
 
-            supported_params: Final = super().get_supported_openai_params(model=model)
+            tool_params: Final = ("tools", "tool_choice", "function_call", "functions", "parallel_tool_calls")
+            params_without_tools: Final = tuple(
+                param for param in super().get_supported_openai_params(model=model) if param not in tool_params
+            )
+            params_with_tools: Final = tuple(dict.fromkeys((*params_without_tools, *tool_params)))
+            supported_params: Final = (
+                params_with_tools
+                if supports_function_calling(model=model, custom_llm_provider=provider.slug)
+                else params_without_tools
+            )
+            if (
+                supports_reasoning(model=model, custom_llm_provider=provider.slug)
+                and "reasoning_effort" not in supported_params
+            ):
+                return [*supported_params, "reasoning_effort"]
+            return list(supported_params)
 
-            _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
-
-            if not _supports_fc:
-                tool_params: Final = [
-                    "tools",
-                    "tool_choice",
-                    "function_call",
-                    "functions",
-                    "parallel_tool_calls",
-                ]
-                for param in tool_params:
-                    if param in supported_params:
-                        supported_params.remove(param)
-                verbose_logger.debug(
-                    "Model %s on provider %s does not support function calling — removed tool-related params from supported params.",
-                    model,
-                    provider.slug,
-                )
-
-            _supports_reasoning: Final = supports_reasoning(model=model, custom_llm_provider=provider.slug)
-            if _supports_reasoning and "reasoning_effort" not in supported_params:
-                supported_params.append("reasoning_effort")
-
-            return supported_params
+        def get_supported_openai_params(self, model: str, base_model: str | None = None) -> list:
+            supported_params: Final = self._get_supported_openai_params_for_model(model)
+            if not base_model or base_model == model:
+                return supported_params
+            return list(dict.fromkeys([*supported_params, *self._get_supported_openai_params_for_model(base_model)]))
 
         def map_openai_params(
             self,
@@ -127,10 +134,11 @@ def create_config_class(provider: SimpleProviderConfig):
             optional_params: dict,
             model: str,
             drop_params: bool,
+            base_model: str | None = None,
         ) -> dict:
             """Apply parameter mappings and constraints"""
 
-            supported_params: Final = self.get_supported_openai_params(model)
+            supported_params: Final = self.get_supported_openai_params(model, base_model=base_model)
 
             # Apply supported params
             for param, value in non_default_params.items():
@@ -167,6 +175,7 @@ def create_config_class(provider: SimpleProviderConfig):
         def custom_llm_provider(self) -> str | None:
             return provider.slug
 
+    JSONProviderConfig.supports_base_model_hint = True
     return JSONProviderConfig
 
 

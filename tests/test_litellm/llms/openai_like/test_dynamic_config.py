@@ -19,6 +19,71 @@ def _isolate_generated_class_cache():
     dynamic_config._responses_config_cache.clear()
 
 
+class TestBaseModelParamSupport:
+    TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    def test_generated_chat_config_uses_base_model_for_supported_params(self, local_model_cost_map):
+        config = dynamic_config.create_config_class(_provider("publicai", base_class="openai_gpt"))()
+
+        endpoint_params = config.get_supported_openai_params(model="ep-publicai")
+        assert "tools" not in endpoint_params
+        assert "reasoning_effort" not in endpoint_params
+
+        instruct_params = config.get_supported_openai_params(
+            model="ep-publicai",
+            base_model="publicai/allenai/Olmo-3-7B-Instruct",
+        )
+        assert "tools" in instruct_params
+        assert "reasoning_effort" not in instruct_params
+
+        thinking_params = config.get_supported_openai_params(
+            model="ep-publicai",
+            base_model="publicai/allenai/Olmo-3-7B-Think",
+        )
+        assert "tools" in thinking_params
+        assert "reasoning_effort" in thinking_params
+
+    def test_get_optional_params_passes_base_model_to_json_provider(self, local_model_cost_map):
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="ep-publicai",
+            custom_llm_provider="publicai",
+            tools=self.TOOLS,
+            reasoning_effort="high",
+            base_model="publicai/allenai/Olmo-3-7B-Think",
+            drop_params=True,
+        )
+
+        assert optional_params["tools"] == self.TOOLS
+        assert optional_params["reasoning_effort"] == "high"
+        assert "base_model" not in optional_params
+
+    def test_non_json_provider_does_not_receive_base_model_kwarg(self):
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="a2a/test-agent",
+            custom_llm_provider="a2a",
+            tools=self.TOOLS,
+            base_model="publicai/allenai/Olmo-3-7B-Think",
+            drop_params=True,
+        )
+
+        assert "base_model" not in optional_params
+
+
 class TestClassCaching:
     def test_same_slug_returns_the_identical_class_object(self):
         provider = _provider("cache_same_slug")
