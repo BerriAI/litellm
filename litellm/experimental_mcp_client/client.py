@@ -18,6 +18,7 @@ from mcp import ClientSession, McpError, ReadResourceResult, Resource, StdioServ
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.shared.message import SessionMessage
+from mcp.shared.session import RequestResponder
 from typing_extensions import Unpack
 
 _TransportStreams: TypeAlias = tuple[
@@ -56,10 +57,13 @@ def missing_streamable_http_client_error() -> ImportError:
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
+    ClientResult,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
+    ServerNotification,
+    ServerRequest,
     TextContent,
 )
 from mcp.types import Tool as MCPTool
@@ -442,6 +446,18 @@ class MCPClient:
         in_flight_error: BaseException | None = None
         try:
             read_stream, write_stream = transport[0], transport[1]
+            stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
+
+            async def receive_message(
+                message: RequestResponder[ServerRequest, ClientResult] | ServerNotification | Exception,
+            ) -> None:
+                if not isinstance(message, ValueError):
+                    return
+                if not stream_error.done():
+                    stream_error.set_result(message)
+                # The SDK closes pending requests when its message handler raises.
+                raise RuntimeError("MCP response stream failed")
+
             # Build session kwargs with optional callbacks
             session_kwargs: Final[dict[str, Any]] = {}
             if self._sampling_callback is not None:
@@ -456,6 +472,7 @@ class MCPClient:
                 read_stream,
                 write_stream,
                 read_timeout_seconds=timedelta(seconds=self.timeout),
+                message_handler=receive_message if self.transport_type == MCPTransport.http else None,
                 **session_kwargs,
             )
             session: Final = await session_ctx.__aenter__()
@@ -467,6 +484,10 @@ class MCPClient:
                     if isinstance(ins, str) and ins.strip():
                         self._last_initialize_instructions = ins.strip()
                 return await operation(session)
+            except McpError:
+                if stream_error.done():
+                    raise stream_error.result()
+                raise
             finally:
                 try:
                     await session_ctx.__aexit__(None, None, None)

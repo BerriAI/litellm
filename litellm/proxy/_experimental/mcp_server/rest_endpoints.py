@@ -3,12 +3,15 @@ import importlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from traceback import walk_tb
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
+from uuid import uuid4
 
 import anyio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import ValidationError
 from starlette.datastructures import Headers
 
 from litellm._logging import verbose_logger
@@ -30,6 +33,8 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     list_fault_http_status,
     outcome_wire_value,
 )
+from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
+from litellm.proxy._experimental.mcp_server.oauth_utils import _redact_mcp_resource_url
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     acting_user_auth,
     build_effective_auth_contexts,
@@ -78,11 +83,38 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
 
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
+    reference: Final = uuid4().hex
+    verbose_logger.error(
+        "MCP connection test failed (reference=%s): %s",
+        reference,
+        tuple(
+            (
+                type(cause).__name__,
+                tuple(
+                    (frame.f_code.co_filename, lineno, frame.f_code.co_name)
+                    for frame, lineno in walk_tb(cause.__traceback__)
+                ),
+            )
+            for cause in iter_exception_tree(exc)
+        ),
+    )
+    return next(
+        (
+            message
+            for cause in iter_exception_tree(exc)
+            if (message := _known_connection_error_message(cause, url, timeout_seconds)) is not None
+        ),
+        "An unexpected error occurred while testing the MCP connection. "
+        f"Retry; if it persists, share reference {reference} with your gateway administrator.",
+    )
+
+
+def _known_connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str | None:
     if isinstance(exc, MCPServerURLCredentialsError):
         return str(exc.detail)
     if isinstance(exc, TimeoutError):
         return (
-            f"Failed to connect to MCP server: no response from {url or 'the server'} "
+            f"Failed to connect to MCP server: no response from {_redact_mcp_resource_url(url) or 'the server'} "
             f"within {timeout_seconds:.0f}s. Check that the LiteLLM proxy can reach this URL "
             "from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
         )
@@ -99,10 +131,32 @@ def _connection_error_message(exc: BaseException, url: str | None, timeout_secon
         return "Failed to connect to MCP server: the connection timed out."
     if isinstance(exc, httpx.HTTPStatusError):
         return f"Failed to connect to MCP server: it returned HTTP {exc.response.status_code}."
-    return "Failed to connect to MCP server. Check proxy logs for details."
+    if isinstance(exc, ValueError) and str(exc).startswith("Unexpected content type:"):
+        return (
+            "Failed to connect to MCP server: the endpoint returned an unsupported content type. "
+            "Check that the URL is an MCP endpoint, not a web page, and matches the selected transport."
+        )
+    if isinstance(exc, ValidationError) and exc.title in ("JSONRPCMessage", "InitializeResult", "ListToolsResult"):
+        return (
+            "Failed to connect to MCP server: the endpoint returned invalid JSON or an invalid MCP response. "
+            "Check the MCP endpoint URL and the server's protocol implementation."
+        )
+    if MCP_AVAILABLE and isinstance(exc, McpError):
+        if exc.error.code == 32600 and exc.error.message == "Session terminated":
+            return (
+                "Failed to connect to MCP server: the MCP session was terminated. "
+                "Check that the URL points to an MCP endpoint and matches the selected transport, "
+                "then retry to start a new session."
+            )
+        return (
+            f"Failed to connect to MCP server: the MCP request failed (JSON-RPC code {exc.error.code}). "
+            "Check that the endpoint supports MCP initialization and tool listing, and check the upstream server logs."
+        )
+    return None
 
 
 if MCP_AVAILABLE:
+    from mcp.shared.exceptions import McpError
     from mcp.types import Tool as MCPTool
 
     from litellm.experimental_mcp_client.client import MCPClient
@@ -1342,7 +1396,6 @@ if MCP_AVAILABLE:
         except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
         except BaseException as e:
-            verbose_logger.error("Error in MCP operation: %s", e, exc_info=True)
             return {
                 "status": "error",
                 "error": True,
