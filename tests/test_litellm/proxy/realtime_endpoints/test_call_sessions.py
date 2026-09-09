@@ -106,7 +106,8 @@ async def test_realtime_endpoint_rejects_untrusted_call_ids(monkeypatch, call_id
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("multipart", [False, True])
-async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch, multipart):
+@pytest.mark.parametrize("credential", ["authorization", "api-key", "subprotocol"])
+async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch, multipart, credential):
     import json
     from unittest.mock import AsyncMock
 
@@ -147,6 +148,11 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
 
         async def common_processing_pre_call_logic(self, **kwargs):
             assert kwargs["user_api_key_dict"] is auth
+            if kwargs["route_type"] == "_arealtime":
+                assert self.data["model"] == "voice-alias"
+                assert self.data["guardrails"] == ["query-guardrail"]
+                assert await kwargs["request"].json() == {"model": "voice-alias"}
+                return {**self.data, "metadata": {"guardrails": ["policy-guardrail"], "user_api_key_team_id": "team"}}, None
             return self.data, None
 
     monkeypatch.setattr(common_request_processing, "ProxyBaseLLMRequestProcessing", Processor)
@@ -184,11 +190,20 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
     async def receive_ws():
         return {"type": "websocket.connect"}
 
-    websocket = WebSocket({"type": "websocket", "headers": [(b"authorization", b"Bearer owner")]}, receive_ws, send)
+    credential_headers = {
+        "authorization": [(b"authorization", b"Bearer owner")],
+        "api-key": [(b"api-key", b"owner")],
+        "subprotocol": [(b"sec-websocket-protocol", b"realtime, openai-insecure-api-key.owner")],
+    }
+    websocket = WebSocket({"type": "websocket", "path": "/v1/live/opaque",
+        "query_string": b"guardrails=query-guardrail", "headers": credential_headers[credential]}, receive_ws, send)
     forward = AsyncMock()
     monkeypatch.setattr(litellm, "_arealtime", forward)
     await codex.codex_realtime_sideband(websocket, token, auth)
     assert sent[0]["type"] == "websocket.accept"
+    if credential == "subprotocol":
+        assert sent[0]["subprotocol"] == "realtime"
+    assert forward.await_args.kwargs["metadata"] == {"guardrails": ["policy-guardrail"], "user_api_key_team_id": "team"}
     assert forward.await_args.kwargs["chatgpt_realtime_call_id"] == "rtc_private"
     assert forward.await_args.kwargs["model"] == "chatgpt/gpt-live-1-codex"
     assert authorize.await_count == 2
@@ -211,3 +226,43 @@ async def test_invalid_offers_fail_before_authentication(monkeypatch, body):
         await codex.create_codex_realtime_call(request)
     assert error.value.status_code == 400
     authenticate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sideband_pre_call_block_prevents_upstream_connection(monkeypatch):
+    from unittest.mock import AsyncMock
+    from fastapi import WebSocket
+    import litellm
+    from litellm.proxy import common_request_processing
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.realtime_endpoints import call_sessions as codex
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-salt-for-codex-realtime")
+    call = CodexRealtimeCall(call_id="rtc_test", model="gpt-live-1-codex", alias="voice",
+        owner=hashlib.sha256(b"Bearer owner").hexdigest(), expires_at=time.time()+300)
+    token = encode_call(call)
+    sent = []
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        sent.append(message)
+
+    class BlockingProcessor:
+        def __init__(self, data):
+            assert data["model"] == "voice"
+
+        async def common_processing_pre_call_logic(self, **kwargs):
+            assert kwargs["route_type"] == "_arealtime"
+            raise HTTPException(403, "Policy blocked this call")
+
+    forward = AsyncMock()
+    monkeypatch.setattr(litellm, "_arealtime", forward)
+    monkeypatch.setattr(codex, "can_key_call_resolved_model", AsyncMock())
+    monkeypatch.setattr(common_request_processing, "ProxyBaseLLMRequestProcessing", BlockingProcessor)
+    websocket = WebSocket({"type": "websocket", "path": "/v1/live/opaque", "query_string": b"",
+        "headers": [(b"authorization", b"Bearer owner")]}, receive, send)
+    await codex.codex_realtime_sideband(websocket, token, UserAPIKeyAuth())
+    forward.assert_not_called()
+    assert sent == [{"type": "websocket.close", "code": 1008, "reason": "Realtime pre-call rejected"}]
