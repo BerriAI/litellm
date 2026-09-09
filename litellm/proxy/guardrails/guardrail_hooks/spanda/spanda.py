@@ -12,7 +12,7 @@ import asyncio
 import difflib
 import re
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, ClassVar, Final, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -74,6 +74,8 @@ def _compute_fallback_grounding(response: str, context: str) -> float:
 
 
 class SpandaGuardrail(CustomGuardrail):
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
     def __init__(
         self,
         api_base: str | None = None,
@@ -93,8 +95,8 @@ class SpandaGuardrail(CustomGuardrail):
             **kwargs,  # kwargs-ok: forwarded to CustomGuardrail.__init__
         )
         self.api_base: Final = api_base
-        self.uncertainty_threshold: Final = float(uncertainty_threshold or 0.35)
-        self.grounding_threshold: Final = float(grounding_threshold or 0.15)
+        self.uncertainty_threshold: Final = float(0.35 if uncertainty_threshold is None else uncertainty_threshold)
+        self.grounding_threshold: Final = float(0.15 if grounding_threshold is None else grounding_threshold)
         self.block_mode: Final = bool(block_mode)
 
         guardrail_inst = None  # rebind-ok: conditional initialization

@@ -187,3 +187,20 @@ async def test_async_post_call_success_hook_blocking():
     response = SimpleNamespace(choices=[c1, c2])
     with pytest.raises(GuardrailRaisedException):
         await g.async_post_call_success_hook(data, None, response)
+
+
+def test_zero_threshold_preservation():
+    lp = LitellmParams(
+        guardrail="spanda",
+        mode="post_call",
+        uncertainty_threshold=0.0,
+        grounding_threshold=0.0,
+        block_mode=True,
+    )
+    cb = initialize_guardrail(lp, {"guardrail_name": "zero-tolerance-spanda"})
+    assert cb.uncertainty_threshold == 0.0
+    assert cb.grounding_threshold == 0.0
+
+
+def test_use_native_lifecycle_hooks_flag():
+    assert SpandaGuardrail.use_native_lifecycle_hooks is True
