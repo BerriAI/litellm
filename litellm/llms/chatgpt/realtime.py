@@ -38,7 +38,7 @@ def realtime_headers(
 def realtime_endpoint(model: str) -> str:
     try:
         model_info: Final = get_model_info(model, custom_llm_provider="chatgpt")
-    except Exception:
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
         return "realtime"
     return "live" if "/v1/live" in (model_info.get("supported_endpoints") or ()) else "realtime"
 
