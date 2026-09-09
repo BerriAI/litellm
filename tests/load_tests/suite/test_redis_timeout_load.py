@@ -1,4 +1,4 @@
-"""Load test for the failure path: retries against a failing upstream while Redis is failing.
+"""Load test: retries against a failing upstream while every Redis command times out.
 
 Reproduces the v1.100.0 OOM (LIT-6780). Every request fails its primary deployment, retries,
 falls back to a healthy deployment and succeeds, so each one leaves retry breadcrumbs in its
@@ -8,9 +8,9 @@ except block turns the whole request metadata into the body of a failed-tracking
 v1.100.0 that body roughly doubled with every request in the process. This test asserts it
 stays flat.
 
-Run individually; it measures process RSS. Per-request numbers are logged at INFO:
+Part of the load test suite (see conftest.py in this directory). Per-request numbers are logged at INFO:
 
-    uv run pytest tests/load_tests/test_failing_dependencies_load.py -v -o log_cli=true -o log_cli_level=INFO
+    make test-load
 """
 
 import asyncio
@@ -189,7 +189,7 @@ async def _drive(router: Router, recorder: AlertRecorder) -> AsyncIterator[Reque
 
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
-async def test_failing_upstream_with_failing_redis_stays_flat(
+async def test_retries_under_redis_timeouts_stay_flat(
     alert_recorder: AlertRecorder, failing_redis_cache: FaultInjectingRedisCache
 ) -> None:
     router: Final = _retrying_router_with_fallback()

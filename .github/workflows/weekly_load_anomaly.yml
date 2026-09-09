@@ -84,7 +84,7 @@ jobs:
         if: failure()
         run: tail -n 300 proxy.log
 
-  failure-path-load:
+  load-suite:
     if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -117,9 +117,9 @@ jobs:
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
-      - name: Run the failure-path load test
+      - name: Run the load test suite
         env:
           LITELLM_LOG: WARNING
         run: |
-          uv run --no-sync pytest tests/load_tests/test_failing_dependencies_load.py -v --tb=short -rA \
+          uv run --no-sync pytest tests/load_tests/suite -v --tb=short -rA \
             -o log_cli=true -o log_cli_level=INFO

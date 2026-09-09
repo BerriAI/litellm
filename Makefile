@@ -3,7 +3,7 @@
 
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
-	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
+	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm test-load \
 	test-rust-extension \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
@@ -42,6 +42,7 @@ help:
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
+	@echo "  make test-load          - Run the hermetic load test suite (tests/load_tests/suite)"
 	@echo "  make test-unit          - Run unit tests (tests/test_litellm)"
 	@echo "  make test-unit-llms     - Run LLM provider tests (~225 files)"
 	@echo "  make test-unit-proxy-guardrails - Run proxy guardrails+mgmt tests (~51 files)"
@@ -332,6 +333,10 @@ test-unit-other: install-test-deps
 
 test-unit-root: install-test-deps
 	$(UV_RUN) pytest tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
+
+# Load test suite: hermetic, runnable together (see tests/load_tests/suite/conftest.py)
+test-load: install-test-deps
+	$(UV_RUN) pytest tests/load_tests/suite --tb=short -vv -o log_cli=true -o log_cli_level=INFO
 
 # Proxy unit tests (tests/proxy_unit_tests split alphabetically)
 test-proxy-unit-a: install-test-deps
