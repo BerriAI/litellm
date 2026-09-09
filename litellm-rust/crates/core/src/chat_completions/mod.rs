@@ -58,4 +58,5 @@ pub fn chat_completions_decline_reason(
 }
 
 #[cfg(test)]
+#[path = "../../tests/chat_completions/tests.rs"]
 mod tests;

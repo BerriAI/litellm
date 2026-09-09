@@ -18,4 +18,5 @@ pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Resu
 }
 
 #[cfg(all(test, feature = "bedrock-auth"))]
+#[path = "../../tests/audio_transcription/tests.rs"]
 mod tests;
