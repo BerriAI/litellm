@@ -878,8 +878,8 @@ async def _run_toolset_update(payload: dict) -> dict:
     mock_prisma = _mock_toolset_prisma()
     await update_mcp_toolset(mock_prisma, UpdateMCPToolsetRequest.model_validate(payload), "test-user")
     written = dict(mock_prisma.db.litellm_mcptoolsettable.update.call_args[1]["data"])
-    assert written.pop("updated_by") == "test-user"
-    return written
+    assert written["updated_by"] == "test-user"
+    return {name: value for name, value in written.items() if name != "updated_by"}
 
 
 @pytest.mark.asyncio
