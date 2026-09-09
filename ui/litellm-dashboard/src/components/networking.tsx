@@ -140,7 +140,7 @@ const resolveDefaultBase = (fallback: string | null): string | null =>
 const defaultProxyBaseUrl = resolveDefaultBase(null);
 const WORKER_URL_KEY = "litellm_worker_url";
 // If a worker URL is in localStorage, use it as the initial proxyBaseUrl.
-// This survives page navigation and the sessionStorage.clear() in user_dashboard.
+// This survives page navigation.
 const _rawWorkerUrl = typeof window !== "undefined" ? window.localStorage.getItem(WORKER_URL_KEY) : null;
 // Validate stored worker URL — reject non-HTTP schemes to prevent exfiltration
 const _initialWorkerUrl = (() => {
@@ -195,10 +195,9 @@ export const getProxyBaseUrl = (): string => {
 
 /**
  * Switch API calls to point at a worker (or back to the control plane).
- * Persists to localStorage so it survives page navigation and the
- * sessionStorage.clear() in user_dashboard. Also updates the module-level
- * proxyBaseUrl so in-flight code in this JS execution sees the new value
- * immediately.
+ * Persists to localStorage so it survives page navigation. Also updates the
+ * module-level proxyBaseUrl so in-flight code in this JS execution sees the
+ * new value immediately.
  */
 function isValidHttpUrl(url: string): boolean {
   try {
@@ -4919,6 +4918,24 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
   }
 };
 
+export interface ConnectFlowStatus {
+  state: "unscoped" | "interactive" | "m2m" | "stale";
+  client_origin: string;
+  server_id: string | null;
+  server_name: string | null;
+  connected: boolean | null;
+}
+
+/**
+ * What the gateway says about one in-flight connect flow, read from the sealed HttpOnly
+ * flow cookie rather than from the address bar (LIT-7075): the client asking, the server
+ * the flow is scoped to, and whether that server's vendor OAuth is already done. Sent with
+ * no access token; the flow and session cookies are the credential, exactly as they are for
+ * the finish form this page posts.
+ */
+export const fetchConnectFlow = async (flowHandle: string): Promise<ConnectFlowStatus> =>
+  apiClient.get(`/authorize/flow`, { query: { flow: flowHandle }, credentials: "include" });
+
 export const fetchMCPServers = async (accessToken: string, teamId?: string | null, connectedAppView?: boolean) => {
   try {
     return await apiClient.get(`/v1/mcp/server`, {
@@ -6244,6 +6261,7 @@ export const patchAgentCall = async (
     agent_name?: string;
     litellm_params?: Record<string, any>;
     agent_card_params?: Record<string, any>;
+    object_permission?: Record<string, any>;
     tpm_limit?: number | null;
     rpm_limit?: number | null;
     session_tpm_limit?: number | null;
@@ -6879,13 +6897,14 @@ export const buildMcpOAuthAuthorizeUrl = ({
   const base = getProxyBaseUrl();
   const normalizedServerId = encodeURIComponent(serverId.trim());
   const url = `${base}/v1/mcp/server/oauth/${normalizedServerId}/authorize`;
-  const params = new URLSearchParams({
+  const authorizeParams = {
     redirect_uri: redirectUri,
     state,
     response_type: "code",
     code_challenge: codeChallenge,
     code_challenge_method: "S256",
-  });
+  };
+  const params = new URLSearchParams(authorizeParams);
   if (clientId && clientId.trim().length > 0) {
     params.set("client_id", clientId);
   }
