@@ -6975,7 +6975,6 @@ def mock_completion_streaming_obj(model_response, mock_response, model, n: int |
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
-            model_response.choices[0].finish_reason = None
         else:
             _all_choices = []
             for j in range(n):
@@ -6986,19 +6985,16 @@ def mock_completion_streaming_obj(model_response, mock_response, model, n: int |
                 _all_choices.append(_streaming_choice)
             model_response.choices = _all_choices
         yield model_response
+    # Separate terminal object so content chunks keep finish_reason unset.
+    terminal: Final = model_response.model_copy(deep=True)
     if n is None:
-        model_response.choices[0].delta = Delta(role="assistant", content=None)
-        model_response.choices[0].finish_reason = "stop"
+        terminal.choices[0].delta = Delta(role="assistant", content=None)
+        terminal.choices[0].finish_reason = "stop"
     else:
-        model_response.choices = [
-            litellm.utils.StreamingChoices(
-                index=j,
-                delta=litellm.utils.Delta(role="assistant", content=None),
-                finish_reason="stop",
-            )
-            for j in range(n)
-        ]
-    yield model_response
+        for j in range(n):
+            terminal.choices[j].delta = litellm.utils.Delta(role="assistant", content=None)
+            terminal.choices[j].finish_reason = "stop"
+    yield terminal
 
 
 async def async_mock_completion_streaming_obj(
@@ -7016,7 +7012,6 @@ async def async_mock_completion_streaming_obj(
         completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
-            model_response.choices[0].finish_reason = None
         else:
             _all_choices = []
             for j in range(n):
@@ -7027,19 +7022,16 @@ async def async_mock_completion_streaming_obj(
                 _all_choices.append(_streaming_choice)
             model_response.choices = _all_choices
         yield model_response
+    # Separate terminal object so content chunks keep finish_reason unset.
+    terminal: Final = model_response.model_copy(deep=True)
     if n is None:
-        model_response.choices[0].delta = Delta(role="assistant", content=None)
-        model_response.choices[0].finish_reason = "stop"
+        terminal.choices[0].delta = Delta(role="assistant", content=None)
+        terminal.choices[0].finish_reason = "stop"
     else:
-        model_response.choices = [
-            litellm.utils.StreamingChoices(
-                index=j,
-                delta=litellm.utils.Delta(role="assistant", content=None),
-                finish_reason="stop",
-            )
-            for j in range(n)
-        ]
-    yield model_response
+        for j in range(n):
+            terminal.choices[j].delta = litellm.utils.Delta(role="assistant", content=None)
+            terminal.choices[j].finish_reason = "stop"
+    yield terminal
 
 
 ########## Reading Config File ############################
