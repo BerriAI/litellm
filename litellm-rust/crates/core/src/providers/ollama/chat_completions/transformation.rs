@@ -165,7 +165,7 @@ impl ChatCompletionsProviderConfig for OllamaChatConfig {
             .map(str::to_string);
         // Ollama reports usage as `prompt_eval_count` and `eval_count` on the
         // `done: true` response. Non-streaming `/api/chat` always returns both.
-        // 
+        //
         // When both are present report them verbatim; when they are absent,
         // leave `usage` `None` so the Python bridge estimates it.
         let prompt_tokens = body.get("prompt_eval_count").and_then(Value::as_u64);
