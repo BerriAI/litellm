@@ -24,10 +24,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _spanda_callback
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry: Final = {  # mutable-ok: guardrail initializer mapping
     SupportedGuardrailIntegrations.SPANDA.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {
+guardrail_class_registry: Final = {  # mutable-ok: guardrail class registry mapping
     SupportedGuardrailIntegrations.SPANDA.value: SpandaGuardrail,
 }
