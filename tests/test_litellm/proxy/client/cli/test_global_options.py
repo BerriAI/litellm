@@ -37,16 +37,17 @@ def test_cli_version_flag(cli_runner):
     assert "LiteLLM Proxy Server Version: 1.2.3" in result.output
 
 
-def test_lite_version_does_not_fetch_model_cost_map():
+def test_lite_version_does_not_fetch_model_cost_map(tmp_path: Path) -> None:
     lite_path = shutil.which("lite")
     if lite_path is None:
         pytest.skip("lite executable is unavailable")
 
-    requests: list[str] = []
+    request_log: Path = tmp_path / "requests.log"
 
     class _CostMapHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            requests.append(self.path)
+            with request_log.open("a", encoding="utf-8") as log_file:
+                log_file.write(f"{self.path}\n")
             body = b'{"test-model": {"litellm_provider": "openai", "mode": "chat"}}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -84,7 +85,8 @@ def test_lite_version_does_not_fetch_model_cost_map():
 
     assert result.returncode == 0
     assert "LiteLLM Proxy CLI Version" in result.stdout
-    assert requests == []
+    request_count: int = request_log.read_text(encoding="utf-8").count("\n") if request_log.exists() else 0
+    assert request_count == 0
 
 
 def test_cli_source_is_ascii_only():
