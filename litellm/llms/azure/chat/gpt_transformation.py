@@ -7,6 +7,7 @@ from httpx._models import Headers, Response
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
+    flatten_combinators_and_drop_non_python_regex_patterns,
     hoist_images_from_tool_messages,
     tool_with_sanitized_parameters,
 )
@@ -44,7 +45,10 @@ def sanitized_tools_update(optional_params: Mapping[str, object]) -> Mapping[str
     if not isinstance(tools, list):
         return _NO_TOOLS_UPDATE
     sanitized: Final = [  # mutable-ok: request tools are a JSON list
-        tool_with_sanitized_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
+        tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
+        if isinstance(tool, dict)
+        else tool
+        for tool in tools
     ]
     return MappingProxyType({"tools": sanitized})
 

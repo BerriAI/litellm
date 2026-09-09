@@ -1312,11 +1312,23 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         }
         assert tool == self._artifact_tool()
 
-    def test_custom_api_base_keeps_non_python_regex_pattern(self):
-        tool = self._artifact_tool()
+    def test_custom_api_base_drops_non_python_regex_pattern_but_keeps_union(self):
+        tool = self._anyof_tool()
+        tool["function"]["parameters"]["properties"]["id"]["pattern"] = _ARTIFACT_FIELD_PATTERN
 
         request = self._transform(
             self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": "http://localhost:8000/v1"}, [tool]
+        )
+
+        parameters = request["tools"][0]["function"]["parameters"]
+        assert parameters["properties"]["id"] == {"type": "string"}
+        assert parameters["anyOf"] == self._anyof_tool()["function"]["parameters"]["anyOf"]
+
+    def test_non_openai_provider_keeps_non_python_regex_pattern(self):
+        tool = self._artifact_tool()
+
+        request = self._transform(
+            self.config, "some-oss-model", {"custom_llm_provider": "groq", "api_base": None}, [tool]
         )
 
         assert request["tools"][0] is tool

@@ -1,6 +1,7 @@
 import functools
 import json
 import os
+import sys
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -1464,11 +1465,12 @@ class TestToolWithSanitizedParameters:
 
     def test_flattens_anyof_parameters_into_new_tool(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_combinators_and_drop_non_python_regex_patterns,
             tool_with_sanitized_parameters,
         )
 
         tool = self._anyof_tool()
-        result = tool_with_sanitized_parameters(tool)
+        result = tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
 
         assert result is not tool
         parameters = result["function"]["parameters"]
@@ -1481,6 +1483,7 @@ class TestToolWithSanitizedParameters:
 
     def test_clean_parameters_return_the_same_tool_object(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_combinators_and_drop_non_python_regex_patterns,
             tool_with_sanitized_parameters,
         )
 
@@ -1492,28 +1495,23 @@ class TestToolWithSanitizedParameters:
             },
         }
 
-        assert tool_with_sanitized_parameters(tool) is tool
+        assert tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns) is tool
 
-    def test_drops_non_python_regex_patterns_from_function_parameters(self):
+    def test_pattern_only_sanitizer_drops_the_regex_and_keeps_the_union(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_non_python_regex_patterns,
             tool_with_sanitized_parameters,
         )
 
-        tool = {
-            "type": "function",
-            "function": {
-                "name": "Artifact",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"field": {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}},
-                },
-            },
-        }
+        tool = self._anyof_tool()
+        tool["function"]["parameters"]["properties"]["id"]["pattern"] = _ARTIFACT_FIELD_PATTERN
 
-        result = tool_with_sanitized_parameters(tool)
+        result = tool_with_sanitized_parameters(tool, drop_non_python_regex_patterns)
 
-        assert result["function"]["parameters"] == {"type": "object", "properties": {"field": {"type": "string"}}}
-        assert tool["function"]["parameters"]["properties"]["field"]["pattern"] == _ARTIFACT_FIELD_PATTERN
+        parameters = result["function"]["parameters"]
+        assert parameters["properties"]["id"] == {"type": "string"}
+        assert parameters["anyOf"] == self._anyof_tool()["function"]["parameters"]["anyOf"]
+        assert tool["function"]["parameters"]["properties"]["id"]["pattern"] == _ARTIFACT_FIELD_PATTERN
 
     @pytest.mark.parametrize(
         "tool",
@@ -1526,15 +1524,17 @@ class TestToolWithSanitizedParameters:
     )
     def test_non_dict_function_or_parameters_return_the_same_tool_object(self, tool):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            flatten_combinators_and_drop_non_python_regex_patterns,
             tool_with_sanitized_parameters,
         )
 
-        assert tool_with_sanitized_parameters(tool) is tool
+        assert tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns) is tool
 
 
 class TestDropNonPythonRegexPatterns:
     """Claude Code's Artifact tool declares ECMA-262 ``\\p{..}`` escapes that OpenAI's
-    validator, which compiles ``pattern`` with Python ``re``, refuses as "not a 'regex'"."""
+    validator, which compiles ``pattern`` values and ``patternProperties`` keys with
+    Python ``re``, refuses as "not a 'regex'"."""
 
     def _schema(self, pattern):
         return {
@@ -1546,12 +1546,18 @@ class TestDropNonPythonRegexPatterns:
                     "items": {"properties": {"doc_id": {"type": "string", "pattern": pattern}}},
                 },
                 "query": {"anyOf": [{"type": "string", "pattern": pattern}, {"type": "null"}]},
+                "pair": {"type": "array", "prefixItems": [{"type": "string", "pattern": pattern}]},
+                "extra": {"type": "object", "additionalProperties": {"type": "string", "pattern": pattern}},
+                "tagged": {
+                    "type": "object",
+                    "patternProperties": {pattern: {"type": "string"}, "^x_": {"type": "integer"}},
+                },
             },
             "$defs": {"segment": {"type": "string", "pattern": pattern}},
             "required": ["field"],
         }
 
-    def test_drops_every_pattern_python_re_rejects_without_mutating_the_input(self):
+    def test_drops_every_regex_python_re_rejects_from_every_schema_position(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             drop_non_python_regex_patterns,
         )
@@ -1560,15 +1566,19 @@ class TestDropNonPythonRegexPatterns:
 
         result = drop_non_python_regex_patterns(schema)
 
-        assert "pattern" not in json.dumps(result)
-        assert result["properties"]["field"] == {"type": "string"}
-        assert result["properties"]["writes"]["items"]["properties"]["doc_id"] == {"type": "string"}
-        assert result["properties"]["query"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+        assert '"pattern"' not in json.dumps(result)
+        properties = result["properties"]
+        assert properties["field"] == {"type": "string"}
+        assert properties["writes"]["items"]["properties"]["doc_id"] == {"type": "string"}
+        assert properties["query"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+        assert properties["pair"]["prefixItems"] == [{"type": "string"}]
+        assert properties["extra"]["additionalProperties"] == {"type": "string"}
+        assert properties["tagged"]["patternProperties"] == {"^x_": {"type": "integer"}}
         assert result["$defs"]["segment"] == {"type": "string"}
         assert result["required"] == ["field"]
         assert schema == self._schema(_ARTIFACT_FIELD_PATTERN)
 
-    def test_keeps_patterns_python_re_compiles_and_returns_the_same_object(self):
+    def test_keeps_regexes_python_re_compiles_and_returns_the_same_object(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             drop_non_python_regex_patterns,
         )
@@ -1577,16 +1587,26 @@ class TestDropNonPythonRegexPatterns:
 
         assert drop_non_python_regex_patterns(schema) is schema
 
-    def test_a_property_named_pattern_is_not_a_regex(self):
+    def test_pattern_keys_inside_data_positions_are_not_regexes(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             drop_non_python_regex_patterns,
         )
 
-        schema = {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}
+        schema = {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "template": {"type": "object", "default": {"pattern": _ARTIFACT_FIELD_PATTERN}},
+                "samples": {"type": "array", "examples": [{"pattern": _ARTIFACT_FIELD_PATTERN}]},
+                "fixed": {"const": {"pattern": _ARTIFACT_FIELD_PATTERN}},
+                "vendor": {"type": "string", "x-litellm": {"pattern": _ARTIFACT_FIELD_PATTERN}},
+            },
+            "required": ["pattern"],
+        }
 
         assert drop_non_python_regex_patterns(schema) is schema
 
-    def test_pattern_nested_past_what_python_re_can_parse_is_dropped_not_raised(self):
+    def test_regex_nested_past_what_python_re_can_parse_is_dropped_not_raised(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             drop_non_python_regex_patterns,
         )
@@ -1598,13 +1618,31 @@ class TestDropNonPythonRegexPatterns:
 
         assert drop_non_python_regex_patterns(schema)["properties"]["deep"] == {"type": "string"}
 
-    def test_stops_walking_past_the_depth_cap(self):
+    def test_walks_schemas_deeper_than_the_interpreter_recursion_limit(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            drop_non_python_regex_patterns,
+        )
+
+        depth = sys.getrecursionlimit()
+        leaf = {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}
+        schema = functools.reduce(
+            lambda inner, _: {"type": "object", "properties": {"child": inner}}, range(depth), leaf
+        )
+
+        result = drop_non_python_regex_patterns(schema)
+
+        assert functools.reduce(lambda node, _: node["properties"]["child"], range(depth), result) == {"type": "string"}
+        assert functools.reduce(lambda node, _: node["properties"]["child"], range(depth), schema) is leaf
+
+    def test_leaves_levels_past_the_json_nesting_limit_alone(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             drop_non_python_regex_patterns,
         )
 
         leaf = {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}
-        schema = functools.reduce(lambda inner, _: {"type": "object", "properties": {"child": inner}}, range(40), leaf)
+        schema = functools.reduce(
+            lambda inner, _: {"type": "object", "properties": {"child": inner}}, range(1100), leaf
+        )
 
         assert drop_non_python_regex_patterns(schema) is schema
 

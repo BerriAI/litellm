@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_non_python_regex_patterns,
-    flatten_top_level_schema_combinators,
+    flatten_combinators_and_drop_non_python_regex_patterns,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -46,10 +46,6 @@ _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
 _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
-
-
-def _flattened_without_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
-    return flatten_top_level_schema_combinators(drop_non_python_regex_patterns(schema))
 
 
 class _ReasoningSupportEntry(BaseModel):
@@ -409,7 +405,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return tools
         gate_model: Final = self._combinator_gate_model(model=model, litellm_params=litellm_params)
         sanitize: Final = (
-            _flattened_without_non_python_regex_patterns
+            flatten_combinators_and_drop_non_python_regex_patterns
             if self._rejects_top_level_schema_combinators(gate_model)
             else drop_non_python_regex_patterns
         )
