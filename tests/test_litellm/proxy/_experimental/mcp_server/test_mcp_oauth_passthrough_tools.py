@@ -1,5 +1,6 @@
 """Unit tests for MCP OAuth passthrough tool-fetch behavior."""
 
+import logging
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,7 +12,7 @@ if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup
 
 
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError, MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _extract_upstream_auth_failure,
@@ -434,3 +435,27 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
 
     assert listing.tools == []
     assert listing.outcomes["delegate_docs"].tag == "auth_required"
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
+    manager = MCPServerManager()
+    request = httpx.Request(
+        "POST",
+        "https://upstream/apis/mcp",
+        headers={"Authorization": "Bearer upstream-token-0123456789"},
+        content=b'{"method":"initialize","jsonrpc":"2.0","id":0}',
+    )
+    response = httpx.Response(500, request=request)
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(
+        side_effect=httpx.HTTPStatusError("500", request=request, response=response)
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with pytest.raises(MCPServerListError):
+            await manager._fetch_tools_with_timeout(mock_client, "sample_docs")
+
+    assert "POST https://upstream/apis/mcp -> HTTP 500" in caplog.text
+    assert '"method":"initialize"' in caplog.text
+    assert "upstream-token-0123456789" not in caplog.text
