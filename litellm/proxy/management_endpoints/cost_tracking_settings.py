@@ -643,7 +643,7 @@ async def estimate_cost(
                 custom_cost_per_token=resolved.custom_cost_per_token,
                 litellm_logging_obj=litellm_logging_obj,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # completion_cost raises a bare Exception for an unpriceable model
             raise HTTPException(
                 status_code=404,
                 detail={
