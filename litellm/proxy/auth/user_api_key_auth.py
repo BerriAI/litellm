@@ -1742,15 +1742,6 @@ async def _user_api_key_auth_builder(
             ):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(api_key)
 
-            if valid_token is not None and valid_token.is_session_token:
-                valid_token = await _refresh_session_token_team_grants(
-                    valid_token=valid_token,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-
         if (
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
@@ -2214,6 +2205,9 @@ async def _user_api_key_auth_builder(
                 # guardrails (or any other metadata) added after the key was cached
                 # are picked up on subsequent requests without a cache eviction.
                 valid_token.team_metadata = _team_obj.metadata
+                if valid_token.is_session_token:
+                    valid_token.team_models = list(_team_obj.models)  # mutable-ok: auth model requires a fresh list
+                    valid_token.team_alias = _team_obj.team_alias
             else:
                 valid_token.team_object_permission = None
 
@@ -2350,33 +2344,6 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
         models=token_team_models,
         metadata=valid_token.team_metadata,
         object_permission_id=valid_token.team_object_permission_id,
-    )
-
-
-async def _refresh_session_token_team_grants(
-    valid_token: UserAPIKeyAuth,
-    prisma_client: PrismaClient | None,
-    user_api_key_cache: UserApiKeyCache,
-    parent_otel_span: Span | None,
-    proxy_logging_obj: ProxyLogging,
-) -> UserAPIKeyAuth:
-    if valid_token.team_id is None or valid_token.team_id == UI_TEAM_ID or prisma_client is None:
-        return valid_token
-    try:
-        team_obj: Final = await get_team_object(
-            team_id=valid_token.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except HTTPException:
-        return valid_token
-    return valid_token.model_copy(
-        update={  # mutable-ok: model_copy requires a mutable update mapping
-            "team_models": list(team_obj.models),  # mutable-ok: auth model requires a fresh list
-            "team_alias": team_obj.team_alias,
-        }
     )
 
 
