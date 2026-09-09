@@ -254,3 +254,42 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 		t.Errorf("RPMLimit not parsed: %+v", key.RPMLimit)
 	}
 }
+
+func TestResourceKeyReadDropsMissingKeyFromState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":{"message":"Key not found in database","type":"not_found_error","param":"key","code":"404"}}`))
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "stale"})
+	d.SetId("deleted-out-of-band")
+
+	diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if diags.HasError() {
+		t.Fatalf("read of a missing key must not error, got: %v", diags)
+	}
+	if d.Id() != "" {
+		t.Errorf("Id = %q, want empty so Terraform plans a recreate", d.Id())
+	}
+}
+
+func TestResourceKeyReadStillFailsOnNon404Errors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":{"message":"db down"}}`))
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "live"})
+	d.SetId("still-exists")
+
+	diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if !diags.HasError() {
+		t.Fatal("a 500 from /key/info must surface as an error, not be treated as a deleted key")
+	}
+	if d.Id() != "still-exists" {
+		t.Errorf("Id = %q, want unchanged on a transient error", d.Id())
+	}
+}
