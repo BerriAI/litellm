@@ -457,7 +457,7 @@ def test_azure_passthrough_is_streaming_request_reads_the_stream_flag(request_da
         ("openai/deployments/gpt/chat/completions", None),
         ("gpt/openai/deployments/gpt-5.4-mini/chat/completions", None),
         ("gpt/openai/deployments/GPT-5.4-MINI/chat/completions", None),
-        ("gpt/openai/deployments/Gpt/chat/completions", None),
+        ("gpt/openai/deployments/Gpt/chat/completions", "Gpt"),
         ("gpt/models/chat/completions", None),
         ("gpt/openai/deployments/gpt-5.4/chat/completions", "gpt-5.4"),
         ("gpt/openai/deployments/other-group/chat/completions", "other-group"),
@@ -473,7 +473,7 @@ def test_foreign_azure_deployment_skips_the_router_when_the_segment_is_the_group
     def served_models():
         raise AssertionError("the router must not be consulted for the group's own name")
 
-    assert foreign_azure_deployment("gpt/openai/deployments/Gpt/chat/completions", "gpt", served_models) is None
+    assert foreign_azure_deployment("gpt/openai/deployments/gpt/chat/completions", "gpt", served_models) is None
 
 
 @pytest.mark.parametrize(
