@@ -292,6 +292,9 @@ if TYPE_CHECKING:
     from litellm.router_strategy.adaptive_router.adaptive_router import (
         AdaptiveRouter,
     )
+    from litellm.router_strategy.adept_router.adept_router import (
+        AdeptRouter,
+    )
     from litellm.router_strategy.auto_router.auto_router import (
         AutoRouter,
         PreRoutingHookResponse,
@@ -912,6 +915,7 @@ class Router:
         self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
         self.quality_routers: dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]] = {}
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
+        self.adept_routers: dict[str, AdeptRouter] = {}  # mutable-ok: registry filled per deploy sync
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: dict[str, str | RouterModelGroupAliasItem] = (
@@ -9192,6 +9196,26 @@ class Router:
         if self._unregister_pre_routing_strategy(self.adaptive_routers, model_name, tags):
             self._sync_adaptive_router_hooks()
 
+    def _release_adept_router_for_deleted_deployment(self, item: object) -> None:
+        """Drop an ADEPT deployment's in-memory router, unregister its callbacks, and release
+        its shared PG client when no sibling deployment still references the same URL."""
+        model_name: Final = (
+            item.model_name
+            if isinstance(item, Deployment)
+            else (item.get("model_name") if isinstance(item, dict) else None)
+        )
+        if model_name is None:
+            return
+        removed_adept: Final = self.adept_routers.pop(model_name, None)
+        if removed_adept is None:
+            return
+        litellm.logging_callback_manager.remove_callback_from_all_lists(removed_adept)
+        removed_adept.close()
+        if not any(r.pg_url == removed_adept.pg_url for r in self.adept_routers.values()):
+            from litellm.router_strategy.adept_router.store.implementation.prisma import schedule_disconnect
+
+            schedule_disconnect(removed_adept.pg_url)
+
     def _finalize_adaptive_router_if_configured(self) -> None:
         """Locate every adaptive-router deployment in the finalized model_list and
         build an AdaptiveRouter for each. Safe no-op when none are configured.
@@ -9367,6 +9391,97 @@ class Router:
             strategy_label="Quality-router",
         )
 
+    def _is_adept_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """Returns True when the model prefix is 'adept/'."""
+        return litellm_params.model.startswith("adept/")
+
+    def init_adept_router_deployment(self, deployment: Deployment) -> None:
+        """Initialize an ADEPT router deployment and register it in self.adept_routers.
+
+        Idempotent: repeat calls with identical params are a no-op; a param change rebuilds
+        the in-memory router so the new value takes effect without a proxy restart.
+        """
+        from litellm.router_strategy.adept_router.adept_router import AdeptRouter
+        from litellm.router_strategy.adept_router.config import (
+            DEFAULT_CONVERSATIONS_THRESHOLD,
+        )
+
+        lp: Final = deployment.litellm_params
+        default_model: Final = lp.adept_router_default_model
+        if default_model is None:
+            raise ValueError("adept_router_default_model is required for ADEPT router deployments.")
+
+        if not lp.adept_router_pg_host:
+            raise ValueError(
+                "adept_router_pg_host is required for ADEPT router deployments. "
+                "Configure a PostgreSQL database so the trainer pipeline can access the data."
+            )
+
+        from urllib.parse import quote_plus
+
+        password: Final = lp.adept_router_pg_password or ""
+        port: Final = lp.adept_router_pg_port or 5432
+        user: Final = lp.adept_router_pg_user or ""
+        database: Final = lp.adept_router_pg_database or ""
+        ssl_mode: Final = lp.adept_router_pg_ssl_mode or "prefer"
+        pg_url: Final = f"postgresql://{quote_plus(user)}:{quote_plus(password)}@{lp.adept_router_pg_host}:{port}/{database}?sslmode={ssl_mode}"
+
+        trainer_url: Final = lp.adept_router_trainer_url
+        if trainer_url:
+            from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+
+            try:
+                validate_url(trainer_url)
+            except SSRFError as ssrf_err:
+                raise ValueError(
+                    f"adept_router_trainer_url {trainer_url!r} rejected by SSRF guard: {ssrf_err}. "
+                    "Add the host to `general_settings.user_url_allowed_hosts` if it is an internal "
+                    "trainer the operator has explicitly cleared."
+                ) from ssrf_err
+
+        threshold: Final = lp.adept_router_conversations_threshold or DEFAULT_CONVERSATIONS_THRESHOLD
+        tag_prefix: Final = lp.adept_router_tag_prefix or ""
+
+        existing: Final = self.adept_routers.get(deployment.model_name)
+        if existing is not None:
+            params_changed: Final = (
+                existing.default_model != default_model
+                or existing.pg_url != pg_url
+                or existing.template_router.trainer_url != trainer_url
+                or existing.template_router.conversations_threshold != threshold
+                or existing.template_router.tag_prefix != tag_prefix
+            )
+            if not params_changed:
+                verbose_router_logger.debug(
+                    "AdeptRouter: '%s' already registered with matching params — skipping re-init.",
+                    deployment.model_name,
+                )
+                return
+            verbose_router_logger.info(
+                "AdeptRouter: '%s' params changed — rebuilding in-memory router.", deployment.model_name
+            )
+            litellm.logging_callback_manager.remove_callback_from_all_lists(existing)
+            existing.close()
+            if existing.pg_url != pg_url and not any(
+                name != deployment.model_name and r.pg_url == existing.pg_url for name, r in self.adept_routers.items()
+            ):
+                from litellm.router_strategy.adept_router.store.implementation.prisma import schedule_disconnect
+
+                schedule_disconnect(existing.pg_url)
+
+        adept_router: Final = AdeptRouter(
+            model_name=deployment.model_name,
+            default_model=default_model,
+            litellm_router_instance=self,
+            pg_url=pg_url,
+            tag_prefix=tag_prefix,
+            conversations_threshold=threshold,
+            trainer_url=trainer_url,
+            seed_config=lp.adept_router_seed_config,
+        )
+        self.adept_routers[deployment.model_name] = adept_router
+        litellm.logging_callback_manager.add_litellm_callback(adept_router)
+
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
         Function to check if a llm deployment is active for a given environment. Allows using the same config.yaml across multople environments
@@ -9396,6 +9511,11 @@ class Router:
         self.complexity_routers = {}
         self.auto_routers = {}
         self._provider_unresolved_deployments = ()
+        for stale_adept in tuple(self.adept_routers.values()):
+            litellm.logging_callback_manager.remove_callback_from_all_lists(stale_adept)
+            stale_adept.close()
+        pre_reload_adept_urls: Final = frozenset(r.pg_url for r in self.adept_routers.values())
+        self.adept_routers = {}  # mutable-ok: registry reset on model_list reload; populated incrementally per deployment sync
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
@@ -9473,6 +9593,15 @@ class Router:
         # deployments have been registered.
         self._finalize_adaptive_router_if_configured()
 
+        # Deferred until after re-init so we never disconnect a client a rebuilt deployment reused.
+        post_reload_adept_urls: Final = frozenset(r.pg_url for r in self.adept_routers.values())
+        orphaned_adept_urls: Final = pre_reload_adept_urls - post_reload_adept_urls
+        if orphaned_adept_urls:
+            from litellm.router_strategy.adept_router.store.implementation.prisma import schedule_disconnect
+
+            for orphaned_url in orphaned_adept_urls:
+                schedule_disconnect(orphaned_url)
+
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
 
@@ -9492,9 +9621,10 @@ class Router:
             if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
                 is_prompt_management_model = True
 
-        if is_prompt_management_model:
-            # For prompt management models, skip LLM provider validation
-            # The actual model will be resolved at runtime from the prompt file
+        # ADEPT deployments skip standard get_llm_provider validation; init_adept_router_deployment handles them.
+        is_adept_router_model: Final = self._is_adept_router_deployment(litellm_params=deployment.litellm_params)
+
+        if is_prompt_management_model or is_adept_router_model:
             _model = litellm_model
             custom_llm_provider = None
             dynamic_api_key = None
@@ -9598,6 +9728,9 @@ class Router:
         #########################################################
         if self._is_quality_router_deployment(litellm_params=deployment.litellm_params):
             self.init_quality_router_deployment(deployment=deployment)
+
+        if self._is_adept_router_deployment(litellm_params=deployment.litellm_params):
+            self.init_adept_router_deployment(deployment=deployment)
 
         return deployment
 
@@ -10089,6 +10222,7 @@ class Router:
                         "the deployment is out of the model_list and its indices are repaired",
                         id,
                     )
+                self._release_adept_router_for_deleted_deployment(item)
                 return item
             else:
                 return None
@@ -13405,6 +13539,14 @@ class Router:
             model=registered_model_name, request_kwargs=request_kwargs
         )
         if selected_strategy is None:
+            if registered_model_name in self.adept_routers:
+                return await self.adept_routers[registered_model_name].async_pre_routing_hook(
+                    model=registered_model_name,
+                    request_kwargs=request_kwargs,
+                    messages=messages,
+                    input=input,
+                    specific_deployment=specific_deployment,
+                )
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
             self._stamp_or_clear_metadata_key(
                 request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
@@ -13509,6 +13651,15 @@ class Router:
         request_kwargs.update(newly_forwarded)
         if newly_forwarded:
             request_kwargs.update(((_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, tuple(key for key, _ in newly_forwarded)),))
+
+        if registered_model_name in self.adept_routers:
+            return await self.adept_routers[registered_model_name].async_pre_routing_hook(
+                model=registered_model_name,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
 
         return pre_routing_hook_response
 
@@ -13681,6 +13832,12 @@ class Router:
                 "Use an async Router method with a supported routing_strategy (simple-shuffle, "
                 "usage-based-routing-v2, cost-based-routing, latency-based-routing, least-busy), "
                 "or remove `plugins` from the Router config."
+            )
+        if self.adept_routers:
+            raise ValueError(
+                "An ADEPT router is configured but this call resolved to the synchronous "
+                "deployment-selection path, which never runs the async pre-routing hook. "
+                "Use an async Router method."
             )
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out

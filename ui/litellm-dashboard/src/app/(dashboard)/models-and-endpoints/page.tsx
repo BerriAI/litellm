@@ -17,6 +17,7 @@ import { useModelDashboardData } from "@/app/(dashboard)/models-and-endpoints/us
 import AllModelsPanel from "@/app/(dashboard)/models-and-endpoints/panels/AllModelsPanel";
 import AutoRoutersTabPanel from "@/app/(dashboard)/models-and-endpoints/panels/AutoRoutersTabPanel";
 import AddModelPanel from "@/app/(dashboard)/models-and-endpoints/panels/AddModelPanel";
+import AddAdeptRouterPanel from "@/app/(dashboard)/models-and-endpoints/panels/AddAdeptRouterPanel";
 import LlmCredentialsPanel from "@/app/(dashboard)/models-and-endpoints/panels/LlmCredentialsPanel";
 import PassThroughPanel from "@/app/(dashboard)/models-and-endpoints/panels/PassThroughPanel";
 import HealthStatusPanel from "@/app/(dashboard)/models-and-endpoints/panels/HealthStatusPanel";
@@ -30,6 +31,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 type ModelTabSlug =
   | "add"
   | "auto-routers"
+  | "adept-routers"
   | "llm-credentials"
   | "pass-through"
   | "health"
@@ -43,6 +45,7 @@ const BASE_TAB_KEY = "all-models";
 const TAB_LABELS: Record<ModelTabSlug, string> = {
   add: "Add Model",
   "auto-routers": "Auto-Routers",
+  "adept-routers": "ADEPT Routers",
   "llm-credentials": "LLM Credentials",
   "pass-through": "Pass-Through Endpoints",
   health: "Health Status",
@@ -58,6 +61,8 @@ const renderPanel = (key: string) => {
       return <AllModelsPanel />;
     case "auto-routers":
       return <AutoRoutersTabPanel />;
+    case "adept-routers":
+      return <AddAdeptRouterPanel />;
     case "add":
       return <AddModelPanel />;
     case "llm-credentials":
@@ -105,7 +110,7 @@ export default function ModelsAndEndpointsPage() {
     () => [
       "",
       ...(canCreate ? (["add"] as const) : []),
-      ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
+      ...(isAdmin || canCreate ? (["auto-routers", "adept-routers"] as const) : []),
       ...(isAdmin
         ? ([
             "llm-credentials",
