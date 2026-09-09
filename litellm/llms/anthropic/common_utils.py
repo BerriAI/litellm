@@ -1202,6 +1202,30 @@ def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[A
     return out
 
 
+def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    kept: Final = [b for b in content if not is_encrypted_reasoning_block(b)]  # mutable-ok: API message payload
+    if len(kept) == len(content):
+        return message
+    if not kept:
+        return None
+    return {**message, "content": kept}  # mutable-ok: API message payload
+
+
+def strip_encrypted_reasoning_blocks_from_anthropic_messages(
+    messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    """
+    Drop thinking / redacted_thinking blocks that carry another provider's encrypted
+    reasoning (a turn the Responses API bridge served) before the request reaches
+    Anthropic, which cannot verify them. Anthropic's own signed blocks are kept.
+    """
+    stripped: Final = (_without_encrypted_reasoning_blocks(m) for m in messages)
+    return [m for m in stripped if m is not None]  # mutable-ok: API message payload
+
+
 def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data: dict[str, Any],
 ) -> None:
@@ -1236,10 +1260,8 @@ def strip_empty_content_blocks_from_anthropic_messages(
     on the unified ``/v1/messages`` path.  ``/v1/chat/completions`` already
     handles this in ``anthropic_messages_pt``; this helper provides the
     equivalent guarantee for the native Anthropic Messages path.
-    A thinking or ``redacted_thinking`` block whose signature or data carries
-    another provider's encrypted reasoning (a turn served by the Responses API
-    bridge) is dropped too, since Anthropic cannot verify it; every other
-    ``redacted_thinking`` block is left alone.
+    ``redacted_thinking`` blocks are never touched: they carry opaque
+    ``data`` instead of thinking text.
 
     Messages whose content is a list and becomes empty after stripping are
     omitted, matching :func:`strip_thinking_blocks_from_anthropic_messages`.
@@ -1252,11 +1274,7 @@ def strip_empty_content_blocks_from_anthropic_messages(
             out.append(m)
             continue
         content = m["content"]
-        filtered = [  # mutable-ok: rebuilt message content list
-            b
-            for b in content
-            if not _is_empty_text_block(b) and not is_empty_thinking_block(b) and not is_encrypted_reasoning_block(b)
-        ]
+        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_thinking_block(b)]
         if len(filtered) == len(content):
             out.append(m)
         elif filtered:
