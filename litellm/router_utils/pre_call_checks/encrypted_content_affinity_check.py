@@ -245,7 +245,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         retry after the deployment is eligible again.
         """
         routing_kwargs: Final = (
-            request_kwargs if request_kwargs is not None else {}
+            request_kwargs
+            if request_kwargs is not None
+            else {}  # mutable-ok: preserve shared request context when kwargs are absent
         )  # mutable-ok: preserve shared request context when kwargs are absent
         typed_healthy_deployments: Final = cast(
             list[dict], healthy_deployments
@@ -261,7 +263,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 metadata_key
             ] = {  # mutable-ok: routing callbacks share this context with response post-processing
                 **(routing_kwargs.get(metadata_key) or {}),
-                "encrypted_content_affinity_enabled": True,
+                "encrypted_content_affinity_enabled": True,  # mutable-ok: merge shared routing metadata for response post-processing
             }
 
         request_input: Final = routing_kwargs.get("input")
