@@ -4,7 +4,7 @@ This suite covers OCR requests through LiteLLM's compiled Rust extension. OCR be
 
 A test name identifies the OCR entrypoint or callback under test and its expected observable result. Parameter IDs state the execution mode or credential case. Keep multiple assertions together only when they prove one request, mutation, failure, or callback lifecycle behavior. Record callback observations and assert them after the callback returns because production logging can swallow callback exceptions
 
-`ocr/test_requests.py` covers provider payloads, endpoint and credential resolution, normalized responses, errors, timeouts, and Azure token-provider behavior. `ocr/test_callbacks.py` covers OCR callback inputs, mutations, ordering, context, failure handling, concurrency, and cleanup. `ocr/test_dispatch.py` covers public sync and async native dispatch, explicit Python dispatch, fallback, and the native compression header. `test_ocr.py` is the strict wire-level smoke test
+`ocr/test_requests.py` covers provider payloads, endpoint and credential resolution, normalized responses, errors, timeouts, and Azure token-provider behavior. `ocr/test_callbacks.py` covers OCR callback inputs, mutations, ordering, context, failure handling, concurrency, and cleanup. `ocr/test_guardrails.py` covers OCR post-call blocking and response replacement. `ocr/test_dispatch.py` covers public sync and async native dispatch, explicit Python dispatch, fallback, and the native compression header. `test_ocr.py` is the strict wire-level smoke test
 
 Run `make test-rust-extension` as the acceptance command. It builds a fresh wheel, installs that wheel into a temporary environment, requires `LITELLM_RUST=1`, and runs this suite with isolated Python imports
 
