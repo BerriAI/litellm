@@ -288,6 +288,36 @@ func TestWithoutReservedKeyMetadataFieldsNilIsNil(t *testing.T) {
 	}
 }
 
+// Iterates reservedKeyMetadataFields itself, not a hardcoded copy, so adding a name there without
+// a real proxy-merged field (or the reverse) is caught here instead of silently reopening the diff.
+func TestWithoutReservedKeyMetadataFieldsDropsEveryEntry(t *testing.T) {
+	for name := range reservedKeyMetadataFields {
+		raw := map[string]interface{}{"own_field": "kept", name: "should be dropped"}
+		got := withoutReservedKeyMetadataFields(raw)
+		if _, present := got[name]; present {
+			t.Errorf("%s: still present after filtering: %v", name, got)
+		}
+		if got["own_field"] != "kept" {
+			t.Errorf("%s: own_field lost: %v", name, got)
+		}
+	}
+}
+
+// A name only belongs in reservedKeyMetadataFields once this resource also has a real argument
+// for it (see the comment on the map). Something the proxy accepts under metadata but this
+// resource has no argument for yet, like mcp_rpm_limit, has to stay visible through metadata:
+// it is the only place a caller can see or manage it here, so filtering it would erase it with
+// no attribute to hold it instead.
+func TestWithoutReservedKeyMetadataFieldsKeepsFieldsWithNoAttributeYet(t *testing.T) {
+	got := withoutReservedKeyMetadataFields(map[string]interface{}{
+		"project":       "pseudonymization",
+		"mcp_rpm_limit": float64(10),
+	})
+	if got["mcp_rpm_limit"] != float64(10) {
+		t.Errorf("mcp_rpm_limit = %v, want preserved (no dedicated attribute exists for it)", got["mcp_rpm_limit"])
+	}
+}
+
 // resourceKeyRead must not surface the proxy-merged fields as if they were part of the
 // caller's own metadata, or every key that sets model_tpm_limit (or any of the other fields
 // key_management_endpoints.py folds into metadata) shows a permanent plan diff.

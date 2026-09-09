@@ -196,3 +196,30 @@ func TestDataSourceKeyQueriesByTokenHash(t *testing.T) {
 		t.Fatalf("query key = %q, want the token hash %q", gotQuery, keyBlockTestHash)
 	}
 }
+
+// rpm_limit_type is a string, so the pre-existing string-only narrowing in this Read would
+// otherwise let it through metadata untouched even though it already has its own attribute.
+func TestDataSourceKeyReadDropsProxyOwnedMetadataFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"key": "sk-test",
+			"info": {
+				"token": "hash-1",
+				"key_alias": "ci-key",
+				"metadata": {"env": "prod", "rpm_limit_type": "guaranteed_throughput"}
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, dataSourceLiteLLMKey().Schema, map[string]interface{}{"key": "sk-test"})
+	if err := dataSourceLiteLLMKeyRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	metadata := d.Get("metadata").(map[string]interface{})
+	if len(metadata) != 1 || metadata["env"] != "prod" {
+		t.Errorf("metadata = %v, want only {env: prod}", metadata)
+	}
+}

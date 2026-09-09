@@ -59,7 +59,7 @@ The following arguments are supported:
 
 * `max_parallel_requests` - (Optional) Maximum number of parallel requests allowed for this key. This helps in controlling concurrent usage.
 
-* `metadata` - (Optional) Metadata associated with this key. This can be used to store additional, custom information about the key. Arguments that have their own field here (`model_rpm_limit`, `model_tpm_limit`, `guardrails`, `tags`, and the rest of what the proxy calls its metadata-backed fields) are not echoed back into this map even though the proxy stores them in the same underlying JSON blob.
+* `metadata` - (Optional) Metadata associated with this key. This can be used to store additional, custom information about the key.
 
 * `tpm_limit` - (Optional) Tokens per minute limit for this key. This sets a rate limit based on the number of tokens processed.
 
