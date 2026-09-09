@@ -190,7 +190,7 @@ def rerank(
             "model_info": model_info,
             "preset_cache_key": None,
             "stream_response": {},
-            **optional_params.model_dump(exclude_unset=True),
+            **optional_params.model_dump(exclude_unset=True, exclude={"proxy_server_request"}),
         }
 
         litellm_logging_obj.update_from_kwargs(
@@ -380,7 +380,7 @@ def rerank(
                 return_documents=return_documents,
                 max_chunks_per_doc=max_chunks_per_doc,
                 _is_async=_is_async,
-                optional_params=optional_params.model_dump(exclude_unset=True),
+                optional_params=optional_params.model_dump(exclude_unset=True, exclude={"proxy_server_request"}),
                 timeout=optional_params.timeout,
                 api_base=api_base,
                 extra_headers=merged_headers,
