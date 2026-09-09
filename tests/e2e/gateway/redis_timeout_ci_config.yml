@@ -17,15 +17,3 @@ router_settings:
   fallbacks:
     - redis-timeout-primary:
         - redis-timeout-backup
-
-model_list:
-  - model_name: redis-timeout-primary
-    litellm_params:
-      model: openai/gpt-5-mini
-      api_key: sk-redis-timeout-primary-not-used
-      api_base: http://127.0.0.1:1
-  - model_name: redis-timeout-backup
-    litellm_params:
-      model: openai/gpt-5-mini
-      api_key: sk-redis-timeout-backup-not-used
-      mock_response: "ok"
