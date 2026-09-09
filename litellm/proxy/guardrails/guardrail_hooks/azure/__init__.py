@@ -32,7 +32,7 @@ def initialize_guardrail(
         ) = AzureContentSafetyPromptShieldGuardrail(
             guardrail_name=guardrail_name,
             **{
-                **litellm_params.model_dump(exclude_none=True),
+                **litellm_params.model_dump(exclude_unset=True),
                 "api_key": litellm_params.api_key,
                 "api_base": litellm_params.api_base,
                 "entra_token_provider": entra_token_provider,
@@ -44,7 +44,7 @@ def initialize_guardrail(
         azure_content_safety_guardrail = AzureContentSafetyTextModerationGuardrail(
             guardrail_name=guardrail_name,
             **{
-                **litellm_params.model_dump(exclude_none=True),
+                **litellm_params.model_dump(exclude_unset=True),
                 "api_key": litellm_params.api_key,
                 "api_base": litellm_params.api_base,
                 "entra_token_provider": entra_token_provider,

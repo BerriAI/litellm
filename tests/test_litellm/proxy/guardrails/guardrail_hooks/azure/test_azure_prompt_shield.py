@@ -690,3 +690,62 @@ async def test_clearing_api_key_at_runtime_switches_to_entra(api_base, capturing
     assert "authorization" not in sent[0].headers
     assert sent[1].headers["Authorization"] == "Bearer entra-token"
     assert "ocp-apim-subscription-key" not in sent[1].headers
+
+
+@pytest.mark.asyncio
+async def test_config_without_api_version_uses_the_content_safety_default(api_base, capturing_handler):
+    """A config that omits api_version gets the Content Safety default, not another guardrail's."""
+    handler, sent = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(guardrail="azure/prompt_shield", mode="pre_call", api_base=api_base),
+        {"guardrail_name": "azure-prompt-shield"},
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent[0].url.params["api-version"] == "2024-09-01"
+
+
+@pytest.mark.asyncio
+async def test_config_api_version_is_honoured(api_base, capturing_handler):
+    """Pinning an older Content Safety version stays possible."""
+    handler, sent = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(guardrail="azure/prompt_shield", mode="pre_call", api_base=api_base, api_version="2023-10-01"),
+        {"guardrail_name": "azure-prompt-shield"},
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent[0].url.params["api-version"] == "2023-10-01"
+
+
+@pytest.mark.asyncio
+async def test_config_pricing_extras_survive_the_forwarded_params(api_base, capturing_handler):
+    """cost_tier and price_per_1000_text_records arrive as pydantic extras rather than declared
+    fields, so forwarding only the params the config set must still carry them through."""
+    handler, _ = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(
+            guardrail="azure/prompt_shield",
+            mode="pre_call",
+            api_base=api_base,
+            cost_tier="paid",
+            price_per_1000_text_records=0.38,
+        ),
+        {"guardrail_name": "azure-prompt-shield"},
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+    request_data = {"metadata": {}}
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type="request")
+
+    assert _recorded_guardrail_info(request_data)["guardrail_cost"] == pytest.approx(0.38 / 1000)

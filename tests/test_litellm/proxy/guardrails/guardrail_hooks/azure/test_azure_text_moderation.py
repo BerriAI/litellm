@@ -1,3 +1,4 @@
+import json
 from unittest.mock import Mock, patch
 
 import pytest
@@ -486,3 +487,45 @@ async def test_initialize_guardrail_without_api_key_authenticates_with_entra(api
     await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
     assert sent[0].headers["Authorization"] == "Bearer entra-token"
+
+
+@pytest.mark.asyncio
+async def test_config_without_api_version_uses_the_content_safety_default(api_base, capturing_handler):
+    """A config that omits api_version gets the Content Safety default, not another guardrail's."""
+    handler, sent = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(guardrail="azure/text_moderations", mode="pre_call", api_base=api_base),
+        {"guardrail_name": "azure-text-moderation"},
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    assert sent[0].url.params["api-version"] == "2024-09-01"
+
+
+@pytest.mark.asyncio
+async def test_config_moderation_options_still_reach_the_request(api_base, capturing_handler):
+    """Forwarding only params the config set must not drop the guardrail's own options."""
+    handler, sent = capturing_handler
+
+    guardrail = initialize_guardrail(
+        LitellmParams(
+            guardrail="azure/text_moderations",
+            mode="pre_call",
+            api_base=api_base,
+            outputType="EightSeverityLevels",
+            blocklistNames=["my-blocklist"],
+        ),
+        {"guardrail_name": "azure-text-moderation"},
+        entra_token_provider=lambda: "entra-token",
+    )
+    guardrail.async_handler = handler
+
+    await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+
+    body = json.loads(sent[0].content)
+    assert body["outputType"] == "EightSeverityLevels"
+    assert body["blocklistNames"] == ["my-blocklist"]
