@@ -1,16 +1,11 @@
-from __future__ import annotations
-
 import os
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 import litellm
 from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
 from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.secret_managers.main import get_secret
 from litellm.types.completion import _CompletionDispatchContext, _CompletionDispatchResult
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _OLLAMA_CHAT_PROVIDER: Final = "ollama_chat"
 _DEFAULT_OLLAMA_API_BASE: Final = "http://localhost:11434"
@@ -20,7 +15,6 @@ def ollama_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDispat
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
-    client: Final = ctx.client
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
     logging: Final = ctx.logging
@@ -28,7 +22,6 @@ def ollama_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDispat
     model: Final = ctx.model
     model_response: Final = ctx.model_response
     optional_params = ctx.optional_params
-    shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
@@ -88,20 +81,9 @@ def ollama_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDispat
                 # fired above for this request, so the fallback skips the base
                 # handler's pre_call; this is the same attempt continuing.
                 python_fallback=lambda: _python_completion(
-                    acompletion=True,
+                    ctx=ctx,
                     api_base=api_base,
                     api_key=api_key,
-                    client=client,
-                    headers=headers,
-                    litellm_params=litellm_params,
-                    logging=logging,
-                    messages=messages,
-                    model=model,
-                    model_response=model_response,
-                    optional_params=optional_params,
-                    shared_session=shared_session,
-                    stream=stream,
-                    timeout=timeout,
                     skip_pre_call_logging=True,
                 ),
             )
@@ -126,60 +108,37 @@ def ollama_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDispat
         # `decline` capability check while the call runs the full provider call.
 
     return _python_completion(
-        acompletion=acompletion,
+        ctx=ctx,
         api_base=api_base,
         api_key=api_key,
-        client=client,
-        headers=headers,
-        litellm_params=litellm_params,
-        logging=logging,
-        messages=messages,
-        model=model,
-        model_response=model_response,
-        optional_params=optional_params,
-        shared_session=shared_session,
-        stream=stream,
-        timeout=timeout,
         skip_pre_call_logging=serves_via_rust,
     )
 
 
 def _python_completion(
-    *,
-    acompletion: bool,
-    api_base: str | None,
+    ctx: _CompletionDispatchContext,
+    api_base: str,
     api_key: str | None,
-    client: object,
-    headers: dict,
-    litellm_params: dict,
-    logging: LiteLLMLoggingObj,
-    messages: list,
-    model: str,
-    model_response: object,
-    optional_params: dict,
-    shared_session: object,
-    stream: object,
-    timeout: object,
     skip_pre_call_logging: bool = False,
 ) -> _CompletionDispatchResult:
     from litellm.main import _get_encoding, base_llm_http_handler
 
     return base_llm_http_handler.completion(
-        model=model,
-        stream=stream,
-        messages=messages,
-        acompletion=acompletion,
+        model=ctx.model,
+        stream=ctx.stream,
+        messages=ctx.messages,
+        acompletion=ctx.acompletion,
         api_base=api_base,
-        model_response=model_response,
-        optional_params=optional_params,
-        litellm_params=litellm_params,
-        shared_session=shared_session,
+        model_response=ctx.model_response,
+        optional_params=ctx.optional_params,
+        litellm_params=ctx.litellm_params,
+        shared_session=ctx.shared_session,
         custom_llm_provider=_OLLAMA_CHAT_PROVIDER,
-        timeout=timeout,
-        headers=headers,
+        timeout=ctx.timeout,
+        headers=ctx.headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,
-        client=client,
+        logging_obj=ctx.logging,
+        client=ctx.client,
         skip_pre_call_logging=skip_pre_call_logging,
     )
