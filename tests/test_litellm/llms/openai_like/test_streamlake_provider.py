@@ -293,7 +293,6 @@ class TestStreamlakeModelMetadata:
         assert entry.get("supports_vision", False) is ("vision" in capabilities)
         assert entry.get("supports_prompt_caching", False) is ("prompt_caching" in capabilities)
         assert entry.get("supports_assistant_prefill", False) is ("prefill" in capabilities)
-        assert entry.get("supports_image_input", False) is ("image" in capabilities)
         assert entry.get("supports_video_input", False) is ("video" in capabilities)
         assert entry["supported_modalities"] == (["text", "image", "video"] if "video" in capabilities else ["text"])
         assert entry["supported_output_modalities"] == ["text"]
@@ -346,7 +345,6 @@ class TestStreamlakeModelMetadata:
             if model.startswith("streamlake/GLM")
             else info.get("supports_assistant_prefill") is None
         )
-        assert info.get("supports_image_input") is (True if model.endswith("Flash") else None)
         assert info.get("supports_video_input") is (True if model.endswith("Flash") else None)
 
         model_cost = self._load("model_prices_and_context_window.json")

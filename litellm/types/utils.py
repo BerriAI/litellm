@@ -138,7 +138,6 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_system_messages: bool | None
     supports_response_schema: bool | None
     supports_vision: bool | None
-    supports_image_input: ReadOnly[bool | None]
     supports_video_input: ReadOnly[bool | None]
     supported_modalities: ReadOnly[Sequence[str] | None]
     supported_output_modalities: ReadOnly[Sequence[str] | None]
