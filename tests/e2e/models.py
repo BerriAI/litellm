@@ -655,11 +655,6 @@ class OcrResponse(BaseModel):
 # ---------- spend logs ----------
 
 
-class CostBreakdown(BaseModel):
-    input_cost: float | None = None
-    output_cost: float | None = None
-
-
 class GuardrailEntityMatch(BaseModel):
     entity_type: str
     score: float
@@ -677,7 +672,6 @@ class GuardrailRunRecord(BaseModel):
 
 
 class SpendLogMetadata(BaseModel):
-    cost_breakdown: CostBreakdown | None = None
     applied_guardrails: list[str] | None = None
     guardrail_information: list[GuardrailRunRecord] | None = None
 
@@ -821,42 +815,15 @@ class CustomPricing(BaseModel):
         return prompt_tokens * self.input_cost_per_token + completion_tokens * self.output_cost_per_token
 
 
-class DeploymentParams(CustomPricing):
-    """The litellm_params half of a /model/info row: the stored deployment as written,
-    credentials scrubbed. Unlike model_info it is never back-filled from the cost map,
-    so a key the store dropped is absent here (check `model_fields_set`)."""
-
-    model: str | None = None
-    api_base: str | None = None
-    max_input_tokens: int | None = None
-
-
-class DeploymentModelInfo(CustomPricing):
-    id: str | None = None
-    max_input_tokens: int | None = None
-
-
 class ModelInfoEntry(BaseModel):
     """One /model/info row. `litellm_params` is the configured deployment (carries
     any custom-pricing override); `model_info` is the price the proxy resolved for
-    it - the override merged over the cost-map defaults, so a key cleared from the
-    stored blob reads as the cost-map default here."""
+    it - the override merged over the cost-map defaults."""
 
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
-    litellm_params: DeploymentParams = DeploymentParams()
-    model_info: DeploymentModelInfo = DeploymentModelInfo()
-
-
-class StoredDeployment(BaseModel):
-    """PATCH /model/{model_id}/update answers with the row as stored: both blobs raw,
-    nothing back-filled, so a cleared key is absent from `model_fields_set` of the
-    blob it was cleared from."""
-
-    model_config = ConfigDict(protected_namespaces=())
-    model_name: str
-    litellm_params: DeploymentParams
-    model_info: DeploymentModelInfo
+    litellm_params: CustomPricing = CustomPricing()
+    model_info: CustomPricing = CustomPricing()
 
 
 class ModelInfoResponse(BaseModel):
@@ -957,10 +924,9 @@ class LiteLLMParamsBody(BaseModel):
     timeout: float | None = None
     tpm: int | None = None
     weight: int | None = None
-    max_input_tokens: int | None = None
 
 
-ModelMode = Literal["chat", "batch", "realtime", "image_generation"]
+ModelMode = Literal["batch", "realtime", "image_generation"]
 
 
 class ModelInfoBody(BaseModel):
@@ -970,7 +936,6 @@ class ModelInfoBody(BaseModel):
     # constraint when a prior run's teardown had not removed the row.
     id: str | None = None
     mode: ModelMode | None = None
-    max_input_tokens: int | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
     allowed_fails_policy: dict[str, int] | None = None
@@ -997,37 +962,6 @@ class ModelUpdateBody(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     litellm_params: LiteLLMParamsBody
     model_info: ModelInfoBody
-
-
-class Clear(BaseModel):
-    """Serializes to JSON null. The transport dumps every body with exclude_none, so a
-    field set to this is how a patch carries the explicit null that removes a stored key."""
-
-    @model_serializer
-    def _as_null(self) -> None:
-        return None
-
-
-class LiteLLMParamsPatch(BaseModel):
-    api_base: str | Clear | None = None
-    max_input_tokens: int | Clear | None = None
-    input_cost_per_token: float | Clear | None = None
-    output_cost_per_token: float | Clear | None = None
-
-
-class ModelInfoPatch(BaseModel):
-    mode: ModelMode | Clear | None = None
-    max_input_tokens: int | Clear | None = None
-
-
-class ModelPatchBody(BaseModel):
-    """PATCH /model/{model_id}/update body, JSON Merge Patch over the stored deployment:
-    a field left None is dropped from the body and unchanged, a field set to `Clear()`
-    is sent as null and removed, a field with a value is set."""
-
-    model_config = ConfigDict(protected_namespaces=())
-    litellm_params: LiteLLMParamsPatch | None = None
-    model_info: ModelInfoPatch | None = None
 
 
 class ModelListEntry(BaseModel):
