@@ -95,6 +95,11 @@ def _cached_entra_id_token_provider(
     return get_bearer_token_provider(ClientSecretCredential(tenant_id, client_id, client_secret), scope)
 
 
+@lru_cache(maxsize=128)
+def _cached_azure_ad_token_refresh_provider(scope: str) -> Callable[[], str]:
+    return get_azure_ad_token_provider(azure_scope=scope)
+
+
 def get_azure_ad_token_from_entra_id(
     tenant_id: str,
     client_id: str,
@@ -649,9 +654,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
             )
             try:
-                azure_ad_token_provider = get_azure_ad_token_provider(
-                    azure_scope=scope,
-                )
+                azure_ad_token_provider = _cached_azure_ad_token_refresh_provider(scope)
             except ValueError:
                 verbose_logger.debug("Azure AD Token Provider could not be used.")
         if api_version is None:
