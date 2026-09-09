@@ -620,7 +620,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return event_pydantic_model.model_construct(**parsed_chunk)
 
     @staticmethod
-    def parse_terminal_event_from_stream_chunks(all_chunks: list[str]) -> ResponsesTerminalEvent | None:
+    def parse_terminal_event_from_stream_chunks(all_chunks: Sequence[str]) -> ResponsesTerminalEvent | None:
         for chunk_str in reversed(all_chunks):
             for event_model in (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent):
                 try:

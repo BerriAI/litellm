@@ -1,5 +1,6 @@
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
@@ -55,9 +56,7 @@ def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> 
     """A streaming logging object assembles the logged response from the terminal event, not from its body."""
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
-    terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(
-        all_chunks=list(all_chunks)
-    )
+    terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks=all_chunks)
     if terminal_event is None:
         return None
     logging_obj.call_type = (
@@ -83,7 +82,11 @@ def foreign_azure_deployment(
     if match is None:
         return None
     deployment: Final = match.group(1)
-    return None if deployment == model_group or deployment in served_models() else deployment
+    folded: Final = deployment.casefold()
+    if folded == model_group.casefold():
+        return None
+    served: Final = frozenset(name.casefold() for name in served_models())
+    return None if folded in served else deployment
 
 
 def without_api_version(api_base: str) -> str:
@@ -119,7 +122,9 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         relay_base: Final = without_api_version(base_target_url) if caller_api_version else base_target_url
         complete_url: Final = BaseAzureLLM._get_base_azure_url(
             api_base=relay_base,
-            litellm_params={**litellm_params, "api_version": caller_api_version or litellm_params.get("api_version")},
+            litellm_params=MappingProxyType(
+                {**litellm_params, "api_version": caller_api_version or litellm_params.get("api_version")}
+            ),
             route=native_endpoint,
         )
         return (

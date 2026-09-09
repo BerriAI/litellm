@@ -122,6 +122,10 @@ def is_passthrough_request_using_router_model(request_body: dict, llm_router: li
         return False
 
 
+class RelayRejection(TypedDict):
+    error: ReadOnly[str]
+
+
 def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
     model: Final = litellm_params.get("model", "")
     try:
@@ -1543,13 +1547,11 @@ async def _relay_azure_router_model(
         endpoint, model, lambda: _models_served_by_group(llm_router, model)
     )
     if foreign_deployment is not None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"deployment '{foreign_deployment}' in the path is not served by model group '{model}'; "
-                "put the model group name in the deployments segment"
-            },
-        )
+        rejection: Final[RelayRejection] = {
+            "error": f"deployment '{foreign_deployment}' in the path is not served by model group '{model}'; "
+            "put the model group name in the deployments segment"
+        }
+        raise HTTPException(status_code=400, detail=rejection)
     try:
         result: Final = await llm_router.allm_passthrough_route(
             model=model,
