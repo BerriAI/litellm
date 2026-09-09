@@ -42,12 +42,15 @@ FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
 def test_is_claude_code_one_shot_subagent_request(messages, system, expected):
     from litellm.llms.anthropic.common_utils import is_claude_code_one_shot_subagent_request
 
-    assert is_claude_code_one_shot_subagent_request(
-        messages=messages,
-        system=system,
-        tools=None,
-        user_agent="claude-cli/2.1.263 (external, cli)",
-    ) is expected
+    assert (
+        is_claude_code_one_shot_subagent_request(
+            messages=messages,
+            system=system,
+            tools=None,
+            user_agent="claude-cli/2.1.263 (external, cli)",
+        )
+        is expected
+    )
 
 
 class TestOptionallyHandleAnthropicOAuth:
@@ -1541,8 +1544,8 @@ class TestAnthropicThinkingSignatureSelfHeal:
         out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert [b["type"] for b in out[0]["content"]] == ["thinking"]
 
-    def test_strip_drops_encrypted_reasoning_blocks_from_the_responses_bridge(self):
-        """A session resumed on an Anthropic model replays reasoning only OpenAI can verify."""
+    def test_strip_keeps_encrypted_reasoning_blocks_for_the_responses_bridge(self):
+        """The /v1/messages handler runs this before dispatch, so the bridge must still see the replay."""
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             encrypted_reasoning_signature,
         )
@@ -1556,14 +1559,46 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 "content": [
                     {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_1")},
                     {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_2")},
-                    {"type": "redacted_thinking", "data": "EmwKAhgBEgy_anthropic_minted"},
                     {"type": "text", "text": "The answer."},
                 ],
             }
         ]
-        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
-        assert [b["type"] for b in out[0]["content"]] == ["redacted_thinking", "text"]
-        assert len(msgs[0]["content"]) == 4
+        assert strip_empty_content_blocks_from_anthropic_messages(msgs) == msgs
+
+    def test_strip_encrypted_reasoning_drops_only_the_bridge_tagged_blocks(self):
+        """A session resumed on an Anthropic model replays reasoning only OpenAI can verify."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            encrypted_reasoning_signature,
+        )
+        from litellm.llms.anthropic.common_utils import (
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {"role": "user", "content": "Solve it."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_1")},
+                    {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_2")},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_3")},
+                    {"type": "thinking", "thinking": "native", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                    {"type": "redacted_thinking", "data": "EmwKAhgBEgy_anthropic_minted"},
+                    {"type": "text", "text": "The answer."},
+                ],
+            },
+        ]
+        out = strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs)
+        assert [m["role"] for m in out] == ["user", "assistant"]
+        assert [b["type"] for b in out[1]["content"]] == ["thinking", "redacted_thinking", "text"]
+        assert out[1]["content"][0]["signature"] == "EqQBCkYIAxgCIkA_anthropic_signed"
+        assert len(msgs[1]["content"]) == 2
+        assert len(msgs[2]["content"]) == 4
 
     def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
