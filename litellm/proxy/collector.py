@@ -32,7 +32,12 @@ from typing import Final
 
 from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
-from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, pooled_database_url
+from litellm.proxy.db.pgbouncer import (
+    PgBouncerError,
+    PgBouncerSettings,
+    export_pooled_database_url,
+    pooled_database_url,
+)
 from litellm.proxy.spend_tracking.spend_event_producer import (
     COLLECTOR_JOB_ROLE,
     AddressError,
@@ -202,7 +207,7 @@ def main(argv: Sequence[str]) -> None:
     if isinstance(pooled, PgBouncerError):
         sys.exit(f"LiteLLM collector: cannot use the pod's pgbouncer: {pooled.reason}")
     if pooled is not None:
-        os.environ["DATABASE_URL"] = pooled
+        export_pooled_database_url(pooled)
     settings: Final = CollectorSettings()
     raw_address: Final = address_argument(argv, default=settings.address)
     address: Final = raw_address if isinstance(raw_address, AddressError) else parse_collector_address(raw_address)
