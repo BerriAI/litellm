@@ -13,7 +13,7 @@ Run with:
 
 import os
 import sys
-from collections.abc import MutableMapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from typing import Final
 
 from uvicorn.main import main as uvicorn_main
@@ -22,6 +22,15 @@ from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, start_in_container_pgbouncer
 
 GATEWAY_APP: Final = "gateway.main:app"
+KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
+
+
+def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str]) -> tuple[str, ...]:
+    """Honor ``KEEPALIVE_TIMEOUT`` like ``proxy_cli.py`` does, unless the flag was passed explicitly."""
+    keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
+    if keepalive is None or any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
+        return (GATEWAY_APP, *argv)
+    return (GATEWAY_APP, *argv, KEEPALIVE_FLAG, keepalive)
 
 
 def pool_database_url(
@@ -55,7 +64,7 @@ def main(argv: Sequence[str]) -> None:
     failed: Final = pool_database_url(settings, PgBouncerSettings(), os.environ)
     if failed is not None:
         sys.exit(f"LiteLLM gateway: in-container pgbouncer could not start: {failed.reason}")
-    uvicorn_main((GATEWAY_APP, *argv), prog_name="uvicorn")
+    uvicorn_main(uvicorn_argv(argv, os.environ), prog_name="uvicorn")
 
 
 if __name__ == "__main__":

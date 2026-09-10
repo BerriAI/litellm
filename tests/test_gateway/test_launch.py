@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Final, cast
 
 import pytest
+from uvicorn.main import main as uvicorn_main
 
-from gateway.launch import pool_database_url
+from gateway.launch import GATEWAY_APP, pool_database_url, uvicorn_argv
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
 
@@ -68,6 +69,25 @@ def password_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     for var, value in DB_ENV.items():
         monkeypatch.setenv(var, value)
     return dict(DB_ENV)
+
+
+def _uvicorn_params(argv: tuple[str, ...]) -> dict[str, object]:
+    return uvicorn_main.make_context("uvicorn", list(argv)).params
+
+
+class TestUvicornArgv:
+    def test_keepalive_env_reaches_uvicorn(self):
+        params: Final = _uvicorn_params(uvicorn_argv(("--workers", "4"), {"KEEPALIVE_TIMEOUT": "75"}))
+        assert params["app"] == GATEWAY_APP
+        assert params["workers"] == 4
+        assert params["timeout_keep_alive"] == 75
+
+    def test_unset_env_keeps_the_uvicorn_default(self):
+        assert _uvicorn_params(uvicorn_argv(("--workers", "4"), {}))["timeout_keep_alive"] == 5
+
+    def test_an_explicit_flag_wins_over_the_env(self):
+        argv: Final = uvicorn_argv(("--timeout-keep-alive", "30"), {"KEEPALIVE_TIMEOUT": "75"})
+        assert _uvicorn_params(argv)["timeout_keep_alive"] == 30
 
 
 class TestPoolDatabaseUrl:
