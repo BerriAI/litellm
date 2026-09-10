@@ -1,6 +1,8 @@
 use serde_json::{Value, json};
 
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+use crate::auth::InputSource;
+use crate::ocr::wire::{OcrWireRequest, decode_request};
 
 fn request_body(request: &str) -> Value {
     serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
@@ -75,4 +77,34 @@ async fn invalid_credentials_fail_before_provider_http() {
     );
     let error = perform_ocr(request).await.unwrap_err();
     assert!(error.to_string().contains("vertex_credentials"));
+}
+
+#[tokio::test]
+async fn request_controlled_api_base_is_rejected_before_vertex_auth() {
+    let request = decode_request(OcrWireRequest {
+        model: "vertex_ai/model".into(),
+        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        api_key: Some("test-key".into()),
+        api_base: Some("https://attacker.example".into()),
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: json!({"vertex_project":"project-1"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        input_sources: std::collections::BTreeMap::from([(
+            "api_base".to_string(),
+            InputSource::Request,
+        )]),
+        timeout_seconds: Some(2.0),
+    })
+    .unwrap();
+
+    let error = perform_ocr(request).await.unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("request-controlled Vertex AI endpoint")
+    );
 }

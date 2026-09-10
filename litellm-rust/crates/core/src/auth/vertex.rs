@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -10,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::error::AuthConfigurationError;
 use crate::auth::http::apply_credential;
-use crate::auth::{AuthError, CredentialPlacement, SecretValue};
+use crate::auth::{AuthError, CredentialPlacement, InputSource, SecretValue, Sourced};
 
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const GOOGLE_APPLICATION_CREDENTIALS_ENV: &str = "GOOGLE_APPLICATION_CREDENTIALS";
@@ -23,16 +24,20 @@ const VERTEX_LOCATION_ENV: &str = "VERTEX_LOCATION";
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct VertexConfig {
-    credentials: Option<SecretValue>,
+    credentials: Option<Sourced<SecretValue>>,
     project_id: Option<String>,
     location: Option<String>,
 }
 
 impl VertexConfig {
-    pub(crate) fn from_optional_params(params: &Map<String, Value>) -> Result<Self, AuthError> {
+    pub(crate) fn from_sourced_optional_params(
+        params: &Map<String, Value>,
+        sources: &BTreeMap<String, InputSource>,
+    ) -> Result<Self, AuthError> {
         Ok(Self {
             credentials: optional_credentials(
                 params,
+                sources,
                 &["vertex_credentials", "vertex_ai_credentials"],
             )?,
             project_id: optional_string(params, &["vertex_project", "vertex_ai_project"])?,
@@ -216,7 +221,11 @@ impl VertexProviderLoader for GcpProviderLoader {
     fn load(&self, source: CredentialSource) -> VertexAuthFuture<'_, Arc<dyn VertexTokenSource>> {
         Box::pin(async move {
             let provider: Arc<dyn TokenProvider> = match source {
-                CredentialSource::Configured(configured) => {
+                CredentialSource::Inline(configured) => Arc::new(
+                    CustomServiceAccount::from_json(configured.expose())
+                        .map_err(auth_acquisition_error)?,
+                ),
+                CredentialSource::Trusted(configured) => {
                     let configured = configured.expose();
                     let service_account = if Path::new(configured).is_file() {
                         CustomServiceAccount::from_file(configured)
@@ -240,7 +249,8 @@ impl VertexProviderLoader for GcpProviderLoader {
 
 #[derive(Clone, Debug)]
 enum CredentialSource {
-    Configured(SecretValue),
+    Inline(SecretValue),
+    Trusted(SecretValue),
     ApplicationCredentials(String),
     Adc,
 }
@@ -248,8 +258,11 @@ enum CredentialSource {
 impl CredentialSource {
     fn cache_key(&self) -> CredentialCacheKey {
         match self {
-            Self::Configured(configured) => {
-                CredentialCacheKey::Configured(Sha256::digest(configured.expose()).into())
+            Self::Inline(configured) => {
+                CredentialCacheKey::Inline(Sha256::digest(configured.expose()).into())
+            }
+            Self::Trusted(configured) => {
+                CredentialCacheKey::Trusted(Sha256::digest(configured.expose()).into())
             }
             Self::ApplicationCredentials(path) => {
                 CredentialCacheKey::ApplicationCredentials(path.clone())
@@ -261,7 +274,8 @@ impl CredentialSource {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 enum CredentialCacheKey {
-    Configured([u8; 32]),
+    Inline([u8; 32]),
+    Trusted([u8; 32]),
     ApplicationCredentials(String),
     Adc,
 }
@@ -270,12 +284,16 @@ fn credential_source(
     config: &VertexConfig,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> CredentialSource {
-    let configured = config
-        .credentials
-        .clone()
-        .or_else(|| non_empty_env(env_lookup, VERTEXAI_CREDENTIALS_ENV).map(SecretValue::new));
-    if let Some(configured) = configured {
-        return CredentialSource::Configured(configured);
+    if let Some(configured) = config.credentials.clone() {
+        return match configured.source() {
+            InputSource::Request => CredentialSource::Inline(configured.into_value()),
+            InputSource::Deployment | InputSource::Environment => {
+                CredentialSource::Trusted(configured.into_value())
+            }
+        };
+    }
+    if let Some(configured) = non_empty_env(env_lookup, VERTEXAI_CREDENTIALS_ENV) {
+        return CredentialSource::Trusted(SecretValue::new(configured));
     }
     non_empty_env(env_lookup, GOOGLE_APPLICATION_CREDENTIALS_ENV)
         .map(CredentialSource::ApplicationCredentials)
@@ -284,17 +302,22 @@ fn credential_source(
 
 fn optional_credentials(
     params: &Map<String, Value>,
+    sources: &BTreeMap<String, InputSource>,
     names: &[&str],
-) -> Result<Option<SecretValue>, AuthError> {
+) -> Result<Option<Sourced<SecretValue>>, AuthError> {
     for name in names {
+        let source = source_for(sources, name);
         match params.get(*name) {
             None | Some(Value::Null) => continue,
             Some(Value::String(value)) if value.trim().is_empty() => continue,
-            Some(Value::String(value)) => return Ok(Some(SecretValue::new(value))),
+            Some(Value::String(value)) => {
+                return Ok(Some(Sourced::new(SecretValue::new(value), source)));
+            }
             Some(Value::Object(value)) if value.is_empty() => continue,
             Some(Value::Object(value)) => {
                 return serde_json::to_string(value)
                     .map(SecretValue::new)
+                    .map(|value| Sourced::new(value, source))
                     .map(Some)
                     .map_err(|error| {
                         AuthError::Configuration(AuthConfigurationError::InvalidFieldType(format!(
@@ -311,6 +334,10 @@ fn optional_credentials(
         }
     }
     Ok(None)
+}
+
+fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSource {
+    sources.get(name).copied().unwrap_or_default()
 }
 
 fn optional_string(
@@ -386,7 +413,8 @@ mod tests {
     }
 
     fn config(value: Value) -> VertexConfig {
-        VertexConfig::from_optional_params(value.as_object().unwrap()).unwrap()
+        VertexConfig::from_sourced_optional_params(value.as_object().unwrap(), &BTreeMap::new())
+            .unwrap()
     }
 
     fn auth(calls: Arc<AtomicUsize>, loads: Arc<AtomicUsize>) -> VertexAuth {
@@ -405,8 +433,9 @@ mod tests {
         assert_eq!(config.location(), Some("europe-west4"));
         assert!(!format!("{config:?}").contains("secret-key"));
         assert!(
-            VertexConfig::from_optional_params(
-                json!({"vertex_credentials":true}).as_object().unwrap()
+            VertexConfig::from_sourced_optional_params(
+                json!({"vertex_credentials":true}).as_object().unwrap(),
+                &BTreeMap::new()
             )
             .is_err()
         );
@@ -423,7 +452,7 @@ mod tests {
             "vertex_ai_location": "alias-location"
         }));
         assert_eq!(
-            config.credentials.as_ref().unwrap().expose(),
+            config.credentials.as_ref().unwrap().value().expose(),
             "alias-credentials"
         );
         assert_eq!(config.project_id(), Some("alias-project"));
@@ -458,13 +487,17 @@ mod tests {
 
     #[test]
     fn credential_discovery_prefers_input_then_environment_then_adc() {
-        let configured = config(json!({"vertex_credentials":"input-json"}));
+        let params = json!({"vertex_credentials":"input-json"});
+        let sources = BTreeMap::from([("vertex_credentials".to_string(), InputSource::Request)]);
+        let configured =
+            VertexConfig::from_sourced_optional_params(params.as_object().unwrap(), &sources)
+                .unwrap();
         assert!(
-            matches!(credential_source(&configured, &|_| Some("environment-value".into())), CredentialSource::Configured(value) if value.expose() == "input-json")
+            matches!(credential_source(&configured, &|_| Some("environment-value".into())), CredentialSource::Inline(value) if value.expose() == "input-json")
         );
         let empty = VertexConfig::default();
         assert!(
-            matches!(credential_source(&empty, &|name| (name == VERTEXAI_CREDENTIALS_ENV).then(|| "environment-json".into())), CredentialSource::Configured(value) if value.expose() == "environment-json")
+            matches!(credential_source(&empty, &|name| (name == VERTEXAI_CREDENTIALS_ENV).then(|| "environment-json".into())), CredentialSource::Trusted(value) if value.expose() == "environment-json")
         );
         assert!(
             matches!(credential_source(&empty, &|name| (name == GOOGLE_APPLICATION_CREDENTIALS_ENV).then(|| "adc.json".into())), CredentialSource::ApplicationCredentials(path) if path == "adc.json")
@@ -473,6 +506,10 @@ mod tests {
             credential_source(&empty, &|_| None),
             CredentialSource::Adc
         ));
+        assert_ne!(
+            CredentialSource::Inline(SecretValue::new("same-value")).cache_key(),
+            CredentialSource::Trusted(SecretValue::new("same-value")).cache_key()
+        );
     }
 
     #[tokio::test]

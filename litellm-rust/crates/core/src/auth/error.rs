@@ -75,6 +75,8 @@ pub enum AuthConfigurationError {
     RequestAzureCredentialReference,
     #[error("host credentials cannot be sent to a request-controlled Azure endpoint")]
     RequestAzureCredentialDestination,
+    #[error("credentials cannot be sent to a request-controlled Vertex AI endpoint")]
+    RequestVertexCredentialDestination,
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]

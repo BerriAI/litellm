@@ -1,4 +1,5 @@
 use super::super::OcrAdapter;
+use super::validate_destination;
 use crate::Error;
 use crate::auth::vertex::{self, VertexConfig};
 use crate::ocr::OcrClient;
@@ -25,12 +26,16 @@ impl OcrAdapter for VertexMistralAdapter {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
+        validate_destination(&request.connection)?;
         let ParsedProviderParams {
             known: params,
             extra_params: _extra_params,
         } = _prepare_ocr_request::<MistralOcrParams>(request)?;
-        let config =
-            VertexConfig::from_optional_params(&request.optional_params).map_err(Error::from)?;
+        let config = VertexConfig::from_sourced_optional_params(
+            &request.optional_params,
+            &request.input_sources,
+        )
+        .map_err(Error::from)?;
         let authentication = client
             .vertex_auth()
             .validate_environment(
@@ -82,6 +87,7 @@ fn get_complete_url(
     location: &str,
     model: &str,
 ) -> Result<String, OcrError> {
+    validate_location(location)?;
     let default_base = format!("https://{location}-aiplatform.googleapis.com");
     let base = api_base
         .map(str::trim)
@@ -111,6 +117,28 @@ fn get_complete_url(
         })
 }
 
+fn validate_location(location: &str) -> Result<(), OcrError> {
+    let valid = !location.is_empty()
+        && location
+            .bytes()
+            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == b'-')
+        && location
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && location
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric);
+    if valid {
+        return Ok(());
+    }
+    Err(OcrRequestError::RequestField {
+        path: "vertex_location".into(),
+    }
+    .into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::get_complete_url;
@@ -121,5 +149,6 @@ mod tests {
             get_complete_url(None, "proj-1", "europe-west4", "mistral-ocr-maas").unwrap(),
             "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
         );
+        assert!(get_complete_url(None, "proj-1", "attacker.example/path", "model").is_err());
     }
 }
