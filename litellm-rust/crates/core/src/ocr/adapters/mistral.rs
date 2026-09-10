@@ -20,12 +20,6 @@ impl OcrAdapter for MistralAdapter {
     type ProviderResponse = MistralOcrResponse;
     const PROVIDER: OcrProvider = OcrProvider::Mistral;
 
-    #[tracing::instrument(
-        name = "transform_ocr_request",
-        target = "litellm::function_trace",
-        level = "trace",
-        skip_all
-    )]
     async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
