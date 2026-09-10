@@ -90,29 +90,31 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Function to check if current value matches a relative time option
-  const getMatchingOption = useCallback((currentValue: DateRangePickerValue): string | null => {
-    if (!currentValue.from || !currentValue.to) return null;
+  const getMatchingOption = useCallback(
+    (currentValue: DateRangePickerValue, preferred: string | null): string | null => {
+      if (!currentValue.from || !currentValue.to) return null;
 
-    for (const option of options) {
-      const optionRange = option.getValue();
+      const matches = (option: RelativeTimeOption) => {
+        const optionRange = option.getValue();
+        const fromMatches = moment(currentValue.from).isSame(moment(optionRange.from), "day");
+        const toMatches = moment(currentValue.to).isSame(moment(optionRange.to), "day");
+        return fromMatches && toMatches;
+      };
 
-      // Compare dates with some tolerance (to account for time differences)
-      const fromMatches = moment(currentValue.from).isSame(moment(optionRange.from), "day");
-      const toMatches = moment(currentValue.to).isSame(moment(optionRange.to), "day");
-
-      if (fromMatches && toMatches) {
-        return option.shortLabel;
+      if (preferred && options.some((option) => option.shortLabel === preferred && matches(option))) {
+        return preferred;
       }
-    }
 
-    return null;
-  }, [options]);
+      return options.find(matches)?.shortLabel ?? null;
+    },
+    [options],
+  );
 
   // Update selected option when value changes
   useEffect(() => {
-    const matchingOption = getMatchingOption(value);
+    const matchingOption = getMatchingOption(value, selectedOption);
     setSelectedOption(matchingOption);
-  }, [value, getMatchingOption]);
+  }, [value, getMatchingOption, selectedOption]);
 
   // Validation logic - simplified for dates only
   const validateDateRange = useCallback(() => {
@@ -231,14 +233,14 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
           setTempValue(newValue);
 
           // Check if this matches any preset option
-          const matchingOption = getMatchingOption(newValue);
+          const matchingOption = getMatchingOption(newValue, selectedOption);
           setSelectedOption(matchingOption);
         }
       }
     } catch (error) {
       console.warn("Invalid date format:", error);
     }
-  }, [startDate, endDate, validation.isValid, getMatchingOption]);
+  }, [startDate, endDate, validation.isValid, getMatchingOption, selectedOption]);
 
   // Update tempValue when inputs change
   useEffect(() => {
@@ -276,7 +278,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     }
 
     // Reset selected option
-    const matchingOption = getMatchingOption(value);
+    const matchingOption = getMatchingOption(value, selectedOption);
     setSelectedOption(matchingOption);
 
     setIsOpen(false);

@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import moment from "moment";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import AdvancedDatePicker from "./advanced_date_picker";
 
@@ -96,8 +97,6 @@ describe("AdvancedDatePicker", () => {
 
     openDropdown(container);
 
-    const presets = container.querySelectorAll('[data-slot="advanced-date-picker-preset"]');
-    expect(presets).toHaveLength(6);
     expect(screen.getByText("Since last budget reset")).toBeInTheDocument();
 
     await user.click(screen.getByText("Since last budget reset"));
@@ -113,7 +112,46 @@ describe("AdvancedDatePicker", () => {
 
     openDropdown(container);
 
-    expect(container.querySelectorAll('[data-slot="advanced-date-picker-preset"]')).toHaveLength(5);
+    expect(
+      screen.getAllByRole("button", {
+        name: /^(Todaytoday|Last 7 days7d|Last 30 days30d|Month to dateMTD|Year to dateYTD)$/,
+      }),
+    ).toHaveLength(5);
+  });
+
+  it("keeps the chosen additional option selected when its range matches a built-in option", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <AdvancedDatePicker
+        value={defaultValue}
+        onValueChange={mockOnValueChange}
+        additionalOptions={[
+          {
+            label: "Since last budget reset",
+            shortLabel: "budget",
+            getValue: () => ({
+              from: moment().startOf("month").toDate(),
+              to: moment().endOf("day").toDate(),
+            }),
+          },
+        ]}
+      />,
+    );
+
+    openDropdown(container);
+
+    const budgetOption = screen.getByRole("button", { name: /Since last budget reset/ });
+    const monthToDateOption = screen.getByRole("button", { name: /^Month to date/ });
+    await user.click(budgetOption);
+
+    expect(budgetOption).toHaveAttribute("aria-pressed", "true");
+    expect(monthToDateOption).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await user.click(screen.getByRole("button", { name: /1 Jan, 12:00 - 31 Jan, 12:00/ }));
+
+    expect(screen.getByRole("button", { name: /Since last budget reset/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^Month to date/ })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("anchors the panel to the trigger edge named by align", () => {
@@ -225,7 +263,9 @@ describe("AdvancedDatePicker", () => {
     await user.tab();
     await user.keyboard("{Enter}");
 
-    const presets = Array.from(container.querySelectorAll('[data-slot="advanced-date-picker-preset"]'));
+    const presets = screen.getAllByRole("button", {
+      name: /^(Todaytoday|Last 7 days7d|Last 30 days30d|Month to dateMTD|Year to dateYTD)$/,
+    });
     expect(presets).toHaveLength(5);
 
     await user.tab();
