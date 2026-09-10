@@ -287,8 +287,10 @@ class LiteLLMCompletionResponsesConfig:
                 return ToolChoiceCustomParam(type="custom", name=custom_name)
             case _, {"type": "function", "function": {"name": str(function_name)}}:
                 return ToolChoiceFunctionParam(type="function", name=function_name)
-            case _, normalized:
-                return _RESPONSES_API_TOOL_CHOICE_ADAPTER.validate_python(normalized)
+            case _, "none" | "auto" | "required" as normalized:
+                return normalized
+            case _, _:
+                return "auto"
 
     @staticmethod
     def _should_drop_derived_web_search_options(model: str, custom_llm_provider: str | None) -> bool:

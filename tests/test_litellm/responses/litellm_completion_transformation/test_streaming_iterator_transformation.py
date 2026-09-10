@@ -685,3 +685,23 @@ def test_streamed_named_tool_choice_is_echoed_in_responses_api_shape() -> None:
         {"type": "function", "name": "run_command"},
     ]
     assert any(getattr(event, "type", None) == "response.output_item.done" for event in events)
+
+
+def test_streamed_unrecognized_tool_choice_is_echoed_as_auto() -> None:
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper([_tool_call_chunk(finish_reason="tool_calls")]),
+        request_input="Run the command pwd.",
+        responses_api_request={
+            "tools": [{"type": "function", "name": "run_command", "parameters": {"type": "object"}}],
+            "tool_choice": "any",
+        },
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    response_events: Final = [
+        event for event in iterator if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES
+    ]
+
+    assert [event.response.tool_choice for event in response_events] == ["auto", "auto", "auto"]
