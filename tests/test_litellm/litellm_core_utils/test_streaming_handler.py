@@ -6,7 +6,7 @@ import pytest
 
 import asyncio
 import traceback
-from typing import Optional
+from typing import Final, Optional
 
 import litellm
 from litellm import verbose_logger
@@ -2631,6 +2631,48 @@ def test_dispatch_cached_response_extracts_delta(
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
     assert model_response.id == "chatcmpl-cache-1"
     assert initialized_custom_stream_wrapper.response_id == "chatcmpl-cache-1"
+
+
+def test_dispatch_cached_response_without_choices_is_an_empty_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """A cached completion with no choices replays as an empty, unfinished chunk
+    instead of raising IndexError on choices[0]."""
+    initialized_custom_stream_wrapper.custom_llm_provider = "cached_response"
+    chunk: Final = ModelResponseStream(id="chatcmpl-cache-empty", choices=[])
+
+    result, model_response, completion_obj = _run_dispatch(
+        initialized_custom_stream_wrapper, chunk
+    )
+
+    assert isinstance(result, _ProviderChunkParsed)
+    assert completion_obj["content"] is None
+    assert initialized_custom_stream_wrapper.received_finish_reason is None
+    assert model_response.id == "chatcmpl-cache-empty"
+
+
+@pytest.mark.asyncio
+async def test_cached_response_without_choices_streams_a_single_stop_chunk(
+    logging_obj: Logging,
+):
+    """A stream cache hit on a completion stored with choices == [] ends with one
+    finish_reason=stop chunk, the same shape the live empty stream produced."""
+
+    async def cached_chunks():
+        yield ModelResponseStream(id="chatcmpl-cache-empty", choices=[])
+
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=cached_chunks(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    chunks: Final = tuple([chunk async for chunk in wrapper])
+
+    assert len(chunks) == 1
+    assert tuple(choice.finish_reason for chunk in chunks for choice in chunk.choices) == ("stop",)
+    assert all(choice.delta.content in (None, "") for chunk in chunks for choice in chunk.choices)
 
 
 def test_dispatch_vertex_ai_legacy_text_and_finish_reason(

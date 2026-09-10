@@ -335,29 +335,28 @@ def _closing_instruction_block_start(roles: Sequence[str | None], leading_length
     return last_conversation_index + 1
 
 
-def hoisted_developer_item_order(roles: Sequence[str | None]) -> tuple[int, ...]:
+def hoisted_instruction_indices(roles: Sequence[str | None]) -> tuple[int, ...]:
     """
-    Index order that moves every developer item after the leading instruction block
-    up into it, except a developer block that closes the conversation right after an
-    assistant turn, which stays in place so the request does not end on the assistant's
-    turn. Items without a role (tool calls and their outputs) count as conversation.
+    Indices of the leading instruction block plus every developer item after it, except
+    a developer block that closes the conversation right after an assistant turn, which
+    stays in place so the request does not end on the assistant's turn. Items without a
+    role (tool calls and their outputs) count as conversation.
     """
     leading_length: Final = _leading_instruction_block_length(roles)
     closing_start: Final = _closing_instruction_block_start(roles, leading_length)
-    conversation: Final = range(leading_length, closing_start)
-    hoisted: Final = tuple(index for index in conversation if roles[index] == "developer")
-    if hoisted:
-        verbose_logger.debug("Hoisting %d developer message(s) into the leading system block.", len(hoisted))
-    return (
-        *range(leading_length),
-        *hoisted,
-        *(index for index in conversation if roles[index] != "developer"),
-        *range(closing_start, len(roles)),
-    )
+    moved: Final = tuple(index for index in range(leading_length, closing_start) if roles[index] == "developer")
+    if moved:
+        verbose_logger.debug("Hoisting %d developer message(s) into the leading system block.", len(moved))
+    return (*range(leading_length), *moved)
+
+
+def _hoisted_developer_item_order(roles: Sequence[str | None]) -> tuple[int, ...]:
+    hoisted: Final = hoisted_instruction_indices(roles)
+    return (*hoisted, *(index for index in range(len(roles)) if index not in hoisted))
 
 
 def _move_later_developer_messages_up(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
-    order: Final = hoisted_developer_item_order(tuple(message["role"] for message in messages))
+    order: Final = _hoisted_developer_item_order(tuple(message["role"] for message in messages))
     return tuple(messages[index] for index in order)
 
 

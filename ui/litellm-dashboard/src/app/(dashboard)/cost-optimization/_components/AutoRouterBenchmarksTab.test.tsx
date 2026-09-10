@@ -187,10 +187,10 @@ describe("AutoRouterBenchmarksTab", () => {
   });
 
   it.each([
-    { spend: 20665.28, classifier_cost: 342.18, turns: 140815, llm: "$20,323.10", cost: "$342.18" },
-    { spend: 0, classifier_cost: 0, turns: 0, llm: "$0.00", cost: "$0.00" },
-    { spend: 0.002, classifier_cost: 0.0004, turns: 100, llm: "$0.0016", cost: "$0.0004" },
-  ])("shows total classification cost across $turns turns without a per-turn rate", ({ llm, cost, ...values }) => {
+    { spend: 20665.28, classifier_cost: 342.18, turns: 140815, llm: "$20,323.10", cost: "$342.18", rate: "$2.43" },
+    { spend: 0, classifier_cost: 0, turns: 0, llm: "$0.00", cost: "$0.00", rate: "$0.00" },
+    { spend: 0.002, classifier_cost: 0.0004, turns: 100, llm: "$0.0016", cost: "$0.0004", rate: "$0.0040" },
+  ])("shows total classification cost and its rate across $turns turns", ({ llm, cost, rate, ...values }) => {
     const stats = totals({ ...values, saved_spend: 10126.28, baseline_spend: values.spend + 10126.28 });
     mockHook({ data: response([group(stats)], stats) });
     renderTab();
@@ -201,7 +201,7 @@ describe("AutoRouterBenchmarksTab", () => {
         .map((node) => node.textContent)
         .slice(1, 3),
     ).toEqual([llm, cost]);
-    expect(screen.queryByText(/1K turns/)).not.toBeInTheDocument();
+    expect(screen.getByText(`(${rate} / 1K turns)`)).toBeInTheDocument();
     expect(screen.getAllByText("$10,126.28").length).toBeGreaterThan(0);
   });
 
@@ -237,7 +237,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(terms).toEqual([
       "Actual auto-router spend",
       "LLM spend",
-      "Classification cost",
+      "Classification cost($2.00 / 1K turns)",
       "Estimated spend at highest-tier model",
     ]);
     expect(values).toEqual(["$359.86", "$353.71", "$6.15", "$2,534.45"]);

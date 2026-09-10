@@ -1025,6 +1025,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServers,
             mcpServerToolRestrictions,
             mcpToolsets,
+            streamingEnabled,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(
@@ -1174,7 +1175,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
     return !model.mode || model.mode === "chat";
   };
 
-  const supportsStreamingToggle = endpointType === EndpointType.CHAT || endpointType === EndpointType.RESPONSES;
+  const supportsStreamingToggle =
+    endpointType === EndpointType.CHAT ||
+    endpointType === EndpointType.RESPONSES ||
+    endpointType === EndpointType.ANTHROPIC_MESSAGES;
   const modelsForEndpoint = useMemo(
     () => filterModelsForEndpoint(modelInfo, endpointType as EndpointType),
     [modelInfo, endpointType],
