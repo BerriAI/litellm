@@ -4071,7 +4071,7 @@ def test_deepseek_v4_models_in_cost_map():
     configured in model_prices_and_context_window.json.
 
     Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
-    - deepseek-v4-flash: $0.44/M input, $1.32/M output
+    - deepseek-v4-flash: $0.30/M input, $1.20/M output (served by DeepSeek-V4.1-Flash)
     - deepseek-v4-pro:   $1.32/M input, $3.96/M output
 
     Closes https://github.com/BerriAI/litellm/issues/26709
@@ -4085,7 +4085,8 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-flash", 3e-07, 1.2e-06, 6e-09),
+        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09),
         ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
@@ -4101,7 +4102,8 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-flash", 3e-07, 1.2e-06, 6e-09),
+        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09),
         ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
@@ -4129,7 +4131,8 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-flash", 3e-07, 1.2e-06, 6e-09),
+        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09),
         ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
@@ -4143,7 +4146,8 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-flash", 3e-07, 1.2e-06, 6e-09),
+        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09),
         ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
