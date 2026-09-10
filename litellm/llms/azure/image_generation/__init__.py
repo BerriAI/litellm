@@ -29,6 +29,6 @@ def get_azure_image_generation_config(model: str) -> BaseImageGenerationConfig:
         return AzureFoundryMAIImageGenerationConfig()
     else:
         verbose_logger.debug(
-            f"Using AzureGPTImageGenerationConfig for model: {model}. This follows the gpt-image model format."
+            "Using AzureGPTImageGenerationConfig for model: %s. This follows the gpt-image model format.", model
         )
         return AzureGPTImageGenerationConfig()

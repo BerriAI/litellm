@@ -10,7 +10,10 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
       BedrockMantleAuthMixin in common_utils.
 """
 
-from typing import Iterator, AsyncIterator, Any, List, Optional, Tuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, Final
+
+import httpx
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,8 +26,10 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
-from ..common_utils import mantle_base_segment
+from ...base_llm.chat.transformation import BaseLLMException
+from ...bedrock.common_utils import BedrockError
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+from ..common_utils import mantle_base_segment
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -37,21 +42,26 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         self._aws_signer = aws_signer or BaseAWSLLM()
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "bedrock_mantle"
 
     @classmethod
     def get_config(cls):
         return super().get_config()
 
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
     def _get_openai_compatible_provider_info(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        api_base: str | None,
+        api_key: str | None,
+        litellm_params: GenericLiteLLMParams | None = None,
         model: str | None = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
-        region = (
+    ) -> tuple[str | None, str | None]:
+        region: Final = (
             (litellm_params.aws_region_name if litellm_params else None)
             or get_secret_str("BEDROCK_MANTLE_REGION")
             or get_secret_str("AWS_REGION_NAME")
@@ -67,18 +77,18 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             or get_secret_str("BEDROCK_MANTLE_API_BASE")
             or f"https://bedrock-mantle.{region}.api.aws/{mantle_base_segment(model, litellm.model_cost)}"
         )
-        dynamic_api_key = self._resolve_bearer_token(api_key)
+        dynamic_api_key: Final = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         headers = super().validate_environment(
             headers=headers,
@@ -89,26 +99,26 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             api_key=api_key,
             api_base=api_base,
         )
-        project_id = litellm_params.get("aws_bedrock_project_id")
+        project_id: Final = litellm_params.get("aws_bedrock_project_id")
         if project_id:
             headers["OpenAI-Project"] = project_id
         return headers
 
     def get_supported_openai_params(self, model: str) -> list:
-        base_params = super().get_supported_openai_params(model)
+        base_params: Final = super().get_supported_openai_params(model)
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 if "reasoning_effort" not in base_params:
                     base_params.append("reasoning_effort")
         except Exception as e:
-            verbose_logger.debug(f"BedrockMantleChatConfig: error checking reasoning support: {e}")
+            verbose_logger.debug("BedrockMantleChatConfig: error checking reasoning support: %s", e)
         return base_params
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], Any],
+        streaming_response: Iterator[str] | AsyncIterator[str] | Any,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         from litellm.llms.openai.chat.gpt_transformation import (
             OpenAIChatCompletionStreamingHandler,

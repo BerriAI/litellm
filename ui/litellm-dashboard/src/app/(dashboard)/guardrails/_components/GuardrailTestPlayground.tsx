@@ -1,16 +1,20 @@
 import React, { useState } from "react";
-import { Card, List, Empty, Spin, Input, Typography } from "antd";
-import { ExperimentOutlined, SearchOutlined } from "@ant-design/icons";
+import { FlaskConical, Search } from "lucide-react";
 import GuardrailTestPanel from "./GuardrailTestPanel";
 import { applyGuardrail } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
+import { Card, CardContent } from "@/components/ui/card";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { GuardrailMode } from "@/components/guardrails/types";
+import { formatGuardrailMode } from "./guardrail_info_helpers";
 
 interface GuardrailItem {
   guardrail_id?: string;
   guardrail_name: string | null;
   litellm_params: {
     guardrail: string;
-    mode: string;
+    mode: GuardrailMode;
     default_on: boolean;
   };
   guardrail_info: Record<string, any> | null;
@@ -103,124 +107,121 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
     setIsTesting(false);
 
     if (results.length > 0) {
-      NotificationsManager.success(`${results.length} guardrail${results.length > 1 ? "s" : ""} applied successfully`);
+      toast.success(`${results.length} guardrail${results.length > 1 ? "s" : ""} applied successfully`);
     }
     if (errors.length > 0) {
-      NotificationsManager.fromBackend(`${errors.length} guardrail${errors.length > 1 ? "s" : ""} failed`);
+      toast.fromError(`${errors.length} guardrail${errors.length > 1 ? "s" : ""} failed`);
     }
   };
 
   return (
     <div className="w-full h-[calc(100vh-200px)]">
-      <Card className="h-full" styles={{ body: { padding: 0, height: "100%" } }}>
-        <div className="flex h-full">
-          {/* Left Sidebar - Guardrails List */}
-          <div className="w-1/4 border-r border-gray-200 flex flex-col overflow-hidden">
-            <div className="p-4 border-b border-gray-200">
-              <div className="mb-3">
-                <h3 className="text-lg font-semibold mb-3">Guardrails</h3>
-                <Input
-                  prefix={<SearchOutlined />}
-                  placeholder="Search guardrails..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
+      <Card className="h-full overflow-hidden py-0">
+        <CardContent className="h-full p-0">
+          <div className="flex h-full">
+            {/* Left Sidebar - Guardrails List */}
+            <div className="flex w-1/4 flex-col overflow-hidden border-r border-border">
+              <div className="border-b border-border p-4">
+                <div className="mb-3">
+                  <h3 className="mb-3 text-lg font-semibold">Guardrails</h3>
+                  <InputGroup>
+                    <InputGroupAddon>
+                      <Search className="size-4 text-muted-foreground" />
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      placeholder="Search guardrails..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                  </InputGroup>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-auto">
+                {isLoading ? (
+                  <div className="flex h-32 items-center justify-center" aria-busy="true">
+                    <UiLoadingSpinner className="size-6 text-muted-foreground" />
+                  </div>
+                ) : filteredGuardrails.length === 0 ? (
+                  <div className="p-4 text-center text-muted-foreground">
+                    {searchQuery ? "No guardrails match your search" : "No guardrails available"}
+                  </div>
+                ) : (
+                  <ul className="m-0 list-none p-0">
+                    {filteredGuardrails.map((guardrail) => (
+                      <li
+                        key={guardrail.guardrail_id ?? guardrail.guardrail_name}
+                        onClick={() => {
+                          if (guardrail.guardrail_name) {
+                            toggleGuardrailSelection(guardrail.guardrail_name);
+                          }
+                        }}
+                        className={`cursor-pointer border-b border-border py-3 pr-4 pl-6 transition-colors hover:bg-muted/40 ${
+                          selectedGuardrails.has(guardrail.guardrail_name || "")
+                            ? "border-l-4 border-l-primary bg-accent"
+                            : "border-l-4 border-l-transparent"
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2">
+                          <FlaskConical className="size-4 text-muted-foreground" />
+                          <span className="font-medium">{guardrail.guardrail_name}</span>
+                        </div>
+                        <div className="mt-1 space-y-1 text-xs">
+                          <div>
+                            <span className="font-medium">Type: </span>
+                            <span className="text-muted-foreground">{guardrail.litellm_params.guardrail}</span>
+                          </div>
+                          <div>
+                            <span className="font-medium">Mode: </span>
+                            <span className="text-muted-foreground">
+                              {formatGuardrailMode(guardrail.litellm_params.mode)}
+                            </span>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="border-t border-border bg-muted/40 p-3">
+                <span className="text-xs text-muted-foreground">
+                  {selectedGuardrails.size} of {filteredGuardrails.length} selected
+                </span>
               </div>
             </div>
 
-            <div className="flex-1 overflow-auto">
-              {isLoading ? (
-                <div className="flex items-center justify-center h-32">
-                  <Spin />
-                </div>
-              ) : filteredGuardrails.length === 0 ? (
-                <div className="p-4">
-                  <Empty description={searchQuery ? "No guardrails match your search" : "No guardrails available"} />
-                </div>
-              ) : (
-                <List
-                  dataSource={filteredGuardrails}
-                  renderItem={(guardrail) => (
-                    <List.Item
-                      onClick={() => {
-                        if (guardrail.guardrail_name) {
-                          toggleGuardrailSelection(guardrail.guardrail_name);
-                        }
-                      }}
-                      style={{ paddingLeft: 24, paddingRight: 16 }}
-                      className={`cursor-pointer hover:bg-gray-50 transition-colors ${
-                        selectedGuardrails.has(guardrail.guardrail_name || "")
-                          ? "bg-blue-50 border-l-4 border-l-blue-500"
-                          : "border-l-4 border-l-transparent"
-                      }`}
-                    >
-                      <List.Item.Meta
-                        title={
-                          <div className="flex items-center space-x-2">
-                            <ExperimentOutlined className="text-gray-400" />
-                            <span className="font-medium text-gray-900">{guardrail.guardrail_name}</span>
-                          </div>
-                        }
-                        description={
-                          <div className="text-xs space-y-1 mt-1">
-                            <div>
-                              <span className="font-medium">Type: </span>
-                              <span className="text-gray-600">{guardrail.litellm_params.guardrail}</span>
-                            </div>
-                            <div>
-                              <span className="font-medium">Mode: </span>
-                              <span className="text-gray-600">{guardrail.litellm_params.mode}</span>
-                            </div>
-                          </div>
-                        }
-                      />
-                    </List.Item>
-                  )}
-                />
-              )}
-            </div>
+            {/* Right Panel - Test Area */}
+            <div className="flex w-3/4 flex-col">
+              <div className="flex items-center justify-between border-b border-border p-4">
+                <h2 className="mb-0 text-xl font-semibold">Guardrail Testing Playground</h2>
+              </div>
 
-            <div className="p-3 border-t border-gray-200 bg-gray-50">
-              <Typography.Text className="text-xs text-gray-600">
-                {selectedGuardrails.size} of {filteredGuardrails.length} selected
-              </Typography.Text>
+              <div className="flex-1 overflow-auto p-4">
+                {selectedGuardrails.size === 0 ? (
+                  <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+                    <FlaskConical className="mb-4 size-12" />
+                    <p className="mb-2 text-lg font-medium">Select Guardrails to Test</p>
+                    <p className="max-w-md text-center">
+                      Choose one or more guardrails from the left sidebar to start testing and comparing results.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="h-full">
+                    <GuardrailTestPanel
+                      guardrailNames={Array.from(selectedGuardrails)}
+                      onSubmit={handleTestGuardrails}
+                      results={testResults.length > 0 ? testResults : null}
+                      errors={testErrors.length > 0 ? testErrors : null}
+                      isLoading={isTesting}
+                      onClose={() => setSelectedGuardrails(new Set())}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-
-          {/* Right Panel - Test Area */}
-          <div className="w-3/4 flex flex-col bg-white">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <Typography.Title level={2} className="text-xl font-semibold mb-0">
-                Guardrail Testing Playground
-              </Typography.Title>
-            </div>
-
-            <div className="flex-1 overflow-auto p-4">
-              {selectedGuardrails.size === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                  <ExperimentOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
-                  <Typography.Paragraph className="text-lg font-medium text-gray-600 mb-2">
-                    Select Guardrails to Test
-                  </Typography.Paragraph>
-                  <Typography.Paragraph className="text-center text-gray-500 max-w-md">
-                    Choose one or more guardrails from the left sidebar to start testing and comparing results.
-                  </Typography.Paragraph>
-                </div>
-              ) : (
-                <div className="h-full">
-                  <GuardrailTestPanel
-                    guardrailNames={Array.from(selectedGuardrails)}
-                    onSubmit={handleTestGuardrails}
-                    results={testResults.length > 0 ? testResults : null}
-                    errors={testErrors.length > 0 ? testErrors : null}
-                    isLoading={isTesting}
-                    onClose={() => setSelectedGuardrails(new Set())}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        </CardContent>
       </Card>
     </div>
   );

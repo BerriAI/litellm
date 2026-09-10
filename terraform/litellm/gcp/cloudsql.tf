@@ -36,7 +36,7 @@ resource "google_sql_database_instance" "writer" {
 
     ip_configuration {
       ipv4_enabled    = false
-      private_network = google_compute_network.this.id
+      private_network = local.network_id
     }
 
     insights_config {
@@ -55,6 +55,11 @@ resource "google_sql_database_instance" "writer" {
     # (full data loss). Set the initial size only; let Cloud SQL own it
     # thereafter.
     ignore_changes = [settings[0].disk_size]
+
+    precondition {
+      condition     = var.create_psa_connection || var.network_id != ""
+      error_message = "create_psa_connection must be true unless network_id references an existing VPC with Private Services Access configured."
+    }
   }
 }
 
@@ -76,7 +81,7 @@ resource "google_sql_database_instance" "reader" {
 
     ip_configuration {
       ipv4_enabled    = false
-      private_network = google_compute_network.this.id
+      private_network = local.network_id
     }
   }
 

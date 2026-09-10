@@ -5,7 +5,7 @@ import { Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { CellTooltip, DateCell, IdentityCell } from "@/components/shared/table_cells";
-import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { getVectorStoreProviderLogoAndName } from "@/components/vector_store_providers";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -19,7 +19,7 @@ import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 function VectorStoreProviderCell({ provider }: { provider: string }) {
-  const { displayName, logo } = getProviderLogoAndName(provider);
+  const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
   return (
     <div className="flex items-center gap-2">
       {logo ? (

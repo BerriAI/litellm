@@ -10,14 +10,11 @@ Targets the four helpers introduced on Router:
   - _aresponses_streaming_iterator
 """
 
-import os
-import sys
 from typing import Any, AsyncIterator, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import Router
 from litellm.types.llms.openai import (
@@ -88,6 +85,35 @@ def test_extract_partial_responses_usage_no_completed_response():
 
     usage = Router._extract_partial_responses_usage(source)
     assert usage is None
+
+
+def test_extract_partial_responses_usage_bridge_iterator_no_completed_response():
+    """
+    Regression for #35411: the bridge iterator
+    (LiteLLMCompletionStreamingIterator) overrides __init__ without calling
+    super().__init__(), so completed_response was never set until the stream
+    reached RESPONSE_COMPLETED. On a mid-stream provider error (before
+    completion) the fallback recovery path read source_iterator.completed_response
+    and raised AttributeError, masking the real provider error and bypassing
+    fallbacks. The attribute must always exist and default to None.
+    """
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
+
+    wrapper = MagicMock()
+    wrapper.logging_obj = MagicMock()
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="anthropic/claude-sonnet-4-5",
+        litellm_custom_stream_wrapper=wrapper,
+        request_input="hi",
+        responses_api_request={},
+    )
+
+    assert iterator.completed_response is None
+    # No chat chunks collected yet and no completed_response → must return
+    # None instead of raising AttributeError.
+    assert Router._extract_partial_responses_usage(iterator) is None
 
 
 # -------- _combine_responses_fallback_usage --------

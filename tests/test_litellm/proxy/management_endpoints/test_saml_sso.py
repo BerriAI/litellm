@@ -517,6 +517,39 @@ async def test_team_ids_extracted_from_groups_attribute(saml_env_idp_initiated):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "roles",
+    [
+        ["internal_user", "proxy_admin_viewer"],
+        ["proxy_admin_viewer", "internal_user"],
+    ],
+)
+async def test_multi_valued_role_attribute_resolves_to_highest_privilege(saml_env_idp_initiated, roles):
+    """An assertion carrying several roles must not depend on the order the IdP emitted them in."""
+    key_pem, cert_pem = saml_env_idp_initiated
+    resp = _build_signed_response(
+        key_pem,
+        cert_pem,
+        attributes={
+            "email": ["dave@example.com"],
+            "role": roles,
+        },
+    )
+
+    result = await _acs(_b64(resp), _shared_cache())
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+
+
+@pytest.mark.asyncio
+async def test_assertion_without_role_attribute_has_no_user_role(saml_env_idp_initiated):
+    key_pem, cert_pem = saml_env_idp_initiated
+    resp = _build_signed_response(key_pem, cert_pem, attributes={"email": ["erin@example.com"]})
+
+    result = await _acs(_b64(resp), _shared_cache())
+    assert result.user_role is None
+
+
+@pytest.mark.asyncio
 async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
     cache = DualCache()
     redirect = await SAMLAuthHandler.build_login_redirect(_fake_request(), cache)
@@ -642,3 +675,77 @@ async def test_read_acs_post_data_rejects_oversized_stream_without_content_lengt
     with pytest.raises(HTTPException) as exc:
         await SAMLAuthHandler.read_acs_post_data(cast(Request, request))
     assert exc.value.status_code == 413
+
+
+def _fake_request_with_scheme(scheme, headers=None, client_host="203.0.113.5"):
+    """A fuller fake Request than ``_fake_request``: adds ``url``, ``headers`` and
+    ``client``, which ``IPAddressUtils.is_request_https`` reads directly instead of
+    going through ``PROXY_BASE_URL``."""
+    return type(
+        "Req",
+        (),
+        {
+            "base_url": URL(f"{scheme}://proxy.example.com/"),
+            "url": URL(f"{scheme}://proxy.example.com/sso/saml/login"),
+            "query_params": {},
+            "cookies": {},
+            "headers": headers or {},
+            "client": type("Client", (), {"host": client_host})(),
+        },
+    )()
+
+
+class TestSAMLAuthnCookieSecureFlag:
+    """Regression tests for the litellm_saml_authn cookie's Secure attribute.
+    litellm only sees a plain-HTTP hop whenever TLS terminates at a reverse
+    proxy, so Secure must not be derived from the literal request scheme alone."""
+
+    @pytest.mark.asyncio
+    async def test_secure_over_direct_https(self, saml_env, monkeypatch):
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        cache = DualCache()
+        request = _fake_request_with_scheme("https")
+        redirect = await SAMLAuthHandler.build_login_redirect(request, cache)
+        cookie = redirect.headers["set-cookie"]
+        assert "Secure" in cookie
+        assert "SameSite=none" in cookie
+
+    @pytest.mark.asyncio
+    async def test_not_secure_over_direct_http(self, saml_env, monkeypatch):
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        cache = DualCache()
+        request = _fake_request_with_scheme("http")
+        redirect = await SAMLAuthHandler.build_login_redirect(request, cache)
+        cookie = redirect.headers["set-cookie"]
+        assert "Secure" not in cookie
+        assert "SameSite=lax" in cookie
+
+    @pytest.mark.asyncio
+    async def test_secure_behind_trusted_tls_terminating_proxy(self, saml_env, monkeypatch):
+        """THE regression: TLS terminates at a reverse proxy, litellm only sees a
+        plain-HTTP hop, but the cookie must still be marked Secure when the operator
+        has configured a trusted proxy reporting X-Forwarded-Proto: https."""
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+        )
+        cache = DualCache()
+        request = _fake_request_with_scheme(
+            "http", headers={"X-Forwarded-Proto": "https"}, client_host="10.0.0.5"
+        )
+        redirect = await SAMLAuthHandler.build_login_redirect(request, cache)
+        cookie = redirect.headers["set-cookie"]
+        assert "Secure" in cookie
+
+    @pytest.mark.asyncio
+    async def test_untrusted_spoofed_forwarded_proto_is_ignored(self, saml_env, monkeypatch):
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        cache = DualCache()
+        request = _fake_request_with_scheme(
+            "http", headers={"X-Forwarded-Proto": "https"}, client_host="203.0.113.5"
+        )
+        redirect = await SAMLAuthHandler.build_login_redirect(request, cache)
+        cookie = redirect.headers["set-cookie"]
+        assert "Secure" not in cookie

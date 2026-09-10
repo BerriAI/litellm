@@ -4,7 +4,7 @@ import asyncio
 import json
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 from urllib.parse import urlsplit
 
 import httpx
@@ -49,16 +49,16 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
-GUARDRAIL_NAME = "straiker"
-DEFAULT_BLOCK_MESSAGE = "Content violates policy"
-DEFAULT_API_BASE = "https://api.prod.straiker.ai"
-DEFAULT_MAX_PAYLOAD_BYTES = 524288
-WEBHOOK_PATH = "/api/v1/detect/webhook"
-RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504})
-UNREACHABLE_STATUS = frozenset({502, 503, 504})
-_APPLICATION_METADATA_KEYS = frozenset({"agent_id", "app_name"})
-_OPAQUE_METADATA_SCALAR_TYPES = (str, int, float, bool)
-_JSON_DICT_ADAPTER = TypeAdapter(dict[str, object])
+GUARDRAIL_NAME: Final = "straiker"
+DEFAULT_BLOCK_MESSAGE: Final = "Content violates policy"
+DEFAULT_API_BASE: Final = "https://api.prod.straiker.ai"
+DEFAULT_MAX_PAYLOAD_BYTES: Final = 524288
+WEBHOOK_PATH: Final = "/api/v1/detect/webhook"
+RETRY_STATUS: Final = frozenset({408, 429, 500, 502, 503, 504})
+UNREACHABLE_STATUS: Final = frozenset({502, 503, 504})
+_APPLICATION_METADATA_KEYS: Final = frozenset({"agent_id", "app_name"})
+_OPAQUE_METADATA_SCALAR_TYPES: Final = (str, int, float, bool)
+_JSON_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +83,7 @@ def _as_optional_str(value: object) -> str | None:
 
 
 def _build_webhook_metadata(request_data: dict, default_metadata: dict[str, str]) -> dict[str, object] | None:
-    out: dict[str, object] = {}
+    out: Final[dict[str, object]] = {}
     for key, value in _as_dict(request_data.get("metadata")).items():
         if key in _APPLICATION_METADATA_KEYS or key.startswith("user_api"):
             continue
@@ -96,7 +96,7 @@ def _build_webhook_metadata(request_data: dict, default_metadata: dict[str, str]
 
 
 def _extract_identity(request_data: dict) -> StraikerWebhookIdentity:
-    meta = _merged_metadata(request_data)
+    meta: Final = _merged_metadata(request_data)
     return StraikerWebhookIdentity(
         litellm_key=_as_optional_str(meta.get("user_api_key_alias"))
         or _as_optional_str(meta.get("user_api_key_hash"))
@@ -111,8 +111,8 @@ def _extract_identity(request_data: dict) -> StraikerWebhookIdentity:
 
 
 def _resolve_provider(request_data: dict, model: str | None) -> str | None:
-    litellm_params = _as_dict(request_data.get("litellm_params"))
-    custom_llm_provider = request_data.get("custom_llm_provider") or litellm_params.get("custom_llm_provider")
+    litellm_params: Final = _as_dict(request_data.get("litellm_params"))
+    custom_llm_provider: Final = request_data.get("custom_llm_provider") or litellm_params.get("custom_llm_provider")
     if custom_llm_provider:
         return custom_llm_provider
     if not model:
@@ -129,8 +129,8 @@ def _resolve_provider(request_data: dict, model: str | None) -> str | None:
 
 
 def _resolve_destination(request_data: dict) -> str | None:
-    litellm_params = _as_dict(request_data.get("litellm_params"))
-    api_base = request_data.get("api_base") or litellm_params.get("api_base")
+    litellm_params: Final = _as_dict(request_data.get("litellm_params"))
+    api_base: Final = request_data.get("api_base") or litellm_params.get("api_base")
     if not isinstance(api_base, str):
         return None
     try:
@@ -143,15 +143,15 @@ def _route_has_translation(request_data: dict) -> bool:
     from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
     from litellm.llms import load_guardrail_translation_mappings
 
-    route = _as_dict(request_data.get("litellm_metadata")).get("user_api_key_request_route")
+    route: Final = _as_dict(request_data.get("litellm_metadata")).get("user_api_key_request_route")
     if not isinstance(route, str) or not route:
         return False
-    mappings = load_guardrail_translation_mappings()
+    mappings: Final = load_guardrail_translation_mappings()
     return any(call_type in mappings for call_type in get_call_types_for_route(route) or ())
 
 
 def _request_structured_messages(request_data: dict) -> list[dict[str, Any]] | None:
-    messages = request_data.get("messages")
+    messages: Final = request_data.get("messages")
     if messages:
         return messages if isinstance(messages, list) else None
     if not _route_has_translation(request_data):
@@ -169,8 +169,8 @@ def _configured_modes(event_hook: object) -> list[str] | None:
     elif isinstance(event_hook, (str, GuardrailEventHooks)):
         names = [_hook_name(event_hook)]
     elif isinstance(event_hook, Mode):
-        default = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
-        tags = [v for value in event_hook.tags.values() for v in (value if isinstance(value, list) else [value])]
+        default: Final = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
+        tags: Final = [v for value in event_hook.tags.values() for v in (value if isinstance(value, list) else [value])]
         names = [_hook_name(v) for v in (*default, *tags) if v is not None]
     else:
         return None
@@ -178,7 +178,7 @@ def _configured_modes(event_hook: object) -> list[str] | None:
 
 
 def _resolve_call_surface(logging_obj: LiteLLMLoggingObj | None, request_data: dict) -> str:
-    call_type = (
+    call_type: Final = (
         (getattr(logging_obj, "call_type", None) if logging_obj is not None else None)
         or request_data.get("call_type")
         or request_data.get("litellm_call_type")
@@ -197,7 +197,7 @@ def _jsonable_dict(value: object) -> dict[str, object] | None:
 def _opaque_dict_list(value: object) -> list[dict[str, object]] | None:
     if not isinstance(value, list):
         return None
-    items = tuple(plain for item in value if (plain := _jsonable_dict(item)) is not None)
+    items: Final = tuple(plain for item in value if (plain := _jsonable_dict(item)) is not None)
     return list(items) if items else None
 
 
@@ -245,17 +245,17 @@ def _as_optional_int(value: object) -> int | None:
 
 
 def _usage_token_count(usage: object, openai_key: str, anthropic_key: str) -> int | None:
-    get = usage.get if isinstance(usage, dict) else lambda key: getattr(usage, key, None)
-    openai_count = _as_optional_int(get(openai_key))
+    get: Final = usage.get if isinstance(usage, dict) else lambda key: getattr(usage, key, None)
+    openai_count: Final = _as_optional_int(get(openai_key))
     return openai_count if openai_count is not None else _as_optional_int(get(anthropic_key))
 
 
 def _build_usage(response: object) -> StraikerWebhookUsage | None:
-    usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+    usage: Final = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
     if usage is None:
         return None
-    input_tokens = _usage_token_count(usage, "prompt_tokens", "input_tokens")
-    output_tokens = _usage_token_count(usage, "completion_tokens", "output_tokens")
+    input_tokens: Final = _usage_token_count(usage, "prompt_tokens", "input_tokens")
+    output_tokens: Final = _usage_token_count(usage, "completion_tokens", "output_tokens")
     if input_tokens is None and output_tokens is None:
         return None
     return StraikerWebhookUsage(input_tokens=input_tokens, output_tokens=output_tokens)
@@ -264,7 +264,7 @@ def _build_usage(response: object) -> StraikerWebhookUsage | None:
 def _is_streamed_request(request_data: dict) -> bool:
     if request_data.get("stream") is True:
         return True
-    body = _as_dict(_as_dict(request_data.get("proxy_server_request")).get("body"))
+    body: Final = _as_dict(_as_dict(request_data.get("proxy_server_request")).get("body"))
     return body.get("stream") is True
 
 
@@ -333,8 +333,8 @@ class StraikerGuardrail(CustomGuardrail):
         return f"{self.api_base}{WEBHOOK_PATH}"
 
     def _headers(self) -> dict[str, str]:
-        reserved = {"authorization", "content-type", "x-straiker-webhook-format"}
-        extra = {k: v for k, v in self.custom_headers.items() if k.lower() not in reserved}
+        reserved: Final = {"authorization", "content-type", "x-straiker-webhook-format"}
+        extra: Final = {k: v for k, v in self.custom_headers.items() if k.lower() not in reserved}
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -343,8 +343,8 @@ class StraikerGuardrail(CustomGuardrail):
         }
 
     def _build_application(self, request_data: dict) -> StraikerWebhookApplication:
-        meta = _merged_metadata(request_data)
-        agent_id = _as_optional_str(meta.get("agent_id"))
+        meta: Final = _merged_metadata(request_data)
+        agent_id: Final = _as_optional_str(meta.get("agent_id"))
         return StraikerWebhookApplication(
             source=agent_id or self.source,
             name=_as_optional_str(meta.get("app_name")),
@@ -376,11 +376,11 @@ class StraikerGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None,
     ) -> StraikerWebhookRequest:
-        model = inputs.get("model") or request_data.get("model")
-        call_id = getattr(logging_obj, "litellm_call_id", None) if logging_obj else None
-        event_id = f"{call_id or 'litellm'}:{input_type}"
+        model: Final = inputs.get("model") or request_data.get("model")
+        call_id: Final = getattr(logging_obj, "litellm_call_id", None) if logging_obj else None
+        event_id: Final = f"{call_id or 'litellm'}:{input_type}"
 
-        content = StraikerWebhookContent(
+        content: Final = StraikerWebhookContent(
             texts=list(inputs.get("texts") or []),
             images=list(inputs.get("images") or []),
             structured_messages=_opaque_dict_list(inputs.get("structured_messages")),
@@ -399,12 +399,12 @@ class StraikerGuardrail(CustomGuardrail):
                 metadata=_build_webhook_metadata(request_data, self.default_metadata),
             )
 
-        response_obj = request_data.get("response")
+        response_obj: Final = request_data.get("response")
         content.finish_reason = _response_finish_reason(response_obj)
-        request_content = StraikerWebhookContent(
+        request_content: Final = StraikerWebhookContent(
             structured_messages=_opaque_dict_list(_request_structured_messages(request_data)),
         )
-        phase: Literal["none", "assembled"] = "assembled" if _is_streamed_request(request_data) else "none"
+        phase: Final[Literal["none", "assembled"]] = "assembled" if _is_streamed_request(request_data) else "none"
         event = StraikerWebhookEvent(type="post_call", id=event_id, stream=StraikerWebhookStream(phase=phase))
         return StraikerWebhookRequest(
             event=event,
@@ -422,16 +422,16 @@ class StraikerGuardrail(CustomGuardrail):
             body = json.dumps(payload).encode("utf-8")
         except (TypeError, ValueError, OverflowError) as error:
             return None, _WebhookFailure(f"request serialization failed: {error}", is_unreachable=False)
-        body_bytes = len(body)
+        body_bytes: Final = len(body)
         if body_bytes > self.max_payload_bytes:
             return None, _WebhookFailure(
                 f"payload {body_bytes}B exceeds max_payload_bytes {self.max_payload_bytes}",
                 is_unreachable=False,
             )
 
-        url = self._webhook_url()
-        headers = self._headers()
-        attempts = self.max_retries + 1
+        url: Final = self._webhook_url()
+        headers: Final = self._headers()
+        attempts: Final = self.max_retries + 1
         last_failure: _WebhookFailure | None = None
 
         if self.verbose:
@@ -494,10 +494,10 @@ class StraikerGuardrail(CustomGuardrail):
     ) -> None:
         if not self.verbose:
             return
-        response_obj = request_data.get("response")
-        hidden = getattr(response_obj, "_hidden_params", None)
+        response_obj: Final = request_data.get("response")
+        hidden: Final = getattr(response_obj, "_hidden_params", None)
         if isinstance(hidden, dict):
-            straiker_hidden = hidden.setdefault("straiker", {})
+            straiker_hidden: Final = hidden.setdefault("straiker", {})
             if isinstance(straiker_hidden, dict):
                 straiker_hidden.update({"action": parsed.action, "turn_id": parsed.turn_id})
 
@@ -510,7 +510,7 @@ class StraikerGuardrail(CustomGuardrail):
         error: str,
         is_unreachable: bool,
     ) -> GenericGuardrailAPIInputs:
-        fail_open = (is_unreachable and self.unreachable_fallback == "fail_open") or not self.fail_on_error
+        fail_open: Final = (is_unreachable and self.unreachable_fallback == "fail_open") or not self.fail_on_error
         verbose_proxy_logger.error(
             json.dumps(
                 {
@@ -536,12 +536,14 @@ class StraikerGuardrail(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         message: str,
+        blocked_content: bool = False,
     ) -> NoReturn:
         if input_type == "request":
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
                 message=message,
                 should_wrap_with_default_message=False,
+                blocked_content=blocked_content,
             )
         raise ModifyResponseException(
             message=message,
@@ -556,7 +558,7 @@ class StraikerGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         parsed: StraikerWebhookResponse,
     ) -> GenericGuardrailAPIInputs:
-        return_inputs: GenericGuardrailAPIInputs = {}
+        return_inputs: Final[GenericGuardrailAPIInputs] = {}
         return_inputs.update(inputs)
         if parsed.texts is not None:
             return_inputs["texts"] = parsed.texts
@@ -571,13 +573,13 @@ class StraikerGuardrail(CustomGuardrail):
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         try:
-            envelope = self._build_envelope(
+            envelope: Final = self._build_envelope(
                 inputs=inputs,
                 request_data=request_data,
                 input_type=input_type,
                 logging_obj=logging_obj,
             )
-            payload = envelope.model_dump(mode="json", exclude_none=True)
+            payload: Final = envelope.model_dump(mode="json", exclude_none=True)
         except (ValidationError, TypeError, ValueError) as error:
             return self._fail(
                 inputs=inputs,
@@ -623,14 +625,16 @@ class StraikerGuardrail(CustomGuardrail):
                 request_data=request_data,
                 input_type=input_type,
                 message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
+                blocked_content=True,
             )
         if parsed.action == "GUARDRAIL_INTERVENED":
-            is_streamed_response = input_type == "response" and _is_streamed_request(request_data)
+            is_streamed_response: Final = input_type == "response" and _is_streamed_request(request_data)
             if parsed.texts is None or is_streamed_response:
                 self._block(
                     request_data=request_data,
                     input_type=input_type,
                     message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
+                    blocked_content=True,
                 )
             return self._intervened_inputs(inputs, parsed)
         return inputs

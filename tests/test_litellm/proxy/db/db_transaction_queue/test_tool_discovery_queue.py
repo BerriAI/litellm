@@ -2,12 +2,9 @@
 Unit tests for ToolDiscoveryQueue.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,

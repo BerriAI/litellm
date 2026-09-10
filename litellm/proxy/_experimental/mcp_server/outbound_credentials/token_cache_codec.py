@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Final
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
@@ -28,7 +29,7 @@ class OAuthTokenCacheCodec:
         return self.encrypt(token.access_token)
 
     def decode(self, blob: str) -> OAuthToken | None:
-        access_token = self.decrypt(blob)
+        access_token: Final = self.decrypt(blob)
         if not access_token:
             return None
         return OAuthToken(access_token=access_token, refresh_token=None)

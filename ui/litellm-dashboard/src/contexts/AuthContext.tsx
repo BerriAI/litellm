@@ -4,7 +4,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { jwtDecode } from "jwt-decode";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
-import { formatUserRole } from "@/utils/roles";
+import { effectiveSessionRole } from "@/utils/roles";
 import { getUiConfig, setGlobalLitellmHeaderName } from "@/components/networking";
 
 function deleteCookie(name: string, path = "/") {
@@ -107,7 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation);
 
     if (decoded.user_role) {
-      setUserRole(formatUserRole(decoded.user_role));
+      setUserRole(effectiveSessionRole(decoded.user_role));
     }
     if (decoded.user_email) {
       setUserEmail(decoded.user_email);

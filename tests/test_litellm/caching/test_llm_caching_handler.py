@@ -9,16 +9,12 @@ See: https://github.com/BerriAI/litellm/pull/22247
 """
 
 import asyncio
-import os
-import sys
 import warnings
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
+from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.caching.llm_caching_handler import LLMClientCache
 
 
@@ -154,6 +150,71 @@ def test_remove_key_no_event_loop():
     # Should not raise even though there's no running event loop
     cache._remove_key("test-key")
     assert "test-key" not in cache.cache_dict
+
+
+class _FakeClock:
+    """Hand-advanced monotonic clock, so grace windows need no real waiting."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.mark.asyncio
+async def test_evicted_litellm_owned_client_is_closed_once_the_grace_window_elapses():
+    """
+    Eviction only drops the cache's reference. The SDK clients are reference
+    cycles, so without an explicit close the client keeps its connection pool
+    open until a generational collection runs.
+    """
+    clock = _FakeClock()
+    cache = LLMClientCache(
+        max_size_in_memory=2,
+        evicted_client_closer=EvictedClientCloser(grace_seconds=60.0, clock=clock),
+    )
+
+    client = MockAsyncClient()
+    cache.set_cache("client-key", client, litellm_owned_client=True, ttl=600)
+
+    cache.ttl_dict = {key: 0 for key in cache.ttl_dict}
+    cache.expiration_heap = [(0, key) for _, key in cache.expiration_heap]
+    cache.evict_cache()
+    await asyncio.sleep(0.1)
+    assert client.closed is False, "an in-flight request may still hold the client"
+
+    clock.advance(61.0)
+    cache.get_cache("any-key")
+    await asyncio.sleep(0.1)
+
+    assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_evicted_caller_supplied_client_is_never_closed():
+    """litellm does not own a client the caller passed in, so it must stay open."""
+    clock = _FakeClock()
+    cache = LLMClientCache(
+        max_size_in_memory=2,
+        evicted_client_closer=EvictedClientCloser(grace_seconds=60.0, clock=clock),
+    )
+
+    client = MockAsyncClient()
+    cache.set_cache("client-key", client, ttl=600)
+
+    cache.ttl_dict = {key: 0 for key in cache.ttl_dict}
+    cache.expiration_heap = [(0, key) for _, key in cache.expiration_heap]
+    cache.evict_cache()
+
+    clock.advance(3600.0)
+    cache.get_cache("any-key")
+    await asyncio.sleep(0.1)
+
+    assert client.closed is False
 
 
 def test_remove_key_removes_plain_values():

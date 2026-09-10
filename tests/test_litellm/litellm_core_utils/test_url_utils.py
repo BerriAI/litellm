@@ -1,5 +1,9 @@
+import asyncio
 import socket
+import threading
+import time
 
+import httpx
 import pytest
 
 import litellm
@@ -100,12 +104,12 @@ class TestEncodeUrlPathSegment:
 
     @pytest.mark.parametrize("value", ["", ".", "..", None])
     def test_rejects_empty_and_dot_segments(self, value):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"resource_id (is required|cannot be a dot path segment)"):
             encode_url_path_segment(value, field_name="resource_id")
 
     @pytest.mark.parametrize("value", ["../model", "model/../other", "/model"])
     def test_rejects_dot_segments_in_multi_segment_paths(self, value):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match=r"model (is required|cannot be a dot path segment)"):
             encode_url_path_segments(value, field_name="model")
 
 
@@ -535,3 +539,34 @@ def test_assert_same_origin_error_message_does_not_leak_hostnames():
     detail = str(exc.value)
     assert "attacker.example.com" not in detail
     assert "api.internal-corp.example" not in detail
+
+
+async def test_async_safe_get_resolves_dns_off_the_event_loop(monkeypatch):
+    loop_thread = threading.current_thread()
+    resolver_threads = []
+
+    def slow_getaddrinfo(host, port, *args, **kwargs):
+        resolver_threads.append(threading.current_thread())
+        time.sleep(0.4)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 443))]
+
+    monkeypatch.setattr(url_utils.socket, "getaddrinfo", slow_getaddrinfo)
+
+    class FakeClient:
+        async def get(self, url, **kwargs):
+            return httpx.Response(200, request=httpx.Request("GET", url))
+
+    ticks = [time.perf_counter()]
+
+    async def heartbeat():
+        while True:
+            await asyncio.sleep(0.01)
+            ticks.append(time.perf_counter())
+
+    beating = asyncio.create_task(heartbeat())
+    response = await url_utils.async_safe_get(FakeClient(), "https://img.example/a.png")
+    beating.cancel()
+
+    assert response.status_code == 200
+    assert resolver_threads and all(thread is not loop_thread for thread in resolver_threads)
+    assert max(b - a for a, b in zip(ticks, ticks[1:])) < 0.2

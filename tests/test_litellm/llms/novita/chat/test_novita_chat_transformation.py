@@ -5,16 +5,11 @@ These tests validate the NovitaConfig class which extends OpenAIGPTConfig.
 Novita AI is an OpenAI-compatible provider with a few customizations.
 """
 
-import os
-import sys
 from typing import Dict, List, Optional
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.novita.chat.transformation import NovitaConfig
 
@@ -47,7 +42,7 @@ class TestNovitaConfig:
         """Test error handling when API key is missing"""
         config = NovitaConfig()
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match='Missing Novita AI API Key - A call is being made to novita') as excinfo:
             config.validate_environment(
                 headers={},
                 model="novita/meta-llama/llama-3.3-70b-instruct",

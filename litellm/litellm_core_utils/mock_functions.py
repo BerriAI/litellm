@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 from ..types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -9,7 +7,7 @@ from ..types.utils import (
 )
 
 
-def mock_embedding(model: str, mock_response: Optional[List[float]]):
+def mock_embedding(model: str, mock_response: list[float] | None):
     if mock_response is None:
         mock_response = [0.0] * 1536
     elif mock_response == "error":
