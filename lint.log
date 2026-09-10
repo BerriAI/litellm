@@ -1,0 +1,45 @@
+check: logging full output to /Users/jvalluru/LiteLLM-work/litellm/.git/worktrees/litellm-lit-5777/pre_commit_lint.log
+check: nothing staged; scoping to the working tree's diff against the merge base with origin/litellm_internal_staging:
+    ui/litellm-dashboard/src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx
+    ui/litellm-dashboard/src/components/mcp_tools/MCPToolArgumentsForm.tsx
+    ui/litellm-dashboard/tsconfig.tsbuildinfo
+check: linting dashboard (prettier + eslint + lint budgets)
+Checking formatting...
+All matched files use Prettier code style!
+
+/Users/jvalluru/LiteLLM-work/litellm-lit-5777/ui/litellm-dashboard/src/components/mcp_tools/MCPToolArgumentsForm.tsx
+   30:7   warning  Boolean expression combines 4 conditions; extract it into a named variable  local/no-long-condition-chain
+   89:65  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+   92:80  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  101:74  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  101:80  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  148:62  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  158:26  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  161:19  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  162:41  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  165:49  warning  Arrow function has a complexity of 28. Maximum allowed is 20                complexity
+  167:9   warning  Boolean expression combines 4 conditions; extract it into a named variable  local/no-long-condition-chain
+  187:15  warning  Boolean expression combines 4 conditions; extract it into a named variable  local/no-long-condition-chain
+  189:17  warning  Boolean expression combines 4 conditions; extract it into a named variable  local/no-long-condition-chain
+  216:49  warning  Unexpected any. Specify a different type                                    @typescript-eslint/no-explicit-any
+  342:28  warning  Arrow function has a complexity of 21. Maximum allowed is 20                complexity
+
+✖ 15 problems (0 errors, 15 warnings)
+
+@typescript-eslint/no-explicit-any: 1472 | max: 2040 | target: 1500 | at target
+no-console: 12 | max: 12 | target: 0 | 0 of headroom
+complexity: 126 | max: 140 | target: 80 | 14 of headroom
+max-depth: 53 | max: 70 | target: 30 | 17 of headroom
+local/no-large-inline-object-arg: 551 | max: 551 | target: 300 | 0 of headroom
+local/no-long-condition-chain: 196 | max: 196 | target: 120 | 0 of headroom
+testing-library/no-container: 132 | max: 133 | target: 50 | 1 of headroom
+testing-library/no-node-access: 704 | max: 707 | target: 500 | 3 of headroom
+testing-library/prefer-screen-queries: 18 | max: 18 | target: 18 | at target
+check: summary
+    skipped: Python lint (make lint) (no litellm/ Python files in scope)
+    skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)
+    skipped: test-tree lint (ruff-tests.toml + test-quality budget) (no tests/ Python files or test-tree lint inputs in scope)
+    ran:     dashboard lint (prettier + eslint + lint budgets)
+    skipped: dashboard API-type sync (npm run gen:api) (no litellm/proxy, litellm/types, or generator files in scope)
+check: PASS
+check: full log: /Users/jvalluru/LiteLLM-work/litellm/.git/worktrees/litellm-lit-5777/pre_commit_lint.log

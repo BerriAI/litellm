@@ -1,0 +1,34 @@
+{
+  "request": {
+    "id": "72360.927",
+    "method": "POST",
+    "url": "http://localhost:45777/mcp-rest/tools/call",
+    "payload": {
+      "server_id": "6019b2b29a1ec85ec7b3a6693d70c129",
+      "name": "echo_required",
+      "arguments": {
+        "filter.category": "invoices",
+        "query": "September",
+        "options": {
+          "region": "eu"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "_meta": null,
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"filter.category\": \"invoices\", \"query\": \"September\", \"options\": {\"region\": \"eu\"}}",
+          "annotations": null,
+          "_meta": null
+        }
+      ],
+      "structuredContent": null,
+      "isError": false
+    }
+  }
+}

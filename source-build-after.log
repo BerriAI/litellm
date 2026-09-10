@@ -1,0 +1,276 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 6.08kB done
+#1 DONE 0.0s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1.7
+#2 DONE 0.6s
+
+#3 docker-image://docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
+#3 resolve docker.io/docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e done
+#3 CACHED
+
+#4 [internal] load metadata for cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
+#4 DONE 0.0s
+
+#5 [internal] load metadata for docker.io/library/node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
+#5 DONE 0.0s
+
+#6 [internal] load metadata for ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+#6 DONE 0.0s
+
+#7 [internal] load .dockerignore
+#7 transferring context: 782B done
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 DONE 0.0s
+
+#9 [ui-builder 1/6] FROM docker.io/library/node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
+#9 resolve docker.io/library/node:24.19-alpine3.24@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 done
+#9 DONE 0.0s
+
+#10 [runtime  1/12] FROM cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
+#10 resolve cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d
+#10 resolve cgr.dev/chainguard/wolfi-base@sha256:e624c5d5e42382ce7165ddafcbbf8e6769a24cbd02ea6114b880b05ae5ba2a8d 0.0s done
+#10 DONE 0.0s
+
+#11 [uvbin 1/1] FROM ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a
+#11 resolve ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a done
+#11 DONE 0.0s
+
+#8 [internal] load build context
+#8 transferring context: 2.01MB 0.2s done
+#8 DONE 0.2s
+
+#12 [ui-builder 2/6] WORKDIR /ui
+#12 CACHED
+
+#13 [ui-builder 3/6] COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+#13 CACHED
+
+#14 [ui-builder 4/6] RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
+#14 CACHED
+
+#15 [builder  2/16] WORKDIR /app
+#15 CACHED
+
+#16 [builder  4/16] COPY --from=uvbin /uvx /usr/local/bin/uvx
+#16 CACHED
+
+#17 [builder  7/16] COPY enterprise/pyproject.toml enterprise/
+#17 CACHED
+
+#18 [builder  8/16] COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
+#18 CACHED
+
+#19 [builder  3/16] COPY --from=uvbin /uv /usr/local/bin/uv
+#19 CACHED
+
+#20 [builder  5/16] RUN apk add --no-cache     bash     gcc     python-3.13     python-3.13-dev     rust     openssl     openssl-dev     nodejs     npm     libsndfile
+#20 CACHED
+
+#21 [builder  6/16] COPY pyproject.toml uv.lock ./
+#21 CACHED
+
+#22 [builder  9/16] RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable     --extra proxy     --extra proxy-runtime     --extra extra_proxy     --extra semantic-router     --extra saml     --extra bedrock-realtime     --python python3.13
+#22 CACHED
+
+#23 [builder 10/16] COPY . .
+#23 ...
+
+#24 [ui-builder 5/6] COPY ui/litellm-dashboard/ ./
+#24 DONE 0.2s
+
+#25 [ui-builder 6/6] RUN npm run build
+#25 0.432 
+#25 0.432 > litellm-dashboard@0.1.0 build
+#25 0.432 > next build
+#25 0.432 
+#25 ...
+
+#23 [builder 10/16] COPY . .
+#23 DONE 1.0s
+
+#26 [builder 11/16] RUN rm -rf litellm/proxy/_experimental/out
+#26 DONE 0.1s
+
+#25 [ui-builder 6/6] RUN npm run build
+#25 0.773 ▲ Next.js 16.3.3 (Turbopack)
+#25 0.773 - Environments: .env.production
+#25 0.782 ✓ Running next.config.mjs took 8ms
+#25 0.798 - Experiments (use with caution):
+#25 0.798   ⨯ useTypeScriptCli
+#25 0.798 
+#25 0.814   Creating an optimized production build ...
+#25 8.992 ✓ Compiled successfully in 8.1s
+#25 8.995   Running TypeScript ...
+#25 33.80   Finished TypeScript in 24.8s ...
+#25 33.80   Collecting page data using 17 workers ...
+#25 34.37   Generating static pages using 17 workers (0/51) ...
+#25 34.68   Generating static pages using 17 workers (12/51) 
+#25 34.82   Generating static pages using 17 workers (25/51) 
+#25 34.88   Generating static pages using 17 workers (38/51) 
+#25 34.96 ✓ Generating static pages using 17 workers (51/51) in 592ms
+#25 34.96   Finalizing page optimization ...
+#25 34.96 Turbopack build encountered 1 warning:
+#25 34.96 ./public/assets/logos/enkrypt_ai.avif
+#25 34.96 Warning: AVIF image not supported
+#25 34.96 This version of Turbopack does not support AVIF images, will emit without optimization or encoding
+#25 34.96 
+#25 34.96 Import trace:
+#25 34.96   Client Component SSR:
+#25 34.96     ./public/assets/logos/enkrypt_ai.avif
+#25 34.96     ./src/app/(dashboard)/guardrails/_components/guardrail_info_helpers.tsx [Client Component SSR]
+#25 34.96     ./src/app/(dashboard)/guardrails/_components/GuardrailsPanel.tsx [Client Component SSR]
+#25 34.96     ./src/app/(dashboard)/guardrails/page.tsx [Client Component SSR]
+#25 34.96     ./src/app/(dashboard)/guardrails/page.tsx [Server Component]
+#25 34.96 
+#25 34.96 
+#25 35.05 
+#25 35.05 Route (app)
+#25 35.05 ┌ ○ /
+#25 35.05 ├ ○ /_not-found
+#25 35.05 ├ ○ /access-groups
+#25 35.05 ├ ○ /admin-panel
+#25 35.05 ├ ○ /agents
+#25 35.05 ├ ○ /api-keys
+#25 35.05 ├ ○ /api-reference
+#25 35.05 ├ ○ /budgets
+#25 35.05 ├ ○ /caching
+#25 35.05 ├ ○ /chat
+#25 35.05 ├ ○ /chat/api-keys
+#25 35.05 ├ ○ /chat/credentials
+#25 35.05 ├ ○ /chat/integrations
+#25 35.05 ├ ○ /chat/logs
+#25 35.05 ├ ○ /chat/usage
+#25 35.05 ├ ○ /connect
+#25 35.05 ├ ○ /cost-optimization
+#25 35.05 ├ ○ /cost-tracking
+#25 35.05 ├ ○ /guardrails
+#25 35.05 ├ ○ /guardrails-monitor
+#25 35.05 ├ ○ /logging-and-alerts
+#25 35.05 ├ ○ /login
+#25 35.05 ├ ○ /logs
+#25 35.05 ├ ○ /mcp-servers
+#25 35.05 ├ ○ /mcp/oauth/callback
+#25 35.05 ├ ○ /memory
+#25 35.05 ├ ○ /model_hub
+#25 35.05 ├ ○ /model_hub_table
+#25 35.05 ├ ○ /model-hub-table
+#25 35.05 ├ ○ /models-and-endpoints
+#25 35.05 ├ ○ /old-usage
+#25 35.05 ├ ○ /onboarding
+#25 35.05 ├ ○ /organizations
+#25 35.05 ├ ○ /playground
+#25 35.05 ├ ○ /policies
+#25 35.05 ├ ○ /projects
+#25 35.05 ├ ○ /prompts
+#25 35.05 ├ ○ /router-settings
+#25 35.05 ├ ○ /search-tools
+#25 35.05 ├ ○ /skills
+#25 35.05 ├ ○ /tag-management
+#25 35.05 ├ ○ /teams
+#25 35.05 ├ ○ /tool-policies
+#25 35.05 ├ ○ /transform-request
+#25 35.05 ├ ○ /ui-theme
+#25 35.05 ├ ○ /usage
+#25 35.05 ├ ○ /users
+#25 35.05 ├ ○ /vector-stores
+#25 35.05 └ ○ /workflows
+#25 35.05 
+#25 35.05 
+#25 35.05 ○  (Static)  prerendered as static content
+#25 35.05 
+#25 35.10 npm notice
+#25 35.10 npm notice New major version of npm available! 11.17.0 -> 12.0.2
+#25 35.10 npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.0.2
+#25 35.10 npm notice To update run: npm install -g npm@12.0.2
+#25 35.10 npm notice
+#25 DONE 35.3s
+
+#27 [builder 12/16] COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
+#27 DONE 0.1s
+
+#28 [builder 13/16] RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+#28 0.460 
+#28 0.460 /app
+#28 0.461 Admin UI - using default LiteLLM UI
+#28 DONE 0.5s
+
+#29 [builder 14/16] RUN uv sync --frozen --no-default-groups --no-editable     --extra proxy     --extra proxy-runtime     --extra extra_proxy     --extra semantic-router     --extra saml     --extra bedrock-realtime     --python python3.13
+#29 0.247    Building litellm @ file:///app
+#29 0.248    Building litellm-enterprise @ file:///app/enterprise
+#29 0.248    Building litellm-proxy-extras @ file:///app/litellm-proxy-extras
+#29 0.933       Built litellm-enterprise @ file:///app/enterprise
+#29 0.961       Built litellm-proxy-extras @ file:///app/litellm-proxy-extras
+#29 57.25       Built litellm @ file:///app
+#29 57.45 Prepared 3 packages in 57.20s
+#29 58.27 Installed 3 packages in 824ms
+#29 58.27  + litellm==1.102.0 (from file:///app)
+#29 58.27  + litellm-enterprise==0.1.66 (from file:///app/enterprise)
+#29 58.27  + litellm-proxy-extras==0.4.95 (from file:///app/litellm-proxy-extras)
+#29 DONE 58.6s
+
+#30 [builder 15/16] RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries     npm_config_cache=/root/.npm     prisma generate --schema=./schema.prisma
+#30 1.300 Installing Prisma CLI
+#30 3.870 prisma:warn Prisma doesn't know which engines to download for the Linux distro "wolfi". Falling back to Prisma engines built "debian".
+#30 3.870 Please report your experience by creating an issue at https://github.com/prisma/prisma/issues so we can add your distro to the list of known supported distros.
+#30 4.902 Prisma schema loaded from schema.prisma
+#30 4.923 prisma:warn Prisma doesn't know which engines to download for the Linux distro "wolfi". Falling back to Prisma engines built "debian".
+#30 4.923 Please report your experience by creating an issue at https://github.com/prisma/prisma/issues so we can add your distro to the list of known supported distros.
+#30 6.592 Warning: The binaryTargets option is not officially supported by Prisma Client Python.
+#30 6.728 
+#30 6.728 ✔ Generated Prisma Client Python (v0.11.0) to ./.venv/lib/python3.13/site-packages/prisma in 243ms
+#30 6.728 
+#30 DONE 6.8s
+
+#31 [builder 16/16] RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh &&     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
+#31 DONE 0.1s
+
+#32 [runtime  2/12] RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
+#32 CACHED
+
+#33 [runtime  3/12] RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile
+#33 CACHED
+
+#34 [runtime  4/12] WORKDIR /app
+#34 CACHED
+
+#35 [runtime  5/12] COPY --from=builder /app/.venv /app/.venv
+#35 DONE 2.7s
+
+#36 [runtime  6/12] COPY --from=builder /app/docker /app/docker
+#36 DONE 0.1s
+
+#37 [runtime  7/12] COPY --from=builder /app/schema.prisma /app/schema.prisma
+#37 DONE 0.0s
+
+#38 [runtime  8/12] COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
+#38 DONE 0.0s
+
+#39 [runtime  9/12] COPY --from=builder /app/enterprise /app/enterprise
+#39 DONE 0.0s
+
+#40 [runtime 10/12] COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
+#40 DONE 0.1s
+
+#41 [runtime 11/12] COPY --from=builder /opt/prisma /opt/prisma
+#41 DONE 0.2s
+
+#42 [runtime 12/12] RUN find /app/.venv -type f -path "*/tornado/test/*" -delete &&     find /app/.venv -type d -path "*/tornado/test" -delete &&     chmod -R a+rX /opt/prisma &&     test -x /opt/prisma/binaries/node_modules/.bin/prisma &&     test -f /opt/prisma/binaries/node_modules/prisma/build/index.js &&     python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths"
+#42 0.522 find: /app/.venv/lib/python3.13/site-packages/tornado/test: Directory not empty
+#42 DONE 2.4s
+
+#43 exporting to image
+#43 exporting layers
+#43 exporting layers 9.1s done
+#43 exporting manifest sha256:55757ce07a8bb49b1d6f0d2f9dfc7e02d43b52c456fa9afd27ede14988bd19fc done
+#43 exporting config sha256:c2987261a2a3ebd2bb03bfb4c78e6776477e4cd30758ff4948e3936cd705b0c3 done
+#43 exporting attestation manifest sha256:53b1465c2e31a885da965c2c92ba72b27074615ab05c0369724367b1bf32807c done
+#43 exporting manifest list sha256:f9e309e050a483fd9b1b37255b9d3242c418fcb55b9f342447a58213592c5c14 0.0s done
+#43 naming to docker.io/library/litellm-5777:after done
+#43 unpacking to docker.io/library/litellm-5777:after
+#43 unpacking to docker.io/library/litellm-5777:after 4.0s done
+#43 DONE 13.2s

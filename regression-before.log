@@ -1,0 +1,239 @@
+[33mTesting types with tsc and vue-tsc is an experimental feature.
+Breaking changes might not follow SemVer, please pin Vitest's version when using it.[39m
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.11 [39m[90m/ui[39m
+
+Importing from "vitest/environments" is deprecated since Vitest 4.1. Please use "vitest/runtime" instead.
+The Vitest environment jsdom-fetch defines the "transformMode". This options was deprecated in Vitest 4 and will be removed in the next major version. Please, use "viteEnvironment" instead.
+[90mstderr[2m | src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22m[2mMCPToolArgumentsForm[2m > [22m[2mkeeps dotted arguments separate from a same-prefix object and converts their values
+[22m[39mAn update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22m[2mMCPToolArgumentsForm[2m > [22m[2mshows and clears required validation on the literal dotted field
+[22m[39mAn update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22m[2mMCPToolArgumentsForm[2m > [22m[2mshows and clears required validation on the literal dotted field
+[22m[39mAn update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22m[2mMCPToolArgumentsForm[2m > [22m[2mrejects and reports invalid JSON for an object field
+[22m[39mAn update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22m[2mMCPToolArgumentsForm[2m > [22m[2mrejects a JSON array typed into an object field
+[22m[39mAn update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22m[2mMCPToolArgumentsForm[2m > [22m[2mrejects an empty required field with the per-field message
+[22m[39mAn update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22m[2mMCPToolArgumentsForm[2m > [22m[2mrejects with a non-Error carrying errorFields, which is what the caller branches on
+[22m[39mAn update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22m[2mMCPToolArgumentsForm[2m > [22m[2mreports the required message for the string-schema input
+[22m[39mAn update to Controller inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+ [31m❯[39m [30m[45m integration [49m[39m src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx [2m([22m[2m18 tests[22m[2m | [22m[31m4 failed[39m[2m)[22m[33m 677[2mms[22m[39m
+[31m     [31m×[31m keeps dotted arguments separate from a same-prefix object and converts their values[39m[32m 156[2mms[22m[39m
+[31m     [31m×[31m shows and clears required validation on the literal dotted field[39m[32m 28[2mms[22m[39m
+[31m     [31m×[31m validates JSON for dotted arguments inside params and preserves their literal names[39m[32m 14[2mms[22m[39m
+[31m     [31m×[31m resets dotted defaults and positional values when the selected tool changes[39m[32m 11[2mms[22m[39m
+     [32m✓[39m returns typed values for a string, integer, number and boolean field[32m 149[2mms[22m[39m
+     [32m✓[39m truncates a fractional value for an integer field[32m 34[2mms[22m[39m
+     [32m✓[39m drops an empty optional string rather than sending an empty value[32m 6[2mms[22m[39m
+     [32m✓[39m parses a JSON object field into an object[32m 55[2mms[22m[39m
+     [32m✓[39m parses a JSON array field into an array[32m 47[2mms[22m[39m
+     [32m✓[39m rejects and reports invalid JSON for an object field[32m 49[2mms[22m[39m
+     [32m✓[39m rejects a JSON array typed into an object field[32m 50[2mms[22m[39m
+     [32m✓[39m rejects an empty required field with the per-field message[32m 9[2mms[22m[39m
+     [32m✓[39m rejects with a non-Error carrying errorFields, which is what the caller branches on[32m 5[2mms[22m[39m
+     [32m✓[39m wraps values under params when the schema nests them[32m 25[2mms[22m[39m
+     [32m✓[39m renders a single input field when the schema is only a string[32m 22[2mms[22m[39m
+     [32m✓[39m reports the required message for the string-schema input[32m 5[2mms[22m[39m
+     [32m✓[39m seeds a schema default and sends it untouched[32m 5[2mms[22m[39m
+     [32m✓[39m shows the empty state and submits nothing when the schema has no properties[32m 2[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 4 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m [30m[45m integration [49m[39m src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22mMCPToolArgumentsForm[2m > [22mkeeps dotted arguments separate from a same-prefix object and converts their values
+[31m[1mAssertionError[22m: promise rejected "{ errorFields: [ { …(2) } ] }" instead of resolving[39m
+[36m [2m❯[22m src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx:[2m50:29[22m[39m
+    [90m 48|[39m     fireEvent.change(screen.getByRole("textbox", { name: "query" }), {…
+    [90m 49|[39m
+    [90m 50|[39m     [35mawait[39m [34mexpect[39m([34msubmit[39m(ref))[33m.[39mresolves[33m.[39m[34mtoEqual[39m({
+    [90m   |[39m                             [31m^[39m
+    [90m 51|[39m       [32m"filter.category"[39m[33m:[39m [32m"invoices"[39m[33m,[39m
+    [90m 52|[39m       filter[33m:[39m { category[33m:[39m [32m"receipts"[39m[33m,[39m metadata[33m:[39m { region[33m:[39m [32m"eu"[39m } }[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m [30m[45m integration [49m[39m src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22mMCPToolArgumentsForm[2m > [22mshows and clears required validation on the literal dotted field
+[31m[1mAssertionError[22m: promise rejected "{ errorFields: [ { …(2) } ] }" instead of resolving[39m
+[36m [2m❯[22m src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx:[2m74:29[22m[39m
+    [90m 72|[39m       target[33m:[39m { value[33m:[39m [32m"invoices"[39m }[33m,[39m
+    [90m 73|[39m     })[33m;[39m
+    [90m 74|[39m     await expect(submit(ref)).resolves.toEqual({ "filter.category": "i…
+    [90m   |[39m                             [31m^[39m
+    [90m 75|[39m   })[33m;[39m
+    [90m 76|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m [30m[45m integration [49m[39m src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22mMCPToolArgumentsForm[2m > [22mvalidates JSON for dotted arguments inside params and preserves their literal names
+[31m[1mAssertionError[22m: expected null to deeply equal { errorFields: [ { …(2) } ] }[39m
+
+[32m- Expected:[39m
+{
+  "errorFields": [
+    {
+      "errors": [
+        "Invalid JSON",
+      ],
+      "name": [
+        "filter.options",
+      ],
+    },
+  ],
+}
+
+[31m+ Received:[39m
+null
+
+[36m [2m❯[22m src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx:[2m92:36[22m[39m
+    [90m 90|[39m     fireEvent[33m.[39m[34mchange[39m(field[33m,[39m { target[33m:[39m { value[33m:[39m [32m"invalid"[39m } })[33m;[39m
+    [90m 91|[39m
+    [90m 92|[39m     [34mexpect[39m([35mawait[39m [34msubmitError[39m(ref))[33m.[39m[34mtoEqual[39m({
+    [90m   |[39m                                    [31m^[39m
+    [90m 93|[39m       errorFields: [{ name: ["filter.options"], errors: ["Invalid JSON…
+    [90m 94|[39m     })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m [30m[45m integration [49m[39m src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx[2m > [22mMCPToolArgumentsForm[2m > [22mresets dotted defaults and positional values when the selected tool changes
+[31m[1mAssertionError[22m: expected { 'filter.category': 'invoices', …(1) } to deeply equal { 'filter.category': 'invoices' }[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  {[22m
+[31m+   "filter": {[39m
+[31m+     "category": "invoices",[39m
+[31m+   },[39m
+[2m    "filter.category": "invoices",[22m
+[2m  }[22m
+
+[36m [2m❯[22m src/components/mcp_tools/MCPToolArgumentsForm.integration.test.tsx:[2m114:29[22m[39m
+    [90m112|[39m     )[33m;[39m
+    [90m113|[39m     expect(screen.getByRole("textbox", { name: "filter.category" })).t…
+    [90m114|[39m     await expect(submit(ref)).resolves.toEqual({ "filter.category": "i…
+    [90m   |[39m                             [31m^[39m
+    [90m115|[39m     fireEvent.change(screen.getByRole("textbox", { name: "filter.categ…
+    [90m116|[39m       target[33m:[39m { value[33m:[39m [32m"edited"[39m }[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m4 failed[39m[22m[2m | [22m[1m[32m14 passed[39m[22m[90m (18)[39m
+[2mType Errors [22m [2mno errors[22m
+[2m   Start at [22m 23:45:10
+[2m   Duration [22m 2.10s[2m (transform 276ms, setup 315ms, import 507ms, tests 677ms, environment 506ms)[22m
+

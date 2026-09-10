@@ -1,0 +1,8 @@
+model_list: []
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+mcp_servers:
+  dotted_echo:
+    transport: http
+    url: http://echo:8080/mcp/
+    allow_all_keys: true

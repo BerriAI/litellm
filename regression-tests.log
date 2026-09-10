@@ -1,0 +1,14 @@
+Testing types with tsc and vue-tsc is an experimental feature.
+Breaking changes might not follow SemVer, please pin Vitest's version when using it.
+
+ RUN  v4.1.11 /Users/jvalluru/LiteLLM-work/litellm-lit-5777/ui/litellm-dashboard
+
+Importing from "vitest/environments" is deprecated since Vitest 4.1. Please use "vitest/runtime" instead.
+The Vitest environment jsdom-fetch defines the "transformMode". This options was deprecated in Vitest 4 and will be removed in the next major version. Please, use "viteEnvironment" instead.
+
+ Test Files  1 passed (1)
+      Tests  18 passed (18)
+Type Errors  no errors
+   Start at  16:56:46
+   Duration  1.05s (transform 74ms, setup 59ms, import 232ms, tests 354ms, environment 334ms)
+
