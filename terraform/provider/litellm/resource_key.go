@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -297,6 +298,7 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 	}
 
 	if key == nil {
+		log.Printf("[WARN] Key %s not found, removing from state", d.Id())
 		d.SetId("")
 		return nil
 	}
