@@ -16,6 +16,7 @@ from .cmd_quoting import quote_for_cmd
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
+    ListingFailure,
     PiSyncError,
     fetch_model_ids,
     fetch_model_limits,
@@ -165,7 +166,9 @@ def prepare_pi(
     """
     ids: Final = fetch_model_ids(base_url, api_key, get=get)
     if isinstance(ids, PiSyncError):
-        raise AgentRunError(ids.message)
+        raise AgentRunError(
+            f"{ids.message} pi would have nothing to run." if ids.kind is ListingFailure.EMPTY else ids.message
+        )
     limits: Final = fetch_model_limits(base_url, api_key, get=get)
     path: Final = models_json_path(base_env)
     error: Final = sync_models_json(path, base_url, ids, limits)
