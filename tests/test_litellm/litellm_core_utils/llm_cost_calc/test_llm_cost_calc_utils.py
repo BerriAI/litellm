@@ -2648,6 +2648,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
 
     prompt_tokens_details: PromptTokensDetailsResult = {
         "cache_hit_tokens": 0,
+        "cache_hit_audio_tokens": 0,
         "cache_creation_tokens": 0,
         "cache_creation_token_details": CacheCreationTokenDetails(
             ephemeral_5m_input_tokens=100,
@@ -5147,3 +5148,70 @@ def test_generic_cost_per_token_bills_nested_reasoning_once_beside_audio_output(
     assert completion_cost == pytest.approx(
         30 * info["output_cost_per_token"] + 70 * info["output_cost_per_audio_token"]
     )
+
+
+def test_cached_realtime_audio_tokens_billed_at_audio_cache_read_rate(
+    _local_model_cost_map: None,
+) -> None:
+    usage = Usage(
+        prompt_tokens=283,
+        completion_tokens=0,
+        total_tokens=283,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=116,
+            audio_tokens=167,
+            cached_tokens=192,
+            cached_tokens_details={"text_tokens": 64, "audio_tokens": 128},
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-realtime-2", usage=usage, custom_llm_provider="openai"
+    )
+    assert prompt_cost == pytest.approx(0.0015328)
+
+
+def test_prompt_tokens_details_without_cached_tokens_details_unchanged(
+    _local_model_cost_map: None,
+) -> None:
+    usage = Usage(
+        prompt_tokens=283,
+        completion_tokens=0,
+        total_tokens=283,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=116, audio_tokens=167, cached_tokens=192
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-realtime-2", usage=usage, custom_llm_provider="openai"
+    )
+    assert prompt_cost == pytest.approx(0.0029888)
+
+
+def test_cached_audio_tokens_fall_back_to_cache_read_input_token_cost() -> None:
+    model_info: ModelInfo = {
+        "input_cost_per_token": 4e-6,
+        "input_cost_per_audio_token": 32e-6,
+        "cache_read_input_token_cost": 5e-7,
+    }
+    usage = Usage(
+        prompt_tokens=283,
+        completion_tokens=0,
+        total_tokens=283,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=116,
+            audio_tokens=167,
+            cached_tokens=192,
+            cached_tokens_details={"text_tokens": 64, "audio_tokens": 128},
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="some-realtime-model",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+    expected = 52 * 4e-6 + 64 * 5e-7 + 39 * 32e-6 + 128 * 5e-7
+    assert prompt_cost == pytest.approx(expected)

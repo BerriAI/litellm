@@ -32502,6 +32502,7 @@
     },
     "gpt-realtime": {
         "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-01-20",
         "input_cost_per_audio_token": 3.2e-05,
@@ -32535,6 +32536,7 @@
     },
     "gpt-realtime-1.5": {
         "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
@@ -32702,6 +32704,7 @@
     },
     "gpt-realtime-2025-08-28": {
         "cache_creation_input_audio_token_cost": 4e-07,
+        "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
         "deprecation_date": "2027-01-20",
         "input_cost_per_audio_token": 3.2e-05,

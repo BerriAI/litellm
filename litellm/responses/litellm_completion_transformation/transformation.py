@@ -45,6 +45,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    CachedTokensDetails,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
@@ -2681,27 +2682,31 @@ class LiteLLMCompletionResponsesConfig:
         # Translate prompt_tokens_details to input_tokens_details
         if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details is not None:
             prompt_details: Final = usage.prompt_tokens_details
-            input_details_dict: Final[dict[str, int]] = {}
-
-            if hasattr(prompt_details, "cached_tokens") and prompt_details.cached_tokens is not None:
-                input_details_dict["cached_tokens"] = prompt_details.cached_tokens
-            else:
-                input_details_dict["cached_tokens"] = 0
-
-            if hasattr(prompt_details, "text_tokens") and prompt_details.text_tokens is not None:
-                input_details_dict["text_tokens"] = prompt_details.text_tokens
-
-            if hasattr(prompt_details, "audio_tokens") and prompt_details.audio_tokens is not None:
-                input_details_dict["audio_tokens"] = prompt_details.audio_tokens
-
-            cache_write_tokens = getattr(prompt_details, "cache_write_tokens", None) or getattr(
-                prompt_details, "cache_creation_tokens", None
+            cached_tokens_details: Final = getattr(prompt_details, "cached_tokens_details", None)
+            response_usage.input_tokens_details = InputTokensDetails(
+                cached_tokens=(
+                    prompt_details.cached_tokens
+                    if hasattr(prompt_details, "cached_tokens") and prompt_details.cached_tokens is not None
+                    else 0
+                ),
+                text_tokens=(
+                    prompt_details.text_tokens
+                    if hasattr(prompt_details, "text_tokens") and prompt_details.text_tokens is not None
+                    else None
+                ),
+                audio_tokens=(
+                    prompt_details.audio_tokens
+                    if hasattr(prompt_details, "audio_tokens") and prompt_details.audio_tokens is not None
+                    else None
+                ),
+                cache_write_tokens=(
+                    getattr(prompt_details, "cache_write_tokens", None)
+                    or getattr(prompt_details, "cache_creation_tokens", None)
+                ),
+                cached_tokens_details=(
+                    cached_tokens_details if isinstance(cached_tokens_details, CachedTokensDetails) else None
+                ),
             )
-            if cache_write_tokens is not None:
-                input_details_dict["cache_write_tokens"] = cache_write_tokens
-
-            if input_details_dict:
-                response_usage.input_tokens_details = InputTokensDetails(**input_details_dict)
 
         # Translate completion_tokens_details to output_tokens_details
         if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details is not None:

@@ -9,6 +9,8 @@ from types import MappingProxyType
 from typing import Any, Final, Literal, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from typing_extensions import ReadOnly
+
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
@@ -772,6 +774,7 @@ def calculate_cache_writing_cost(
 
 class PromptTokensDetailsResult(TypedDict):
     cache_hit_tokens: int
+    cache_hit_audio_tokens: ReadOnly[int]
     cache_creation_tokens: int
     cache_creation_token_details: CacheCreationTokenDetails | None
     text_tokens: int
@@ -802,12 +805,26 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         )
         or None
     )
-    text_tokens: Final = (
-        cast(int | None, getattr(usage.prompt_tokens_details, "text_tokens", None))
-        or 0  # default to prompt tokens, if this field is not set
+    cached_tokens_details: Final = getattr(usage.prompt_tokens_details, "cached_tokens_details", None)
+    cached_text_tokens: Final = _get_token_detail_value(cached_tokens_details, "text_tokens") or 0
+    cached_audio_tokens: Final = _get_token_detail_value(cached_tokens_details, "audio_tokens") or 0
+    cached_image_tokens: Final = _get_token_detail_value(cached_tokens_details, "image_tokens") or 0
+    text_tokens: Final = max(
+        (
+            cast(int | None, getattr(usage.prompt_tokens_details, "text_tokens", None))
+            or 0  # default to prompt tokens, if this field is not set
+        )
+        - cached_text_tokens,
+        0,
     )
-    audio_tokens: Final = cast(int | None, getattr(usage.prompt_tokens_details, "audio_tokens", 0)) or 0
-    image_tokens: Final = cast(int | None, getattr(usage.prompt_tokens_details, "image_tokens", 0)) or 0
+    audio_tokens: Final = max(
+        (cast(int | None, getattr(usage.prompt_tokens_details, "audio_tokens", 0)) or 0) - cached_audio_tokens,
+        0,
+    )
+    image_tokens: Final = max(
+        (cast(int | None, getattr(usage.prompt_tokens_details, "image_tokens", 0)) or 0) - cached_image_tokens,
+        0,
+    )
     video_tokens: Final = _coerce_token_count(getattr(usage.prompt_tokens_details, "video_tokens", 0))
     character_count: Final = (
         cast(
@@ -835,6 +852,7 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
 
     return PromptTokensDetailsResult(
         cache_hit_tokens=cache_hit_tokens,
+        cache_hit_audio_tokens=min(cached_audio_tokens, cache_hit_tokens),
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_token_details,
         text_tokens=text_tokens,
@@ -918,7 +936,16 @@ def _calculate_input_cost(
     prompt_cost = float(prompt_tokens_details["text_tokens"]) * prompt_base_cost
 
     ### CACHE READ COST - Now uses tiered pricing
-    prompt_cost += float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
+    cache_hit_audio_tokens: Final = prompt_tokens_details["cache_hit_audio_tokens"]
+    audio_cache_read_rate: Final = _get_cost_per_unit(
+        model_info,
+        _get_service_tier_cost_key("cache_read_input_audio_token_cost", service_tier),
+        None,
+    )
+    prompt_cost += float(prompt_tokens_details["cache_hit_tokens"] - cache_hit_audio_tokens) * cache_read_cost
+    prompt_cost += float(cache_hit_audio_tokens) * (
+        audio_cache_read_rate if audio_cache_read_rate is not None else cache_read_cost
+    )
 
     ### AUDIO COST
     if prompt_tokens_details["audio_tokens"]:
@@ -1149,6 +1176,7 @@ def generic_cost_per_token(
     ### PROCESSING COST
     prompt_tokens_details = PromptTokensDetailsResult(
         cache_hit_tokens=0,
+        cache_hit_audio_tokens=0,
         cache_creation_tokens=0,
         cache_creation_token_details=None,
         text_tokens=usage.prompt_tokens,

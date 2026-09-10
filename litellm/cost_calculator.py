@@ -108,6 +108,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
+    CachedTokensDetails,
     CallTypesLiteral,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
@@ -2310,6 +2311,60 @@ def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]
     return [attr for attr in field_names if attr != "cache_creation_tokens"]
 
 
+def _combine_cached_tokens_details(
+    current: CachedTokensDetails | None, new: CachedTokensDetails
+) -> CachedTokensDetails:
+    def _sum_optional(current_value: int | None, new_value: int | None) -> int | None:
+        if current_value is None and new_value is None:
+            return None
+        return (current_value or 0) + (new_value or 0)
+
+    return CachedTokensDetails(
+        text_tokens=_sum_optional(
+            current.text_tokens if current is not None else None, new.text_tokens
+        ),
+        audio_tokens=_sum_optional(
+            current.audio_tokens if current is not None else None, new.audio_tokens
+        ),
+        image_tokens=_sum_optional(
+            current.image_tokens if current is not None else None, new.image_tokens
+        ),
+    )
+
+
+def _combine_prompt_tokens_details(combined: Usage, usage: Usage) -> None:
+    if not (hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details):
+        return
+    if not hasattr(combined, "prompt_tokens_details") or not combined.prompt_tokens_details:
+        combined.prompt_tokens_details = PromptTokensDetailsWrapper()
+
+    # Check what keys exist in the model's prompt_tokens_details
+    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
+    for attr in _summable_prompt_token_fields(usage.prompt_tokens_details):
+        if (
+            hasattr(usage.prompt_tokens_details, attr)
+            and not attr.startswith("_")
+            and not callable(_attribute_value(usage.prompt_tokens_details, attr))
+        ):
+            current_val = getattr(combined.prompt_tokens_details, attr, 0) or 0
+            new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
+            if new_val is not None and isinstance(new_val, (int, float)):
+                setattr(
+                    combined.prompt_tokens_details,
+                    attr,
+                    current_val + new_val,
+                )
+
+    new_cached_tokens_details: Final = getattr(
+        usage.prompt_tokens_details, "cached_tokens_details", None
+    )
+    if isinstance(new_cached_tokens_details, CachedTokensDetails):
+        combined.prompt_tokens_details.cached_tokens_details = _combine_cached_tokens_details(
+            getattr(combined.prompt_tokens_details, "cached_tokens_details", None),
+            new_cached_tokens_details,
+        )
+
+
 class BaseTokenUsageProcessor:
     @staticmethod
     def combine_usage_objects(usage_objects: list[Usage]) -> Usage:
@@ -2318,7 +2373,6 @@ class BaseTokenUsageProcessor:
         """
         from litellm.types.utils import (
             CompletionTokensDetailsWrapper,
-            PromptTokensDetailsWrapper,
             Usage,
         )
 
@@ -2337,27 +2391,7 @@ class BaseTokenUsageProcessor:
                         and isinstance(current_val, (int, float))
                     ):
                         setattr(combined, attr, current_val + new_val)
-            # Handle nested prompt_tokens_details
-            if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
-                if not hasattr(combined, "prompt_tokens_details") or not combined.prompt_tokens_details:
-                    combined.prompt_tokens_details = PromptTokensDetailsWrapper()
-
-                # Check what keys exist in the model's prompt_tokens_details
-                # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-                for attr in _summable_prompt_token_fields(usage.prompt_tokens_details):
-                    if (
-                        hasattr(usage.prompt_tokens_details, attr)
-                        and not attr.startswith("_")
-                        and not callable(_attribute_value(usage.prompt_tokens_details, attr))
-                    ):
-                        current_val = getattr(combined.prompt_tokens_details, attr, 0) or 0
-                        new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
-                        if new_val is not None and isinstance(new_val, (int, float)):
-                            setattr(
-                                combined.prompt_tokens_details,
-                                attr,
-                                current_val + new_val,
-                            )
+            _combine_prompt_tokens_details(combined, usage)
 
             # Handle nested completion_tokens_details
             if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
