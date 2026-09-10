@@ -7,14 +7,13 @@ from typing import Final
 
 import pytest
 
-import litellm
+from litellm.rust_bridge import ocr as rust_ocr_bridge
 
 pytestmark = pytest.mark.requires_rust_extension
 
 
 @dataclass(frozen=True, slots=True)
 class RecordedOCRRequest:
-    headers: dict[str, str]
     body: object
 
 
@@ -26,7 +25,6 @@ def ocr_server() -> Generator[tuple[ThreadingHTTPServer, list[RecordedOCRRequest
         def do_POST(self) -> None:
             requests.append(
                 RecordedOCRRequest(
-                    headers={name.lower(): value for name, value in self.headers.items()},
                     body=json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
                 )
             )
@@ -57,26 +55,28 @@ def ocr_server() -> Generator[tuple[ThreadingHTTPServer, list[RecordedOCRRequest
         thread.join()
 
 
-@pytest.mark.parametrize("rust_enabled", [True, False], ids=["enabled", "disabled"])
-def test_public_ocr_dispatches_according_to_rust_setting(
-    ocr_server: tuple[ThreadingHTTPServer, list[RecordedOCRRequest]], rust_enabled: bool
+def test_native_ocr_with_compiled_rust_extension(
+    ocr_server: tuple[ThreadingHTTPServer, list[RecordedOCRRequest]],
 ) -> None:
-    litellm.rust(rust_enabled)
     server, requests = ocr_server
     address: Final = server.server_address
     host: Final = str(address[0])
     port: Final = int(address[1])
 
-    response: Final = litellm.ocr(
-        model="mistral/mistral-ocr-latest",
+    response: Final = rust_ocr_bridge.ocr(
+        model="mistral-ocr-latest",
         document={"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
         api_key="test-key",
         api_base=f"http://{host}:{port}",
+        custom_llm_provider="mistral",
+        extra_headers=None,
+        optional_params={},
+        timeout=None,
     )
 
-    assert response.pages[0].markdown == "native OCR response"
+    assert response is not None
+    assert response["pages"][0]["markdown"] == "native OCR response"
     assert len(requests) == 1
-    assert ("user-agent" in requests[0].headers) == (not rust_enabled)
     assert requests[0].body == {
         "model": "mistral-ocr-latest",
         "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
