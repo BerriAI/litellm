@@ -13,14 +13,14 @@ from pydantic import ValidationError
 
 from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     RefreshOwnershipProven,
-    VerifiedRefreshToken,
     RefreshTokenPresented,
-    current_binding_proof,
+    VerifiedRefreshToken,
     _discover_jwks_url,
     _fetch_issuer_jwks,
     _load_caller_principal,
     _load_stored_refresh_token,
     _select_signing_key,
+    current_binding_proof,
     enforce_oauth_identity_binding,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -471,19 +471,20 @@ async def test_refresh_with_mismatched_id_token_rejected():
 
 
 @pytest.mark.asyncio
-async def test_audit_mode_logs_but_does_not_reject():
+async def test_audit_mode_logs_but_does_not_reject(caplog):
     token: Final = _sign_id_token({"email": "mallory@example.com", "email_verified": True})
     result: Final = await enforce_oauth_identity_binding(
         server=_server(mode="audit"),
         token_response={"access_token": "at", "id_token": token},
         litellm_user_id="user-a",
         grant_type="authorization_code",
-        expected_nonce="test-nonce",
         refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader("alice@example.com"),
     )
     assert result is None
+    assert "oauth_principal_mismatch" in caplog.text
+    assert "nonce" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -642,6 +643,25 @@ async def test_binding_proof_rejects_changed_user_or_policy():
 def test_identity_binding_rejects_modes_without_gateway_credential_custody(auth_type):
     with pytest.raises(ValidationError, match="gateway-managed per-user"):
         MCPServer(
-            server_id="srv", name="srv", transport=MCPTransport.http, auth_type=auth_type,
+            server_id="srv",
+            name="srv",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
             oauth_identity_binding=_server().oauth_identity_binding,
         )
+
+
+@pytest.mark.asyncio
+async def test_audit_matching_login_without_nonce_does_not_report_failure(caplog):
+    token: Final = _sign_id_token({"email": "alice@example.com", "email_verified": True})
+    result: Final = await enforce_oauth_identity_binding(
+        server=_server(mode="audit"),
+        token_response={"access_token": "at", "id_token": token},
+        litellm_user_id="user-a",
+        grant_type="authorization_code",
+        refresh_ownership=None,
+        jwks_fetcher=_jwks_fetcher,
+        caller_principal_loader=_caller_loader("alice@example.com"),
+    )
+    assert result is None
+    assert "oauth_identity_binding audit" not in caplog.text

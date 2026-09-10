@@ -293,17 +293,18 @@ async def test_refresh_uses_admin_entered_token_url_when_issuer_yield_empties_re
 @pytest.mark.asyncio
 async def test_identity_rejection_never_persists_or_returns_refreshed_token():
     from unittest.mock import AsyncMock
+
     from fastapi import HTTPException
 
     validator = AsyncMock(side_effect=HTTPException(status_code=403, detail="oauth_principal_mismatch"))
     persist = AsyncMock()
     refresher = AuthorizationCodeRefresher(
-        _lookup(_Server()), _endpoint({"access_token": "foreign-token", "id_token": "foreign-identity"}),
-        persist, identity_validator=validator,
+        _lookup(_Server()),
+        _endpoint({"access_token": "foreign-token", "id_token": "foreign-identity"}),
+        persist,
+        identity_validator=validator,
     )
-    with pytest.raises(HTTPException) as error:
-        await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt"))
-    assert error.value.status_code == 403
+    assert await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt")) is None
     persist.assert_not_awaited()
 
 
@@ -314,10 +315,13 @@ async def test_verified_refresh_preserves_binding_proof_in_storage():
     validator = AsyncMock(return_value="verified-binding")
     persist = AsyncMock()
     refresher = AuthorizationCodeRefresher(
-        _lookup(_Server()), _endpoint({"access_token": "new", "refresh_token": "rotated"}),
-        persist, identity_validator=validator,
+        _lookup(_Server()),
+        _endpoint({"access_token": "new", "refresh_token": "rotated"}),
+        persist,
+        identity_validator=validator,
     )
     token = await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt"))
     assert token.access_token == "new"
     assert token.refresh_token == "rotated"
+    assert token.identity_binding_proof == "verified-binding"
     assert persist.await_args.kwargs["identity_binding_proof"] == "verified-binding"
