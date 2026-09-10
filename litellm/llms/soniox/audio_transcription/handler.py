@@ -63,8 +63,6 @@ else:
 
 
 _CLEANUP_TARGETS: Final = TypeAdapter(tuple[str, ...])
-# `language` is translated to `language_hints` upstream; `audio_url`/`file_id`/`response_format`
-# are placed by the handler, everything else here is a LiteLLM-only knob.
 _NOT_FORWARDED_TO_SONIOX: Final[frozenset[str]] = frozenset(
     (*SONIOX_HANDLER_ONLY_PARAMS, "audio_url", "file_id", "response_format", "language")
 )
