@@ -1137,7 +1137,7 @@ def test_get_config_callbacks_appends_runtime_only_callbacks(client, auth_as, mo
 
 def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_as, mock_prisma, monkeypatch):
     """A configured callback shows once as editable, whether the runtime holds its string or an initialized instance
-    registered under a different alias (arize initializes an OpenTelemetry instance)."""
+    (arize initializes an ArizeLogger, logfire a bare OpenTelemetry that only its class identifies)."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -1148,7 +1148,7 @@ def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_a
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
         return_value={
-            "litellm_settings": {"success_callback": ["langfuse", "arize"]},
+            "litellm_settings": {"success_callback": ["langfuse", "arize", "logfire"]},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
         }
@@ -1156,9 +1156,11 @@ def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_a
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
     import litellm
-    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.integrations.arize.arize import ArizeLogger
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 
-    monkeypatch.setattr(litellm, "success_callback", ["langfuse", OpenTelemetry()])
+    arize_logger = ArizeLogger(config=OpenTelemetryConfig(exporter="console"), callback_name="arize")
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse", arize_logger, OpenTelemetry()])
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
@@ -1171,6 +1173,64 @@ def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_a
     assert [(cb["name"], cb["type"], cb.get("read_only", False)) for cb in response.json()["callbacks"]] == [
         ("langfuse", "success", False),
         ("arize", "success", False),
+        ("logfire", "success", False),
+    ]
+
+
+def test_get_config_callbacks_keeps_yaml_otel_family_callbacks_next_to_configured_one(
+    client, auth_as, mock_prisma, monkeypatch
+):
+    """LIT-5281: arize, weave_otel and langfuse_otel all initialize OpenTelemetry subclasses. Saving one of them
+    from the dashboard replaces the YAML `callbacks` list, so the YAML siblings keep running and must stay listed
+    under their own names instead of being hidden as duplicates of the configured OTel callback."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"callbacks": ["langfuse_otel"]},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    import litellm
+    from litellm.integrations.arize.arize import ArizeLogger
+    from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+    from litellm.integrations.langsmith import LangsmithLogger
+    from litellm.integrations.opentelemetry import OpenTelemetryConfig
+    from litellm.integrations.weave.weave_otel import WeaveOtelLogger
+
+    console_config = OpenTelemetryConfig(exporter="console")
+    monkeypatch.setattr(litellm, "success_callback", [LangsmithLogger()])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            ArizeLogger(config=console_config, callback_name="arize"),
+            WeaveOtelLogger(config=console_config),
+            LangfuseOtelLogger(config=console_config, callback_name="langfuse_otel"),
+        ],
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+
+    assert [(cb["name"], cb["type"], cb.get("read_only", False)) for cb in response.json()["callbacks"]] == [
+        ("langfuse_otel", "success_and_failure", False),
+        ("arize", "success_and_failure", True),
+        ("langsmith", "success", True),
+        ("weave_otel", "success_and_failure", True),
     ]
 
 

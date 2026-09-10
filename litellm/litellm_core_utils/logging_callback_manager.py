@@ -450,6 +450,7 @@ class LoggingCallbackManager:
         )
 
     def _get_callback_string(self, callback: CustomLogger | Callable | str) -> str:
+        from litellm.integrations.opentelemetry import OpenTelemetry
         from litellm.litellm_core_utils.custom_logger_registry import (
             CustomLoggerRegistry,
         )
@@ -457,6 +458,8 @@ class LoggingCallbackManager:
         """Convert a callback to its string representation"""
         if isinstance(callback, str):
             return callback
+        elif isinstance(callback, OpenTelemetry) and callback.callback_name is not None:
+            return callback.callback_name
         elif isinstance(callback, CustomLogger):
             # Try to get the string representation from the registry
             callback_str: Final = CustomLoggerRegistry.get_callback_str_from_class_type(type(callback))

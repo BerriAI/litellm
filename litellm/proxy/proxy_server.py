@@ -17571,13 +17571,27 @@ def _callback_module_name(callback: CustomLogger | Callable[..., object]) -> str
     return type(callback).__module__
 
 
-def _is_litellm_internal_callback(callback: CustomLogger | Callable[..., object]) -> bool:
+def _is_litellm_internal_callback(callback_name: str, callback: CustomLogger | Callable[..., object]) -> bool:
     """Hooks litellm registers on its own (router, proxy, service logging) are not user logging callbacks."""
     from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
     module_owner: Final = _callback_module_name(callback).partition(".")[0]
-    is_registered_integration: Final = CustomLoggerRegistry.get_callback_str_from_class_type(type(callback)) is not None
+    is_registered_integration: Final = (
+        _normalize_callback_alias(callback_name) in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
+    )
     return not is_registered_integration and module_owner in ("litellm", "litellm_enterprise")
+
+
+def _is_instance_of_configured_callback(
+    callback_name: str, callback: CustomLogger | Callable[..., object], configured_classes: tuple[type, ...]
+) -> bool:
+    """A configured string callback is replaced at init by an instance that may only be identifiable by class
+    (`logfire` initializes a bare `OpenTelemetry`). An instance that names itself (`arize`, `weave_otel`) is
+    matched by name instead, so a configured OTel-family callback does not hide its YAML-configured siblings."""
+    from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
+
+    class_derived_name: Final = CustomLoggerRegistry.get_callback_str_from_class_type(type(callback))
+    return isinstance(callback, configured_classes) and callback_name in (class_derived_name, type(callback).__name__)
 
 
 def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) -> frozenset[str]:
@@ -17595,8 +17609,8 @@ def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) ->
         callback_name
         for callback_name, callback in litellm.logging_callback_manager.get_callback_objects()
         if isinstance(callback, CustomGuardrail)
-        or _is_litellm_internal_callback(callback)
-        or isinstance(callback, configured_classes)
+        or _is_litellm_internal_callback(callback_name, callback)
+        or _is_instance_of_configured_callback(callback_name, callback, configured_classes)
         or _callback_module_name(callback) in configured_modules
     )
 
