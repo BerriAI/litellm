@@ -127,9 +127,9 @@ def rerank(
     # adding real safety; it stays typed downstream via get_optional_rerank_params.
     instruction: Final[str | None] = kwargs.get("instruction", None)
     headers: Final[dict | None] = kwargs.get("headers")
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.pop("litellm_logging_obj")
     litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
-    proxy_server_request: Final = kwargs.get("proxy_server_request", None)
+    proxy_server_request: Final = kwargs.pop("proxy_server_request", None)
     model_info: Final = kwargs.get("model_info", None)
     user: Final = kwargs.get("user", None)
     client: Final = kwargs.get("client", None)

@@ -75,11 +75,48 @@ class SerializationProbe(BaseModel):
 
     @field_serializer("value")
     def reject_serialization(self, value: str) -> str:
-        raise RuntimeError("proxy request was serialized")
+        raise RuntimeError("runtime request state was serialized")
 
 
-def test_rerank_does_not_serialize_proxy_request():
+class LoggingSerializationProbe:
+    def __init__(self, proxy_server_request):
+        self.proxy_server_request = proxy_server_request
+        self.model_call_details = {}
+
+    def update_from_kwargs(self, **kwargs):
+        pass
+
+    def pre_call(self, **kwargs):
+        pass
+
+    def post_call(self, **kwargs):
+        pass
+
+    def get_router_model_id(self):
+        return None
+
+    def success_handler(self, *args, **kwargs):
+        pass
+
+    def failure_handler(self, *args, **kwargs):
+        pass
+
+    def _response_cost_calculator(self, **kwargs):
+        return None
+
+    @property
+    def caching_details(self):
+        return None
+
+
+def _runtime_request_state():
     proxy_server_request = {"body": {"probe": SerializationProbe(value="payload")}}
+    return proxy_server_request, LoggingSerializationProbe(proxy_server_request)
+
+
+
+def test_rerank_does_not_serialize_runtime_request_state():
+    proxy_server_request, logging_obj = _runtime_request_state()
     transport = httpx.MockTransport(
         lambda request: httpx.Response(
             200,
@@ -96,13 +133,14 @@ def test_rerank_does_not_serialize_proxy_request():
             api_key="fake-fireworks-key",
             client=HTTPHandler(client=raw_client),
             proxy_server_request=proxy_server_request,
+            litellm_logging_obj=logging_obj,
         )
 
     assert response.results[0]["relevance_score"] == 0.95
 
 
-def test_bedrock_rerank_does_not_serialize_proxy_request():
-    proxy_server_request = {"body": {"probe": SerializationProbe(value="payload")}}
+def test_bedrock_rerank_does_not_serialize_runtime_request_state():
+    proxy_server_request, logging_obj = _runtime_request_state()
     transport = httpx.MockTransport(
         lambda request: httpx.Response(
             200,
@@ -121,6 +159,7 @@ def test_bedrock_rerank_does_not_serialize_proxy_request():
             aws_secret_access_key="fake-secret-key",
             client=HTTPHandler(client=raw_client),
             proxy_server_request=proxy_server_request,
+            litellm_logging_obj=logging_obj,
         )
 
     assert response.results[0]["relevance_score"] == 0.95
