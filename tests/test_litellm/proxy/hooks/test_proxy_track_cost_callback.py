@@ -2245,14 +2245,15 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
     )
     logger = _ProxyDBLogger(producer)
     kwargs = {**_offload_kwargs(), "call_type": CallTypes.aretrieve_batch.value}
-    in_progress_batch = LiteLLMBatch(
+    completed_batch = LiteLLMBatch(
         id="batch_abc",
         completion_window="24h",
         created_at=1,
         endpoint="/v1/chat/completions",
         input_file_id="file-in",
+        output_file_id="file-out",
         object="batch",
-        status="in_progress",
+        status="completed",
     )
 
     with (
@@ -2268,7 +2269,7 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
-        await logger.async_log_success_event(kwargs, in_progress_batch, datetime.now(), datetime.now())
+        await logger.async_log_success_event(kwargs, completed_batch, datetime.now(), datetime.now())
 
     mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
     assert producer.stats().queued == 0
