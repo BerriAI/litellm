@@ -1,6 +1,12 @@
 use litellm_core::Error;
 use litellm_core::call_lifecycle::CallLifecycle;
+use litellm_core::ocr::{
+    OcrClient,
+    wire::{OcrWireRequest, decode_request},
+};
+use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 use serde_json::Value;
+use std::sync::Arc;
 
 mod common_utils;
 mod handler;
@@ -15,6 +21,45 @@ use prepare::{PreparedOcrCall, prepare_ocr_call};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
+    let provider = get_custom_llm_provider(request.model, request.custom_llm_provider).unwrap_or(
+        CustomLlmProvider {
+            model: request.model,
+            custom_llm_provider: "mistral",
+        },
+    );
+    if provider.custom_llm_provider == "mistral" {
+        return core_mistral_ocr(request).await;
+    }
+    legacy_ocr(request).await
+}
+
+async fn core_mistral_ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
+    let client = OcrClient::new(crate::client::http_client().clone())?;
+    let core_request = decode_request(OcrWireRequest {
+        model: request.model.to_string(),
+        document: request.document,
+        api_key: request.api_key.map(str::to_string),
+        api_base: request.api_base.map(str::to_string),
+        custom_llm_provider: request.custom_llm_provider.map(str::to_string),
+        extra_headers: request.extra_headers,
+        optional_params: request.optional_params,
+        timeout_seconds: request.timeout.map(|timeout| timeout.as_secs_f64()),
+    })?
+    .with_host_hooks(
+        Arc::new(hooks::OcrLifecycleHooks::new(
+            crate::integrations::custom_logger::CustomLoggerRunner::new(request.callbacks),
+            crate::integrations::custom_guardrail::CustomGuardrailRunner::new(request.guardrails),
+            request.request_metadata,
+        )),
+        request.litellm_call_id.map(str::to_string),
+    );
+    client
+        .perform(core_request)
+        .await
+        .map(|response| response.into_json())
+}
+
+async fn legacy_ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
     let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
     CallLifecycle::default()
         .run_request(request, &hooks, |request| {

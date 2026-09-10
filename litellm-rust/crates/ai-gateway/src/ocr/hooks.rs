@@ -399,3 +399,102 @@ fn core_error_kind(error: &Error) -> &'static str {
         Error::Unsupported(_) => "UnsupportedRequest",
     }
 }
+
+impl litellm_core::ocr::hooks::OcrHooks for OcrLifecycleHooks {
+    fn has_guardrails(&self) -> bool {
+        !self.guardrail_runner.is_empty()
+    }
+
+    fn pre_call(
+        &self,
+        request: litellm_core::ocr::hooks::OcrPreCallRequest,
+    ) -> litellm_core::ocr::hooks::OcrHookFuture<'_, litellm_core::ocr::hooks::OcrPreCallRequest>
+    {
+        Box::pin(async move {
+            let context = guardrail_context(&self.request_metadata);
+            let payload = GuardrailRequest::new(json!(&request));
+            let (changed, _) = self
+                .guardrail_runner
+                .run_pre_call(&context, payload)
+                .await
+                .map_err(guardrail_error_to_core_error)?;
+            Ok(litellm_core::ocr::wire::decode_pre_call_result(
+                request,
+                changed.data,
+            )?)
+        })
+    }
+
+    fn during_call(
+        &self,
+        request: litellm_core::ocr::hooks::OcrDuringCallRequest,
+    ) -> litellm_core::ocr::hooks::OcrHookFuture<'_, litellm_core::ocr::hooks::OcrDuringCallRequest>
+    {
+        Box::pin(async move {
+            let context = guardrail_context(&self.request_metadata);
+            let payload = GuardrailRequest::new(json!(&request));
+            let (changed, _) = self
+                .guardrail_runner
+                .run_during_call(&context, payload)
+                .await
+                .map_err(guardrail_error_to_core_error)?;
+            Ok(litellm_core::ocr::wire::decode_during_call_result(
+                request,
+                changed.data,
+            )?)
+        })
+    }
+
+    fn success<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        response: &'a litellm_core::ocr::LiteLLMOcrResponse,
+        timing: &'a CallLifecycleTiming,
+    ) -> litellm_core::ocr::hooks::OcrLogFuture<'a> {
+        Box::pin(async move {
+            if self.logger_runner.is_empty() {
+                return;
+            }
+            self.logger_runner
+                .async_log_success_event(
+                    &ModelCallDetails::from_standard_logging_payload(
+                        self.standard_logging_payload(context, timing),
+                    ),
+                    &CallbackValue::new("ocr", json!(response)),
+                    CallbackTiming::new(timing.start_time, timing.end_time),
+                )
+                .await;
+        })
+    }
+
+    fn failure<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        error: &'a Error,
+        timing: &'a CallLifecycleTiming,
+    ) -> litellm_core::ocr::hooks::OcrLogFuture<'a> {
+        Box::pin(async move {
+            if self.logger_runner.is_empty() {
+                return;
+            }
+            let logging_error = LoggingError {
+                message: error.to_string(),
+                kind: core_error_kind(error).to_string(),
+            };
+            let response = CallbackValue::new(
+                "error",
+                json!({"message":logging_error.message,"kind":logging_error.kind}),
+            );
+            self.logger_runner
+                .async_log_failure_event(
+                    &ModelCallDetails::from_standard_logging_payload(
+                        self.standard_logging_payload(context, timing),
+                    )
+                    .with_failure_error(logging_error),
+                    Some(&response),
+                    CallbackTiming::new(timing.start_time, timing.end_time),
+                )
+                .await;
+        })
+    }
+}
