@@ -66,19 +66,13 @@ async fn supplied_authorization_is_forwarded_without_a_static_token() {
     );
 }
 
-#[test]
-fn invalid_credentials_fail_during_request_decoding() {
-    assert!(
-        crate::ocr::wire::decode_request(crate::ocr::wire::OcrWireRequest {
-            model: "vertex_ai/model".into(),
-            document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
-            api_key: None,
-            api_base: Some("http://127.0.0.1:1".into()),
-            custom_llm_provider: None,
-            extra_headers: None,
-            optional_params: json!({"vertex_credentials":true}).as_object().unwrap().clone(),
-            timeout_seconds: Some(1.0),
-        })
-        .is_err()
+#[tokio::test]
+async fn invalid_credentials_fail_before_provider_http() {
+    let request = wire_request(
+        "vertex_ai/model",
+        "http://127.0.0.1:1",
+        json!({"vertex_credentials": true}),
     );
+    let error = perform_ocr(request).await.unwrap_err();
+    assert!(error.to_string().contains("vertex_credentials"));
 }
