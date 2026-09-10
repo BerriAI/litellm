@@ -272,6 +272,47 @@ variable "gateway_memory_target" {
   default     = 80
 }
 
+variable "gateway_target_requests_per_second" {
+  description = <<-EOT
+    Requests per second one gateway task should serve. Adds an
+    ALBRequestCountPerTarget target-tracking policy next to the CPU/memory
+    ones (Application Auto Scaling follows whichever asks for more tasks).
+    CloudWatch publishes that metric as a 1-minute count, so the policy
+    targets 60x this value and ECS reacts on a ~1 minute cadence. 0 skips
+    the policy.
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "gateway_target_tokens_per_second" {
+  description = <<-EOT
+    Tokens per second one gateway task should serve. Adds a target-tracking
+    policy on gateway_tokens_metric summed over each 60s period, divided by
+    60 and by the service's Container Insights RunningTaskCount. Tokens are
+    counted when a response completes, so the signal trails long streams.
+    0 skips the policy.
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "gateway_tokens_metric" {
+  description = <<-EOT
+    CloudWatch metric carrying the gateway's litellm_total_tokens_metric_total
+    counter, as published by the CloudWatch agent's Prometheus scraper (it
+    emits the delta between scrapes, so Sum over a period is the tokens
+    served in it). Required when gateway_target_tokens_per_second > 0.
+    dimensions must match the metric_declaration the agent publishes with.
+  EOT
+  type = object({
+    namespace  = string
+    name       = optional(string, "litellm_total_tokens_metric_total")
+    dimensions = optional(map(string), {})
+  })
+  default = null
+}
+
 variable "backend_autoscaling_enabled" {
   description = "Toggle Application Auto Scaling target-tracking on the backend service."
   type        = bool
