@@ -843,10 +843,8 @@ class TestCheckResponsesCost:
     async def test_claim_is_taken_back_from_a_pod_that_died_holding_it(
         self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
-        """A pod that dies between claiming and billing releases nothing, and the row's status
-        never reaches terminal, so without a lease every later cycle re-selects it and loses.
-        The window has to be longer than a live cycle can hold a claim and short enough that the
-        row is retried well before stale expiry gives up on it unbilled."""
+        """A pod that dies holding a claim strands the row forever, so the lease has to outlast a
+        live cycle and still fire well before stale expiry gives up on the row unbilled."""
         from litellm.constants import PROXY_BATCH_POLLING_INTERVAL
         from litellm_enterprise.proxy.common_utils.check_responses_cost import (
             CLAIM_ABANDONED_AFTER_POLL_CYCLES,

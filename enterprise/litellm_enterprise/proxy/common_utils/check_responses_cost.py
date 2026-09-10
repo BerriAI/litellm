@@ -6,7 +6,7 @@ same route are non-inference and free.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -48,18 +48,15 @@ class CheckResponsesCost:
     async def _get_response(
         self,
         response_id: str,
-        litellm_metadata: Dict[str, str],
+        litellm_metadata: dict[str, str],
     ) -> ResponsesAPIResponse:
-        """Fetch the upstream response, using deployment credentials when available.
+        """Fetch the upstream response through the deployment that served it.
 
-        LiteLLM-encoded response IDs carry the ``model_id`` of the deployment that
-        served the original request, so routing through ``llm_router`` applies that
-        deployment's ``api_base`` / ``api_key`` / ``api_version``, exactly like
-        ``GET /v1/responses/{id}`` does. ``litellm.aget_responses`` on its own only
-        sees provider env vars, so it fails for every deployment whose credentials
-        live in the config; the row then never leaves ``queued``.
+        A LiteLLM-encoded id carries its deployment's ``model_id``, so the router applies that
+        deployment's credentials. ``litellm.aget_responses`` only sees provider env vars, so a
+        config-only deployment's rows never leave ``queued``.
         """
-        model_id: Optional[str] = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
+        model_id: str | None = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
         if model_id is None or self.llm_router.get_deployment(model_id=model_id) is None:
             return await litellm.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
         router_response = await self.llm_router.aget_responses(
@@ -70,15 +67,9 @@ class CheckResponsesCost:
     async def _expire_stale_rows(
         self, cutoff: datetime, batch_size: int
     ) -> int:
-        """Execute the bounded UPDATE that marks stale rows as 'stale_expired'.
+        """Run the bounded UPDATE that marks stale rows 'stale_expired'.
 
-        Isolated so it can be swapped / mocked in tests without touching the
-        orchestration logic in ``_cleanup_stale_managed_objects``.
-
-        Uses PostgreSQL syntax (``$1::timestamptz``, ``LIMIT``, double-quoted
-        identifiers) which is the only dialect the proxy supports — every
-        ``schema.prisma`` in the repo sets ``provider = "postgresql"``.
-        Same pattern as ``spend_log_cleanup.py``.
+        PostgreSQL is the only dialect the proxy supports. Same pattern as ``spend_log_cleanup.py``.
         """
         return await self.prisma_client.db.execute_raw(
             """
@@ -98,15 +89,9 @@ class CheckResponsesCost:
         )
 
     async def _cleanup_stale_managed_objects(self) -> None:
-        """
-        Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
-        in non-terminal states as 'stale_expired'. These will never complete and
-        should not be polled.
+        """Retire rows stuck in a non-terminal state past the staleness cutoff, so they stop being polled.
 
-        Runs as a single DB query with a subquery LIMIT so no rows are loaded
-        into Python memory. Processes at most STALE_OBJECT_CLEANUP_BATCH_SIZE
-        rows per invocation to avoid overwhelming the DB when there is a large
-        backlog.
+        One query with a subquery LIMIT, so a large backlog never lands in Python memory.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
         result = await self._expire_stale_rows(cutoff, STALE_OBJECT_CLEANUP_BATCH_SIZE)
@@ -122,20 +107,12 @@ class CheckResponsesCost:
         return "batch_processed" in message or "unknown column" in message or "does not exist" in message
 
     async def _claim_job_for_costing(self, job: "LiteLLM_ManagedObjectTable") -> bool:
-        """Atomically flip batch_processed from false to true, returning whether this pod won the row.
+        """Atomically flip batch_processed false to true, returning whether this pod won the row.
 
-        Every pod and uvicorn worker schedules its own CheckResponsesCost against the shared table,
-        so without this compare-and-swap two of them select the same queued response in one window
-        and both bill it. The claim is taken before the read because the read is what prices the
-        job: ``aget_responses`` stamped with the poll origin writes the spend log itself, so there
-        is no later point at which to serialize. Schemas without the column can't be claimed, so
-        they keep the pre-existing behavior rather than silently billing nothing.
-
-        A pod that dies between winning the claim and billing would otherwise strand the row:
-        it holds a claim nobody will release, and its status never reaches terminal, so every
-        later cycle re-selects it and loses. The ``updated_at`` arm takes such a claim back once
-        it has gone unbilled for longer than any live cycle could hold it. ``updated_at`` is
-        ``@updatedAt``, so a healthy in-flight claim refreshed moments ago is never stolen.
+        Every pod polls the same table and the read is what prices the job, so the claim has to be
+        taken before it. The ``updated_at`` arm takes a claim back from a pod that died holding it;
+        ``updated_at`` is ``@updatedAt``, so a live claim is never stolen. A schema without the
+        column cannot claim, so it keeps the pre-existing behavior instead of billing nothing.
         """
         abandoned_before: Final = datetime.now(timezone.utc) - timedelta(
             seconds=CLAIM_ABANDONED_AFTER_POLL_CYCLES * PROXY_BATCH_POLLING_INTERVAL
@@ -162,10 +139,9 @@ class CheckResponsesCost:
         return claimed > 0
 
     async def _release_job_claim(self, job: "LiteLLM_ManagedObjectTable") -> None:
-        """Give a claimed row back when the read did not bill it, so a later poll cycle retries it.
+        """Give a claimed row back when the read did not bill it, so a later cycle retries it.
 
-        A response still queued at the provider, or whose read raised, has no spend to record yet.
-        Holding the claim would retire it permanently, which is the failure #37050 hit on batches.
+        Holding the claim would retire the row unbilled, which is the failure #37050 hit on batches.
         """
         try:
             await self.prisma_client.db.litellm_managedobjecttable.update_many(
@@ -181,12 +157,8 @@ class CheckResponsesCost:
     async def _mark_job_completed(self, job: "LiteLLM_ManagedObjectTable") -> None:
         """Retire a billed row from polling, per job so one failure can't strand the rest.
 
-        Only ``status`` is written. The generation's usage and spend already land in
-        ``LiteLLM_SpendLogs`` unconditionally, so copying the response body onto this row would
-        duplicate content the provider still serves, on a table nothing ever deletes from.
-
-        ``status`` stays the literal "completed" for every terminal provider status, matching
-        what this poller has always written, so stale-row expiry keeps skipping these rows.
+        Only ``status`` is written, and always the literal "completed", because the usage already
+        landed in ``LiteLLM_SpendLogs`` and stale-row expiry keys off that exact value.
         """
         try:
             await self.prisma_client.db.litellm_managedobjecttable.update_many(
@@ -199,13 +171,9 @@ class CheckResponsesCost:
             )
 
     async def check_responses_cost(self):
-        """
-        Check if background responses are complete and track their cost.
-        - Get all status="queued" or "in_progress" and file_purpose="response" jobs
-        - Query the provider to check if response is complete
-        - Cost is tracked by the get-responses call, billed because the poll is stamped
-          with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
-        - Mark responses in a terminal state as complete in the database
+        """Read every queued background response and retire the ones the provider has finished.
+
+        The read itself is what bills, because it is stamped with the poll's call origin.
         """
         try:
             await self._cleanup_stale_managed_objects()
