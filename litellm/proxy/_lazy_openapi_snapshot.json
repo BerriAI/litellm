@@ -5721,8 +5721,26 @@
     "paths": {
       "/claude-code/marketplace.json": {
         "get": {
-          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin install my-plugin@litellm\n    ```",
+          "description": "Serve marketplace.json for Claude Code plugin discovery.\n\nThis endpoint is accessed by Claude Code CLI when users run:\n- claude plugin marketplace add <url>\n- claude plugin install <name>@<marketplace>\n\nWithout `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`\nthe key is authenticated and the catalog also holds the disabled plugins granted\nto it through `object_permission.skills` on the key or its team.\n\nReturns:\n    Marketplace catalog with list of available plugins and their git sources.\n\nExample:\n    ```bash\n    claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json\n    claude plugin marketplace add \"http://localhost:4000/claude-code/marketplace.json?key=sk-...\"\n    claude plugin install my-plugin@litellm\n    ```",
           "operationId": "get_marketplace_claude_code_marketplace_json_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key"
+              }
+            }
+          ],
           "responses": {
             "200": {
               "content": {
@@ -5731,6 +5749,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "summary": "Get Marketplace",
