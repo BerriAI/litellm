@@ -1959,3 +1959,137 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 429, response.text
         assert response.json()["error"]["message"] == "rate limited"
+
+
+class TestBackgroundResponseManagedObjectId:
+    """The managed row for a background response must be keyed by the provider's own id.
+
+    The advertised ``response.id`` is encrypted with a fresh nonce per call, so storing it
+    in ``model_object_id`` leaves the row with no stable lookup key and every later read
+    of the same generation looks like a new object.
+    """
+
+    @staticmethod
+    def _encrypted_id(provider_response_id: str) -> str:
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+        from litellm.types.utils import SpecialEnums
+
+        managed_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+            provider_response_id, "u-1", "t-1"
+        )
+        return f"resp_{encrypt_value_helper(value=managed_id)}"
+
+    async def _store_call_for(self, provider_response_id: str) -> dict:
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.response_api_endpoints.endpoints import responses_api
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        advertised_id = self._encrypted_id(provider_response_id)
+        assert advertised_id != self._encrypted_id(provider_response_id), (
+            "advertised ids must be nonce-encrypted, otherwise this regression cannot occur"
+        )
+
+        response = ResponsesAPIResponse(
+            id=advertised_id,
+            created_at=0,
+            model="gpt-4o",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            status="queued",
+        )
+        response._hidden_params = {"model_id": "deployment-1"}
+
+        managed_files_obj = MagicMock()
+        managed_files_obj.store_unified_object_id = AsyncMock()
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook = MagicMock(return_value=managed_files_obj)
+
+        with patch(
+            "litellm.proxy.proxy_server._read_request_body",
+            AsyncMock(return_value={"model": "gpt-4o", "input": "hi", "background": True}),
+        ), patch("litellm.proxy.proxy_server.polling_via_cache_enabled", False), patch(
+            "litellm.proxy.proxy_server.llm_router", MagicMock()
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+        ), patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            AsyncMock(return_value=response),
+        ):
+            await responses_api(
+                request=MagicMock(),
+                fastapi_response=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1", team_id="t-1"),
+            )
+
+        managed_files_obj.store_unified_object_id.assert_awaited_once()
+        return managed_files_obj.store_unified_object_id.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_model_object_id_is_the_provider_response_id(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+        provider_response_id = "resp_provider68abc123"
+
+        kwargs = await self._store_call_for(provider_response_id)
+
+        assert kwargs["model_object_id"] == provider_response_id
+        assert kwargs["unified_object_id"] != provider_response_id
+        assert kwargs["unified_object_id"] == kwargs["file_object"].id
+
+    @pytest.mark.asyncio
+    async def test_two_background_creates_are_distinguishable_by_provider_id(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+
+        first = await self._store_call_for("resp_providerAAA")
+        second = await self._store_call_for("resp_providerBBB")
+
+        assert first["model_object_id"] == "resp_providerAAA"
+        assert second["model_object_id"] == "resp_providerBBB"
+
+    @pytest.mark.asyncio
+    async def test_unencrypted_advertised_id_is_stored_as_is(self, monkeypatch):
+        """With response-id security disabled the advertised id is already the provider's."""
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.response_api_endpoints.endpoints import responses_api
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+        response = ResponsesAPIResponse(
+            id="resp_rawprovider999",
+            created_at=0,
+            model="gpt-4o",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            status="queued",
+        )
+        response._hidden_params = {"model_id": "deployment-1"}
+
+        managed_files_obj = MagicMock()
+        managed_files_obj.store_unified_object_id = AsyncMock()
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.get_proxy_hook = MagicMock(return_value=managed_files_obj)
+
+        with patch(
+            "litellm.proxy.proxy_server._read_request_body",
+            AsyncMock(return_value={"model": "gpt-4o", "input": "hi", "background": True}),
+        ), patch("litellm.proxy.proxy_server.polling_via_cache_enabled", False), patch(
+            "litellm.proxy.proxy_server.llm_router", MagicMock()
+        ), patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+        ), patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            AsyncMock(return_value=response),
+        ):
+            await responses_api(
+                request=MagicMock(),
+                fastapi_response=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1", team_id="t-1"),
+            )
+
+        kwargs = managed_files_obj.store_unified_object_id.await_args.kwargs
+        assert kwargs["model_object_id"] == "resp_rawprovider999"

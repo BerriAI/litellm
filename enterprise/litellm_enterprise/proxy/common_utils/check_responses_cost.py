@@ -238,8 +238,8 @@ class CheckResponsesCost:
                 stored_response = job.file_object
                 model_name = stored_response.get("model", None)
                 
-                # Decrypt the response ID
-                responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(unified_object_id)
+                # Decrypts rows written before model_object_id held the provider's own id.
+                responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(job.model_object_id)
                 
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {

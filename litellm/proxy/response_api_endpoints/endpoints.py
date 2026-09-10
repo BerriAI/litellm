@@ -379,6 +379,10 @@ async def responses_api(
 
                 if managed_files_obj and llm_router:
                     try:
+                        from litellm.proxy.hooks.responses_id_security import (
+                            ResponsesIDSecurity,
+                        )
+
                         # Get the actual deployment model_id from hidden params
                         hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
                         model_id: Final = hidden_params.get("model_id", None)
@@ -389,12 +393,13 @@ async def responses_api(
                                 response.id,
                             )
                             raise Exception("No model_id found in response hidden params")
+                        provider_response_id, _, _ = ResponsesIDSecurity()._decrypt_response_id(response.id)
                         # Store in managed objects table
                         await managed_files_obj.store_unified_object_id(
                             unified_object_id=response.id,
                             file_object=response,
                             litellm_parent_otel_span=None,
-                            model_object_id=response.id,
+                            model_object_id=provider_response_id,
                             file_purpose="response",
                             user_api_key_dict=user_api_key_dict,
                             persist_attribution=True,

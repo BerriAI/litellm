@@ -142,6 +142,7 @@ class TestCheckResponsesCost:
         # Mock job with response ID
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_123"
+        mock_job.model_object_id = "resp_test_123"
         mock_job.created_by = "test-user"
         mock_job.id = "job-123"
         mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_123"}
@@ -185,6 +186,7 @@ class TestCheckResponsesCost:
         # Mock job
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_456"
+        mock_job.model_object_id = "resp_test_456"
         mock_job.created_by = "test-user"
         mock_job.id = "job-456"
         mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_456"}
@@ -224,6 +226,7 @@ class TestCheckResponsesCost:
         # Mock job
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_789"
+        mock_job.model_object_id = "resp_test_789"
         mock_job.created_by = "test-user"
         mock_job.id = "job-789"
         mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_789"}
@@ -263,6 +266,7 @@ class TestCheckResponsesCost:
         # Mock job
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_in_progress"
+        mock_job.model_object_id = "resp_test_in_progress"
         mock_job.created_by = "test-user"
         mock_job.id = "job-in-progress"
         mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_in_progress"}
@@ -304,6 +308,7 @@ class TestCheckResponsesCost:
         # Mock job
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_queued"
+        mock_job.model_object_id = "resp_test_queued"
         mock_job.created_by = "test-user"
         mock_job.id = "job-queued"
         mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_queued"}
@@ -345,6 +350,7 @@ class TestCheckResponsesCost:
         # Mock job
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_error"
+        mock_job.model_object_id = "resp_test_error"
         mock_job.created_by = "test-user"
         mock_job.id = "job-error"
         mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_error"}
@@ -379,18 +385,21 @@ class TestCheckResponsesCost:
         # Mock multiple jobs
         mock_job1 = MagicMock()
         mock_job1.unified_object_id = "resp_test_1"
+        mock_job1.model_object_id = "resp_test_1"
         mock_job1.created_by = "user1"
         mock_job1.id = "job-1"
         mock_job1.file_object = {"model": "gpt-4o", "id": "resp_test_1"}
 
         mock_job2 = MagicMock()
         mock_job2.unified_object_id = "resp_test_2"
+        mock_job2.model_object_id = "resp_test_2"
         mock_job2.created_by = "user2"
         mock_job2.id = "job-2"
         mock_job2.file_object = {"model": "gpt-4o", "id": "resp_test_2"}
 
         mock_job3 = MagicMock()
         mock_job3.unified_object_id = "resp_test_3"
+        mock_job3.model_object_id = "resp_test_3"
         mock_job3.created_by = "user3"
         mock_job3.id = "job-3"
         mock_job3.file_object = {"model": "gpt-4o", "id": "resp_test_3"}
@@ -470,6 +479,7 @@ class TestCheckResponsesCost:
 
         mock_job = MagicMock()
         mock_job.unified_object_id = encoded_response_id
+        mock_job.model_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-router"
         mock_job.file_object = {"model": "azure-gpt-5", "id": encoded_response_id}
@@ -541,6 +551,7 @@ class TestCheckResponsesCost:
 
         mock_job = MagicMock()
         mock_job.unified_object_id = encrypted_response_id
+        mock_job.model_object_id = encrypted_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-encrypted"
         mock_job.file_object = {"model": "gpt-5", "id": encrypted_response_id}
@@ -586,6 +597,7 @@ class TestCheckResponsesCost:
         """Ids that carry no deployment info can't be routed, so fall back to the SDK."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_plain_upstream_id"
+        mock_job.model_object_id = "resp_plain_upstream_id"
         mock_job.created_by = "test-user"
         mock_job.id = "job-plain"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_plain_upstream_id"}
@@ -635,6 +647,7 @@ class TestCheckResponsesCost:
 
         mock_job = MagicMock()
         mock_job.unified_object_id = encoded_response_id
+        mock_job.model_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-missing-deployment"
         mock_job.file_object = {"model": "gpt-5", "id": encoded_response_id}
@@ -677,6 +690,7 @@ class TestCheckResponsesCost:
         """'incomplete' is terminal in the Responses API, so the row must not stay queued."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_incomplete"
+        mock_job.model_object_id = "resp_test_incomplete"
         mock_job.created_by = "test-user"
         mock_job.id = "job-incomplete"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_incomplete"}
@@ -710,6 +724,7 @@ class TestCheckResponsesCost:
         """When file_object has no 'model' key, model_name is None and metadata skips model fields."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_no_model"
+        mock_job.model_object_id = "resp_test_no_model"
         mock_job.created_by = "test-user"
         mock_job.team_id = None
         mock_job.api_key = None
@@ -752,6 +767,7 @@ class TestCheckResponsesCost:
 
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_billed"
+        mock_job.model_object_id = "resp_test_billed"
         mock_job.created_by = "test-user"
         mock_job.team_id = "team-billed"
         mock_job.api_key = "sk-billed"
@@ -788,6 +804,7 @@ class TestCheckResponsesCost:
         spend log, so losing the claim has to skip the read entirely or the job is billed twice."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_claimed_elsewhere"
+        mock_job.model_object_id = "resp_test_claimed_elsewhere"
         mock_job.created_by = "test-user"
         mock_job.id = "job-claimed-elsewhere"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_claimed_elsewhere"}
@@ -828,6 +845,7 @@ class TestCheckResponsesCost:
 
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_abandoned"
+        mock_job.model_object_id = "resp_test_abandoned"
         mock_job.created_by = "test-user"
         mock_job.id = "job-abandoned"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_abandoned"}
@@ -869,6 +887,7 @@ class TestCheckResponsesCost:
         afterwards is what stops a second pod reading and billing the same row again."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_ordering"
+        mock_job.model_object_id = "resp_test_ordering"
         mock_job.created_by = "test-user"
         mock_job.id = "job-ordering"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_ordering"}
@@ -919,6 +938,7 @@ class TestCheckResponsesCost:
         back to batch_processed=False; holding the claim retires it before it is ever billed."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_still_running"
+        mock_job.model_object_id = "resp_test_still_running"
         mock_job.created_by = "test-user"
         mock_job.id = "job-still-running"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_still_running"}
@@ -959,6 +979,7 @@ class TestCheckResponsesCost:
         retired unbilled and no later poll cycle ever retries it."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_read_error"
+        mock_job.model_object_id = "resp_test_read_error"
         mock_job.created_by = "test-user"
         mock_job.id = "job-read-error"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_read_error"}
@@ -993,12 +1014,14 @@ class TestCheckResponsesCost:
         has to be read and billed in the same cycle."""
         mock_job1 = MagicMock()
         mock_job1.unified_object_id = "resp_test_first"
+        mock_job1.model_object_id = "resp_test_first"
         mock_job1.created_by = "user1"
         mock_job1.id = "job-first"
         mock_job1.file_object = {"model": "gpt-5", "id": "resp_test_first"}
 
         mock_job2 = MagicMock()
         mock_job2.unified_object_id = "resp_test_second"
+        mock_job2.model_object_id = "resp_test_second"
         mock_job2.created_by = "user2"
         mock_job2.id = "job-second"
         mock_job2.file_object = {"model": "gpt-5", "id": "resp_test_second"}
@@ -1078,6 +1101,7 @@ class TestCheckResponsesCost:
         (which is what bills it) and the row is still marked completed."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_old_schema"
+        mock_job.model_object_id = "resp_test_old_schema"
         mock_job.created_by = "test-user"
         mock_job.id = "job-old-schema"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_old_schema"}
@@ -1122,12 +1146,14 @@ class TestCheckResponsesCost:
         are already read and billed, so losing their write loses their usage for good."""
         mock_job1 = MagicMock()
         mock_job1.unified_object_id = "resp_test_persist_fails"
+        mock_job1.model_object_id = "resp_test_persist_fails"
         mock_job1.created_by = "user1"
         mock_job1.id = "job-persist-fails"
         mock_job1.file_object = {"model": "gpt-5", "id": "resp_test_persist_fails"}
 
         mock_job2 = MagicMock()
         mock_job2.unified_object_id = "resp_test_persist_works"
+        mock_job2.model_object_id = "resp_test_persist_works"
         mock_job2.created_by = "user2"
         mock_job2.id = "job-persist-works"
         mock_job2.file_object = {"model": "gpt-5", "id": "resp_test_persist_works"}
@@ -1157,3 +1183,97 @@ class TestCheckResponsesCost:
             "job-persist-fails",
             "job-persist-works",
         ]
+
+    @pytest.mark.asyncio
+    async def test_poller_fetches_the_provider_id_from_model_object_id(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router, monkeypatch
+    ):
+        """The row's provider id drives the fetch, not the nonce-encrypted advertised id.
+
+        A background create advertises a freshly encrypted id per call, so unified_object_id
+        is not a stable handle on the generation.
+        """
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+        from litellm.types.utils import SpecialEnums
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
+
+        provider_response_id = "resp_provider_stable_1"
+        stale_advertised_id = "resp_" + str(
+            encrypt_value_helper(
+                value=SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+                    "resp_some_other_encoding", "test-user", "test-team"
+                )
+            )
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = stale_advertised_id
+        mock_job.model_object_id = provider_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-provider-id"
+        mock_job.file_object = {"model": "gpt-5", "id": stale_advertised_id}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+
+        mock_response = ResponsesAPIResponse(
+            id=provider_response_id,
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        assert mock_aget.call_args[1]["response_id"] == provider_response_id
+        assert _completed_job_ids(mock_prisma_client) == ["job-provider-id"]
+
+    @pytest.mark.asyncio
+    async def test_poller_still_reads_rows_written_before_the_provider_id_was_stored(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router, monkeypatch
+    ):
+        """Rows created earlier carry the encrypted advertised id in both columns."""
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+        from litellm.types.utils import SpecialEnums
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
+
+        provider_response_id = "resp_legacy_upstream_9"
+        legacy_id = "resp_" + str(
+            encrypt_value_helper(
+                value=SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+                    provider_response_id, "test-user", "test-team"
+                )
+            )
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = legacy_id
+        mock_job.model_object_id = legacy_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-legacy"
+        mock_job.file_object = {"model": "gpt-5", "id": legacy_id}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+
+        mock_response = ResponsesAPIResponse(
+            id=provider_response_id,
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        assert mock_aget.call_args[1]["response_id"] == provider_response_id
+        assert _completed_job_ids(mock_prisma_client) == ["job-legacy"]
