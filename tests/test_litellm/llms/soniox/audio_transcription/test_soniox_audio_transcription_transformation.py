@@ -707,11 +707,9 @@ class TestDecodeSonioxFormParams:
         assert result["enable_speaker_diarization"] is True
         assert result["language_hints"] == ["en", "es"]
 
-    def test_should_raise_400_on_malformed_json_context(self):
-        with pytest.raises(SonioxException) as exc_info:
-            decode_soniox_form_params({"context": '{"terms": ["Celebrex"'})
-        assert exc_info.value.status_code == 400
-        assert "context" in str(exc_info.value)
+    @pytest.mark.parametrize("raw", ["[inaudible] consultation", "{unbalanced", '{"terms": ["Celebrex"'])
+    def test_should_keep_bracket_prefixed_free_form_context_as_string(self, raw: str):
+        assert decode_soniox_form_params({"context": raw})["context"] == raw
 
     def test_should_decode_json_string_translation(self):
         result = decode_soniox_form_params({"translation": '{"type": "one_way", "target_language": "es"}'})
