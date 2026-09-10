@@ -86,6 +86,31 @@ impl From<reqwest::Error> for TransportError {
     }
 }
 
+impl From<crate::ocr::error::OcrRequestError> for Error {
+    fn from(error: crate::ocr::error::OcrRequestError) -> Self {
+        match error {
+            crate::ocr::error::OcrRequestError::MissingField(field) => Self::MissingField(field),
+            error => Self::InvalidRequest(error.to_string()),
+        }
+    }
+}
+
+impl From<crate::ocr::error::OcrResponseError> for Error {
+    fn from(error: crate::ocr::error::OcrResponseError) -> Self {
+        Self::InvalidResponse(error.to_string())
+    }
+}
+
+impl From<TransportError> for Error {
+    fn from(error: TransportError) -> Self {
+        match error {
+            TransportError::Http { status, body } => Self::Http { status, body },
+            TransportError::Network(message) => Self::Network(message),
+            TransportError::Connect(message) => Self::Connect(message),
+        }
+    }
+}
+
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
