@@ -48,7 +48,10 @@ from litellm.exceptions import (
     ServiceUnavailableError,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
-from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_content_of_block
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    encrypted_content_of_block,
+    strip_encrypted_reasoning_from_messages,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.types.llms.openai import AllMessageValues
@@ -274,8 +277,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
-        If the request ``input`` contains litellm-encoded item IDs, decode the
-        embedded ``model_id`` and pin the request to that deployment. Raises
+        If the request ``input`` contains litellm-encoded item IDs, or its Anthropic
+        ``messages`` replay a bridge-tagged thinking block, decode the embedded
+        ``model_id`` and pin the request to that deployment. Raises
         ``RateLimitError`` / ``ServiceUnavailableError`` when the originating
         deployment is a member of the routed model group but currently unavailable
         and no encryption-boundary peer exists, rather than dispatching a doomed
@@ -304,9 +308,10 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
 
         request_input: Final = request_kwargs.get("input")
+        anthropic_messages: Final = messages or request_kwargs.get("messages")
         model_id: Final = self._extract_model_id_from_input(
             request_input
-        ) or self._extract_model_id_from_anthropic_messages(request_kwargs.get("messages"))
+        ) or self._extract_model_id_from_anthropic_messages(anthropic_messages)
         if not model_id:
             return typed_healthy_deployments
 
@@ -363,6 +368,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 model,
             )
             ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
+            strip_encrypted_reasoning_from_messages(anthropic_messages)
             return typed_healthy_deployments
 
         # The origin is a member of the routed group but currently unavailable (cooled down); fail fast

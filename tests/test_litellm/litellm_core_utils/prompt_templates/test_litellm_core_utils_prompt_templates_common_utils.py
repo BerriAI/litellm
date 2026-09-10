@@ -1,3 +1,4 @@
+import copy
 import functools
 import json
 import os
@@ -20,6 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_encrypted_reasoning_block,
     responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
+    strip_encrypted_reasoning_from_messages,
     update_messages_with_model_file_ids,
 )
 
@@ -1567,7 +1569,9 @@ class TestEncryptedReasoningReplay:
     def test_signature_round_trips_the_encrypted_content(self):
         assert encrypted_content_from_signature(encrypted_reasoning_signature("gAAAA_bytes")) == "gAAAA_bytes"
 
-    @pytest.mark.parametrize("signature", [None, "", "ErcBCkgIValidAnthropicSignature", "litellm_encrypted_reasoning:", 7])
+    @pytest.mark.parametrize(
+        "signature", [None, "", "ErcBCkgIValidAnthropicSignature", "litellm_encrypted_reasoning:", 7]
+    )
     def test_anything_else_is_not_encrypted_content(self, signature):
         assert encrypted_content_from_signature(signature) is None
 
@@ -1576,7 +1580,11 @@ class TestEncryptedReasoningReplay:
             [{"type": "thinking", "thinking": "Plan.", "signature": encrypted_reasoning_signature("gAAAA_1")}]
         )
         assert items == (
-            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Plan."}], "encrypted_content": "gAAAA_1"},
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Plan."}],
+                "encrypted_content": "gAAAA_1",
+            },
         )
 
     def test_encrypted_redacted_block_replays_with_an_empty_summary(self):
@@ -1596,7 +1604,10 @@ class TestEncryptedReasoningReplay:
             ]
         )
         assert items == (
-            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "A."}, {"type": "summary_text", "text": "B."}]},
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "A."}, {"type": "summary_text", "text": "B."}],
+            },
             {"type": "reasoning", "summary": [{"type": "summary_text", "text": "C."}], "encrypted_content": "gAAAA_c"},
             {"type": "reasoning", "summary": [{"type": "summary_text", "text": "D."}]},
         )
@@ -1621,3 +1632,46 @@ class TestEncryptedReasoningReplay:
     )
     def test_is_encrypted_reasoning_block(self, block, expected):
         assert is_encrypted_reasoning_block(block) is expected
+
+    def test_strip_keeps_the_readable_thinking_and_drops_the_undecryptable_bytes(self):
+        assistant_content = [
+            {"type": "thinking", "thinking": "minted by Anthropic", "signature": "ErcBCkgIValid"},
+            {"type": "thinking", "thinking": "packed by the bridge", "signature": encrypted_reasoning_signature("g1")},
+            {"type": "redacted_thinking", "data": encrypted_reasoning_signature("g2")},
+            {"type": "thinking", "thinking": "", "signature": encrypted_reasoning_signature("g3")},
+            {"type": "text", "text": "answer"},
+        ]
+        messages = [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": assistant_content},
+            {"role": "user", "content": [{"type": "text", "text": "follow-up"}]},
+        ]
+
+        strip_encrypted_reasoning_from_messages(messages)
+
+        assert messages[1]["content"] is assistant_content
+        assert assistant_content == [
+            {"type": "thinking", "thinking": "minted by Anthropic", "signature": "ErcBCkgIValid"},
+            {"type": "thinking", "thinking": "packed by the bridge"},
+            {"type": "text", "text": "answer"},
+        ]
+        assert messages[0] == {"role": "user", "content": "question"}
+        assert messages[2] == {"role": "user", "content": [{"type": "text", "text": "follow-up"}]}
+
+    @pytest.mark.parametrize(
+        "messages",
+        [
+            "not a list",
+            None,
+            [{"role": "user", "content": None}],
+            [{"role": "user", "content": "plain string"}],
+            ["not a message"],
+            [{"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "ErcBCkgIValid"}]}],
+        ],
+    )
+    def test_strip_leaves_history_without_bridge_reasoning_untouched(self, messages):
+        before = copy.deepcopy(messages)
+
+        strip_encrypted_reasoning_from_messages(messages)
+
+        assert messages == before
