@@ -386,7 +386,14 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | N
 
 _REMINDER_OPEN: Final = "<system-reminder>"
 _REMINDER_CLOSE: Final = "</system-reminder>"
-_DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
+_DEFAULT_REMINDER_MARKERS: Final = (
+    (_REMINDER_OPEN, _REMINDER_CLOSE),
+    ("<environment_context>", "</environment_context>"),
+    ("<recommended_plugins>", "</recommended_plugins>"),
+    ("<user_instructions>", "</user_instructions>"),
+    ("<environments_instructions>", "</environments_instructions>"),
+    ("# agents.md instructions for ", "</instructions>"),
+)
 
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3

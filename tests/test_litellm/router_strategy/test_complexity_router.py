@@ -5,6 +5,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 """
 
 import asyncio
+from copy import deepcopy
 import logging
 import sys
 import time
@@ -194,7 +195,14 @@ class TestComplexityRouterInit:
             complexity_router_config=basic_config,
         )
 
-        assert router._reminder_markers == (("<system-reminder>", "</system-reminder>"),)
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_current_ask_and_system_prompt
+
+        assert (
+            _extract_current_ask_and_system_prompt(
+                [{"role": "user", "content": "<system-reminder>noise</system-reminder>hello"}], router._reminder_markers
+            )[0]
+            == "hello"
+        )
 
     def test_init_without_config(self, mock_router_instance):
         """Test initialization without configuration uses defaults."""
@@ -7601,10 +7609,102 @@ _ASKED = {"role": "user", "content": _ASK}
 _ANSWERED = {"role": "assistant", "content": "Working on it."}
 _TOOL_RESULT = {"type": "tool_result", "tool_use_id": "x", "content": "out"}
 _REMINDER = "<system-reminder>Budget: 42 tokens remaining. Do not mention this.</system-reminder>"
+_CODEX_NEW_TASK: Final = (
+    "Message Type: NEW_TASK\nTask name: /root/cache_worker\nSender: /root\nPayload:\n"
+    "Implement and test a thread-safe bounded LRU cache."
+)
+_CODEX_ENVELOPES: Final = (
+    "<environment_context>LITELLM ESCALATE cwd=/repo</environment_context>",
+    "<recommended_plugins>LITELLM ESCALATE plugin list</recommended_plugins>",
+    "<user_instructions>LITELLM ESCALATE preferences</user_instructions>",
+    "<environments_instructions>LITELLM ESCALATE environment</environments_instructions>",
+    "# AGENTS.md instructions for /repo with spaces/中文\n<INSTRUCTIONS>LITELLM ESCALATE instructions</INSTRUCTIONS>",
+)
 
 
 class TestContextAwareClassifier:
     """Test the new classifier context window and trajectory signals."""
+
+    @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
+    def test_codex_envelopes_preserve_delegated_task_and_prior_context(self, envelope: str) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _extract_current_ask_and_system_prompt,
+            _extract_prior_turns,
+            _newest_turn_ask,
+            _newest_turn_is_human_ask,
+        )
+
+        messages: Final = [
+            {"role": "user", "content": f"{envelope}\nDesign cache invalidation"},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": envelope}, {"type": "text", "text": _CODEX_NEW_TASK}],
+            },
+            {"role": "developer", "content": "<permissions instructions>developer scope</permissions instructions>"},
+            {"role": "user", "content": envelope},
+        ]
+
+        assert _extract_current_ask_and_system_prompt(messages)[0] == _CODEX_NEW_TASK
+        assert _extract_prior_turns(messages, _CODEX_NEW_TASK, 1, 100, None, False) == (
+            ("user", "Design cache invalidation"),
+        )
+        assert _newest_turn_ask(messages) is None
+        assert _newest_turn_is_human_ask(messages) is False
+        assert _extract_current_ask_and_system_prompt([messages[-1]])[0] is None
+
+    @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
+    def test_codex_marker_override_and_incomplete_blocks_preserve_text(self, envelope: str) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import _strip_reminder_blocks
+
+        incomplete: Final = envelope.rsplit("</", 1)[0]
+        assert _strip_reminder_blocks(f"before {envelope.upper()} after") == "before after"
+        assert _strip_reminder_blocks(incomplete) == incomplete
+        assert _strip_reminder_blocks(f"<custom>noise</custom>{envelope}", (("<custom>", "</custom>"),)) == envelope
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("responses_api", (False, True))
+    async def test_codex_routing_preserves_original_request(self, responses_api: bool) -> None:
+        completion: Final = AsyncMock(return_value=_llm_response('{"tier":"COMPLEX"}'))
+        router: Final = ComplexityRouter(
+            model_name="codex-router",
+            litellm_router_instance=MagicMock(acompletion=completion),
+            complexity_router_config={
+                "tiers": {"COMPLEX": "task-model", "REASONING": "escalated-model"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "keyword_tier_rules": [{"keywords": ["LITELLM ESCALATE"], "tier": "REASONING"}],
+            },
+        )
+        messages: Final = [
+            {"role": "user", "content": _CODEX_NEW_TASK},
+            {"role": "user", "content": "\n".join(_CODEX_ENVELOPES)},
+        ]
+        original: Final = deepcopy(messages)
+        request_kwargs: Final = (
+            {"input": messages, "litellm_metadata": {"user_api_key_request_route": "/v1/responses"}}
+            if responses_api
+            else {}
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="codex-router",
+            request_kwargs=request_kwargs,
+            messages=None if responses_api else messages,
+            input=messages if responses_api else None,
+        )
+
+        assert response is not None
+        assert response.model == "task-model"
+        completion.assert_awaited_once()
+        assert completion.call_args.kwargs["messages"][1]["content"].strip() == (
+            f"Classify this message:\n{_CODEX_NEW_TASK}"
+        )
+        assert messages == original
+        if responses_api:
+            assert response.messages is None
+            assert request_kwargs["input"] == original
+        else:
+            assert response.messages == original
 
     @pytest.mark.parametrize(
         "messages,expected_ask",
@@ -13661,6 +13761,7 @@ class _OutputCeilingRecorder(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         self.seen.append((model, kwargs.get("optional_params", {}).get("max_tokens")))
+
 
 NON_REASONING_TIERS: Final = {
     "NON_REASONING": "gpt-4o-mini",
