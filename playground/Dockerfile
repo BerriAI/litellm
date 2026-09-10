@@ -3,6 +3,7 @@ FROM node:22-bookworm-slim AS frontend
 WORKDIR /build/playground
 COPY playground/package.json playground/package-lock.json ./
 RUN npm ci
+COPY playground/tsconfig.json ./tsconfig.json
 COPY playground/index.html ./index.html
 COPY playground/src ./src
 RUN npm run build
