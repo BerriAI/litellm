@@ -342,7 +342,7 @@ async def _evaluate_binding(
     claims: Final = _decode_id_token(id_token, binding, signing_key)
     if isinstance(claims, _BindingRejection):
         return claims
-    if grant_type == "authorization_code":
+    if grant_type == "authorization_code" and (binding.mode == "enforce" or expected_nonce is not None):
         nonce: Final = claims.get("nonce")
         if not expected_nonce or not isinstance(nonce, str) or not hmac.compare_digest(nonce, expected_nonce):
             return _BindingRejection(

@@ -14,6 +14,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final, Protocol
 
+from fastapi import HTTPException
+
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointAuthConfigError,
@@ -93,6 +95,14 @@ class AuthorizationCodeRefresher:
         self._identity_validator = identity_validator
 
     async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
+        try:
+            return await self._refresh(user_id, server_id, token)
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
+            return None
+
+    async def _refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
         if token.refresh_token is None:
             return None
         server: Final = self._server_lookup(server_id)
@@ -162,4 +172,5 @@ class AuthorizationCodeRefresher:
             expires_at=self._clock() + expires_in if expires_in is not None else None,
             refresh_token=new_refresh,
             scopes=scopes,
+            identity_binding_proof=binding_proof,
         )

@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
 
+from fastapi import HTTPException
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
@@ -1692,13 +1693,18 @@ async def refresh_user_oauth_token(
         )
         return None
 
-    binding_proof: Final = await enforce_oauth_identity_binding(
-        server=server,
-        token_response=body,
-        litellm_user_id=user_id,
-        grant_type="refresh_token",
-        refresh_ownership=RefreshTokenPresented(refresh_token),
-    )
+    try:
+        binding_proof: Final = await enforce_oauth_identity_binding(
+            server=server,
+            token_response=body,
+            litellm_user_id=user_id,
+            grant_type="refresh_token",
+            refresh_ownership=RefreshTokenPresented(refresh_token),
+        )
+    except HTTPException as exc:
+        if exc.status_code != 403:
+            raise
+        return None
 
     access_token: Final[str | None] = body.get("access_token")
     if not access_token:
@@ -1812,8 +1818,14 @@ async def resolve_user_oauth_access_token(
 
         binding: Final = server.oauth_identity_binding
         enforce_binding: Final = binding is not None and binding.mode == "enforce"
-        if enforce_binding:
-            await mcp_per_user_token_cache.delete(user_id, server_id)
+        if prefetched_creds is None and enforce_binding and binding is not None:
+            bound_token: Final = await mcp_per_user_token_cache.get_token(user_id, server_id)
+            if bound_token is not None:
+                if await credential_binding_matches(
+                    binding, user_id, server_id, {"identity_binding_proof": bound_token.identity_binding_proof}
+                ):
+                    return bound_token.access_token
+                await mcp_per_user_token_cache.delete(user_id, server_id)
         if prefetched_creds is None and not enforce_binding:
             cached_token: Final = await mcp_per_user_token_cache.get(user_id, server_id)
             if cached_token is not None:
@@ -1848,7 +1860,9 @@ async def resolve_user_oauth_access_token(
         access_token: Final[str] = cred["access_token"]
         if prefetched_creds is None:
             ttl: Final = _compute_per_user_token_ttl(server, _remaining_token_seconds(cred.get("expires_at")))
-            await mcp_per_user_token_cache.set(user_id, server_id, access_token, ttl)
+            await mcp_per_user_token_cache.set(
+                user_id, server_id, access_token, ttl, identity_binding_proof=cred.get("identity_binding_proof")
+            )
         return access_token
     except Exception as e:
         verbose_proxy_logger.warning(
