@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="CodeMirror and rust-analyzer proof using the in-repo LiteLLM Rust crate" />
+    <title>LiteLLM Rust Playground</title>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">LOCAL PROOF</span>
+          <h1>LiteLLM Rust Playground</h1>
+        </div>
+        <div class="status-row">
+          <span id="lsp-status" class="status" data-state="loading">Connecting to rust-analyzer</span>
+          <span id="diagnostic-status" class="status">Diagnostics pending</span>
+          <button id="reset-button" class="button secondary" type="button">Reset</button>
+          <button id="run-button" class="button primary" type="button">Run</button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <aside class="docs">
+          <p class="section-label">GUIDE.md</p>
+          <h2>Prove the connection</h2>
+          <p>
+            Put the cursor on <code>build_proof</code> in <code>main.rs</code> and press
+            <code>F12</code>. The editor opens its definition in <code>proof.rs</code>. Hover
+            <code>litellm_core::Error</code> for dependency type information
+          </p>
+          <h3>What this uses</h3>
+          <dl>
+            <div>
+              <dt>Editor</dt>
+              <dd>CodeMirror 6</dd>
+            </div>
+            <div>
+              <dt>Language server</dt>
+              <dd>rust-analyzer over WebSocket</dd>
+            </div>
+            <div>
+              <dt>Dependency</dt>
+              <dd>In-repo litellm-core path dependency</dd>
+            </div>
+            <div>
+              <dt>Proc macro</dt>
+              <dd>Serde Serialize and Deserialize derives</dd>
+            </div>
+          </dl>
+          <p class="hint">The source is saved in this browser. Reset restores the checked-in example</p>
+        </aside>
+
+        <section class="editor-panel" aria-label="Rust editor">
+          <div class="filebar">
+            <nav id="file-nav" class="file-nav" aria-label="Project files"></nav>
+            <span id="revision" class="revision"></span>
+          </div>
+          <div id="editors"></div>
+        </section>
+
+        <section class="output-panel" aria-live="polite">
+          <div class="output-header">
+            <span>OUTPUT</span>
+            <span id="run-status"></span>
+          </div>
+          <pre id="output">Press Run to compile against the cloned LiteLLM repository.</pre>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
