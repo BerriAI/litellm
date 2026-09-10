@@ -46,3 +46,13 @@ pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
 pub(crate) const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
 pub(crate) const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
 pub(crate) const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
+
+/// Message accounting `litellm.token_counter` adds on top of the raw encoding
+/// for non-OpenAI models (`litellm/litellm_core_utils/token_counter.py`).
+pub(crate) const TOKENS_PER_MESSAGE: usize = 3;
+pub(crate) const TOKENS_PER_NAME: usize = 1;
+pub(crate) const REPLY_PRIMING_TOKENS: usize = 3;
+pub(crate) const TOOL_DEFINITIONS_TOKENS: usize = 9;
+pub(crate) const TOOLS_WITH_SYSTEM_MESSAGE_DISCOUNT: usize = 4;
+pub(crate) const TOOL_CHOICE_NONE_TOKENS: usize = 1;
+pub(crate) const NAMED_TOOL_CHOICE_TOKENS: usize = 7;
