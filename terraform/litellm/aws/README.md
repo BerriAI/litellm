@@ -258,6 +258,39 @@ gateway_metrics_port         = 4001
 gateway_metrics_scrape_cidrs = ["10.0.0.0/16"]
 ```
 
+### In-container connection pool
+
+Each of the `gateway_num_workers` uvicorn workers opens its own Prisma pool
+straight to Postgres, so one task holds `workers x connection_limit`
+connections and the fleet's footprint against the database ceiling grows with
+every task. `gateway_connection_pool_enabled` runs a PgBouncer (transaction
+mode, loopback) inside the gateway container that all workers share, capping
+the task at `gateway_pool_max_db_connections` upstream connections however
+many workers it runs. `gateway_pool_max_client_conn` bounds the worker-side
+connections the pooler accepts. The module sets
+`LITELLM_PGBOUNCER_ENABLED`, `LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS` and
+`LITELLM_PGBOUNCER_MAX_CLIENT_CONN` on the gateway container only; the backend
+and the migration task keep the direct connection.
+
+```hcl
+create_database                 = false
+database_url                    = "postgresql://litellm:<password>@db.internal:5432/litellm"
+gateway_num_workers             = 4
+gateway_connection_pool_enabled = true
+gateway_pool_max_db_connections = 20
+gateway_pool_max_client_conn    = 1000
+```
+
+The pool needs a static database password, so it is only valid with an
+existing database via `database_url`. The module-created Aurora authenticates
+with rotating IAM tokens (see [Aurora + IAM auth](#aurora--iam-auth)), which
+the pooler cannot follow, and `terraform plan` rejects that combination.
+
+The gateway image on ECS is the componentized `gateway_image`. Its entrypoint
+starts uvicorn directly today, so these variables are inert until the
+PgBouncer-aware launcher lands in that image (BerriAI/litellm#40592); the
+classic `litellm` image honours them already.
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or

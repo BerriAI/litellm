@@ -225,6 +225,26 @@ database:
       usernameKey: username
       passwordKey: password
 
+  # In-container connection pool (PgBouncer, transaction mode) shared by every
+  # gateway worker in the pod. Without it each of the `gateway.numWorkers`
+  # workers opens its own Prisma pool straight to Postgres, so a pod's
+  # footprint against the database's connection ceiling is
+  # numWorkers x connection_limit and grows with every replica. With it, the
+  # pod holds at most maxDbConnections upstream connections no matter how many
+  # workers run; the workers connect to the pool over loopback, with no extra
+  # network hop. The chart emits LITELLM_PGBOUNCER_ENABLED /
+  # LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS / LITELLM_PGBOUNCER_MAX_CLIENT_CONN on
+  # the gateway container only: the backend runs a single worker and the
+  # migrations Job must keep a direct connection. The pool holds a static
+  # password, so it cannot be combined with `database.writer.useIAMAuth` or
+  # `useAzureEntraAuth` (rendering fails). Starting profile for
+  # `gateway.numWorkers: 4` is maxDbConnections: 20, so a database with a
+  # 5000-connection ceiling fits roughly 200 gateway replicas.
+  connectionPool:
+    enabled: false
+    maxDbConnections: 20
+    maxClientConn: 1000
+
 # Optional Redis. Leave host empty to disable.
 #
 # This is the proxy's coordination store: cross-pod tpm/rpm rate limits, spend
