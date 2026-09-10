@@ -1,6 +1,7 @@
 import posixpath
 import re
 from collections.abc import Mapping, Sequence
+from itertools import accumulate, pairwise, repeat
 from types import MappingProxyType
 from typing import Any, Final, cast
 from urllib.parse import quote, unquote
@@ -21,8 +22,8 @@ _MAPPING_PROXY_TYPE: Final[type] = type(MappingProxyType({}))
 
 
 def _fully_unquoted(value: str) -> str:
-    decoded: Final = unquote(value)
-    return value if decoded == value else _fully_unquoted(decoded)
+    decodings: Final = accumulate(repeat(value), lambda current, _: unquote(current))
+    return next(current for current, following in pairwise(decodings) if current == following)
 
 
 def is_managed_cloud_storage_uri(file_id: str) -> bool:

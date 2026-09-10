@@ -28,3 +28,11 @@ def test_is_managed_cloud_storage_uri_ignores_provider_and_unified_ids():
 )
 def test_is_managed_cloud_storage_uri_sees_through_percent_encoding(file_id: str):
     assert is_managed_cloud_storage_uri(file_id)
+
+
+def test_is_managed_cloud_storage_uri_survives_an_id_encoded_thousands_of_times():
+    nested_gs_id = "gs" + "%" + "25" * 5000 + "3A//bucket/x"
+    nested_plain_id = "%" + "25" * 5000
+
+    assert is_managed_cloud_storage_uri(nested_gs_id)
+    assert not is_managed_cloud_storage_uri(nested_plain_id)
