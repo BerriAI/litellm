@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 func newKeyResourceData(t *testing.T, raw map[string]interface{}) *schema.ResourceData {
@@ -252,5 +254,136 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 	}
 	if key.RPMLimit == nil || *key.RPMLimit != 100 {
 		t.Errorf("RPMLimit not parsed: %+v", key.RPMLimit)
+	}
+}
+
+// fakeKeyProxy serves /key/info from stored metadata and applies /key/update
+// the way the proxy does: an absent "metadata" keeps the stored map, a
+// present one replaces it wholesale.
+type fakeKeyProxy struct {
+	metadata map[string]interface{}
+	updates  []map[string]interface{}
+}
+
+func (p *fakeKeyProxy) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/key/info":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"key":  "hash-1",
+				"info": map[string]interface{}{"key_alias": "alias-1", "models": []string{"gpt-4o-mini"}, "metadata": p.metadata},
+			})
+		case "/key/update":
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			p.updates = append(p.updates, body)
+			if m, ok := body["metadata"].(map[string]interface{}); ok {
+				p.metadata = m
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"key": "hash-1", "metadata": p.metadata})
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+func applyKeyUpdate(t *testing.T, client *Client, stateAttrs map[string]string, config map[string]interface{}) *terraform.InstanceState {
+	t.Helper()
+	r := resourceKey()
+	state := &terraform.InstanceState{ID: "hash-1", Attributes: stateAttrs}
+	diff, err := r.Diff(context.Background(), state, terraform.NewResourceConfigRaw(config), client)
+	if err != nil {
+		t.Fatalf("Diff returned error: %v", err)
+	}
+	if diff == nil {
+		t.Fatalf("expected a non-empty diff between %v and %v", stateAttrs, config)
+	}
+	newState, diags := r.Apply(context.Background(), state, diff, client)
+	if diags.HasError() {
+		t.Fatalf("Apply returned error: %v", diags)
+	}
+	return newState
+}
+
+func TestKeyUpdateWithoutMetadataChangePreservesServerMetadata(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{"a": "1", "server_side": "x", "model_rpm_limit": map[string]interface{}{"gpt-4o-mini": float64(5)}}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	newState := applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "max_budget": "10", "metadata.%": "1", "metadata.a": "1"},
+		map[string]interface{}{"key_alias": "alias-1", "max_budget": 20, "metadata": map[string]interface{}{"a": "1"}},
+	)
+
+	if len(proxy.updates) != 1 {
+		t.Fatalf("expected one /key/update call, got %d", len(proxy.updates))
+	}
+	for _, field := range []string{"metadata", "model_rpm_limit", "model_tpm_limit"} {
+		if _, present := proxy.updates[0][field]; present {
+			t.Errorf("unchanged %q was sent on /key/update: %v", field, proxy.updates[0][field])
+		}
+	}
+	if proxy.metadata["server_side"] != "x" {
+		t.Errorf("server-side metadata lost: %v", proxy.metadata)
+	}
+	if got := newState.Attributes["metadata.%"]; got != "1" {
+		t.Errorf("state metadata should hold only the declared entry, got %v", newState.Attributes)
+	}
+	if got := newState.Attributes["metadata.a"]; got != "1" {
+		t.Errorf("metadata.a = %q, want 1", got)
+	}
+}
+
+func TestKeyUpdateWithMetadataChangeMergesOverServerMetadata(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{"a": "1", "b": "2", "server_side": "x"}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "metadata.%": "2", "metadata.a": "1", "metadata.b": "2"},
+		map[string]interface{}{"key_alias": "alias-1", "metadata": map[string]interface{}{"a": "2", "c": "3"}},
+	)
+
+	want := map[string]interface{}{"a": "2", "c": "3", "server_side": "x"}
+	if !reflect.DeepEqual(proxy.metadata, want) {
+		t.Errorf("metadata after update = %v, want %v", proxy.metadata, want)
+	}
+}
+
+func TestKeyUpdateSendsChangedModelLimits(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "model_rpm_limit.%": "1", "model_rpm_limit.gpt-4o-mini": "5"},
+		map[string]interface{}{"key_alias": "alias-1", "model_rpm_limit": map[string]interface{}{"gpt-4o-mini": 7}},
+	)
+
+	got, ok := proxy.updates[0]["model_rpm_limit"].(map[string]interface{})
+	if !ok || got["gpt-4o-mini"] != float64(7) {
+		t.Errorf("changed model_rpm_limit not sent: %v", proxy.updates[0])
+	}
+}
+
+func TestKeyReadKeepsOnlyDeclaredMetadata(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{"a": "1", "server_side": "x"}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	d := newKeyResourceData(t, map[string]interface{}{"metadata": map[string]interface{}{"a": "1"}})
+	d.SetId("hash-1")
+	if diags := resourceKeyRead(context.Background(), d, client); diags.HasError() {
+		t.Fatalf("Read returned error: %v", diags)
+	}
+
+	want := map[string]interface{}{"a": "1"}
+	if got := d.Get("metadata"); !reflect.DeepEqual(got, want) {
+		t.Errorf("metadata in state = %v, want %v", got, want)
 	}
 }
