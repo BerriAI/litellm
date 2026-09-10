@@ -21,7 +21,7 @@ from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
-from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
+from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, run_aws_signing
 from ..common_utils import BedrockError, _get_all_bedrock_regions, error_response_text
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
@@ -136,7 +136,8 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         data: Final = json.dumps(request_data)
 
-        prepped: Final = self.get_request_headers(
+        prepped: Final = await run_aws_signing(
+            self.get_request_headers,
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
             extra_headers=headers,
@@ -206,7 +207,8 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         data: Final = json.dumps(request_data)
 
-        prepped: Final = self.get_request_headers(
+        prepped: Final = await run_aws_signing(
+            self.get_request_headers,
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
             extra_headers=headers,

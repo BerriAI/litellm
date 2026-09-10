@@ -1234,7 +1234,7 @@ if MCP_AVAILABLE:
         return client_id, client_secret, scopes
 
     _STAGED_AUTH_VALUE_AUTH_TYPES: Final = frozenset(
-        (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic, MCPAuth.authorization)
+        (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic, MCPAuth.authorization, MCPAuth.token)
     )
 
     @dataclass(frozen=True, slots=True)
@@ -1242,6 +1242,17 @@ if MCP_AVAILABLE:
         request: NewMCPServerRequest
         mcp_auth_header: str | None
         oauth2_headers: dict[str, str] | None
+
+    def _preview_origin(url: str | None) -> tuple[str, str, int | None] | None:
+        if not url:
+            return None
+        try:
+            parsed: Final = httpx.URL(url)
+        except httpx.InvalidURL:
+            return None
+        if parsed.scheme not in ("http", "https") or not parsed.host:
+            return None
+        return parsed.scheme, parsed.host, parsed.port
 
     def _stage_server_test(new_mcp_server_request: NewMCPServerRequest, headers: Headers) -> _StagedServerTest:
         """
@@ -1255,7 +1266,19 @@ if MCP_AVAILABLE:
             MCPRequestHandler,
         )
 
-        request: Final = _inherit_credentials_from_existing_server(new_mcp_server_request)
+        saved_server: Final = (
+            global_mcp_server_manager.get_mcp_server_by_id(new_mcp_server_request.server_id)
+            if new_mcp_server_request.server_id
+            else None
+        )
+        saved_origin: Final = _preview_origin(saved_server.url) if saved_server else None
+        preview_origin: Final = _preview_origin(new_mcp_server_request.url)
+        may_inherit: Final = new_mcp_server_request.auth_type not in _STAGED_AUTH_VALUE_AUTH_TYPES or (
+            saved_origin is not None and saved_origin == preview_origin
+        )
+        request: Final = (
+            _inherit_credentials_from_existing_server(new_mcp_server_request) if may_inherit else new_mcp_server_request
+        )
         mcp_auth_header: Final = (
             request.credentials.get("auth_value")
             if request.auth_type in _STAGED_AUTH_VALUE_AUTH_TYPES and isinstance(request.credentials, dict)
@@ -1318,8 +1341,15 @@ if MCP_AVAILABLE:
             if _oauth2_flow == "client_credentials" and not request.token_url:
                 _oauth2_flow = None
 
+            # Static previews inherit credentials before this step, but must not resolve back to
+            # the saved record during client creation and discard the edited connection settings.
+            preview_server_id: Final = (
+                ""
+                if request.auth_type in _STAGED_AUTH_VALUE_AUTH_TYPES or request.auth_type in (None, MCPAuth.none)
+                else request.server_id or ""
+            )
             server_model: Final = MCPServer(
-                server_id=request.server_id or "",
+                server_id=preview_server_id,
                 name=request.alias or request.server_name or "",
                 url=request.url,
                 transport=request.transport,

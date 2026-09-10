@@ -21,6 +21,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
+    is_encrypted_reasoning_block,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -1199,6 +1200,32 @@ def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[A
             mm["content"] = filtered
         out.append(mm)
     return out
+
+
+def _without_encrypted_reasoning_blocks(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+    if not isinstance(message, Mapping):
+        return message
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    kept: Final = [b for b in content if not is_encrypted_reasoning_block(b)]  # mutable-ok: API message payload
+    if len(kept) == len(content):
+        return message
+    if not kept:
+        return None
+    return {**message, "content": kept}  # mutable-ok: API message payload
+
+
+def strip_encrypted_reasoning_blocks_from_anthropic_messages(
+    messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    """
+    Drop thinking / redacted_thinking blocks that carry another provider's encrypted
+    reasoning (a turn the Responses API bridge served) before the request reaches
+    Anthropic, which cannot verify them. Anthropic's own signed blocks are kept.
+    """
+    stripped: Final = (_without_encrypted_reasoning_blocks(m) for m in messages)
+    return [m for m in stripped if m is not None]  # mutable-ok: API message payload
 
 
 def strip_thinking_blocks_from_anthropic_messages_request_dict(

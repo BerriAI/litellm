@@ -250,8 +250,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = self._get_api_base(api_base)
-        complete_url: Final = f"{api_base}/chat/completions"
+        use_ai_gateway: Final = model.removeprefix("databricks/").count(".") >= 2
+        api_base = self._get_api_base(api_base, use_ai_gateway=use_ai_gateway)
+        url_base: Final = api_base.rstrip("/") if use_ai_gateway else api_base
+        complete_url: Final = f"{url_base}/chat/completions"
         return complete_url
 
     def get_supported_openai_params(self, model: str | None = None) -> list:
