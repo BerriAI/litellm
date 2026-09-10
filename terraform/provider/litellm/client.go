@@ -80,14 +80,22 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	updateData := map[string]interface{}{
 		"key":              key.Key,
 		"team_id":          key.TeamID,
-		"metadata":         key.Metadata,
 		"key_alias":        key.KeyAlias,
 		"aliases":          key.Aliases,
 		"permissions":      key.Permissions,
 		"model_max_budget": key.ModelMaxBudget,
-		"model_rpm_limit":  key.ModelRPMLimit,
-		"model_tpm_limit":  key.ModelTPMLimit,
 		"blocked":          key.Blocked,
+	}
+
+	// The proxy keeps the stored metadata only when the field is absent, so nil means omit.
+	if key.Metadata != nil {
+		updateData["metadata"] = key.Metadata
+	}
+	if key.ModelRPMLimit != nil {
+		updateData["model_rpm_limit"] = key.ModelRPMLimit
+	}
+	if key.ModelTPMLimit != nil {
+		updateData["model_tpm_limit"] = key.ModelTPMLimit
 	}
 
 	// The proxy rejects an empty-string budget_duration with a 400, so only

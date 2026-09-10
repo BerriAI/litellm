@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -194,6 +195,102 @@ func TestCreateKeySendsConfigSuppliedKey(t *testing.T) {
 	}
 }
 
+// The proxy validates each model_max_budget entry as a BudgetConfig object and
+// 500s on a bare number, so the JSON string must reach /key/generate as nested
+// objects and the proxy's response must map back to equivalent JSON in state.
+func TestCreateKeySendsModelMaxBudgetAsBudgetObjects(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/generate" {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &captured)
+			w.Write([]byte(`{"key": "sk-test", "token_id": "hash-1"}`))
+			return
+		}
+		w.Write([]byte(`{"key": "hash-1", "info": {"model_max_budget": {"gpt-4o-mini": {"budget_limit": 50, "time_period": "30d", "rpm_limit": 60}}}}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newKeyResourceData(t, map[string]interface{}{
+		"model_max_budget": `{"gpt-4o-mini": {"budget_limit": 50, "time_period": "30d"}}`,
+	})
+
+	if diags := resourceKeyCreate(context.Background(), d, client); diags.HasError() {
+		t.Fatalf("create returned error: %v", diags)
+	}
+
+	budgets, ok := captured["model_max_budget"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("create payload model_max_budget = %v, want object", captured["model_max_budget"])
+	}
+	cfg, ok := budgets["gpt-4o-mini"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("model_max_budget[gpt-4o-mini] = %v, want BudgetConfig object", budgets["gpt-4o-mini"])
+	}
+	if cfg["budget_limit"] != float64(50) || cfg["time_period"] != "30d" {
+		t.Errorf("BudgetConfig = %v, want budget_limit 50 and time_period 30d", cfg)
+	}
+
+	var state map[string]interface{}
+	if err := json.Unmarshal([]byte(d.Get("model_max_budget").(string)), &state); err != nil {
+		t.Fatalf("state model_max_budget %q is not JSON: %v", d.Get("model_max_budget"), err)
+	}
+	if got, _ := state["gpt-4o-mini"].(map[string]interface{}); got["budget_limit"] != float64(50) || got["rpm_limit"] != float64(60) {
+		t.Errorf("state model_max_budget = %v, want the BudgetConfig read back from /key/info", state)
+	}
+}
+
+// Schema version 0 stored model_max_budget as map(number); that state cannot
+// decode into the version 1 string attribute, so the upgrader must drop it.
+func TestKeyStateUpgradeV0DropsMapModelMaxBudget(t *testing.T) {
+	upgraded, err := resourceKey().StateUpgraders[0].Upgrade(context.Background(), map[string]interface{}{
+		"id":               "hash-1",
+		"key_alias":        "legacy",
+		"model_max_budget": map[string]interface{}{"gpt-4o-mini": 50.0},
+	}, nil)
+	if err != nil {
+		t.Fatalf("upgrade returned error: %v", err)
+	}
+	if _, present := upgraded["model_max_budget"]; present {
+		t.Errorf("upgraded state still carries map model_max_budget: %v", upgraded["model_max_budget"])
+	}
+	if upgraded["key_alias"] != "legacy" {
+		t.Errorf("upgrade dropped unrelated attribute: %v", upgraded)
+	}
+}
+
+func TestKeyModelMaxBudgetValidationRequiresBudgetObjects(t *testing.T) {
+	validate := resourceKey().Schema["model_max_budget"].ValidateFunc
+	for _, valid := range []string{
+		`{}`,
+		`{"gpt-4o-mini": {"budget_limit": 50, "time_period": "30d"}}`,
+		`{"gpt-4o-mini": {"max_budget": 50, "rpm_limit": 60}, "gpt-4o": {"budget_duration": "1d", "tpm_limit": 1000}}`,
+	} {
+		if _, errs := validate(valid, "model_max_budget"); len(errs) != 0 {
+			t.Errorf("validate(%s) = %v, want accepted", valid, errs)
+		}
+	}
+	for _, invalid := range []string{
+		`null`,
+		`[]`,
+		`"gpt-4o-mini"`,
+		`50`,
+		`{"gpt-4o-mini": 50}`,
+		`{"gpt-4o-mini": null}`,
+		`{"gpt-4o-mini": [50]}`,
+		`{"gpt-4o-mini": {}}`,
+		`{"gpt-4o-mini": {"budget_limt": 50}}`,
+		`{"gpt-4o-mini": {"budget_limit": 50, "max_tokens": 100}}`,
+		`not json`,
+	} {
+		if _, errs := validate(invalid, "model_max_budget"); len(errs) == 0 {
+			t.Errorf("validate(%s) accepted a value that would send no per-model budget", invalid)
+		}
+	}
+}
+
 // The proxy 400s on budget_duration: "", so an unset duration must be
 // omitted from the update payload entirely.
 func TestUpdateKeyOmitsEmptyBudgetDuration(t *testing.T) {
@@ -256,55 +353,168 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 	}
 }
 
-func applyKeyUpdate(t *testing.T, prior map[string]interface{}, next map[string]interface{}) map[string]interface{} {
-	t.Helper()
-	var captured map[string]interface{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/key/update" {
-			body, _ := io.ReadAll(r.Body)
-			json.Unmarshal(body, &captured)
-		}
+// fakeKeyProxy serves /key/info from stored metadata and applies /key/update
+// the way the proxy does: an absent "metadata" keeps the stored map, a
+// present one replaces it wholesale.
+type fakeKeyProxy struct {
+	metadata map[string]interface{}
+	updates  []map[string]interface{}
+}
+
+func (p *fakeKeyProxy) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"key": "hash-1", "info": {"key_alias": "a"}}`))
-	}))
+		switch r.URL.Path {
+		case "/key/info":
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"key":  "hash-1",
+				"info": map[string]interface{}{"key_alias": "alias-1", "models": []string{"gpt-4o-mini"}, "metadata": p.metadata},
+			})
+		case "/key/update":
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			p.updates = append(p.updates, body)
+			if m, ok := body["metadata"].(map[string]interface{}); ok {
+				p.metadata = m
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"key": "hash-1", "metadata": p.metadata})
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+func applyKeyUpdate(t *testing.T, client *Client, stateAttrs map[string]string, config map[string]interface{}) *terraform.InstanceState {
+	t.Helper()
+	r := resourceKey()
+	state := &terraform.InstanceState{ID: "hash-1", Attributes: stateAttrs}
+	diff, err := r.Diff(context.Background(), state, terraform.NewResourceConfigRaw(config), client)
+	if err != nil {
+		t.Fatalf("Diff returned error: %v", err)
+	}
+	if diff == nil {
+		t.Fatalf("expected a non-empty diff between %v and %v", stateAttrs, config)
+	}
+	newState, diags := r.Apply(context.Background(), state, diff, client)
+	if diags.HasError() {
+		t.Fatalf("Apply returned error: %v", diags)
+	}
+	return newState
+}
+
+func TestKeyUpdateWithoutMetadataChangePreservesServerMetadata(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{"a": "1", "server_side": "x", "model_rpm_limit": map[string]interface{}{"gpt-4o-mini": float64(5)}}}
+	srv := httptest.NewServer(proxy.handler())
 	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
 
-	res := resourceKey()
-	priorData := schema.TestResourceDataRaw(t, res.Schema, prior)
-	priorData.SetId("hash-1")
-	diff, err := res.Diff(context.Background(), priorData.State(), terraform.NewResourceConfigRaw(next), nil)
-	if err != nil {
-		t.Fatalf("diff failed: %v", err)
+	newState := applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "max_budget": "10", "metadata.%": "1", "metadata.a": "1"},
+		map[string]interface{}{"key_alias": "alias-1", "max_budget": 20, "metadata": map[string]interface{}{"a": "1"}},
+	)
+
+	if len(proxy.updates) != 1 {
+		t.Fatalf("expected one /key/update call, got %d", len(proxy.updates))
 	}
-	d, err := schema.InternalMap(res.Schema).Data(priorData.State(), diff)
-	if err != nil {
-		t.Fatalf("data failed: %v", err)
+	for _, field := range []string{"metadata", "model_rpm_limit", "model_tpm_limit"} {
+		if _, present := proxy.updates[0][field]; present {
+			t.Errorf("unchanged %q was sent on /key/update: %v", field, proxy.updates[0][field])
+		}
 	}
-	if diags := resourceKeyUpdate(context.Background(), d, NewClient(srv.URL, "test-key", true)); diags.HasError() {
-		t.Fatalf("update failed: %v", diags)
+	if proxy.metadata["server_side"] != "x" {
+		t.Errorf("server-side metadata lost: %v", proxy.metadata)
 	}
-	return captured
+	if got := newState.Attributes["metadata.%"]; got != "1" {
+		t.Errorf("state metadata should hold only the declared entry, got %v", newState.Attributes)
+	}
+	if got := newState.Attributes["metadata.a"]; got != "1" {
+		t.Errorf("metadata.a = %q, want 1", got)
+	}
 }
 
-func TestUpdateKeySendsChangedDuration(t *testing.T) {
-	captured := applyKeyUpdate(t,
-		map[string]interface{}{"key_alias": "a", "duration": "30d"},
-		map[string]interface{}{"key_alias": "a", "duration": "90d"},
+func TestKeyUpdateWithMetadataChangeMergesOverServerMetadata(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{"a": "1", "b": "2", "server_side": "x"}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "metadata.%": "2", "metadata.a": "1", "metadata.b": "2"},
+		map[string]interface{}{"key_alias": "alias-1", "metadata": map[string]interface{}{"a": "2", "c": "3"}},
 	)
-	if captured["duration"] != "90d" {
-		t.Errorf("update payload duration = %v, want 90d", captured["duration"])
+
+	want := map[string]interface{}{"a": "2", "c": "3", "server_side": "x"}
+	if !reflect.DeepEqual(proxy.metadata, want) {
+		t.Errorf("metadata after update = %v, want %v", proxy.metadata, want)
 	}
 }
 
-func TestUpdateKeyOmitsUnchangedDuration(t *testing.T) {
-	captured := applyKeyUpdate(t,
-		map[string]interface{}{"key_alias": "a", "duration": "30d"},
-		map[string]interface{}{"key_alias": "b", "duration": "30d"},
+func TestKeyUpdateSendsChangedModelLimits(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "model_rpm_limit.%": "1", "model_rpm_limit.gpt-4o-mini": "5"},
+		map[string]interface{}{"key_alias": "alias-1", "model_rpm_limit": map[string]interface{}{"gpt-4o-mini": 7}},
 	)
-	if captured["key_alias"] != "b" {
-		t.Fatalf("update payload key_alias = %v, want b", captured["key_alias"])
+
+	got, ok := proxy.updates[0]["model_rpm_limit"].(map[string]interface{})
+	if !ok || got["gpt-4o-mini"] != float64(7) {
+		t.Errorf("changed model_rpm_limit not sent: %v", proxy.updates[0])
 	}
-	if v, present := captured["duration"]; present {
+}
+
+func TestKeyReadKeepsOnlyDeclaredMetadata(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{"a": "1", "server_side": "x"}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	d := newKeyResourceData(t, map[string]interface{}{"metadata": map[string]interface{}{"a": "1"}})
+	d.SetId("hash-1")
+	if diags := resourceKeyRead(context.Background(), d, client); diags.HasError() {
+		t.Fatalf("Read returned error: %v", diags)
+	}
+
+	want := map[string]interface{}{"a": "1"}
+	if got := d.Get("metadata"); !reflect.DeepEqual(got, want) {
+		t.Errorf("metadata in state = %v, want %v", got, want)
+	}
+}
+
+func TestKeyUpdateSendsChangedDuration(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "duration": "30d"},
+		map[string]interface{}{"key_alias": "alias-1", "duration": "90d"},
+	)
+
+	if got := proxy.updates[0]["duration"]; got != "90d" {
+		t.Errorf("update payload duration = %v, want 90d", got)
+	}
+}
+
+func TestKeyUpdateOmitsUnchangedDuration(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "duration": "30d"},
+		map[string]interface{}{"key_alias": "alias-2", "duration": "30d"},
+	)
+
+	if got := proxy.updates[0]["key_alias"]; got != "alias-2" {
+		t.Fatalf("update payload key_alias = %v, want alias-2", got)
+	}
+	if v, present := proxy.updates[0]["duration"]; present {
 		t.Errorf("update payload unexpectedly contains duration = %v", v)
 	}
 }

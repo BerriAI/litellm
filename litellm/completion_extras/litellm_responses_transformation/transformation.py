@@ -25,7 +25,7 @@ import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    responses_reasoning_item_from_thinking_blocks,
+    responses_reasoning_items_from_thinking_blocks,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -129,8 +129,8 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
         return stored
     raw_blocks: Final = msg.get("thinking_blocks") or ()
     blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
-    from_thinking: Final = responses_reasoning_item_from_thinking_blocks(blocks)
-    return [] if from_thinking is None else [dict(from_thinking)]  # mutable-ok: API message payload
+    replayed: Final = responses_reasoning_items_from_thinking_blocks(blocks)
+    return [dict(item) for item in replayed]  # mutable-ok: API message payload
 
 
 def _build_reasoning_item(

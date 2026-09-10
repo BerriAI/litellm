@@ -2568,14 +2568,14 @@ class ComplexityRouter(CustomLogger):
         """Real-tokenizer count of the resolved messages plus the out-of-band carriers, off the
         event loop; None when counting fails, and the gate then leaves the placement alone."""
         import litellm
-        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.litellm_core_utils.token_counter import offload_token_count
 
         out_of_band: Final = self._out_of_band_request_text(request_kwargs)
         try:
-            counted: Final = await asyncify(litellm.token_counter)(
+            counted: Final = await offload_token_count(litellm.token_counter)(
                 messages=cast(list, resolved_messages)  # cast-ok: token_counter only iterates the sequence
             )
-            return counted + (await asyncify(litellm.token_counter)(text=out_of_band) if out_of_band else 0)
+            return counted + (await offload_token_count(litellm.token_counter)(text=out_of_band) if out_of_band else 0)
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.debug("ComplexityRouter: context-window token count failed. Got - %s", e)
             return None
