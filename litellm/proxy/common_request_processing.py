@@ -2121,14 +2121,14 @@ class ProxyBaseLLMRequestProcessing:
 
         fallbacks = None
 
-        key_router_settings: Final = getattr(user_api_key_dict, "router_settings", None)
+        key_router_settings: Final = user_api_key_dict.router_settings
         if isinstance(key_router_settings, dict) and "fallbacks" in key_router_settings:
             fallbacks = key_router_settings["fallbacks"]
 
         if fallbacks is None:
             fallbacks = llm_router.fallbacks
 
-        if not isinstance(fallbacks, list) or not fallbacks:
+        if not fallbacks:
             return None
 
         fallback_model_group, generic_fallback_idx = get_fallback_model_group(
