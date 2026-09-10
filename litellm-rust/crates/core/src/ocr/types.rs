@@ -32,6 +32,28 @@ pub enum OcrDocument {
     },
 }
 
+impl OcrDocument {
+    pub(crate) fn source(&self) -> &str {
+        match self {
+            Self::DocumentUrl { document_url, .. } => document_url,
+            Self::ImageUrl { image_url, .. } => image_url,
+        }
+    }
+
+    pub(crate) fn with_source(self, source: String) -> Self {
+        match self {
+            Self::DocumentUrl { extra_fields, .. } => Self::DocumentUrl {
+                document_url: source,
+                extra_fields,
+            },
+            Self::ImageUrl { extra_fields, .. } => Self::ImageUrl {
+                image_url: source,
+                extra_fields,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OcrResponseFormat {
@@ -46,6 +68,7 @@ pub struct OcrConnection {
     pub api_base: Option<String>,
     pub extra_headers: Vec<(String, String)>,
     pub timeout: Duration,
+    pub max_download_bytes: u64,
 }
 
 impl Default for OcrConnection {
@@ -55,6 +78,7 @@ impl Default for OcrConnection {
             api_base: None,
             extra_headers: Vec::new(),
             timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
+            max_download_bytes: crate::constants::OCR_DOWNLOAD_MAX_BYTES,
         }
     }
 }

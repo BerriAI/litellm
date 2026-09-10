@@ -73,7 +73,7 @@ def assert_native_request(
     headers: HTTPMessage,
     body: object,
 ) -> None:
-    if route not in {"ocr", "transcription", "messages", "chat_completions"}:
+    if route not in {"ocr", "azure_ocr", "transcription", "messages", "chat_completions"}:
         raise AssertionError(f"unexpected route marker: {route!r}")
     if outcome not in {"success", "429", "hang"}:
         raise AssertionError(f"unexpected outcome marker: {outcome!r}")
@@ -85,6 +85,12 @@ def assert_native_request(
         assert body["model"] == "mistral-ocr-latest"
         assert body["document"]["document_url"] == "https://example.com/document.pdf"
         assert body["include_image_base64"] is True
+        return
+    if route == "azure_ocr":
+        assert path == "/providers/mistral/azure/ocr"
+        assert headers.get("authorization") == "Bearer prepared-azure-token"
+        assert body["model"] == "mistral-ocr-2505"
+        assert body["document"]["document_url"] == "data:application/pdf;base64,YWJj"
         return
     if route == "transcription":
         assert path == "/model/mistral.voxtral-mini-3b-2507/converse"
@@ -107,7 +113,7 @@ def assert_native_request(
 def native_response(status: int, route: str | None) -> bytes:
     if status == 429:
         return b'{"error":"native-rate-limit"}'
-    if route == "ocr":
+    if route in {"ocr", "azure_ocr"}:
         return b'{"pages":[{"index":0,"markdown":"native-ocr"}]}'
     if route == "transcription":
         return b'{"output":{"message":{"content":[{"text":"native-transcription"}]}}}'
@@ -181,6 +187,20 @@ def assert_success(route: str, response: object) -> None:
         raise AssertionError(f"{route} returned {actual!r}, expected {expected!r}")
 
 
+def azure_ocr_kwargs(api_base: str) -> dict[str, object]:
+    return {
+        "model": "mistral-ocr-2505",
+        "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+        "api_base": api_base,
+        "custom_llm_provider": "azure_ai",
+        "extra_headers": {
+            "Authorization": "Bearer prepared-azure-token",
+            "x-test-outcome": "success",
+            "x-test-route": "azure_ocr",
+        },
+    }
+
+
 def success_value(route: str, response: dict[object, object]) -> object:
     if route == "ocr":
         return response["pages"][0]["markdown"]
@@ -211,6 +231,7 @@ def exercise_sync(native: object, api_base: str) -> None:
             assert_rate_limit(native, route, error)
         else:
             raise AssertionError(f"{route} accepted a 429 response")
+    assert_success("ocr", native.ocr(**azure_ocr_kwargs(api_base)))
 
 
 async def exercise_async(native: object, api_base: str) -> None:
@@ -223,6 +244,7 @@ async def exercise_async(native: object, api_base: str) -> None:
             assert_rate_limit(native, route, error)
         else:
             raise AssertionError(f"a{route} accepted a 429 response")
+    assert_success("ocr", await native.aocr(**azure_ocr_kwargs(api_base)))
 
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:

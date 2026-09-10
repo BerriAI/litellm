@@ -31,6 +31,18 @@ mod tests {
 
     use super::{OcrRequest, ocr};
     use crate::integrations::types::RequestMetadata;
+    use litellm_core::ocr::wire::is_supported_request;
+
+    #[test]
+    fn core_activation_excludes_unmigrated_azure_document_intelligence() {
+        assert!(is_supported_request("model", Some("mistral")));
+        assert!(is_supported_request("pixtral-12b", Some("azure_ai")));
+        assert!(!is_supported_request(
+            "doc-intelligence/prebuilt-layout",
+            Some("azure_ai")
+        ));
+        assert!(!is_supported_request("parse-v3", Some("reducto")));
+    }
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
         let mut request = Vec::new();

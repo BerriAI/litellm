@@ -70,6 +70,7 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
         api_base: nonblank(wire.api_base),
         extra_headers: headers,
         timeout: timeout.unwrap_or(defaults.timeout),
+        max_download_bytes: defaults.max_download_bytes,
     };
     Ok(LiteLLMOcrRequest {
         connection,

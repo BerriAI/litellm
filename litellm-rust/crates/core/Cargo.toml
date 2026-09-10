@@ -12,6 +12,7 @@ path = "tests/workspace_crate_allowlist.rs"
 
 [dependencies]
 base64.workspace = true
+data-url = "0.3.2"
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -44,5 +45,4 @@ observability = ["dep:tracing-subscriber"]
 
 [dev-dependencies]
 rstest.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber.workspace = true

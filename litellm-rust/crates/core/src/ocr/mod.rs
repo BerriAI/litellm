@@ -1,6 +1,7 @@
 mod adapters;
 pub mod client;
 mod codecs;
+mod document;
 pub mod error;
 mod handler;
 pub mod hooks;
@@ -13,6 +14,9 @@ pub mod wire;
 pub use client::{OcrClient, ocr};
 pub use types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrDocument};
 
+#[cfg(test)]
+#[path = "../../tests/azure_ai_ocr.rs"]
+mod azure_ai_tests;
 #[cfg(test)]
 #[path = "../../tests/ocr/support.rs"]
 pub(crate) mod test_support;
