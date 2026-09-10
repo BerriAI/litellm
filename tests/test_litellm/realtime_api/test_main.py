@@ -327,7 +327,60 @@ async def test_arealtime_azure_ai_on_a_foundry_host_connects_to_the_azure_openai
             api_key="fake-key",
             litellm_logging_obj=FakeLogging(),
         )
-    assert connect.url == (
-        "wss://my-project.services.ai.azure.com/openai/realtime"
-        "?api-version=2024-10-01-preview&deployment=gpt-realtime-mini"
+    assert connect.url == "wss://my-project.services.ai.azure.com/openai/v1/realtime?model=gpt-realtime-mini"
+
+
+class _ClientWebSocketWithHeaders:
+    def __init__(self, headers: tuple[tuple[bytes, bytes], ...]) -> None:
+        self.scope: Final = {"headers": headers}
+
+
+_GA_CLIENT: Final = _ClientWebSocketWithHeaders(headers=())
+_BETA_CLIENT: Final = _ClientWebSocketWithHeaders(headers=((b"openai-beta", b"realtime=v1"),))
+
+
+async def _azure_backend_url_dialed_for(websocket: _ClientWebSocketWithHeaders, **kwargs: object) -> str | None:
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="azure/gpt-realtime",
+            websocket=websocket,
+            api_base="https://my-endpoint.openai.azure.com",
+            api_key="fake-key",
+            litellm_logging_obj=FakeLogging(),
+            **kwargs,
+        )
+    return connect.url
+
+
+@pytest.mark.asyncio
+async def test_arealtime_azure_ga_client_without_beta_header_dials_the_ga_upstream(monkeypatch):
+    monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
+    assert (
+        await _azure_backend_url_dialed_for(_GA_CLIENT)
+        == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=gpt-realtime"
+    )
+
+
+@pytest.mark.asyncio
+async def test_arealtime_azure_beta_header_client_keeps_the_beta_upstream(monkeypatch):
+    monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
+    assert await _azure_backend_url_dialed_for(_BETA_CLIENT) == (
+        "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-realtime"
+    )
+
+
+@pytest.mark.asyncio
+async def test_arealtime_azure_explicit_beta_protocol_wins_over_a_ga_client(monkeypatch):
+    monkeypatch.delenv("LITELLM_AZURE_REALTIME_PROTOCOL", raising=False)
+    assert await _azure_backend_url_dialed_for(_GA_CLIENT, realtime_protocol="beta") == (
+        "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-realtime"
+    )
+
+
+@pytest.mark.asyncio
+async def test_arealtime_azure_env_beta_protocol_wins_over_a_ga_client(monkeypatch):
+    monkeypatch.setenv("LITELLM_AZURE_REALTIME_PROTOCOL", "beta")
+    assert await _azure_backend_url_dialed_for(_GA_CLIENT) == (
+        "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-realtime"
     )
