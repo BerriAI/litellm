@@ -35,7 +35,7 @@ class VoiceCloneResponse(TypedDict):
 class MinimaxVoiceCloneError(BaseLLMException):
     """Error raised when MiniMax rejects an upload or clone request."""
 
-    def __init__(self, message: str, status_code: int = 0, headers: Mapping[str, str] | None = None):
+    def __init__(self, message: str, status_code: int = 0, headers: Mapping[str, str] | None = None) -> None:
         super().__init__(message=message, status_code=status_code, headers=headers)
 
 

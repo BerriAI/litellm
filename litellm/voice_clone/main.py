@@ -7,11 +7,13 @@ ID can then be passed to MiniMax text-to-speech calls as the voice value.
 
 import httpx
 
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.minimax.voice_clone.transformation import (
     MinimaxVoiceCloneConfig,
     VoiceCloneResponse,
 )
 from litellm.types.llms.openai import FileTypes
+from litellm.types.utils import LlmProviders
 
 
 def _validate_provider(custom_llm_provider: str | None) -> None:
@@ -98,25 +100,23 @@ async def avoice_clone(
     upload_files, upload_data = config.transform_upload_request(file=file, purpose=purpose)
     config.transform_clone_request(file_id="pending", voice_id=voice_id, model=model)
     timeout_value = timeout if timeout is not None else 600.0
-    owns_client = client is None
-    http_client = client or httpx.AsyncClient(timeout=timeout_value)
-    try:
-        upload_response = await http_client.post(
-            config.get_complete_url(api_base=api_base, operation="upload"),
-            headers=headers,
-            files=upload_files,
-            data=upload_data,
-            timeout=timeout_value,
-        )
-        file_id = config.transform_upload_response(upload_response)
-        clone_body = config.transform_clone_request(file_id=file_id, voice_id=voice_id, model=model)
-        clone_response = await http_client.post(
-            config.get_complete_url(api_base=api_base, operation="clone"),
-            headers={**headers, "Content-Type": "application/json"},
-            json=clone_body,
-            timeout=timeout_value,
-        )
-        return config.transform_clone_response(clone_response, file_id=file_id, model=model)
-    finally:
-        if owns_client:
-            await http_client.aclose()
+    http_client = client or get_async_httpx_client(
+        llm_provider=LlmProviders.MINIMAX,
+        params={"timeout": timeout_value},
+    )
+    upload_response = await http_client.post(
+        config.get_complete_url(api_base=api_base, operation="upload"),
+        headers=headers,
+        files=upload_files,
+        data=upload_data,
+        timeout=timeout_value,
+    )
+    file_id = config.transform_upload_response(upload_response)
+    clone_body = config.transform_clone_request(file_id=file_id, voice_id=voice_id, model=model)
+    clone_response = await http_client.post(
+        config.get_complete_url(api_base=api_base, operation="clone"),
+        headers={**headers, "Content-Type": "application/json"},
+        json=clone_body,
+        timeout=timeout_value,
+    )
+    return config.transform_clone_response(clone_response, file_id=file_id, model=model)
