@@ -7193,14 +7193,13 @@ class TestAggregateGatewayDcrChallenge:
         www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
         assert www_authenticate == f"Bearer {self._EXPECTED_RESOURCE_METADATA}"
 
-    async def test_per_server_challenge_for_gateway_managed_oauth2(self):
-        """Anonymous request to a per-server path whose single target is a gateway-managed
-        oauth2 server: 401 plus the RFC 9728 challenge advertising the PER-SERVER
-        protected-resource metadata in the same URL spelling the request used, so a keyless
-        DCR client configured with either per-server spelling discovers the gateway as the
-        authorization server (LIT-4864). Covers interactive and M2M, which the gateway can
-        both serve end to end."""
-        from litellm.types.mcp import MCPAuth
+    @pytest.mark.parametrize(
+        "auth_type",
+        (None, "none", "api_key", "bearer_token", "basic", "aws_sigv4", "authorization", "token", "oauth2"),
+    )
+    @pytest.mark.parametrize("bearer_presented", (False, True))
+    async def test_per_server_challenge_for_gateway_owned_auth(self, auth_type, bearer_presented):
+        """Gateway admission challenges are independent of upstream authentication."""
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
         server = MCPServer(
@@ -7209,7 +7208,7 @@ class TestAggregateGatewayDcrChallenge:
             server_name="github",
             url="https://upstream.example/mcp",
             transport="http",
-            auth_type=MCPAuth.oauth2,
+            auth_type=auth_type,
         )
         for path, expected_metadata_path in (
             ("/mcp/github", "/.well-known/oauth-protected-resource/mcp/github"),
@@ -7223,10 +7222,16 @@ class TestAggregateGatewayDcrChallenge:
             ):
                 mock_mgr.get_mcp_server_by_name.return_value = server
                 with pytest.raises(HTTPException) as exc_info:
-                    await MCPRequestHandler.process_mcp_request(self._scope(path=path))
+                    await MCPRequestHandler.process_mcp_request(
+                        self._scope(
+                            path=path,
+                            extra_headers=((b"authorization", b"Bearer invalid-key"),) if bearer_presented else (),
+                        )
+                    )
             assert exc_info.value.status_code == 401
             www_authenticate = (exc_info.value.headers or {})["WWW-Authenticate"]
-            assert www_authenticate == f'Bearer resource_metadata="http://testserver{expected_metadata_path}"'
+            error = 'error="invalid_token", ' if bearer_presented else ""
+            assert www_authenticate == f'Bearer {error}resource_metadata="http://testserver{expected_metadata_path}"'
 
     async def test_per_server_challenge_keeps_spelling_under_server_root_path(self):
         """On a sub-path deployment the challenge must still advertise the spelling the client
@@ -7303,10 +7308,7 @@ class TestAggregateGatewayDcrChallenge:
                     )
 
     def test_challenge_target_excludes_every_non_gateway_managed_mode(self):
-        """Unit pin of the challenge-target owner: only a resolved gateway-managed oauth2
-        target (interactive or M2M) yields a per-server challenge; delegate-auth oauth2
-        (whose keyless flow is upstream PKCE via the relay), every client-forwarded auth
-        type, OBO, api_key, unknown names, and CSV paths yield None (LIT-4864)."""
+        """Gateway challenges exclude unresolved, delegated, and client-forwarded targets."""
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             _gateway_dcr_challenge_target,
         )
@@ -7333,7 +7335,11 @@ class TestAggregateGatewayDcrChallenge:
             (_server(MCPAuth.true_passthrough), None),
             (_server(MCPAuth.oauth_delegate), None),
             (_server(MCPAuth.oauth_delegate, dcr_bridge=True), None),
-            (_server(MCPAuth.api_key), None),
+            (_server(MCPAuth.api_key), "srv"),
+            (_server(MCPAuth.none, extra_headers=["Authorization"]), None),
+            (_server(None, extra_headers=["X-API-Key"]), None),
+            (_server(MCPAuth.none, extra_headers=["Authorization"], oauth_passthrough=True), None),
+            (_server(MCPAuth.oauth2_id_jag), None),
             (None, None),
         ]
         for resolved, expected in cases:
