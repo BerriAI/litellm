@@ -28,7 +28,7 @@ primary_region = "sjc"
   [http_service.http_options]
     idle_timeout = 3600
 
-  [http_service.checks]
+  [[http_service.checks]]
     grace_period = "30s"
     interval = "30s"
     method = "GET"
