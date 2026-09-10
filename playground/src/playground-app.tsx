@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, type Ref, type RefObject } from 'react';
+import { Resizable, type ResizeHandleAxis } from 'react-resizable';
 
 import { loadInfo, persistFile, runCode } from './api';
 import { CodeEditors, type CodeEditorsHandle } from './code-editors';
@@ -29,6 +30,23 @@ const ErrorScreen = ({ message, retry }: { message: string; retry: () => void })
 const initialFile = (example: PlaygroundExample) =>
   example.files.find(file => file.path === 'src/main.rs') ?? example.files[0];
 
+const DOCS_WIDTH = 336;
+const FILE_TREE_WIDTH = 200;
+const OUTPUT_HEIGHT = 220;
+
+const resizeHandle = (label: string, orientation: 'horizontal' | 'vertical') => (
+  axis: ResizeHandleAxis,
+  ref: RefObject<HTMLElement>,
+) => (
+  <span
+    ref={ref as Ref<HTMLSpanElement>}
+    className={`react-resizable-handle react-resizable-handle-${axis}`}
+    role="separator"
+    aria-label={label}
+    aria-orientation={orientation}
+  />
+);
+
 const Playground = ({ info }: { info: PlaygroundInfo }) => {
   const firstExample = info.examples[0];
   const [activeExampleId, setActiveExampleId] = useState(firstExample?.id ?? '');
@@ -38,6 +56,9 @@ const Playground = ({ info }: { info: PlaygroundInfo }) => {
   const [diagnostics, setDiagnostics] = useState('Diagnostics pending');
   const [diagnosticState, setDiagnosticState] = useState<'ready' | 'warning'>('ready');
   const [saveError, setSaveError] = useState('');
+  const [docsWidth, setDocsWidth] = useState(DOCS_WIDTH);
+  const [fileTreeWidth, setFileTreeWidth] = useState(FILE_TREE_WIDTH);
+  const [outputHeight, setOutputHeight] = useState(OUTPUT_HEIGHT);
   const codeEditors = useRef<CodeEditorsHandle>(null);
   const markdownEditor = useRef<MarkdownEditorHandle>(null);
 
@@ -142,21 +163,39 @@ const Playground = ({ info }: { info: PlaygroundInfo }) => {
         </div>
       </header>
 
-      <section className="workspace" aria-busy={connection === 'connecting'}>
-        <aside className="docs" aria-label="Markdown document">
-          <div className="docbar">
-            <span>{info.guide.path}</span>
-            <span className="document-language">Markdown</span>
-          </div>
-          <MarkdownEditor ref={markdownEditor} guide={info.guide} onOpenTarget={openFileTarget} onSave={saveFile} />
-        </aside>
+      <section
+        className="workspace"
+        aria-busy={connection === 'connecting'}
+        style={{
+          gridTemplateColumns: `${docsWidth}px minmax(24rem, 1fr)`,
+          gridTemplateRows: `minmax(20rem, 1fr) ${outputHeight}px`,
+        }}
+      >
+        <Resizable
+          axis="x"
+          width={docsWidth}
+          height={0}
+          minConstraints={[240, 0]}
+          maxConstraints={[Math.min(640, Math.max(240, window.innerWidth - 440)), 0]}
+          resizeHandles={['e']}
+          handle={resizeHandle('Resize Markdown panel', 'vertical')}
+          onResize={(_event, { size }) => setDocsWidth(size.width)}
+        >
+          <aside className="docs" aria-label="Markdown document" style={{ width: docsWidth }}>
+            <div className="docbar">
+              <span>{info.guide.path}</span>
+              <span className="document-language">Markdown</span>
+            </div>
+            <MarkdownEditor ref={markdownEditor} guide={info.guide} onOpenTarget={openFileTarget} onSave={saveFile} />
+          </aside>
+        </Resizable>
 
         <section className="editor-panel" aria-label="Rust editor">
           <div className="filebar">
             <span>{activeExample && activeFile ? `${activeExample.id}://${activeFile.path}` : 'Select a file'}</span>
             <span className="revision">{info.revision.slice(0, 8)}</span>
           </div>
-          <div className="editor-body">
+          <div className="editor-body" style={{ gridTemplateColumns: `minmax(0, 1fr) ${fileTreeWidth}px` }}>
             <div className="editor-stack">
               <CodeEditors
                 ref={codeEditors}
@@ -183,33 +222,55 @@ const Playground = ({ info }: { info: PlaygroundInfo }) => {
                 </div>
               )}
             </div>
-            <aside className="file-tree" aria-label="Project files">
-              <p className="tree-title">EXAMPLES</p>
-              <nav className="example-nav" aria-label="Examples">
-                {info.examples.map(example => (
-                  <button
-                    key={example.id}
-                    className="example-item"
-                    data-active={example.id === activeExampleId}
-                    type="button"
-                    onClick={() => selectExample(example)}
-                  >
-                    {example.title}
-                  </button>
-                ))}
-              </nav>
-              {activeExample && <FileTreePanel example={activeExample} activePath={activeFile?.path} onOpenFile={openFile} />}
-            </aside>
+            <Resizable
+              axis="x"
+              width={fileTreeWidth}
+              height={0}
+              minConstraints={[160, 0]}
+              maxConstraints={[420, 0]}
+              resizeHandles={['w']}
+              handle={resizeHandle('Resize file tree', 'vertical')}
+              onResize={(_event, { size }) => setFileTreeWidth(size.width)}
+            >
+              <aside className="file-tree" aria-label="Project files" style={{ width: fileTreeWidth }}>
+                <p className="tree-title">EXAMPLES</p>
+                <nav className="example-nav" aria-label="Examples">
+                  {info.examples.map(example => (
+                    <button
+                      key={example.id}
+                      className="example-item"
+                      data-active={example.id === activeExampleId}
+                      type="button"
+                      onClick={() => selectExample(example)}
+                    >
+                      {example.title}
+                    </button>
+                  ))}
+                </nav>
+                {activeExample && <FileTreePanel example={activeExample} activePath={activeFile?.path} onOpenFile={openFile} />}
+              </aside>
+            </Resizable>
           </div>
         </section>
 
-        <section className="output-panel" aria-live="polite">
-          <div className="output-header">
-            <span>OUTPUT</span>
-            <span data-state={runMutation.data?.success === false || runMutation.isError ? 'error' : 'ready'}>{runStatus}</span>
-          </div>
-          <pre>{output || 'Program finished without output'}</pre>
-        </section>
+        <Resizable
+          axis="y"
+          width={0}
+          height={outputHeight}
+          minConstraints={[0, 120]}
+          maxConstraints={[0, 480]}
+          resizeHandles={['n']}
+          handle={resizeHandle('Resize output panel', 'horizontal')}
+          onResize={(_event, { size }) => setOutputHeight(size.height)}
+        >
+          <section className="output-panel" aria-live="polite" style={{ height: outputHeight }}>
+            <div className="output-header">
+              <span>OUTPUT</span>
+              <span data-state={runMutation.data?.success === false || runMutation.isError ? 'error' : 'ready'}>{runStatus}</span>
+            </div>
+            <pre>{output || 'Program finished without output'}</pre>
+          </section>
+        </Resizable>
       </section>
     </main>
   );

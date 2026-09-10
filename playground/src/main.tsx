@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
+import 'react-resizable/css/styles.css';
 
 import { PlaygroundApp } from './playground-app';
 import './style.css';

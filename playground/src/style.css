@@ -160,6 +160,7 @@ h1 {
 }
 
 .docs {
+  position: relative;
   display: grid;
   grid-template-rows: auto 1fr;
   grid-row: 1 / 3;
@@ -294,6 +295,7 @@ h1 {
 }
 
 .file-tree {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -392,10 +394,71 @@ h1 {
 }
 
 .output-panel {
+  position: relative;
   display: grid;
   grid-template-rows: auto 1fr;
   border-top: 1px solid #292e36;
   background: #0e1115;
+}
+
+.react-resizable-handle {
+  z-index: 10;
+  background-image: none;
+}
+
+.react-resizable-handle::after {
+  position: absolute;
+  border: 0;
+  background: transparent;
+  content: '';
+  transition: background 120ms ease;
+}
+
+.react-resizable-handle:hover::after {
+  background: #bd5b2f;
+}
+
+.react-resizable-handle-e,
+.react-resizable-handle-w {
+  top: 0;
+  width: 10px;
+  height: 100%;
+  margin: 0;
+  transform: none;
+  cursor: col-resize;
+}
+
+.react-resizable-handle-e {
+  right: -5px;
+}
+
+.react-resizable-handle-w {
+  left: -5px;
+}
+
+.react-resizable-handle-e::after,
+.react-resizable-handle-w::after {
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+}
+
+.react-resizable-handle-n {
+  top: -5px;
+  left: 0;
+  width: 100%;
+  height: 10px;
+  margin: 0;
+  transform: none;
+  cursor: row-resize;
+}
+
+.react-resizable-handle-n::after {
+  top: 4px;
+  right: 0;
+  left: 0;
+  height: 2px;
 }
 
 .output-panel pre {
@@ -424,6 +487,7 @@ h1 {
   }
 
   .docs {
+    width: 100% !important;
     height: 45vh;
     border-right: 0;
     border-bottom: 1px solid #292e36;
@@ -434,7 +498,15 @@ h1 {
   }
 
   .editor-body {
-    grid-template-columns: minmax(0, 1fr) 10.5rem;
+    grid-template-columns: minmax(0, 1fr) 10.5rem !important;
+  }
+
+  .file-tree {
+    width: 10.5rem !important;
+  }
+
+  .react-resizable-handle {
+    display: none;
   }
 
   .output-panel {

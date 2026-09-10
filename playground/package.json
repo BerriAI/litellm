@@ -17,10 +17,12 @@
     "codemirror": "^6.0.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "react-resizable": "^4.0.2",
     "vite": "^7.1.5",
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@types/prop-types": "^15.7.15",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "typescript": "^5.9.2"
