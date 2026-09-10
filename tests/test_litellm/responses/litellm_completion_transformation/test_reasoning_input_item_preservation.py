@@ -167,7 +167,7 @@ class TestEncryptedReasoningRoundTrip:
             {"type": "redacted_thinking", "data": "redacted-payload"},
         ]
         message = Message(role="assistant", content="answer", thinking_blocks=blocks)
-        encoded = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(message)
+        encoded = LiteLLMCompletionResponsesConfig.encode_thinking_blocks(message)
         decoded = LiteLLMCompletionResponsesConfig._decode_thinking_blocks_from_input_item(
             {"type": "reasoning", "encrypted_content": encoded}
         )

@@ -58,6 +58,7 @@ class _ThinkingBlockFragment(TypedDict, total=False):
 
 class _ThinkingDelta(TypedDict, total=False):
     thinking_blocks: Sequence[_ThinkingBlockFragment]
+    provider_specific_fields: ReadOnly[Mapping[str, object] | None]
 
 
 class _ThinkingChoice(TypedDict, total=False):
@@ -672,7 +673,7 @@ class ChunkProcessor:
 
         def _flush_thinking_block() -> None:
             nonlocal current_thinking_text_parts, current_signature
-            if len(current_thinking_text_parts) > 0 and current_signature:
+            if current_signature:
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",
@@ -702,10 +703,19 @@ class ChunkProcessor:
                                     )
                                 )
                         else:
-                            thinking_text = thinking_block.get("thinking", None)
+                            thinking_text, signature, provider_fields = (
+                                thinking_block.get("thinking"),
+                                thinking_block.get("signature"),
+                                delta.get("provider_specific_fields"),
+                            )
+                            if (
+                                signature
+                                and isinstance(provider_fields, Mapping)
+                                and provider_fields.get("thinking_blocks") == thinking
+                            ):
+                                current_thinking_text_parts.clear()
                             if thinking_text:
                                 current_thinking_text_parts.append(thinking_text)
-                            signature = thinking_block.get("signature", None)
                             if signature:
                                 current_signature = signature
                                 _flush_thinking_block()
