@@ -67,7 +67,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
@@ -98,6 +98,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_credentials_in_payload,
     mask_sensitive_structure,
 )
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
@@ -148,6 +149,7 @@ from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
     filter_team_based_models,
     filter_web_search_deployments,
+    get_request_team_id,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
     warn_on_provider_credential_mismatch,
@@ -1316,6 +1318,43 @@ class Router:
             litellm.callbacks = [c for c in litellm.callbacks if id(c) not in selector_ids]
         if isinstance(litellm.input_callback, list):
             litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
+
+    def _apply_updated_routing_strategy_args(self) -> None:
+        """
+        Re-link the default group's selector to the current `routing_strategy_args`.
+
+        Selectors freeze their `RoutingArgs` at construction, so a runtime args
+        update would otherwise keep serving the boot-time values until restart.
+        Latency/usage state survives the rebuild: it lives in the shared router
+        cache, not on the selector.
+        """
+        strategy: Final = self._normalize_strategy(self.routing_strategy)
+        if strategy == "lar1":
+            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
+
+            apply_lar1_routing_strategy(self, self.routing_strategy_args)
+            return
+
+        attr: Final = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy or "")
+        current: Final = getattr(self, attr, None) if attr is not None else None
+        if attr is None or current is None:
+            return
+
+        try:
+            rebuilt: Final = self._build_strategy_selector(
+                strategy=strategy or "",
+                routing_strategy_args=self.routing_strategy_args,
+            )
+        except (TypeError, ValidationError):
+            verbose_router_logger.exception(
+                "Invalid routing_strategy_args %s for '%s'; keeping the previous ones",
+                self.routing_strategy_args,
+                strategy,
+            )
+            return
+
+        self._unregister_router_selectors((current,))
+        setattr(self, attr, rebuilt)
 
     def routing_strategy_init(self, routing_strategy: RoutingStrategy | str, routing_strategy_args: dict):
         verbose_router_logger.info("Routing strategy: %s", routing_strategy)
@@ -11130,6 +11169,43 @@ class Router:
 
         return ids
 
+    def get_candidate_model_ids_for_route(self, model: str, team_id: str | None = None) -> frozenset[str]:
+        """
+        Deployment ids that could serve ``model`` for ``team_id``, following the same
+        precedence ``_common_checks_available_deployment`` uses to build a candidate pool:
+        ``model_group_alias``, then a routing group, then the first matching early-resolve
+        path for a name that is not a ``model_name`` (team route, wildcard pattern via
+        ``get_deployments_by_pattern``, team pattern router, default deployment), then the
+        ``model_name`` and team indexes. Delegating to the router's own resolvers keeps this
+        aligned with how a route actually resolves rather than re-deriving it, and unlike
+        ``_common_checks_available_deployment`` it is read-only: it does not apply request
+        fallbacks and (with ``include_team_models`` left off) does not raise. Lets a pre-call
+        check tell a genuine cross-group route from same-group unavailability without leaking
+        deployment ids into request kwargs bound for the provider.
+        """
+        resolved: Final = self._get_model_from_alias(model=model) or model
+        routing_group_members: Final = self._get_routing_group_deployments(model=resolved, team_id=team_id)
+        if routing_group_members is not None:
+            return self._deployment_ids(routing_group_members)
+        early: Final = self._try_early_resolve_deployments_for_model_not_in_names(
+            model=resolved, request_team_id=team_id
+        )
+        if early is not None:
+            early_deployments: Final = early[1]
+            return self._deployment_ids(
+                (early_deployments,) if isinstance(early_deployments, Mapping) else early_deployments
+            )
+        return self._deployment_ids(self._get_all_deployments(model_name=resolved, team_id=team_id))
+
+    @staticmethod
+    def _deployment_ids(deployments: Sequence[Mapping[str, object]]) -> frozenset[str]:
+        return frozenset(
+            str(model_info["id"])
+            for deployment in deployments
+            for model_info in (deployment.get("model_info"),)
+            if isinstance(model_info, Mapping) and model_info.get("id") is not None
+        )
+
     def has_model_id(self, candidate_id: str) -> bool:
         """
         O(1) membership check for a deployment ID without allocating large lists.
@@ -11847,7 +11923,7 @@ class Router:
 
         _existing_router_settings: Final = self.get_settings()
         rebuild_routing_groups = False
-        relink_lar1_from_args = False
+        routing_args_updated = False
         for var in kwargs:
             if var in RUNTIME_UPDATABLE_ROUTER_SETTINGS:
                 if var in _int_settings:
@@ -11886,15 +11962,13 @@ class Router:
                                 )
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
-                        relink_lar1_from_args = True
+                        routing_args_updated = True
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting %s is not allowed", var)
 
-        if relink_lar1_from_args and self._normalize_strategy(self.routing_strategy) == "lar1":
-            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
-
-            apply_lar1_routing_strategy(self, self.routing_strategy_args)
+        if routing_args_updated:
+            self._apply_updated_routing_strategy_args()
 
         if rebuild_routing_groups:
             self._init_routing_groups(self._routing_groups_input)
@@ -12040,7 +12114,7 @@ class Router:
         try:
             if not self._pre_call_checks_need_token_count(model, healthy_deployments):
                 return None
-            return await asyncify(self._count_pre_call_check_tokens)(
+            return await offload_token_count(self._count_pre_call_check_tokens)(
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
                 request_kwargs=request_kwargs,
@@ -12268,27 +12342,7 @@ class Router:
             if team_deployments:
                 return model, team_deployments
         elif include_team_models:
-            team_deployments = [
-                self.model_list[index]
-                for (_, public_model_name), indices in self.team_model_to_deployment_indices.items()
-                if public_model_name == model
-                for index in indices
-            ]
-            team_ids: Final = {
-                team_id
-                for deployment in team_deployments
-                for team_id in [(deployment.get("model_info") or {}).get("team_id")]
-                if team_id is not None
-            }
-            if len(team_ids) > 1:
-                raise litellm.BadRequestError(
-                    message=(
-                        f"Model name '{model}' matches deployments from multiple teams. "
-                        "Specify the deployment ID directly to disambiguate."
-                    ),
-                    model=model,
-                    llm_provider="",
-                )
+            team_deployments = self._team_deployments_across_teams(model)
             if team_deployments:
                 return model, team_deployments
 
@@ -12314,6 +12368,45 @@ class Router:
             return model, updated_deployment
 
         return None
+
+    def _team_deployments_across_teams(self, model: str) -> list[DeploymentTypedDict]:
+        """Every team's deployments under public name `model`, for a proxy admin calling without a team."""
+        team_deployments: Final = [
+            self.model_list[index]
+            for (_, public_model_name), indices in self.team_model_to_deployment_indices.items()
+            if public_model_name == model
+            for index in indices
+        ]
+        team_ids: Final = {
+            team_id
+            for deployment in team_deployments
+            for team_id in [(deployment.get("model_info") or {}).get("team_id")]
+            if team_id is not None
+        }
+        if len(team_ids) > 1:
+            raise litellm.BadRequestError(
+                message=(
+                    f"Model name '{model}' matches deployments from multiple teams. "
+                    "Specify the deployment ID directly to disambiguate."
+                ),
+                model=model,
+                llm_provider="",
+            )
+        return team_deployments
+
+    def deployments_for_request(
+        self, model: str, request_kwargs: Mapping[str, object]
+    ) -> Sequence[DeploymentTypedDict]:
+        """The deployments `model` names for this caller, through the same alias, then team-first, then
+        global, then admin-across-teams resolution `_common_checks_available_deployment` applies, so
+        strategy selection and compression policy can never disagree with deployment selection about
+        which marker a name means."""
+        registered_name: Final = self._get_model_from_alias(model=model) or model
+        team_id: Final = get_request_team_id(request_kwargs)
+        deployments: Final = self._get_all_deployments(model_name=registered_name, team_id=team_id)
+        if deployments or team_id is not None or not _is_proxy_admin_request(request_kwargs):
+            return deployments
+        return self._team_deployments_across_teams(registered_name)
 
     @staticmethod
     def _is_strategy_marker_deployment(deployment: Mapping[str, object]) -> bool:
@@ -12342,11 +12435,7 @@ class Router:
         - Dict, if specific model chosen
         """
 
-        request_team_id: str | None = None
-        if request_kwargs is not None:
-            metadata: Final = request_kwargs.get("metadata") or {}
-            litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
-            request_team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
+        request_team_id: Final = get_request_team_id(request_kwargs)
         # check if aliases set on litellm model alias map
         if specific_deployment is True:
             return model, self._get_deployment_by_litellm_model(model=model)
@@ -12371,7 +12460,9 @@ class Router:
                 include_team_models=_is_proxy_admin_request(request_kwargs),
             )
             if early is not None:
-                return early
+                if not isinstance(early[1], list):
+                    return early
+                return early[0], self._drop_strategy_markers(early[0], early[1])
 
         ## get healthy deployments
         ### get all deployments
@@ -12448,19 +12539,22 @@ class Router:
                 model
             ]  # update the model to the actual value if an alias has been passed in
 
-        marker_flags: Final = tuple(self._is_strategy_marker_deployment(d) for d in healthy_deployments)
-        if not any(marker_flags):
-            return model, healthy_deployments
-        selectable: Final = [  # mutable-ok: matches this function's list contract expected by downstream filters
-            d for d, is_marker in zip(healthy_deployments, marker_flags, strict=True) if not is_marker
+        return model, self._drop_strategy_markers(model, healthy_deployments)
+
+    def _drop_strategy_markers(
+        self, model: str, deployments: Sequence[DeploymentTypedDict]
+    ) -> list[DeploymentTypedDict]:
+        """A strategy marker is never a callable deployment, whichever resolution arm produced it."""
+        selectable: Final = [  # mutable-ok: matches _common_checks_available_deployment's list contract
+            d for d in deployments if not self._is_strategy_marker_deployment(d)
         ]
-        if not selectable:
+        if deployments and not selectable:
             raise litellm.BadRequestError(
                 message=f"You passed in model={model}. {RouterErrors.only_strategy_marker_deployments.value}",
                 model=model,
                 llm_provider="",
             )
-        return model, selectable
+        return selectable
 
     def _filter_deployments_by_model_access_groups(
         self,
@@ -13150,12 +13244,8 @@ class Router:
 
         return filtered
 
-    def _model_name_has_plain_deployments(self, model: str) -> bool:
-        indices: Final = self.model_name_to_deployment_indices.get(model) or ()
-        return any(not self._is_strategy_marker_deployment(self.model_list[idx]) for idx in indices)
-
     def _select_pre_routing_strategy(
-        self, model: str, request_kwargs: dict
+        self, model: str, request_kwargs: Mapping[str, object]
     ) -> "TaggedPreRoutingStrategy[PreRoutingStrategy] | None":
         """
         Resolve the pre-routing strategy for `model`, disambiguating deployments
@@ -13166,6 +13256,12 @@ class Router:
         deployment the strategy was registered from via its (model_name, tags)
         pair.
 
+        The registries are keyed by the marker deployment's own `model_name`, which
+        for a team-scoped router is the internal `model_name_{team}_{uuid}` while
+        the caller sends the team's public name. So the names looked up are the
+        `model_name`s of whatever deployments this caller's request resolves `model`
+        to, and `model` itself when it resolves to none.
+
         With tag filtering enabled, router-wide or by the request's
         enable_tag_filtering (which the proxy sets from key/team
         router_settings), strategies that all carry real tags matching none of
@@ -13173,12 +13269,14 @@ class Router:
         deployments: returning None hands the request to ordinary tag-aware
         deployment selection.
         """
-        candidates: Final[list[TaggedPreRoutingStrategy[PreRoutingStrategy]]] = [
-            *self.auto_routers.get(model, []),
-            *self.complexity_routers.get(model, []),
-            *self.adaptive_routers.get(model, []),
-            *self.quality_routers.get(model, []),
-        ]
+        registries: Final = (self.auto_routers, self.complexity_routers, self.adaptive_routers, self.quality_routers)
+        if not any(registries):
+            return None
+        deployments: Final = self.deployments_for_request(model, request_kwargs)
+        registered_names: Final = tuple(dict.fromkeys(str(d["model_name"]) for d in deployments)) or (model,)
+        candidates: Final = tuple(
+            tagged for registry in registries for name in registered_names for tagged in registry.get(name, [])
+        )
         if not candidates:
             return None
 
@@ -13196,7 +13294,7 @@ class Router:
         if (
             (self.enable_tag_filtering or request_scoped_filtering)
             and all(tagged.tags for tagged in candidates)
-            and self._model_name_has_plain_deployments(model)
+            and any(not self._is_strategy_marker_deployment(d) for d in deployments)
         ):
             return None
         return candidates[0]
@@ -13308,11 +13406,12 @@ class Router:
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
 
-        `model` is whatever the caller asked for, which may be a `model_group_alias` key, while the
-        strategy registries and the marker deployment are keyed by the marker's own `model_name`, so
-        every lookup below resolves the alias first. Only the lookups: the caller-facing name stays
-        the alias, since spend metadata is stamped before routing and the response carries the tier
-        group the strategy picked.
+        `model` is whatever the caller asked for, which may be a `model_group_alias` key or a team's
+        public model name, while the strategy registries and the marker deployment are keyed by the
+        marker's own `model_name`, so every lookup below resolves the alias first and the team name
+        through the deployment path. Only the lookups: the caller-facing name stays the alias, since
+        spend metadata is stamped before routing and the response carries the tier group the
+        strategy picked.
         """
         requested_registered_model_name: Final = self._get_model_from_alias(model=model) or model
         registered_model_name: Final = await self._resolve_claude_code_session_router(
@@ -13349,7 +13448,6 @@ class Router:
             messages_for_routing,
             model_hop_compression_armed,
             policy_for_model,
-            team_id_from_request,
         )
 
         # Same tag-aware lookup the proxy's pre-call arming used, so an alias with
@@ -13357,7 +13455,7 @@ class Router:
         compression_policy: Final = policy_for_model(
             llm_router=self,
             model_alias=registered_model_name,
-            team_id=team_id_from_request(request_kwargs),
+            request_kwargs=request_kwargs,
             request_tags=_get_tags_from_request_kwargs(request_kwargs),
         )
         # Shared compression already ran in the pre-call hook, so reuse it rather than
@@ -13426,7 +13524,9 @@ class Router:
         # Per-tier `litellm_params` on the hook response are deliberate overrides
         # the caller applies on top, so those keys are never forwarded here.
         marker_params: Final = (
-            self._forwardable_alias_marker_params(model=registered_model_name, strategy_tags=selected_strategy.tags)
+            self._forwardable_alias_marker_params(
+                model=registered_model_name, strategy_tags=selected_strategy.tags, request_kwargs=request_kwargs
+            )
             if pre_routing_hook_response is not None
             else ()
         )
@@ -13444,13 +13544,14 @@ class Router:
         return pre_routing_hook_response
 
     def _forwardable_alias_marker_params(
-        self, model: str, strategy_tags: tuple[str, ...]
+        self, model: str, strategy_tags: tuple[str, ...], request_kwargs: Mapping[str, object]
     ) -> tuple[tuple[str, object], ...]:
         marker_params: Final = tuple(
             litellm_params
-            for idx in self.model_name_to_deployment_indices.get(model, ())
-            if isinstance(litellm_params := self.model_list[idx].get("litellm_params", {}), dict)
-            and str(litellm_params.get("model", "")).startswith(AUTO_ROUTER_MODEL_PREFIX)
+            for deployment in self.deployments_for_request(model, request_kwargs)
+            if str((litellm_params := deployment["litellm_params"]).get("model", "")).startswith(
+                AUTO_ROUTER_MODEL_PREFIX
+            )
         )
         tag_matched: Final = tuple(
             params for params in marker_params if tuple(params.get("tags") or ()) == strategy_tags

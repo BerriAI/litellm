@@ -17,6 +17,7 @@ import time
 import traceback
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Collection, Mapping, MutableMapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -62,11 +63,13 @@ from litellm.constants import (
     LITELLM_UI_SESSION_DURATION,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import (
     UI_TEAM_ID,
     CallbackDelete,
@@ -131,6 +134,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -138,11 +142,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
-from litellm.utils import (
-    _invalidate_model_cost_lowercase_map,
-    load_credentials_from_list,
-    reapply_runtime_model_cost_registrations,
-)
+from litellm.utils import load_credentials_from_list
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -274,7 +274,6 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
-from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
@@ -426,6 +425,7 @@ from litellm.proxy.db.exception_handler import (
 )
 from litellm.proxy.db.gateway_request_tracking import (
     GatewayRequestAccumulator,
+    GatewayRequestRedisBuffer,
     flush_gateway_requests,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import (
@@ -2357,6 +2357,17 @@ open_telemetry_logger: OpenTelemetry | None = None
 gateway_request_accumulator: Final = GatewayRequestAccumulator()
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
+
+
+def _gateway_request_redis_buffer() -> GatewayRequestRedisBuffer | None:
+    """Shares the spend writer's transaction-buffer Redis and pod lock when use_redis_transaction_buffer is on."""
+    writer: Final = proxy_logging_obj.db_spend_update_writer
+    redis_cache: Final = writer.redis_update_buffer.redis_cache
+    if redis_cache is None or not writer.redis_update_buffer._should_commit_spend_updates_to_redis():
+        return None
+    return GatewayRequestRedisBuffer(redis_cache=redis_cache, pod_lock_manager=writer.pod_lock_manager)
+
+
 ### REDIS QUEUE ###
 async_result: Final = None
 celery_app_conn: Final = None
@@ -2707,6 +2718,12 @@ async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) 
     return fallback_spend, False
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingSpendIncrement:
+    counter_key: str
+    increment: float
+
+
 async def increment_spend_counters(
     token: str | None,
     team_id: str | None,
@@ -2741,7 +2758,7 @@ async def increment_spend_counters(
 
     cost: Final[float] = response_cost
 
-    async def _key_scope(key_token: str) -> None:
+    async def _key_scope(key_token: str) -> tuple[_PendingSpendIncrement | BaseException, ...]:
         # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
         # hashes raw "sk-..." keys before they reach the callback). The
         # startswith("sk-") check is a safety net matching update_cache —
@@ -2752,30 +2769,29 @@ async def increment_spend_counters(
             hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
         )
         key_counter_key: Final = f"spend:key:{hashed_token}"
-        if key_counter_key not in reserved_counter_keys:
-            await _init_and_increment_spend_counter(
-                counter_key=key_counter_key,
-                source_cache_key=hashed_token,
-                increment=cost,
+        key_pending: Final[tuple[_PendingSpendIncrement, ...]] = (
+            ()
+            if key_counter_key in reserved_counter_keys
+            else (
+                await _prepare_spend_counter_increment(
+                    counter_key=key_counter_key,
+                    source_cache_key=hashed_token,
+                    increment=cost,
+                ),
             )
-
-        key_obj: Final[object] = await user_api_key_cache.async_get_cache(key=hashed_token)
-        if key_obj is None:
-            return
-        key_budget_limits = getattr(key_obj, "budget_limits", None) or (
-            key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
         )
-        if isinstance(key_budget_limits, str):
-            key_budget_limits = json.loads(key_budget_limits)
-        if not isinstance(key_budget_limits, list):
-            return
-        for window in key_budget_limits:
-            duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-            key_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
-            key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
+
+        async def _key_window_increment(window: object) -> _PendingSpendIncrement | None:
+            duration = (
+                window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
+            )
+            key_window_reset_at = (
+                window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
+            )
+            key_window_counter: Final = f"spend:key:{hashed_token}:window:{duration}"
             key_window_start = get_budget_window_start(window)
-            if key_window_counter not in reserved_counter_keys:
-                await _init_and_increment_window_spend_counter(
+            pending_window: Final = (
+                await _prepare_window_spend_counter_increment(
                     counter_key=key_window_counter,
                     entity_type="Key",
                     entity_id=hashed_token,
@@ -2783,6 +2799,9 @@ async def increment_spend_counters(
                     window_start=key_window_start,
                     increment=cost,
                 )
+                if key_window_counter not in reserved_counter_keys
+                else None
+            )
             await _enqueue_window_spend_row_update(
                 entity_type=Litellm_EntityType.KEY,
                 entity_id=hashed_token,
@@ -2792,33 +2811,48 @@ async def increment_spend_counters(
                 increment=cost,
                 request_started_at=request_started_at,
             )
+            return pending_window
 
-    async def _team_scope(scope_team_id: str) -> None:
-        team_counter_key: Final = f"spend:team:{scope_team_id}"
-        if team_counter_key not in reserved_counter_keys:
-            await _init_and_increment_spend_counter(
-                counter_key=team_counter_key,
-                source_cache_key=f"team_id:{scope_team_id}",
-                increment=cost,
-            )
-
-        team_obj: Final[object] = await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
-        if team_obj is None:
-            return
-        team_budget_limits = getattr(team_obj, "budget_limits", None) or (
-            team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
+        key_obj: Final[object] = await user_api_key_cache.async_get_cache(key=hashed_token)
+        if key_obj is None:
+            return key_pending
+        key_budget_limits = getattr(key_obj, "budget_limits", None) or (
+            key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
         )
-        if isinstance(team_budget_limits, str):
-            team_budget_limits = json.loads(team_budget_limits)
-        if not isinstance(team_budget_limits, list):
-            return
-        for window in team_budget_limits:
-            duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-            team_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
-            team_window_counter = f"spend:team:{scope_team_id}:window:{duration}"
+        if isinstance(key_budget_limits, str):
+            key_budget_limits = json.loads(key_budget_limits)
+        if not isinstance(key_budget_limits, list):
+            return key_pending
+        window_pending: Final = await asyncio.gather(
+            *(_key_window_increment(window) for window in key_budget_limits), return_exceptions=True
+        )
+        return key_pending + tuple(item for item in window_pending if item is not None)
+
+    async def _team_scope(scope_team_id: str) -> tuple[_PendingSpendIncrement | BaseException, ...]:
+        team_counter_key: Final = f"spend:team:{scope_team_id}"
+        team_pending: Final[tuple[_PendingSpendIncrement, ...]] = (
+            ()
+            if team_counter_key in reserved_counter_keys
+            else (
+                await _prepare_spend_counter_increment(
+                    counter_key=team_counter_key,
+                    source_cache_key=f"team_id:{scope_team_id}",
+                    increment=cost,
+                ),
+            )
+        )
+
+        async def _team_window_increment(window: object) -> _PendingSpendIncrement | None:
+            duration = (
+                window["budget_duration"] if isinstance(window, dict) else getattr(window, "budget_duration", None)
+            )
+            team_window_reset_at = (
+                window.get("reset_at") if isinstance(window, dict) else getattr(window, "reset_at", None)
+            )
+            team_window_counter: Final = f"spend:team:{scope_team_id}:window:{duration}"
             team_window_start = get_budget_window_start(window)
-            if team_window_counter not in reserved_counter_keys:
-                await _init_and_increment_window_spend_counter(
+            pending_window: Final = (
+                await _prepare_window_spend_counter_increment(
                     counter_key=team_window_counter,
                     entity_type="Team",
                     entity_id=scope_team_id,
@@ -2826,6 +2860,9 @@ async def increment_spend_counters(
                     window_start=team_window_start,
                     increment=cost,
                 )
+                if team_window_counter not in reserved_counter_keys
+                else None
+            )
             await _enqueue_window_spend_row_update(
                 entity_type=Litellm_EntityType.TEAM,
                 entity_id=scope_team_id,
@@ -2835,25 +2872,47 @@ async def increment_spend_counters(
                 increment=cost,
                 request_started_at=request_started_at,
             )
+            return pending_window
 
-    async def _team_member_scope(scope_user_id: str, scope_team_id: str) -> None:
+        team_obj: Final[object] = await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
+        if team_obj is None:
+            return team_pending
+        team_budget_limits = getattr(team_obj, "budget_limits", None) or (
+            team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
+        )
+        if isinstance(team_budget_limits, str):
+            team_budget_limits = json.loads(team_budget_limits)
+        if not isinstance(team_budget_limits, list):
+            return team_pending
+        window_pending: Final = await asyncio.gather(
+            *(_team_window_increment(window) for window in team_budget_limits), return_exceptions=True
+        )
+        return team_pending + tuple(item for item in window_pending if item is not None)
+
+    async def _team_member_scope(
+        scope_user_id: str, scope_team_id: str
+    ) -> tuple[_PendingSpendIncrement | BaseException, ...]:
         team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
         if team_member_counter_key in reserved_counter_keys:
-            return
-        await _init_and_increment_spend_counter(
-            counter_key=team_member_counter_key,
-            source_cache_key=f"team_membership:{scope_user_id}:{scope_team_id}",
-            increment=cost,
+            return ()
+        return (
+            await _prepare_spend_counter_increment(
+                counter_key=team_member_counter_key,
+                source_cache_key=f"team_membership:{scope_user_id}:{scope_team_id}",
+                increment=cost,
+            ),
         )
 
-    async def _user_scope(scope_user_id: str) -> None:
+    async def _user_scope(scope_user_id: str) -> tuple[_PendingSpendIncrement | BaseException, ...]:
         user_counter_key: Final = f"spend:user:{scope_user_id}"
         if user_counter_key in reserved_counter_keys:
-            return
-        await _init_and_increment_spend_counter(
-            counter_key=user_counter_key,
-            source_cache_key=scope_user_id,
-            increment=cost,
+            return ()
+        return (
+            await _prepare_spend_counter_increment(
+                counter_key=user_counter_key,
+                source_cache_key=scope_user_id,
+                increment=cost,
+            ),
         )
 
     scope_coros: Final = tuple(
@@ -2863,7 +2922,7 @@ async def increment_spend_counters(
             _team_scope(team_id) if team_id is not None else None,
             _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
             _user_scope(user_id) if user_id is not None else None,
-            _increment_end_user_and_tag_spend_counters(
+            _prepare_end_user_and_tag_spend_increments(
                 end_user_id=end_user_id,
                 tags=tags,
                 response_cost=cost,
@@ -2871,14 +2930,14 @@ async def increment_spend_counters(
             )
             if end_user_id is not None or tags is not None
             else None,
-            _increment_model_access_group_spend_counters(
+            _prepare_model_access_group_spend_increments(
                 model_access_groups=model_access_groups,
                 response_cost=cost,
                 reserved_counter_keys=reserved_counter_keys,
             )
             if model_access_groups
             else None,
-            _increment_org_spend_counter(
+            _prepare_org_spend_increment(
                 org_id=org_id,
                 response_cost=cost,
                 reserved_counter_keys=reserved_counter_keys,
@@ -2893,7 +2952,20 @@ async def increment_spend_counters(
     # as orphaned tasks that race the caller's reservation-counter invalidation;
     # all scopes settle, then the first error propagates as before.
     scope_results: Final = await asyncio.gather(*scope_coros, return_exceptions=True)
-    scope_errors: Final = [r for r in scope_results if isinstance(r, BaseException)]
+    scope_errors: Final = tuple(
+        item
+        for scope in scope_results
+        for item in (scope if isinstance(scope, tuple) else (scope,))
+        if isinstance(item, BaseException)
+    )
+    pending: Final = tuple(
+        item
+        for scope in scope_results
+        if not isinstance(scope, BaseException)
+        for item in scope
+        if not isinstance(item, BaseException)
+    )
+    await _apply_spend_counter_increments(pending=pending)
     if scope_errors:
         raise scope_errors[0]
 
@@ -2936,41 +3008,49 @@ async def _reconcile_budget_reservation_for_counter_update(
     return reserved_counter_keys
 
 
-async def _increment_end_user_and_tag_spend_counters(
+async def _prepare_end_user_and_tag_spend_increments(
     end_user_id: str | None,
     tags: list[str] | None,
     response_cost: float,
     reserved_counter_keys: set[str],
-) -> None:
-    if end_user_id is not None:
-        await _init_and_increment_unreserved_spend_counter(
-            counter_key=f"spend:end_user:{end_user_id}",
-            source_cache_key=end_user_cache_key(end_user_id),
-            increment=response_cost,
-            reserved_counter_keys=reserved_counter_keys,
-        )
+) -> tuple[_PendingSpendIncrement | BaseException, ...]:
+    unique_tags: Final = (
+        tuple(dict.fromkeys(tag for tag in tags if tag and isinstance(tag, str))) if tags is not None else ()
+    )
+    results: Final = await asyncio.gather(
+        *(
+            coro
+            for coro in (
+                _prepare_unreserved_spend_counter_increment(
+                    counter_key=f"spend:end_user:{end_user_id}",
+                    source_cache_key=end_user_cache_key(end_user_id),
+                    increment=response_cost,
+                    reserved_counter_keys=reserved_counter_keys,
+                )
+                if end_user_id is not None
+                else None,
+                *(
+                    _prepare_unreserved_spend_counter_increment(
+                        counter_key=f"spend:tag:{tag_name}",
+                        source_cache_key=tag_cache_key(tag_name),
+                        increment=response_cost,
+                        reserved_counter_keys=reserved_counter_keys,
+                    )
+                    for tag_name in unique_tags
+                ),
+            )
+            if coro is not None
+        ),
+        return_exceptions=True,
+    )
+    return tuple(item for item in results if item is not None)
 
-    if tags is None:
-        return
 
-    seen_tags: Final[set[str]] = set()
-    for tag_name in tags:
-        if not tag_name or not isinstance(tag_name, str) or tag_name in seen_tags:
-            continue
-        seen_tags.add(tag_name)
-        await _init_and_increment_unreserved_spend_counter(
-            counter_key=f"spend:tag:{tag_name}",
-            source_cache_key=tag_cache_key(tag_name),
-            increment=response_cost,
-            reserved_counter_keys=reserved_counter_keys,
-        )
-
-
-async def _increment_model_access_group_spend_counters(
+async def _prepare_model_access_group_spend_increments(
     model_access_groups: Sequence[object],
     response_cost: float,
     reserved_counter_keys: set[str],
-) -> None:
+) -> tuple[_PendingSpendIncrement | BaseException, ...]:
     """Charge the model access groups that authorized this request.
 
     Without this the counter auth reads is written only by the reservation path, so
@@ -2984,55 +3064,63 @@ async def _increment_model_access_group_spend_counters(
     unique_groups: Final = tuple(
         dict.fromkeys(group for group in model_access_groups if group and isinstance(group, str))
     )
-    for group in unique_groups:
-        await _init_and_increment_unreserved_spend_counter(
-            counter_key=model_access_group_spend_counter_key(group),
-            source_cache_key=model_access_group_cache_key(group),
-            increment=response_cost,
-            reserved_counter_keys=reserved_counter_keys,
-        )
+    results: Final = await asyncio.gather(
+        *(
+            _prepare_unreserved_spend_counter_increment(
+                counter_key=model_access_group_spend_counter_key(group),
+                source_cache_key=model_access_group_cache_key(group),
+                increment=response_cost,
+                reserved_counter_keys=reserved_counter_keys,
+            )
+            for group in unique_groups
+        ),
+        return_exceptions=True,
+    )
+    return tuple(item for item in results if item is not None)
 
 
-async def _increment_org_spend_counter(
+async def _prepare_org_spend_increment(
     org_id: str | None,
     response_cost: float,
     reserved_counter_keys: set[str],
-) -> None:
+) -> tuple[_PendingSpendIncrement, ...]:
     if org_id is None:
-        return
+        return ()
 
-    await _init_and_increment_unreserved_spend_counter(
+    pending: Final = await _prepare_unreserved_spend_counter_increment(
         counter_key=f"spend:org:{org_id}",
         source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
     )
+    return (pending,) if pending is not None else ()
 
 
-async def _init_and_increment_unreserved_spend_counter(
+async def _prepare_unreserved_spend_counter_increment(
     counter_key: str,
     source_cache_key: str | list[str],
     increment: float,
     reserved_counter_keys: set[str],
-) -> None:
+) -> _PendingSpendIncrement | None:
     if counter_key in reserved_counter_keys:
-        return
+        return None
 
-    await _init_and_increment_spend_counter(
+    return await _prepare_spend_counter_increment(
         counter_key=counter_key,
         source_cache_key=source_cache_key,
         increment=increment,
     )
 
 
-async def _init_and_increment_spend_counter(
+async def _prepare_spend_counter_increment(
     counter_key: str,
     source_cache_key: str | list[str],
     increment: float,
-):
+) -> _PendingSpendIncrement:
     """
     Initialize counter from the authoritative DB spend value if not yet
-    set, then atomically increment in both in-memory and Redis.
+    set, then return the pending increment for the caller to apply in one
+    pipelined Redis call.
 
     On first access per pod:
     1. Check spend_counter_cache (in-memory -> Redis via DualCache)
@@ -3044,13 +3132,13 @@ async def _init_and_increment_spend_counter(
        the counter as absent and seed it. Using increment means the worst case
        is over-counting (conservative, blocks slightly early) rather than
        under-counting (would allow overspend).
-    4. Increment atomically (both in-memory + Redis)
+    4. Increment is returned for the caller to apply via pipeline
     """
     await _ensure_spend_counter_initialized(
         counter_key=counter_key,
         source_cache_key=source_cache_key,
     )
-    await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+    return _PendingSpendIncrement(counter_key=counter_key, increment=increment)
 
 
 async def _enqueue_window_spend_row_update(
@@ -3102,20 +3190,20 @@ async def _enqueue_window_spend_row_update(
         )
 
 
-async def _init_and_increment_window_spend_counter(
+async def _prepare_window_spend_counter_increment(
     counter_key: str,
     entity_type: str,
     entity_id: str,
     window_duration: str | None,
     window_start: datetime | None,
     increment: float,
-):
+) -> _PendingSpendIncrement | None:
     if window_start is None:
         verbose_proxy_logger.warning(
             "Skipping spend counter increment for invalid budget window %s",
             counter_key,
         )
-        return
+        return None
 
     initialized: Final = await _ensure_window_spend_counter_initialized(
         counter_key=counter_key,
@@ -3125,8 +3213,8 @@ async def _init_and_increment_window_spend_counter(
         window_start=window_start,
     )
     if initialized is False:
-        return
-    await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+        return None
+    return _PendingSpendIncrement(counter_key=counter_key, increment=increment)
 
 
 async def _ensure_spend_counter_initialized(
@@ -3257,6 +3345,32 @@ async def _invalidate_spend_counter(counter_key: str):
                 counter_key,
                 exc_info=True,
             )
+
+
+async def _apply_spend_counter_increments(pending: Sequence[_PendingSpendIncrement]) -> None:
+    if not pending:
+        return
+    redis_cache: Final = spend_counter_cache.redis_cache
+    if redis_cache is None:
+        for item in pending:
+            await spend_counter_cache.async_increment_cache(
+                key=item.counter_key,
+                value=item.increment,
+                refresh_ttl=True,
+            )
+        return
+    ttl: Final = redis_cache.get_ttl()
+    increment_list: Final = [  # mutable-ok: async_increment_pipeline signature requires list[RedisPipelineIncrementOperation]
+        RedisPipelineIncrementOperation(key=item.counter_key, increment_value=item.increment, ttl=ttl)
+        for item in pending
+    ]
+    try:
+        results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
+    except Exception:
+        await asyncio.gather(*(_invalidate_spend_counter(counter_key=item.counter_key) for item in pending))
+        raise
+    for item, current_value in zip(pending, results or ()):
+        spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
 
 
 async def update_cache(
@@ -4436,20 +4550,9 @@ def resolve_classifier_plugin(
 
 
 def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
-    """Adopt a freshly fetched cost map into this process's litellm state, return the model count"""
-    litellm.model_cost = new_model_cost_map
-    # Invalidate case-insensitive lookup map since model_cost was replaced
-    _invalidate_model_cost_lowercase_map()
-    # Repopulate provider model sets (e.g. litellm.anthropic_models) so that
-    # wildcard patterns like "anthropic/*" include any newly added models.
-    litellm.add_known_models(model_cost_map=new_model_cost_map)
-    # Counted before the re-apply below, which writes into this same dict, so the
-    # number reported describes the fetched price data alone.
-    fetched_model_count: Final = len(new_model_cost_map) if new_model_cost_map else 0
-    # The swap discards everything registered at runtime (deployment model_info,
-    # register_model overrides), so put it back on top of the fresh catalog.
-    reapply_runtime_model_cost_registrations()
-    return fetched_model_count
+    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
+
+    return adopt_model_cost_map(new_model_cost_map)
 
 
 def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
@@ -9543,7 +9646,7 @@ class ProxyStartupEvent:
             flush_gateway_requests,
             "interval",
             seconds=batch_writing_interval,
-            args=(prisma_client, gateway_request_accumulator),
+            args=(prisma_client, gateway_request_accumulator, _gateway_request_redis_buffer()),
             id="update_gateway_requests_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
@@ -12714,7 +12817,9 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    _tokenizer_used: Final = litellm.utils._select_tokenizer(model=model_to_use, custom_tokenizer=custom_tokenizer)
+    _tokenizer_used: Final = await asyncify(litellm.utils._select_tokenizer)(
+        model=model_to_use, custom_tokenizer=custom_tokenizer
+    )
 
     tokenizer_used: Final = str(_tokenizer_used["type"])
     system_message: Final = _system_message(system)
@@ -12727,7 +12832,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    total_tokens: Final = await asyncify(litellm.token_counter)(
+    total_tokens: Final = await offload_token_count(litellm.token_counter)(
         model=model_to_use,
         text=prompt,
         messages=counted_messages,

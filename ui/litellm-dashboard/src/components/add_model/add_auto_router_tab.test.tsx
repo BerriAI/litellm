@@ -1046,9 +1046,7 @@ describe("AddAutoRouterTab", () => {
       await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
       expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0]).toMatchObject({
         complexity_router_config: {
-          tier_model_configs: {
-            REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
-          },
+          tier_model_configs: ANTHROPIC_PRESET.complexity_router_config.tier_model_configs,
         },
       });
     });

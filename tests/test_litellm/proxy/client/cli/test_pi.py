@@ -4,9 +4,11 @@ import stat
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 import requests
 
 from litellm.proxy.client.cli.commands.pi import (
+    ListingFailure,
     ModelLimits,
     PiSyncError,
     fetch_model_ids,
@@ -26,6 +28,10 @@ class _FakeResponse:
         if self._payload is None:
             raise ValueError("not json")
         return self._payload
+
+
+def _refused(*args, **kwargs):
+    raise requests.ConnectionError("refused")
 
 
 class TestFetchModelIds:
@@ -53,9 +59,7 @@ class TestFetchModelIds:
         assert "Could not list models" in result.message
 
     def test_non_200_is_a_value(self):
-        result = fetch_model_ids(
-            "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500)
-        )
+        result = fetch_model_ids("http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500))
         assert isinstance(result, PiSyncError)
         assert "HTTP 500" in result.message
 
@@ -75,6 +79,22 @@ class TestFetchModelIds:
         )
         assert isinstance(result, PiSyncError)
         assert "no models" in result.message
+        assert result.kind is ListingFailure.EMPTY
+
+    @pytest.mark.parametrize(
+        ("get", "kind"),
+        [
+            (_refused, ListingFailure.UNREACHABLE),
+            (lambda *a, **k: _FakeResponse(401), ListingFailure.REJECTED),
+            (lambda *a, **k: _FakeResponse(403), ListingFailure.REJECTED),
+            (lambda *a, **k: _FakeResponse(500), ListingFailure.OTHER),
+            (lambda *a, **k: _FakeResponse(200), ListingFailure.BAD_BODY),
+        ],
+        ids=["unreachable", "401", "403", "500", "bad-body"],
+    )
+    def test_the_failure_kind_is_decided_where_the_response_is_classified(self, get, kind):
+        result = fetch_model_ids("http://localhost:4000", "sk-key", get=get)
+        assert isinstance(result, PiSyncError) and result.kind is kind
 
 
 class TestFetchModelLimits:

@@ -5,7 +5,7 @@ Handles embedding calls to Bedrock's `/invoke` endpoint
 import copy
 import json
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final, get_args, overload
 
 import httpx
@@ -26,7 +26,7 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 
-from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
+from ..base_aws_llm import AWSPreparedRequest, BaseAWSLLM, Credentials, bedrock_bearer_token, run_aws_signing
 from ..common_utils import BedrockError
 from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
@@ -39,6 +39,20 @@ from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig,
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+def _sign_get_request(
+    credentials: Credentials, url: str, headers: Mapping[str, str], aws_region_name: str
+) -> AWSPreparedRequest:
+    try:
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+    except ImportError:
+        raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+    request: Final = AWSRequest(method="GET", url=url, data=None, headers=headers)
+    SigV4Auth(credentials, "bedrock", aws_region_name).add_auth(request)
+    return request.prepare()
 
 
 class BedrockEmbedding(BaseAWSLLM):
@@ -342,7 +356,8 @@ class BedrockEmbedding(BaseAWSLLM):
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
 
-            prepped = self.get_request_headers(
+            prepped = await run_aws_signing(
+                self.get_request_headers,
                 credentials=credentials,
                 aws_region_name=aws_region_name,
                 extra_headers=extra_headers,
@@ -600,9 +615,6 @@ class BedrockEmbedding(BaseAWSLLM):
             dict: Status response from AWS Bedrock
         """
 
-        # Get AWS credentials using the same method as other Bedrock methods
-        credentials, _ = self._load_credentials(kwargs)
-
         # Get the runtime endpoint
         endpoint_url, _ = self.get_runtime_endpoint(
             api_base=None,
@@ -619,27 +631,13 @@ class BedrockEmbedding(BaseAWSLLM):
         # Prepare headers for GET request
         headers: Final = {"Content-Type": "application/json"}
 
-        # Use AWSRequest directly for GET requests (get_request_headers hardcodes POST)
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        def sign_status_request() -> AWSPreparedRequest:
+            credentials, _ = self._load_credentials(kwargs)
+            return _sign_get_request(
+                credentials=credentials, url=status_url, headers=headers, aws_region_name=aws_region_name
+            )
 
-        # Create AWSRequest with GET method and encoded URL
-        request: Final = AWSRequest(
-            method="GET",
-            url=status_url,
-            data=None,  # GET request, no body
-            headers=headers,
-        )
-
-        # Sign the request - SigV4Auth will create canonical string from request URL
-        sigv4: Final = SigV4Auth(credentials, "bedrock", aws_region_name)
-        sigv4.add_auth(request)
-
-        # Prepare the request
-        prepped: Final = request.prepare()
+        prepped: Final = await run_aws_signing(sign_status_request)
 
         # LOGGING
         if logging_obj is not None:
