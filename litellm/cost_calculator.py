@@ -1999,6 +1999,7 @@ def ocr_cost(
     credits: Final = getattr(response.usage_info, "credits", None)
     has_custom_ocr_pricing: Final = model_info is not None and (
         model_info.get("ocr_cost_per_page") is not None
+        or model_info.get("annotation_cost_per_page") is not None
         or (credits is not None and model_info.get("ocr_cost_per_credit") is not None)
     )
     pricing: Final = model_info if has_custom_ocr_pricing else _cost_map_model_info(model, custom_llm_provider)
