@@ -263,11 +263,11 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 		d.Set("team_member_tpm_limit", *teamResp.TeamMemberTPMLimit)
 	}
 	d.Set("team_member_key_duration", GetStringValue(teamResp.TeamMemberKeyDuration, d.Get("team_member_key_duration").(string)))
-	if teamResp.ModelRPMLimit != nil {
-		d.Set("model_rpm_limit", teamResp.ModelRPMLimit)
+	if v := teamModelLimit(teamResp.ModelRPMLimit, teamResp.Metadata, "model_rpm_limit"); v != nil {
+		d.Set("model_rpm_limit", v)
 	}
-	if teamResp.ModelTPMLimit != nil {
-		d.Set("model_tpm_limit", teamResp.ModelTPMLimit)
+	if v := teamModelLimit(teamResp.ModelTPMLimit, teamResp.Metadata, "model_tpm_limit"); v != nil {
+		d.Set("model_tpm_limit", v)
 	}
 	if teamResp.AllowedPassthroughRoutes != nil {
 		d.Set("allowed_passthrough_routes", teamResp.AllowedPassthroughRoutes)
@@ -364,10 +364,15 @@ func buildTeamData(d *schema.ResourceData, teamID string) map[string]interface{}
 		"organization_id", "tpm_limit", "rpm_limit", "max_budget", "budget_duration", "models",
 		"blocked", "team_member_permissions", "model_aliases", "guardrails", "prompts",
 		"team_member_budget", "team_member_budget_duration", "team_member_rpm_limit",
-		"team_member_tpm_limit", "team_member_key_duration", "model_rpm_limit",
-		"model_tpm_limit", "allowed_passthrough_routes",
+		"team_member_tpm_limit", "team_member_key_duration", "allowed_passthrough_routes",
 	} {
 		if v, ok := d.GetOk(key); ok {
+			teamData[key] = v
+		}
+	}
+
+	for _, key := range []string{"model_rpm_limit", "model_tpm_limit"} {
+		if v, ok := d.GetOk(key); ok || d.HasChange(key) {
 			teamData[key] = v
 		}
 	}
@@ -402,6 +407,14 @@ func buildTeamMetadata(d *schema.ResourceData) map[string]interface{} {
 		return nil
 	}
 	return metadata
+}
+
+func teamModelLimit(topLevel, metadata map[string]interface{}, key string) map[string]interface{} {
+	if topLevel != nil {
+		return topLevel
+	}
+	nested, _ := metadata[key].(map[string]interface{})
+	return nested
 }
 
 func splitTeamMetadata(raw map[string]interface{}) (map[string]string, []string, []string) {
