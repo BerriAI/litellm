@@ -262,7 +262,7 @@ def test_proxied_traffic_stays_on_native_hooks():
     never sees ``data["prompt"]``."""
     guardrail = _guardrail()
     assert guardrail.uses_apply_guardrail_interface() is True
-    assert guardrail._deployment_pre_call_target() is guardrail
+    assert guardrail._deployment_hook_target() is guardrail
 
 
 @pytest.mark.asyncio

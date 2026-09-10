@@ -179,16 +179,7 @@ def _gateway_dcr_challenge_target(
     mcp_servers: list[str] | None,
     client_ip: str | None,
 ) -> str | None:
-    """The single path-named server this request targets, iff it resolves to a
-    gateway-managed oauth2 server — the one per-server shape the gateway's own keyless
-    DCR flow serves end to end, so the 401 challenge may advertise the per-server
-    protected-resource metadata (whose ``authorization_servers`` names the gateway).
-
-    Multi-server CSV paths, header/path mismatches, unknown names, and every
-    client-forwarded or delegated mode return ``None``: those cells keep their existing
-    challenge (or absence of one), and a challenge is never emitted for a name the
-    public discovery routes would 404, so this reveals exactly the server set the
-    per-server protected-resource metadata already reveals."""
+    """Resolve a single path target whose sign-in metadata advertises the gateway."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
@@ -217,7 +208,7 @@ def _is_gateway_dcr_challenge_scope(
     the caller is not a cold-start DCR client), on the scopes the gateway's keyless
     flow serves: the aggregate ``/mcp`` endpoint, an ``x-mcp-servers``-scoped request
     (the resource the client configured is still ``/mcp``), or a per-server path whose
-    single target is a gateway-managed oauth2 server. Every other named target keeps
+    single target advertises gateway-owned sign-in. Every other named target keeps
     its existing behavior, failing closed to the original admission error."""
     if not _is_litellm_auth_admission_error(exc):
         return False
@@ -236,7 +227,7 @@ def _gateway_dcr_challenge(
 ) -> HTTPException:
     """The RFC 9728 challenge pointing the client at the protected-resource metadata
     matching the scope it requested: the per-server document (same URL spelling the
-    request arrived on) when the single target is a gateway-managed oauth2 server,
+    request arrived on) when the single target advertises gateway-owned sign-in,
     else the gateway's aggregate document. Either way the client discovers the gateway
     as its authorization server and starts the same sign-in flow.
 
@@ -3108,15 +3099,17 @@ class MCPRequestHandler:
     @staticmethod
     async def _get_allowed_mcp_servers_for_agent(
         user_api_key_auth: UserAPIKeyAuth | None = None,
-        agent_object_permission=None,
+        agent_object_permission: LiteLLM_ObjectPermissionTable | None = None,
     ) -> list[str]:
         """
         Get allowed MCP servers for an agent (from the agent's object_permission).
 
-        Returns the MCP servers from the agent's object_permission.
-        If agent has no object_permission, returns [] (no extra restriction). An entitlement the
-        agent LINKS but that cannot be read raises ``UnloadableEntitlementError`` out of here so the
-        resolver denies.
+        Returns the agent's direct servers, the servers in its access groups, and the servers reached
+        through its toolsets, exactly as the key, team, and org levels count theirs. If agent has no
+        object_permission, returns [] (no extra restriction). An entitlement the agent LINKS but that
+        cannot be read, or a declared toolset that resolves to no grants, raises
+        ``UnloadableEntitlementError`` out of here so the resolver denies instead of reading the
+        agent as unrestricted.
 
         Args:
             user_api_key_auth: User auth with agent_id
@@ -3126,31 +3119,30 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return []
 
-        obj_perm = agent_object_permission
-        if obj_perm is None:
-            obj_perm = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        obj_perm: Final = (
+            agent_object_permission
+            if agent_object_permission is not None
+            else await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        )
         if obj_perm is None:
             return []
 
         try:
-            direct_mcp_servers = getattr(obj_perm, "mcp_servers", None) or []
-            if isinstance(direct_mcp_servers, str):
-                direct_mcp_servers = []
-            mcp_access_groups = getattr(obj_perm, "mcp_access_groups", None) or []
-            if isinstance(mcp_access_groups, str):
-                mcp_access_groups = []
-
-            # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
-            expanded_direct_servers: Final = global_mcp_server_manager.expand_permission_list(list(direct_mcp_servers))
-
-            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(mcp_access_groups)
-            all_servers: Final = expanded_direct_servers + access_group_servers
-            return list(set(all_servers))
+            expanded_direct_servers: Final = global_mcp_server_manager.expand_permission_list(
+                obj_perm.mcp_servers or []
+            )
+            access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                obj_perm.mcp_access_groups or []
+            )
+            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(obj_perm)
+            return list({*expanded_direct_servers, *access_group_servers, *toolset_grants})
         except Exception as e:
+            if isinstance(e, UnloadableEntitlementError):
+                raise
             verbose_logger.warning("Failed to get allowed MCP servers for agent: %s", e)
             return []
 
@@ -3158,13 +3150,15 @@ class MCPRequestHandler:
     async def _get_agent_tool_permissions_for_server(
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
-        agent_object_permission=None,
+        agent_object_permission: LiteLLM_ObjectPermissionTable | None = None,
     ) -> list[str] | None:
         """
-        Get allowed tool names for a server from the agent's object_permission.
-        Returns None if agent has no tool restrictions for this server. An entitlement the agent
-        LINKS but that cannot be read raises ``UnloadableEntitlementError`` out of here, which the
-        tool resolver turns into deny-all for the server rather than an unrestricted tool list.
+        Get allowed tool names for a server from the agent's object_permission: the union of its
+        direct tool permissions and the tools its toolsets grant on that server, mirroring the key and
+        team levels. Returns None if agent has no tool restrictions for this server. An entitlement the
+        agent LINKS but that cannot be read, or a declared toolset that resolves to no grants, raises
+        ``UnloadableEntitlementError`` out of here, which the tool resolver turns into deny-all for the
+        server rather than an unrestricted tool list.
 
         Args:
             server_id: Server ID to check permissions for
@@ -3175,24 +3169,30 @@ class MCPRequestHandler:
         if not user_api_key_auth or not user_api_key_auth.agent_id:
             return None
 
-        obj_perm = agent_object_permission
-        if obj_perm is None:
-            obj_perm = await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        obj_perm: Final = (
+            agent_object_permission
+            if agent_object_permission is not None
+            else await MCPRequestHandler._get_agent_object_permission(user_api_key_auth)
+        )
         if obj_perm is None:
             return None
 
         try:
-            mcp_tool_permissions: Final = getattr(obj_perm, "mcp_tool_permissions", None)
-            if not mcp_tool_permissions or not isinstance(mcp_tool_permissions, dict):
-                return None
-            # Dict keys may be server_ids OR names/aliases; normalize before lookup.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
-            tools: Final = global_mcp_server_manager.expand_tool_permissions(mcp_tool_permissions).get(server_id)
-            return list(tools) if tools else None
+            direct_tools: Final = (
+                global_mcp_server_manager.expand_tool_permissions(obj_perm.mcp_tool_permissions).get(server_id)
+                if obj_perm.mcp_tool_permissions
+                else None
+            )
+            toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(obj_perm, server_id)
+            agent_tools: Final = MCPRequestHandler._union_tool_grants(direct_tools, toolset_tools)
+            return list(agent_tools) if agent_tools else None
         except Exception as e:
+            if isinstance(e, UnloadableEntitlementError):
+                raise
             verbose_logger.warning("Failed to get agent tool permissions for server: %s", e)
             return None
 

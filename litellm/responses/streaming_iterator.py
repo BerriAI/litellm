@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runti
 
 import httpx
 from openai._streaming import SSEDecoder
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeIs
 
 import litellm
@@ -473,40 +474,23 @@ class BaseResponsesAPIStreamingIterator:
             )
         self._run_post_success_hooks(end_time=end_time)
 
-    def _response_for_success_logging(self) -> ResponsesAPIStreamingResponse | ResponsesAPIResponse | None:
-        """A copy of the completed response, so the handlers' usage transforms (Responses API
-        input_tokens/output_tokens to chat completion prompt_tokens/completion_tokens) don't touch
-        what the caller gets back. model_dump + model_validate instead of deepcopy avoids pickle
-        errors with Pydantic ValidatorIterator on tool_choice with allowed_tools (fixes #17192).
-
-        The handlers only unwrap the completion event in their assembled-stream branch, which a
-        non-streaming caller draining this iterator never reaches, so unwrap it here instead."""
-        completed: Final = self.completed_response
-        copied: Final = self._model_copy_for_logging(completed)
+    def _response_for_success_logging(self) -> object:
+        """The handlers only unwrap the completion event in their assembled-stream branch, which a
+        non-streaming caller draining this iterator never reaches, so unwrap the logging copy here."""
+        copied: Final = _logging_copy(self.completed_response)
         self._restore_provider_response_headers(copied)
         unwrapped: Final = getattr(copied, "response", None)
         if getattr(self.logging_obj, "stream", None) is not True and isinstance(unwrapped, ResponsesAPIResponse):
             return unwrapped
         return copied
 
-    @staticmethod
-    def _model_copy_for_logging(
-        completed: ResponsesAPIStreamingResponse | None,
-    ) -> ResponsesAPIStreamingResponse | None:
-        if completed is None or not hasattr(completed, "model_dump"):
-            return completed
-        try:
-            return type(completed).model_validate(completed.model_dump())
-        except Exception:
-            return completed
-
     def _restore_provider_response_headers(self, logging_response: object) -> None:
         """Re-apply the provider's response headers to the copy handed to logging callbacks.
 
-        ``model_validate(model_dump())`` above drops pydantic private attributes, so the
+        ``model_validate(model_dump())`` in ``_logging_copy`` drops pydantic private attributes, so the
         ``_hidden_params`` the provider transform set on the nested response are lost. Returns early
-        when that copy fell back to the original event, so logging-only state never lands on the
-        object the caller is iterating.
+        when the event was not a pydantic model and logging got the original, so logging-only state
+        never lands on the object the caller is iterating.
         """
         if logging_response is self.completed_response:
             return
@@ -559,7 +543,7 @@ class BaseResponsesAPIStreamingIterator:
     def _record_failed_response_usage(self, response_obj: ResponsesAPIResponse | None) -> None:
         if response_obj is None or self.logging_obj is None:
             return
-        usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+        usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
         if usage_obj is None:
             return
         try:
@@ -1308,14 +1292,46 @@ def _add_text_like_part_events(
         )
 
 
+def _logging_copy(event: object) -> object:
+    """Hand logging callbacks a copy, so their usage rewrite (Responses shape to chat shape) never
+    reaches the event the caller is iterating. The round trip through ``model_dump`` sidesteps the
+    deepcopy pickle errors of #17192; when a provider payload fails validation (LIT-7391), shallow
+    copies of the event and its nested response still keep the caller's ``usage`` attribute separate."""
+    if not isinstance(event, BaseModel):
+        return event
+    try:
+        return type(event).model_validate(event.model_dump())
+    except Exception:
+        return _detached_shallow_copy(event)
+
+
+def _detached_shallow_copy(event: BaseModel) -> BaseModel:
+    nested: Final[object] = getattr(event, "response", None)
+    if isinstance(nested, BaseModel):
+        return event.model_copy(update={"response": nested.model_copy()})
+    return event.model_copy()
+
+
+def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
+    if isinstance(usage, ResponseAPIUsage):
+        return usage
+    if not isinstance(usage, dict):
+        return None
+    try:
+        return ResponseAPIUsage.model_validate(usage)
+    except ValidationError:
+        return None
+
+
 def _stamp_responses_usage_cost(
     response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
 ) -> None:
     if response_obj is None or logging_obj is None:
         return
-    usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+    usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
     if usage_obj is None:
         return
+    response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
     if isinstance(getattr(usage_obj, "cost", None), (int, float)):
         return
     try:
