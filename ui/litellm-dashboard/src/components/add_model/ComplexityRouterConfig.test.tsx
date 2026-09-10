@@ -1,6 +1,7 @@
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import React from "react";
+import { vi, type Mock } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 vi.mock(
   "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults",
@@ -101,7 +102,7 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
 
     await user.click(screen.getByText("Advanced: Response Format"));
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch", { name: "Return raw model name" }));
 
     expect(onChange).toHaveBeenCalledWith({
       ...defaultValue,
@@ -494,7 +495,7 @@ describe("ComplexityRouterConfig", () => {
       />,
     );
     fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch", { name: "Semantic keyword matching" }));
     expect(onSemanticMatchingEnabledChange).toHaveBeenCalledWith(true, expect.anything());
   });
 
@@ -1520,14 +1521,16 @@ describe("ComplexityRouterConfig tier editing", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.queryByText("How Classification Works")).not.toBeInTheDocument();
-    expect(screen.queryByText("scores each request across 7 dimensions", { exact: false })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("scores each request across 7 built-in dimensions", { exact: false }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the scorer card on a built-in router, whose tiers the score still decides", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("How Classification Works")).toBeInTheDocument();
-    expect(screen.getByText("scores each request across 7 dimensions", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("scores each request across 7 built-in dimensions", { exact: false })).toBeInTheDocument();
   });
 
   it("says why a custom row is blocked instead of only reddening its border", () => {
@@ -1688,5 +1691,85 @@ describe("ComplexityRouterConfig tier editing", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     expect(screen.getByLabelText("Display name for the Simple tier")).toBeInTheDocument();
     expect(screen.queryByText("Display names rename the built-in tiers", { exact: false })).not.toBeInTheDocument();
+  });
+});
+
+describe("classifier vision settings", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+  };
+
+  const VisionFixture = ({ onChange = vi.fn() }: { onChange?: Mock }) => {
+    const [value, setValue] = React.useState(llmValue);
+    return (
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={value}
+        onChange={(nextValue) => {
+          setValue(nextValue);
+          onChange(nextValue);
+        }}
+      />
+    );
+  };
+
+  it("starts off and reveals the default cap when enabled", () => {
+    renderWithProviders(<VisionFixture />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const vision = screen.getByRole("switch", { name: "Use images for classification" });
+    expect(vision).not.toBeChecked();
+    expect(screen.queryByLabelText("Maximum images per request")).not.toBeInTheDocument();
+
+    fireEvent.click(vision);
+
+    expect(screen.getByLabelText("Maximum images per request")).toHaveValue("1");
+  });
+
+  it("writes the switch and a clamped image cap into the classifier config", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<VisionFixture onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    fireEvent.click(screen.getByRole("switch", { name: "Use images for classification" }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { ...llmValue.classifier_llm_config, vision: { enabled: true, max_images: 1 } },
+    });
+
+    fireEvent.change(screen.getByLabelText("Maximum images per request"), { target: { value: "1.7" } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { ...llmValue.classifier_llm_config, vision: { enabled: true, max_images: 2 } },
+    });
+  });
+
+  it("keeps the image cap draft empty until a valid value is entered", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<VisionFixture onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("switch", { name: "Use images for classification" }));
+    onChange.mockClear();
+
+    const input = screen.getByLabelText("Maximum images per request");
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(input).toHaveValue("");
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: "0" } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { ...llmValue.classifier_llm_config, vision: { enabled: true, max_images: 1 } },
+    });
+  });
+
+  it("is absent when the classifier is heuristic", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    expect(screen.queryByText("Use images for classification")).not.toBeInTheDocument();
   });
 });

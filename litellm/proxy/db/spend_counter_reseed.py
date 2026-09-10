@@ -23,9 +23,11 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType
+from litellm.proxy.db.db_lookup_gate import db_lookup_gate
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import (
     BudgetWindowSpendRepository,
+    EndUserRepository,
     SpendLogsRepository,
     TeamMembershipRepository,
 )
@@ -36,6 +38,8 @@ from litellm.repositories.verification_token_repository import (
 )
 
 if TYPE_CHECKING:
+    from prisma.types import LiteLLM_EndUserTableWhereUniqueInput
+
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.utils import PrismaClient
 
@@ -46,6 +50,8 @@ _WINDOW_SPEND_ENTITY_TYPES: Final[Mapping[str, str]] = MappingProxyType(
         "Team": Litellm_EntityType.TEAM.value,
     }
 )
+
+END_USER_COUNTER_PREFIX: Final = "spend:end_user:"
 
 _WINDOW_SPEND_LOG_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -74,6 +80,10 @@ class SpendCounterReseed:
     End-user and tag spend counters intentionally do not reseed here. Their
     auth paths already load the corresponding objects via get_end_user_object()
     and get_tag_objects_batch(); callers pass those values as fallback_spend.
+    end_user_from_db is the one end-user read, used only as the budget floor when
+    a counter sits below that cached spend: a worker that did not run the budget
+    reset still caches the pre-reset end-user object, and LiteLLM_EndUserTable
+    is the row the reset zeroed.
     """
 
     _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
@@ -112,36 +122,53 @@ class SpendCounterReseed:
         if SpendCounterReseed._is_key_or_team_window_counter(counter_key):
             return None
         try:
-            if counter_key.startswith("spend:key:"):
-                token: Final = counter_key[len("spend:key:") :]
-                row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
-            elif counter_key.startswith("spend:team_member:"):
-                suffix: Final = counter_key[len("spend:team_member:") :]
-                if ":" not in suffix:
+            async with db_lookup_gate.current():
+                if counter_key.startswith("spend:key:"):
+                    token: Final = counter_key[len("spend:key:") :]
+                    row = await VerificationTokenRepository(prisma_client).table.find_unique(where={"token": token})
+                elif counter_key.startswith("spend:team_member:"):
+                    suffix: Final = counter_key[len("spend:team_member:") :]
+                    if ":" not in suffix:
+                        return None
+                    user_id, team_id = suffix.rsplit(":", 1)
+                    row = await TeamMembershipRepository(prisma_client).table.find_unique(
+                        where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
+                    )
+                elif counter_key.startswith("spend:team:"):
+                    team_id = counter_key[len("spend:team:") :]
+                    row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+                elif counter_key.startswith("spend:user:"):
+                    user_id = counter_key[len("spend:user:") :]
+                    row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
+                elif counter_key.startswith(END_USER_COUNTER_PREFIX) or counter_key.startswith("spend:tag:"):
                     return None
-                user_id, team_id = suffix.rsplit(":", 1)
-                row = await TeamMembershipRepository(prisma_client).table.find_unique(
-                    where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}}
-                )
-            elif counter_key.startswith("spend:team:"):
-                team_id = counter_key[len("spend:team:") :]
-                row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
-            elif counter_key.startswith("spend:user:"):
-                user_id = counter_key[len("spend:user:") :]
-                row = await UserRepository(prisma_client).table.find_unique(where={"user_id": user_id})
-            elif counter_key.startswith("spend:end_user:") or counter_key.startswith("spend:tag:"):
-                return None
-            elif counter_key.startswith("spend:org:"):
-                org_id: Final = counter_key[len("spend:org:") :]
-                row = await OrganizationRepository(prisma_client).table.find_unique(where={"organization_id": org_id})
-            else:
-                return None
+                elif counter_key.startswith("spend:org:"):
+                    org_id: Final = counter_key[len("spend:org:") :]
+                    row = await OrganizationRepository(prisma_client).table.find_unique(
+                        where={"organization_id": org_id}
+                    )
+                else:
+                    return None
         except Exception:
             verbose_proxy_logger.exception("SpendCounterReseed.from_db: failed for %s", counter_key)
             return None
         if row is None:
             return None
         return float(getattr(row, "spend", 0.0) or 0.0)
+
+    @staticmethod
+    async def end_user_from_db(prisma_client: Optional["PrismaClient"], counter_key: str) -> float | None:
+        if prisma_client is None or not counter_key.startswith(END_USER_COUNTER_PREFIX):
+            return None
+        where: Final[LiteLLM_EndUserTableWhereUniqueInput] = {"user_id": counter_key[len(END_USER_COUNTER_PREFIX) :]}
+        try:
+            row: Final = await EndUserRepository(prisma_client).table.find_unique(where=where)
+        except Exception:  # noqa: BLE001  # a failed floor read falls back to the cached spend, like from_db
+            verbose_proxy_logger.exception("SpendCounterReseed.end_user_from_db: failed for %s", counter_key)
+            return None
+        if row is None:
+            return None
+        return float(row.spend or 0.0)
 
     @staticmethod
     def _is_key_or_team_window_counter(counter_key: str) -> bool:

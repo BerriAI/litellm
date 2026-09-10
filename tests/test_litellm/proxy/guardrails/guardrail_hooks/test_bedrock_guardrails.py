@@ -3,6 +3,8 @@ Unit tests for Bedrock Guardrails
 """
 
 import json
+import asyncio
+from datetime import datetime, timezone
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,6 +30,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockTextContent,
 )
 from litellm.types.utils import CallTypes, ModelResponse
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 
 @pytest.mark.asyncio
@@ -1137,7 +1140,11 @@ async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
         mock_api.assert_called_once()
         kwargs = mock_api.call_args.kwargs
         assert kwargs["source"] == "OUTPUT"
-        assert kwargs["request_data"] == {"model": "gpt-4o"}
+        assert kwargs["request_data"]["model"] == "gpt-4o"
+        recorded = kwargs["request_data"]["metadata"]["standard_logging_guardrail_information"]
+        assert [(e["guardrail_name"], e["guardrail_status"]) for e in recorded] == [
+            (guardrail.guardrail_name, "success")
+        ]
         synthetic = kwargs["response"]
         assert isinstance(synthetic, ModelResponse)
         assert len(synthetic.choices) == 2
@@ -5838,3 +5845,36 @@ async def test_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
 
     assert response["action"] == "NONE"
     assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_signs_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: the ApplyGuardrail request is signed with SigV4, and botocore
+    refreshes expiring credentials inside that signing with a blocking HTTP call, so it must run
+    on a worker thread to keep the loop serving other requests."""
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+    probe = EventLoopProbe()
+    allowed = httpx.Response(
+        200,
+        json={"action": "NONE", "outputs": [], "assessments": []},
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", new=AsyncMock(return_value=allowed)):
+        release = asyncio.create_task(probe.release_refresh_from_the_loop())
+        response = await guardrail._post_apply_guardrail_content(
+            content=[{"text": {"text": "hello"}}],
+            base_request_data={"source": "INPUT"},
+            credentials=probe.credentials(),
+            aws_region_name="us-east-1",
+            api_key=None,
+            request_data={},
+            event_type=GuardrailEventHooks.pre_call,
+            start_time=datetime.now(timezone.utc),
+            completed_chunk_usages=[],
+        )
+        await release
+
+    assert response["action"] == "NONE"
+    assert probe.served_during_refresh is True

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/combobox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -59,7 +60,7 @@ interface DynamicParamsFieldsProps {
 }
 
 const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callbackConfigs, selectedCallback }) => {
-  const { register, formState } = useFormContext<CallbackFormValues>();
+  const { register, control, formState } = useFormContext<CallbackFormValues>();
   const fieldIdPrefix = React.useId();
 
   if (!params || params.length === 0) {
@@ -74,37 +75,63 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
         const paramType = paramConfig.type || "text";
         const fieldLabel = paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
         const isRequired = paramConfig.required || false;
+        const selectOptions: string[] = Array.isArray(paramConfig.options) ? paramConfig.options : [];
+        const isSelect = paramType === "select" && selectOptions.length > 0;
         const fieldId = `${fieldIdPrefix}-${param}`;
-        const registration = register(
-          param,
-          isRequired ? { required: `Please enter the ${fieldLabel.toLowerCase()}` } : undefined,
-        );
+        const validationRules = isRequired ? { required: `Please enter the ${fieldLabel.toLowerCase()}` } : undefined;
+        const registration = isSelect ? undefined : register(param, validationRules);
 
         return (
           <Field key={param} className="mb-4">
             <FieldLabel htmlFor={fieldId}>
               <span className="text-sm font-medium text-foreground">{fieldLabel} </span>
             </FieldLabel>
-            {paramType === "password" ? (
-              <Input
-                id={fieldId}
-                type="password"
-                placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
-                {...registration}
+            {isSelect && (
+              <Controller
+                control={control}
+                name={param}
+                rules={validationRules}
+                render={({ field }) => (
+                  <Select
+                    items={selectOptions.map((option) => ({ label: option, value: option }))}
+                    value={field.value || null}
+                    onValueChange={(selected: string | null) => field.onChange(selected ?? "")}
+                  >
+                    <SelectTrigger id={fieldId} className="w-full" onBlur={field.onBlur}>
+                      <SelectValue placeholder={`Select ${fieldLabel.toLowerCase()}`} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectOptions.map((option) => (
+                        <SelectItem key={option} value={option}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               />
-            ) : paramType === "number" ? (
-              <Input
-                id={fieldId}
-                type="number"
-                placeholder={`Enter ${fieldLabel.toLowerCase()}`}
-                min={0}
-                max={1}
-                step={0.1}
-                {...registration}
-              />
-            ) : (
-              <Input id={fieldId} placeholder={`Enter your ${fieldLabel.toLowerCase()}`} {...registration} />
             )}
+            {!isSelect &&
+              (paramType === "password" ? (
+                <Input
+                  id={fieldId}
+                  type="password"
+                  placeholder={`Enter your ${fieldLabel.toLowerCase()}`}
+                  {...registration}
+                />
+              ) : paramType === "number" ? (
+                <Input
+                  id={fieldId}
+                  type="number"
+                  placeholder={`Enter ${fieldLabel.toLowerCase()}`}
+                  min={0}
+                  max={1}
+                  step={0.1}
+                  {...registration}
+                />
+              ) : (
+                <Input id={fieldId} placeholder={`Enter your ${fieldLabel.toLowerCase()}`} {...registration} />
+              ))}
             <FieldError errors={[formState.errors[param]]} />
           </Field>
         );
@@ -271,15 +298,22 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
   useEffect(() => {
     if (showEditCallback && selectedEditCallback) {
+      const params = getDynamicParamsForCallback(
+        selectedEditCallback.name,
+        callbackConfigs,
+        selectedEditCallback.variables,
+      );
+      const fieldNameFor = (variable: string) =>
+        params.find((param) => param.toUpperCase() === variable.toUpperCase()) ?? variable;
       const normalized = Object.fromEntries(
-        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""]),
+        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [fieldNameFor(k), v ?? ""]),
       );
       editForm.reset({
         ...normalized,
         callback: selectedEditCallback.name,
       });
     }
-  }, [showEditCallback, selectedEditCallback, editForm]);
+  }, [showEditCallback, selectedEditCallback, editForm, callbackConfigs]);
 
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {

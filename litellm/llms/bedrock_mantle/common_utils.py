@@ -23,11 +23,12 @@ from botocore.exceptions import (
     ProfileNotFound,
 )
 
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
+from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
 from litellm.secret_managers.main import get_secret_str
 
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
+BEDROCK_REGIONS: Final = frozenset(AmazonBedrockGlobalConfig().get_all_regions())
 
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
@@ -39,7 +40,7 @@ def resolve_mantle_bearer_token(api_key: str | None) -> str | None:
 
 def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
     head, sep, tail = model.partition("/")
-    if sep and head in _get_all_bedrock_regions():
+    if sep and head in BEDROCK_REGIONS:
         return head, tail
     return None, model
 
@@ -63,7 +64,7 @@ def resolve_mantle_region(params: Mapping[str, object]) -> str:
     )
 
 
-class BedrockMantleAuthMixin:
+class BedrockMantleAuthMixin(SignsRequestsWithAWS):
     _aws_signer: BaseAWSLLM
 
     @staticmethod
