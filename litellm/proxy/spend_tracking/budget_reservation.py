@@ -1273,7 +1273,7 @@ def _get_model_cost_info(
     llm_router: Router | None,
 ) -> Mapping[str, object] | None:
     if llm_router is not None:
-        model_group_info: Final = llm_router.get_model_group_info(model_group=model)
+        model_group_info: Final = llm_router.cached_model_group_info(model)
         if model_group_info is not None:
             return model_group_info.model_dump()
     return dict(litellm.get_model_info(model=model))
@@ -1315,7 +1315,7 @@ def _deployment_tiered_pricing_table(
     backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
-    deployment_model_info: Final = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
+    deployment_model_info: Final = llm_router.cached_deployment_model_info(model_id, backend_model)
     if deployment_model_info is None:
         return None
     tiered_pricing: Final = deployment_model_info.get("tiered_pricing")

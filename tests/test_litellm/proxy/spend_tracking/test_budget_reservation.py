@@ -1,3 +1,4 @@
+import math
 from typing import Final
 
 import pytest
@@ -9,6 +10,8 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.budget_reservation import estimate_request_max_cost, reserve_budget_for_request
 from litellm.proxy.utils import ProxyLogging
+from litellm.router import Router
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
     "/responses/input_tokens",
@@ -150,3 +153,47 @@ def test_bedrock_converse_body_reserves_the_prompt_not_the_context_window():
     )
     assert converse_cost is not None and invoke_cost is not None
     assert invoke_cost < converse_cost < 2 * invoke_cost
+
+
+def _tiered_deployment(input_cost_per_token: float) -> Deployment:
+    return Deployment(
+        model_name="tiered-group",
+        litellm_params=LiteLLM_Params(model="dashscope/qwen3-max", api_key="sk-fake"),
+        model_info=ModelInfo(
+            id="tiered-deployment",
+            max_output_tokens=1000,
+            tiered_pricing=[
+                {
+                    "input_cost_per_token": input_cost_per_token,
+                    "output_cost_per_token": input_cost_per_token,
+                    "range": [0, 128000],
+                }
+            ],
+        ),
+    )
+
+
+TIERED_BODY: Final = {"model": "tiered-group", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10}
+
+
+def test_repeated_estimates_reuse_cached_model_cost_info() -> None:
+    router: Final = Router(model_list=[_tiered_deployment(1e-06).model_dump()])
+    first: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
+    hits_before: Final = router.cached_deployment_model_info.cache_info().hits
+
+    second: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
+
+    assert second == first
+    assert router.cached_deployment_model_info.cache_info().hits == hits_before + 1
+
+
+def test_deployment_pricing_update_invalidates_cached_estimate() -> None:
+    router: Final = Router(model_list=[_tiered_deployment(1e-06).model_dump()])
+    before: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
+    assert before is not None
+
+    router.upsert_deployment(_tiered_deployment(1e-03))
+
+    after: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
+    assert after is not None
+    assert math.isclose(after, before * 1000)
