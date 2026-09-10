@@ -1292,6 +1292,7 @@ def completion_cost(
 
         service_tier = _normalize_service_tier(service_tier)
 
+        explicit_pricing: Final = custom_pricing is True or base_model is not None
         selected_model: Final = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -1655,7 +1656,7 @@ def completion_cost(
                     completion_tokens=completion_tokens or 0,
                     custom_llm_provider=custom_llm_provider,
                     response_time_ms=total_time,
-                    region_name=region_name,
+                    region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,
                     prompt_characters=prompt_characters,

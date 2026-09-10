@@ -4363,6 +4363,29 @@ def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map
     assert selected == "bedrock/moonshotai.kimi-k2.5"
 
 
+def test_completion_cost_base_model_ignores_regional_row(_local_model_cost_map):
+    """A deployment with base_model set is priced from that model's own row even when the response
+    carries a region whose regional row charges different rates."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="my-bedrock-deployment",
+        usage={"prompt_tokens": 1000, "completion_tokens": 0, "total_tokens": 1000},
+    )
+    response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "eu-central-1"}
+    flat = litellm.model_cost["anthropic.claude-instant-v1"]
+    regional = litellm.model_cost["bedrock/eu-central-1/anthropic.claude-instant-v1"]
+    assert flat["input_cost_per_token"] != regional["input_cost_per_token"]
+
+    assert litellm.completion_cost(
+        completion_response=response,
+        model="my-bedrock-deployment",
+        custom_llm_provider="bedrock",
+        base_model="anthropic.claude-instant-v1",
+    ) == pytest.approx(1000 * flat["input_cost_per_token"])
+
+
 def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
     """End-to-end cost through a "/"-containing alias must price above zero (#38069)."""
 
