@@ -86,12 +86,32 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
     return _lakera_v2_callback
 
 
+_MCP_EVENT_HOOKS: Final = frozenset(
+    {
+        GuardrailEventHooks.pre_mcp_call.value,
+        GuardrailEventHooks.during_mcp_call.value,
+        GuardrailEventHooks.post_mcp_call.value,
+    }
+)
+
+
+def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
+    match mode:
+        case str():
+            return mode in _MCP_EVENT_HOOKS
+        case list():
+            return bool(mode) and all(m in _MCP_EVENT_HOOKS for m in mode)
+        case Mode():
+            return False
+
+
 def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> tuple[CustomGuardrail, ...]:
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
         _OPTIONAL_PresidioPIIMasking,
     )
 
-    filter_scope: Final = getattr(litellm_params, "presidio_filter_scope", None) or "both"
+    explicit_filter_scope: Final = getattr(litellm_params, "presidio_filter_scope", None)
+    filter_scope: Final = explicit_filter_scope or ("input" if _is_mcp_only_mode(litellm_params.mode) else "both")
     run_input: Final = filter_scope in ("input", "both")
     run_output: Final = filter_scope in ("output", "both")
 
