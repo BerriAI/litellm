@@ -19,6 +19,7 @@ from pydantic import SecretStr
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     ApiKeyConfig,
+    AuthConfig,
     AuthorizationCodeConfig,
     AwsSigV4Config,
     Byok,
@@ -1216,7 +1217,9 @@ async def test_passthrough_ignores_the_carrier_and_keeps_the_callers_slot():
         (AuthorizationCodeConfig(), Subject(tenant_id="", subject_id="alice"), "stored-user-token", "Bearer stored-alice"),
     ],
 )
-async def test_resolved_source_matches_the_credential_sent_upstream(config, subject, expected_source, expected_header):
+async def test_resolved_source_matches_the_credential_sent_upstream(
+    config: AuthConfig, subject: Subject, expected_source: str, expected_header: str | None
+) -> None:
     from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
 
     store = _FakeTokenStore({("alice", "s"): OAuthToken(access_token="stored-alice")})
@@ -1230,7 +1233,7 @@ async def test_resolved_source_matches_the_credential_sent_upstream(config, subj
 
 
 @pytest.mark.asyncio
-async def test_resolved_source_preserves_missing_user_token_error():
+async def test_resolved_source_preserves_missing_user_token_error() -> None:
     from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
 
     result = await resolve_credentials_with_source(UpstreamCredentialProvider(), _SUBJECT, _spec(AuthorizationCodeConfig()))
@@ -1239,7 +1242,7 @@ async def test_resolved_source_preserves_missing_user_token_error():
 
 
 @pytest.mark.asyncio
-async def test_minted_token_sources_match_egress_and_do_not_fetch_twice():
+async def test_minted_token_sources_match_egress_and_do_not_fetch_twice() -> None:
     from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
 
     source = _FakeM2MSource(Ok(OAuthToken(access_token="m2m-at")))
@@ -1259,7 +1262,7 @@ async def test_minted_token_sources_match_egress_and_do_not_fetch_twice():
 
 
 @pytest.mark.asyncio
-async def test_id_jag_source_describes_final_token_after_both_exchanges():
+async def test_id_jag_source_describes_final_token_after_both_exchanges() -> None:
     from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
 
     endpoint = _FakeTokenEndpoint(_two_leg_ok("resource-token"))

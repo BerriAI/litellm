@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict, Final, Optional
+from typing import Any, Dict, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12582,8 +12582,11 @@ async def test_pre_call_tool_check_honors_guardrail_attached_to_key(monkeypatch,
     ],
 )
 async def test_debug_resolution_matches_final_header_conflict_winner(
-    config, extra_headers, expected_source, expected_authorization
-):
+    config: Literal["stored", "static", "none"],
+    extra_headers: dict[str, str] | None,
+    expected_source: str,
+    expected_authorization: str | None,
+) -> None:
     from mcp.server.lowlevel.server import request_ctx
     from mcp.shared.context import RequestContext
     from starlette.requests import Request
@@ -12598,7 +12601,7 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     class Store:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = 0
 
         async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
@@ -12641,7 +12644,7 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["http", "stdio"])
-async def test_debug_reports_legacy_signing_and_non_http_transport(transport):
+async def test_debug_reports_legacy_signing_and_non_http_transport(transport: Literal["http", "stdio"]) -> None:
     from mcp.server.lowlevel.server import request_ctx
     from mcp.shared.context import RequestContext
     from starlette.requests import Request
