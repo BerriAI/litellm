@@ -30,9 +30,12 @@ resource "litellm_key" "example" {
   permissions          = {
     "can_create_keys" = "true"
   }
-  model_max_budget     = {
-    "gpt-4" = 50.0
-  }
+  model_max_budget     = jsonencode({
+    "gpt-4" = {
+      budget_limit = 50.0
+      time_period  = "30d"
+    }
+  })
   model_rpm_limit      = {
     "gpt-3.5-turbo" = 30
   }
@@ -81,7 +84,7 @@ The following arguments are supported:
 
 * `permissions` - (Optional) Permissions associated with this key. This defines what actions are allowed with this key.
 
-* `model_max_budget` - (Optional) Maximum budget per model. This allows setting different budget limits for each model.
+* `model_max_budget` - (Optional) JSON string of per-model budget config, e.g. `jsonencode({"gpt-4" = {budget_limit = 50.0, time_period = "30d"}})`. Each model maps to an object with `budget_limit` (or `max_budget`), `time_period` (or `budget_duration`), `tpm_limit` and `rpm_limit`.
 
 * `model_rpm_limit` - (Optional) Requests per minute limit per model. This allows setting different RPM limits for each model.
 
