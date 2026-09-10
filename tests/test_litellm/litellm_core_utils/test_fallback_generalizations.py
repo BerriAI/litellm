@@ -571,3 +571,63 @@ def test_shipped_mid_conversation_gate_on_bedrock_ids(shipped_cost_map):
     ):
         matched = match_capability_generalizations(unflagged)
         assert matched is None or not matched.get("supports_mid_conversation_system"), unflagged
+
+
+def test_shipped_rules_flag_unmapped_wandb_ids_as_reasoning(shipped_cost_map):
+    """W&B ships reasoning models faster than the registry names them, so an unmapped
+    wandb id resolves as reasoning-capable and its reasoning_effort survives instead of
+    being dropped. The rule carries no mode and no pricing, so cost stays on the standard
+    unpriced behavior and the deployment does not read as catalog-mapped."""
+    model = "wandb/zai-org/GLM-6-Turbo"
+    assert model not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider="wandb")
+    assert info["litellm_provider"] == "wandb"
+    assert info["supports_reasoning"] is True
+    assert info.get("mode") is None
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+    assert litellm.supports_reasoning(model="zai-org/GLM-6-Turbo", custom_llm_provider="wandb") is True
+
+
+def test_shipped_wandb_rule_loses_to_mapped_non_reasoning_entries(shipped_cost_map):
+    """The whole point of a fallback is that it only fills gaps. A wandb model the map
+    describes as non-reasoning must stay non-reasoning, otherwise the rule silently
+    re-introduces the blanket supports_reasoning it exists to avoid."""
+    for model in (
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "microsoft/Phi-4-mini-instruct",
+        "moonshotai/Kimi-K2-Instruct",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    ):
+        assert f"wandb/{model}" in litellm.model_cost, model
+        assert litellm.supports_reasoning(model=model, custom_llm_provider="wandb") is False, model
+
+
+def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map):
+    """``^wandb/`` is anchored, so it cannot leak onto another provider's ids."""
+    assert match_capability_generalizations("wandb/some-new-model") == {"supports_reasoning": True}
+    for foreign in ("openai/some-new-model", "notwandb/some-new-model", "together_ai/wandb/some-new-model"):
+        matched = match_capability_generalizations(foreign)
+        assert matched is None or not matched.get("supports_reasoning"), foreign
+
+
+def test_shipped_wandb_rule_keeps_reasoning_effort_on_an_unmapped_model(shipped_cost_map):
+    """End to end through the provider config: the gate WandbConfig applies reads the
+    rule, so reasoning_effort is advertised and survives get_optional_params rather than
+    raising UnsupportedParamsError."""
+    model = "zai-org/GLM-6-Turbo"
+    assert f"wandb/{model}" not in litellm.model_cost
+
+    supported = litellm.get_supported_openai_params(model=f"wandb/{model}")
+    assert supported is not None
+    assert "reasoning_effort" in supported
+
+    optional_params = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="wandb",
+        reasoning_effort="medium",
+        drop_params=False,
+    )
+    assert optional_params["reasoning_effort"] == "medium"
