@@ -47,6 +47,10 @@ After: the same request comes back with real token counts, so the dashboard show
 
 <!-- e.g., "Fixes #000" -->
 
+## Affected release
+
+<!-- Only for a fix to a perf, memory, or crash regression: name the released or rc version it regressed in, e.g. "regression in v1.100.0" or "since v1.101.0-rc.1", and add the `backport-stable` label so the fix is cherry-picked onto the rc line before the stable is tagged. Leave the section blank otherwise -->
+
 ## Linear ticket
 
 <!-- if you are an internal contributor, add "Resolves " followed by the Linear ticket e.g., "Resolves LIT-1234" to link the Linear ticket to the GitHub PR. If you don't have one, leave the section blank rather than guessing -->
