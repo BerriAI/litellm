@@ -22,7 +22,7 @@ pub enum Error {
     )]
     MissingApiKey { provider: &'static str },
     #[error(
-        "Missing Azure AI credentials - set AZURE_AI_API_KEY or provide an Authorization header"
+        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
     )]
     MissingAzureAiCredentials,
     #[error("Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token")]
@@ -118,6 +118,12 @@ impl From<TransportError> for Error {
             TransportError::Network(message) => Self::Network(message),
             TransportError::Connect(message) => Self::Connect(message),
         }
+    }
+}
+
+impl From<crate::AuthError> for Error {
+    fn from(error: crate::AuthError) -> Self {
+        Self::Auth(error.to_string())
     }
 }
 

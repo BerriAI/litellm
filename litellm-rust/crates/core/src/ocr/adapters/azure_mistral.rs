@@ -1,5 +1,8 @@
+use std::sync::OnceLock;
+
 use super::OcrAdapter;
 use crate::Error;
+use crate::auth::azure::{AzureAuthInputs, AzureAuthService};
 use crate::constants::AZURE_AI_OCR_PATH;
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::mistral::{self, MistralOcrParams, MistralOcrResponse};
@@ -31,7 +34,9 @@ impl OcrAdapter for AzureMistralAdapter {
             known: params,
             extra_params: _extra_params,
         } = _prepare_ocr_request::<MistralOcrParams>(request)?;
-        let headers = authenticate(&request.connection, &credential_env)?;
+        let config =
+            AzureAuthInputs::from_optional_params(&request.optional_params).map_err(Error::from)?;
+        let headers = validate_environment(&request.connection, &config, &credential_env).await?;
         let url = get_complete_url(request.connection.api_base.as_deref(), &credential_env)?;
         let document = inline_remote_document(
             client.document_fetcher(),
@@ -76,21 +81,34 @@ fn get_complete_url(
         })
 }
 
-fn authenticate(
+async fn validate_environment(
     connection: &OcrConnection,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
+    config: &AzureAuthInputs,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, OcrError> {
     if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
         return Ok(connection.extra_headers.clone());
     }
-    let key = nonblank(connection.api_key.clone())
-        .or_else(|| nonblank(env_lookup(AZURE_AI_API_KEY_ENV)))
+    if let Some(key) =
+        nonblank(connection.api_key.clone()).or_else(|| nonblank(env_lookup(AZURE_AI_API_KEY_ENV)))
+    {
+        return Ok(bearer_headers(connection, &key));
+    }
+    static SERVICE: OnceLock<AzureAuthService> = OnceLock::new();
+    let key = SERVICE
+        .get_or_init(AzureAuthService::default)
+        .resolve(config, env_lookup)
+        .await
+        .map_err(Error::from)?
+        .map(|credential| credential.secret().expose().to_string())
         .ok_or(Error::MissingAzureAiCredentials)?;
-    Ok(
-        std::iter::once(("Authorization".into(), format!("Bearer {key}")))
-            .chain(connection.extra_headers.clone())
-            .collect(),
-    )
+    Ok(bearer_headers(connection, &key))
+}
+
+fn bearer_headers(connection: &OcrConnection, key: &str) -> Vec<(String, String)> {
+    std::iter::once(("Authorization".into(), format!("Bearer {key}")))
+        .chain(connection.extra_headers.clone())
+        .collect()
 }
 
 fn nonblank(value: Option<String>) -> Option<String> {
@@ -119,27 +137,35 @@ mod tests {
         );
     }
 
-    #[test]
-    fn supplied_authorization_precedes_keys() {
+    #[tokio::test]
+    async fn supplied_authorization_precedes_keys() {
         let connection = OcrConnection {
             api_key: Some("request-key".into()),
             extra_headers: vec![("authorization".into(), "Bearer prepared".into())],
             ..Default::default()
         };
         assert_eq!(
-            authenticate(&connection, &|_| Some("environment-key".into())).unwrap(),
+            validate_environment(&connection, &Default::default(), &|_| Some(
+                "environment-key".into()
+            ))
+            .await
+            .unwrap(),
             connection.extra_headers
         );
     }
 
-    #[test]
-    fn request_key_precedes_environment_key() {
+    #[tokio::test]
+    async fn request_key_precedes_environment_key() {
         let connection = OcrConnection {
             api_key: Some("request-key".into()),
             ..Default::default()
         };
         assert_eq!(
-            authenticate(&connection, &|_| Some("environment-key".into())).unwrap()[0],
+            validate_environment(&connection, &Default::default(), &|_| Some(
+                "environment-key".into()
+            ))
+            .await
+            .unwrap()[0],
             ("Authorization".into(), "Bearer request-key".into())
         );
     }
