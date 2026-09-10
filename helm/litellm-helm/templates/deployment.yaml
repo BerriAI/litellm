@@ -117,6 +117,14 @@ spec:
             - name: DATABASE_URL_READ_REPLICA
               value: {{ .Values.db.readReplicaUrl | quote }}
             {{- end }}
+            {{- if .Values.db.connectionPool.enabled }}
+            - name: LITELLM_PGBOUNCER_ENABLED
+              value: "true"
+            - name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+              value: {{ .Values.db.connectionPool.maxDbConnections | quote }}
+            - name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+              value: {{ .Values.db.connectionPool.maxClientConn | quote }}
+            {{- end }}
             - name: PROXY_MASTER_KEY
               valueFrom:
                 secretKeyRef:

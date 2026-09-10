@@ -481,7 +481,7 @@ async def test_archive_source_registers_and_is_served_verbatim_in_marketplace():
     assert response.action == "created"
     assert response.plugin.source == _ARCHIVE_SOURCE
 
-    marketplace = json.loads((await get_marketplace()).body)
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
     assert marketplace["plugins"] == [{"name": "s3-skill", "source": _ARCHIVE_SOURCE, "version": "1.0.0"}]
 
 
