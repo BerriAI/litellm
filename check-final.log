@@ -8,7 +8,7 @@ check: nothing staged; scoping to the working tree's diff against the merge base
     ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx
 check: linting Python (make lint)
 uv sync --inexact --frozen --group proxy-dev --group e2e-dev
-Checked 205 packages in 5ms
+Checked 205 packages in 3ms
 uv run --no-sync python scripts/prisma_generate_if_needed.py
 Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
 cd litellm && uv run --no-sync ruff check . && cd ..
@@ -95,7 +95,7 @@ wrote 33 feature fragments to /Users/jvalluru/LiteLLM-work/litellm-lit-7135/lite
 > node scripts/gen-api-types.mjs
 
 ✨ openapi-typescript 7.13.0
-🚀 /var/folders/n4/7jf8qfys5256pzfjlkkcmzj80000gn/T/litellm-openapi-EyadgS/openapi.json → /Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/lib/http/schema.d.ts [620.9ms]
+🚀 /var/folders/n4/7jf8qfys5256pzfjlkkcmzj80000gn/T/litellm-openapi-Ur1BQH/openapi.json → /Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/lib/http/schema.d.ts [504.3ms]
 check: summary
     ran:     Python lint (make lint)
     skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)
@@ -103,4 +103,3 @@ check: summary
     ran:     dashboard lint (prettier + eslint + lint budgets)
     ran:     dashboard API-type sync (npm run gen:api)
 check: PASS
-

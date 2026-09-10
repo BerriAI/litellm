@@ -1,24 +1,35 @@
-FF.F....FFFFFFF                                                          [100%]
+...F.FF.FF..........FFFFFFF                                              [100%]
 =================================== FAILURES ===================================
-_ TestExecuteWithMcpClient.test_static_preview_respects_origin_when_inheriting_credentials[None-http://stored.example/mcp-False] _
+_ TestExecuteWithMcpClient.test_static_preview_respects_origin_when_inheriting_credentials[None-https://[::1]/mcp-https://[::2]/edited-False] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a4ea750>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11bfb4f20>
-url = 'http://stored.example/mcp', same_origin = False
-explicit_credential = None
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc5f70>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11962cb00>
+saved_url = 'https://[::1]/mcp', url = 'https://[::2]/edited'
+same_origin = False, explicit_credential = None
 
     @pytest.mark.parametrize(
-        ("url", "same_origin"),
+        ("saved_url", "url", "same_origin"),
         (
-            ("https://other.example/mcp", False),
-            ("http://stored.example/mcp", False),
-            ("https://stored.example:8443/mcp", False),
-            ("https://stored.example:443/mcp", True),
+            ("https://stored.example/mcp", "https://other.example/mcp", False),
+            ("https://stored.example/mcp", "http://stored.example/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:8443/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:443/mcp", True),
+            ("http://stored.example/mcp", "http://stored.example:80/edited", True),
+            ("https://stored.example/mcp", "HTTPS://STORED.EXAMPLE/edited", True),
+            ("https://[::1]/mcp", "https://[::1]/edited", True),
+            ("https://[::1]/mcp", "https://[::1]:443/edited", True),
+            ("https://[::1]/mcp", "https://[::2]/edited", False),
+            ("https://stored.example/mcp", "https://stored.example:invalid/mcp", False),
         ),
     )
     @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
     def test_static_preview_respects_origin_when_inheriting_credentials(
-        self, monkeypatch: pytest.MonkeyPatch, url: str, same_origin: bool, explicit_credential: str | None
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        saved_url: str,
+        url: str,
+        same_origin: bool,
+        explicit_credential: str | None,
     ) -> None:
         from starlette.datastructures import Headers
     
@@ -28,7 +39,7 @@ explicit_credential = None
         saved: Final = MCPServer(
             server_id="saved-preview-server",
             name="saved",
-            url="https://stored.example/mcp",
+            url=saved_url,
             transport=MCPTransport.http,
             auth_type=MCPAuth.basic,
             authentication_token="preview:stored",
@@ -50,28 +61,37 @@ explicit_credential = None
 E       AssertionError: assert 'preview:stored' == None
 E        +  where 'preview:stored' = _StagedServerTest(request=NewMCPServerRequest(server_id='saved-preview-server', server_name=None, alias=None, descript...ne, approval_status=None, submitted_by=None, submitted_at=None), mcp_auth_header='preview:stored', oauth2_headers=None).mcp_auth_header
 
-tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:195: AssertionError
----------------------------- Captured stdout setup -----------------------------
-[conftest] Module setup complete (worker: master)
-_ TestExecuteWithMcpClient.test_static_preview_respects_origin_when_inheriting_credentials[None-https://other.example/mcp-False] _
+tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:206: AssertionError
+_ TestExecuteWithMcpClient.test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example/mcp-http://stored.example/mcp-False] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a4ea7b0>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11cba77a0>
-url = 'https://other.example/mcp', same_origin = False
-explicit_credential = None
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc5760>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a83fa40>
+saved_url = 'https://stored.example/mcp', url = 'http://stored.example/mcp'
+same_origin = False, explicit_credential = None
 
     @pytest.mark.parametrize(
-        ("url", "same_origin"),
+        ("saved_url", "url", "same_origin"),
         (
-            ("https://other.example/mcp", False),
-            ("http://stored.example/mcp", False),
-            ("https://stored.example:8443/mcp", False),
-            ("https://stored.example:443/mcp", True),
+            ("https://stored.example/mcp", "https://other.example/mcp", False),
+            ("https://stored.example/mcp", "http://stored.example/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:8443/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:443/mcp", True),
+            ("http://stored.example/mcp", "http://stored.example:80/edited", True),
+            ("https://stored.example/mcp", "HTTPS://STORED.EXAMPLE/edited", True),
+            ("https://[::1]/mcp", "https://[::1]/edited", True),
+            ("https://[::1]/mcp", "https://[::1]:443/edited", True),
+            ("https://[::1]/mcp", "https://[::2]/edited", False),
+            ("https://stored.example/mcp", "https://stored.example:invalid/mcp", False),
         ),
     )
     @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
     def test_static_preview_respects_origin_when_inheriting_credentials(
-        self, monkeypatch: pytest.MonkeyPatch, url: str, same_origin: bool, explicit_credential: str | None
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        saved_url: str,
+        url: str,
+        same_origin: bool,
+        explicit_credential: str | None,
     ) -> None:
         from starlette.datastructures import Headers
     
@@ -81,7 +101,7 @@ explicit_credential = None
         saved: Final = MCPServer(
             server_id="saved-preview-server",
             name="saved",
-            url="https://stored.example/mcp",
+            url=saved_url,
             transport=MCPTransport.http,
             auth_type=MCPAuth.basic,
             authentication_token="preview:stored",
@@ -103,26 +123,100 @@ explicit_credential = None
 E       AssertionError: assert 'preview:stored' == None
 E        +  where 'preview:stored' = _StagedServerTest(request=NewMCPServerRequest(server_id='saved-preview-server', server_name=None, alias=None, descript...ne, approval_status=None, submitted_by=None, submitted_at=None), mcp_auth_header='preview:stored', oauth2_headers=None).mcp_auth_header
 
-tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:195: AssertionError
-_ TestExecuteWithMcpClient.test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example:8443/mcp-False] _
+tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:206: AssertionError
+_ TestExecuteWithMcpClient.test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example/mcp-https://other.example/mcp-False] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a4eaa20>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11cf95bb0>
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc55b0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a83f560>
+saved_url = 'https://stored.example/mcp', url = 'https://other.example/mcp'
+same_origin = False, explicit_credential = None
+
+    @pytest.mark.parametrize(
+        ("saved_url", "url", "same_origin"),
+        (
+            ("https://stored.example/mcp", "https://other.example/mcp", False),
+            ("https://stored.example/mcp", "http://stored.example/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:8443/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:443/mcp", True),
+            ("http://stored.example/mcp", "http://stored.example:80/edited", True),
+            ("https://stored.example/mcp", "HTTPS://STORED.EXAMPLE/edited", True),
+            ("https://[::1]/mcp", "https://[::1]/edited", True),
+            ("https://[::1]/mcp", "https://[::1]:443/edited", True),
+            ("https://[::1]/mcp", "https://[::2]/edited", False),
+            ("https://stored.example/mcp", "https://stored.example:invalid/mcp", False),
+        ),
+    )
+    @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
+    def test_static_preview_respects_origin_when_inheriting_credentials(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        saved_url: str,
+        url: str,
+        same_origin: bool,
+        explicit_credential: str | None,
+    ) -> None:
+        from starlette.datastructures import Headers
+    
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+    
+        saved: Final = MCPServer(
+            server_id="saved-preview-server",
+            name="saved",
+            url=saved_url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            authentication_token="preview:stored",
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {saved.server_id: saved}
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+        payload: Final = NewMCPServerRequest(
+            server_id=saved.server_id,
+            url=url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            credentials={"auth_value": explicit_credential} if explicit_credential else None,
+        )
+        staged: Final = rest_endpoints._stage_server_test(payload, Headers())
+        expected: Final = explicit_credential or ("preview:stored" if same_origin else None)
+>       assert staged.mcp_auth_header == expected
+E       AssertionError: assert 'preview:stored' == None
+E        +  where 'preview:stored' = _StagedServerTest(request=NewMCPServerRequest(server_id='saved-preview-server', server_name=None, alias=None, descript...ne, approval_status=None, submitted_by=None, submitted_at=None), mcp_auth_header='preview:stored', oauth2_headers=None).mcp_auth_header
+
+tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:206: AssertionError
+_ TestExecuteWithMcpClient.test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example/mcp-https://stored.example:8443/mcp-False] _
+
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc5c10>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x116f60b90>
+saved_url = 'https://stored.example/mcp'
 url = 'https://stored.example:8443/mcp', same_origin = False
 explicit_credential = None
 
     @pytest.mark.parametrize(
-        ("url", "same_origin"),
+        ("saved_url", "url", "same_origin"),
         (
-            ("https://other.example/mcp", False),
-            ("http://stored.example/mcp", False),
-            ("https://stored.example:8443/mcp", False),
-            ("https://stored.example:443/mcp", True),
+            ("https://stored.example/mcp", "https://other.example/mcp", False),
+            ("https://stored.example/mcp", "http://stored.example/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:8443/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:443/mcp", True),
+            ("http://stored.example/mcp", "http://stored.example:80/edited", True),
+            ("https://stored.example/mcp", "HTTPS://STORED.EXAMPLE/edited", True),
+            ("https://[::1]/mcp", "https://[::1]/edited", True),
+            ("https://[::1]/mcp", "https://[::1]:443/edited", True),
+            ("https://[::1]/mcp", "https://[::2]/edited", False),
+            ("https://stored.example/mcp", "https://stored.example:invalid/mcp", False),
         ),
     )
     @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
     def test_static_preview_respects_origin_when_inheriting_credentials(
-        self, monkeypatch: pytest.MonkeyPatch, url: str, same_origin: bool, explicit_credential: str | None
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        saved_url: str,
+        url: str,
+        same_origin: bool,
+        explicit_credential: str | None,
     ) -> None:
         from starlette.datastructures import Headers
     
@@ -132,7 +226,7 @@ explicit_credential = None
         saved: Final = MCPServer(
             server_id="saved-preview-server",
             name="saved",
-            url="https://stored.example/mcp",
+            url=saved_url,
             transport=MCPTransport.http,
             auth_type=MCPAuth.basic,
             authentication_token="preview:stored",
@@ -154,11 +248,74 @@ explicit_credential = None
 E       AssertionError: assert 'preview:stored' == None
 E        +  where 'preview:stored' = _StagedServerTest(request=NewMCPServerRequest(server_id='saved-preview-server', server_name=None, alias=None, descript...ne, approval_status=None, submitted_by=None, submitted_at=None), mcp_auth_header='preview:stored', oauth2_headers=None).mcp_auth_header
 
-tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:195: AssertionError
+tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:206: AssertionError
+_ TestExecuteWithMcpClient.test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example/mcp-https://stored.example:invalid/mcp-False] _
+
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc6030>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x116f60ef0>
+saved_url = 'https://stored.example/mcp'
+url = 'https://stored.example:invalid/mcp', same_origin = False
+explicit_credential = None
+
+    @pytest.mark.parametrize(
+        ("saved_url", "url", "same_origin"),
+        (
+            ("https://stored.example/mcp", "https://other.example/mcp", False),
+            ("https://stored.example/mcp", "http://stored.example/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:8443/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:443/mcp", True),
+            ("http://stored.example/mcp", "http://stored.example:80/edited", True),
+            ("https://stored.example/mcp", "HTTPS://STORED.EXAMPLE/edited", True),
+            ("https://[::1]/mcp", "https://[::1]/edited", True),
+            ("https://[::1]/mcp", "https://[::1]:443/edited", True),
+            ("https://[::1]/mcp", "https://[::2]/edited", False),
+            ("https://stored.example/mcp", "https://stored.example:invalid/mcp", False),
+        ),
+    )
+    @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
+    def test_static_preview_respects_origin_when_inheriting_credentials(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        saved_url: str,
+        url: str,
+        same_origin: bool,
+        explicit_credential: str | None,
+    ) -> None:
+        from starlette.datastructures import Headers
+    
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+    
+        saved: Final = MCPServer(
+            server_id="saved-preview-server",
+            name="saved",
+            url=saved_url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            authentication_token="preview:stored",
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {saved.server_id: saved}
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+        payload: Final = NewMCPServerRequest(
+            server_id=saved.server_id,
+            url=url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            credentials={"auth_value": explicit_credential} if explicit_credential else None,
+        )
+        staged: Final = rest_endpoints._stage_server_test(payload, Headers())
+        expected: Final = explicit_credential or ("preview:stored" if same_origin else None)
+>       assert staged.mcp_auth_header == expected
+E       AssertionError: assert 'preview:stored' == None
+E        +  where 'preview:stored' = _StagedServerTest(request=NewMCPServerRequest(server_id='saved-preview-server', server_name=None, alias=None, descript...ne, approval_status=None, submitted_by=None, submitted_at=None), mcp_auth_header='preview:stored', oauth2_headers=None).mcp_auth_header
+
+tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:206: AssertionError
 _ TestExecuteWithMcpClient.test_static_preview_uses_edited_connection_instead_of_registered_server[api_key-edited-expected_auth4] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a4e9e80>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11cf97bc0>
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc4e00>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11962f800>
 auth_type = <MCPAuth.api_key: 'api_key'>, auth_value = 'edited'
 expected_auth = {'X-API-Key': 'edited'}
 
@@ -228,16 +385,16 @@ expected_auth = {'X-API-Key': 'edited'}
 E       AssertionError: assert {'headers': {....example/mcp'} == {'headers': {...orrected-mcp'}
 E         
 E         Differing items:
-E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'url': 'https://stored.example/mcp'} != {'url': 'https://stored.example/corrected-mcp'}
+E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'headers': {'Authorization': 'Basic ZWRpdGVk', 'X-Preview': 'edited'}} != {'headers': {'X-API-Key': 'edited', 'X-Preview': 'edited'}}
 E         Use -v to get more diff
 
 tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:148: AssertionError
 _ TestExecuteWithMcpClient.test_static_preview_uses_edited_connection_instead_of_registered_server[authorization-Custom edited-expected_auth6] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a4e9fa0>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11cf96b70>
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc4f20>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11962dfa0>
 auth_type = <MCPAuth.authorization: 'authorization'>
 auth_value = 'Custom edited', expected_auth = {'Authorization': 'Custom edited'}
 
@@ -307,16 +464,16 @@ auth_value = 'Custom edited', expected_auth = {'Authorization': 'Custom edited'}
 E       AssertionError: assert {'headers': {....example/mcp'} == {'headers': {...orrected-mcp'}
 E         
 E         Differing items:
-E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'url': 'https://stored.example/mcp'} != {'url': 'https://stored.example/corrected-mcp'}
+E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'headers': {'Authorization': 'Basic Q3VzdG9tIGVkaXRlZA==', 'X-Preview': 'edited'}} != {'headers': {'Authorization': 'Custom edited', 'X-Preview': 'edited'}}
 E         Use -v to get more diff
 
 tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:148: AssertionError
 _ TestExecuteWithMcpClient.test_static_preview_uses_edited_connection_instead_of_registered_server[basic-None-expected_auth2] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a4e9d60>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11cf3c080>
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc4b00>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x119a586e0>
 auth_type = <MCPAuth.basic: 'basic'>, auth_value = None
 expected_auth = {'Authorization': 'Basic cHJldmlldzpzdG9yZWQ='}
 
@@ -387,15 +544,15 @@ E       AssertionError: assert {'headers': {....example/mcp'} == {'headers': {..
 E         
 E         Omitting 1 identical items, use -vv to show
 E         Differing items:
-E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'url': 'https://stored.example/mcp'} != {'url': 'https://stored.example/corrected-mcp'}
+E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         Use -v to get more diff
 
 tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:148: AssertionError
 _ TestExecuteWithMcpClient.test_static_preview_uses_edited_connection_instead_of_registered_server[basic-preview:correct-expected_auth1] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a4e9a60>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11cf97ce0>
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc48c0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x119a58350>
 auth_type = <MCPAuth.basic: 'basic'>, auth_value = 'preview:correct'
 expected_auth = {'Authorization': 'Basic cHJldmlldzpjb3JyZWN0'}
 
@@ -466,15 +623,15 @@ E       AssertionError: assert {'headers': {....example/mcp'} == {'headers': {..
 E         
 E         Omitting 1 identical items, use -vv to show
 E         Differing items:
-E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'url': 'https://stored.example/mcp'} != {'url': 'https://stored.example/corrected-mcp'}
+E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         Use -v to get more diff
 
 tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:148: AssertionError
 _ TestExecuteWithMcpClient.test_static_preview_uses_edited_connection_instead_of_registered_server[bearer_token-edited-expected_auth3] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a4e9df0>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11cf97770>
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc4d70>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11887e1e0>
 auth_type = <MCPAuth.bearer_token: 'bearer_token'>, auth_value = 'edited'
 expected_auth = {'Authorization': 'Bearer edited'}
 
@@ -544,16 +701,16 @@ expected_auth = {'Authorization': 'Bearer edited'}
 E       AssertionError: assert {'headers': {....example/mcp'} == {'headers': {...orrected-mcp'}
 E         
 E         Differing items:
-E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'url': 'https://stored.example/mcp'} != {'url': 'https://stored.example/corrected-mcp'}
+E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'headers': {'Authorization': 'Basic ZWRpdGVk', 'X-Preview': 'edited'}} != {'headers': {'Authorization': 'Bearer edited', 'X-Preview': 'edited'}}
 E         Use -v to get more diff
 
 tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:148: AssertionError
 _ TestExecuteWithMcpClient.test_static_preview_uses_edited_connection_instead_of_registered_server[none-None-expected_auth0] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a498aa0>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11cf96060>
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116c7ecf0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11884eff0>
 auth_type = <MCPAuth.none: 'none'>, auth_value = None, expected_auth = {}
 
     @pytest.mark.asyncio
@@ -623,15 +780,15 @@ E       AssertionError: assert {'headers': {....example/mcp'} == {'headers': {..
 E         
 E         Omitting 1 identical items, use -vv to show
 E         Differing items:
-E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'url': 'https://stored.example/mcp'} != {'url': 'https://stored.example/corrected-mcp'}
+E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         Use -v to get more diff
 
 tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:148: AssertionError
 _ TestExecuteWithMcpClient.test_static_preview_uses_edited_connection_instead_of_registered_server[token-edited-expected_auth5] _
 
-self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x11a4e9f10>
-monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11cf3fa40>
+self = <test_rest_endpoints.TestExecuteWithMcpClient object at 0x116dc4e90>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11a17aa50>
 auth_type = <MCPAuth.token: 'token'>, auth_value = 'edited'
 expected_auth = {'Authorization': 'token edited'}
 
@@ -701,8 +858,8 @@ expected_auth = {'Authorization': 'token edited'}
 E       AssertionError: assert {'headers': {....example/mcp'} == {'headers': {...orrected-mcp'}
 E         
 E         Differing items:
-E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'url': 'https://stored.example/mcp'} != {'url': 'https://stored.example/corrected-mcp'}
+E         {'transport': <MCPTransport.http: 'http'>} != {'transport': <MCPTransport.sse: 'sse'>}
 E         {'headers': {'X-Preview': 'edited'}} != {'headers': {'Authorization': 'token edited', 'X-Preview': 'edited'}}
 E         Use -v to get more diff
 
@@ -728,9 +885,11 @@ tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:148: As
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ============================
-FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_respects_origin_when_inheriting_credentials[None-http://stored.example/mcp-False]
-FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_respects_origin_when_inheriting_credentials[None-https://other.example/mcp-False]
-FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example:8443/mcp-False]
+FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_respects_origin_when_inheriting_credentials[None-https://[::1]/mcp-https://[::2]/edited-False]
+FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example/mcp-http://stored.example/mcp-False]
+FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example/mcp-https://other.example/mcp-False]
+FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example/mcp-https://stored.example:8443/mcp-False]
+FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_respects_origin_when_inheriting_credentials[None-https://stored.example/mcp-https://stored.example:invalid/mcp-False]
 FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_uses_edited_connection_instead_of_registered_server[api_key-edited-expected_auth4]
 FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_uses_edited_connection_instead_of_registered_server[authorization-Custom edited-expected_auth6]
 FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_uses_edited_connection_instead_of_registered_server[basic-None-expected_auth2]
@@ -738,4 +897,4 @@ FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py:
 FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_uses_edited_connection_instead_of_registered_server[bearer_token-edited-expected_auth3]
 FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_uses_edited_connection_instead_of_registered_server[none-None-expected_auth0]
 FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py::TestExecuteWithMcpClient::test_static_preview_uses_edited_connection_instead_of_registered_server[token-edited-expected_auth5]
-10 failed, 5 passed, 124 deselected, 4 warnings in 3.99s
+12 failed, 15 passed, 124 deselected, 4 warnings in 3.65s

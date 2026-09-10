@@ -21,7 +21,7 @@ The hidden server tools tab can retry GET requests against the broken saved reco
 
 ## Checks
 
-regression-tests.log: 129 dashboard tests pass. backend-tests.log: 139 mapped REST endpoint tests pass. The corresponding before logs demonstrate four failing UI regressions and ten failing backend cases at the merge base
+regression-tests.log: 129 dashboard tests pass. backend-tests.log: 151 mapped REST endpoint tests pass. The corresponding before logs demonstrate four failing UI regressions and twelve failing backend cases at the merge base
 
 check-final.log: full make check passes, including Ruff formatting/lint, test-tree lint, strict-rule, type-discipline, test-quality, basedpyright budget, dashboard lint budgets and generated API type sync. ui-build.log: production dashboard build passes. Full backend suites are left to CI
 

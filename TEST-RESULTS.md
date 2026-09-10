@@ -1,9 +1,9 @@
 # LIT-7135 verification results
 
-Final tip: 493c98f9bffbcf2ea1d5ba30e324427daa9a173b
+Final tip: 3169c80252e6e98f6c68ff77869244dd9788b796
 Merge base: 6b721de3e530bc97758d59621e57e3a75a9ebadf
 
-129 affected dashboard tests pass. 139 tests in the mapped backend REST endpoint file pass. Four new UI integration cases fail at the merge base. The backend regression subset at the merge base has ten expected failures: seven stale connection cases and three cross-origin inherited-credential cases; five other cases pass
+129 affected dashboard tests pass. 151 tests in the mapped backend REST endpoint file pass. Four new UI integration cases fail at the merge base. The backend regression subset at the merge base has twelve expected failures: seven stale connection cases and five rejected-origin inherited-credential cases; fifteen other cases pass
 
 Production dashboard build and both source Docker builds pass. Full make check passes all applicable gates: Ruff lint/format, test-tree lint, strict-rule, type-discipline, test-quality, basedpyright budgets, dashboard lint/budgets and generated API-type sync. No budgets or blanket suppressions were added. Existing diagnostics remain within the repository budgets
 
@@ -16,3 +16,5 @@ After saving corrected Basic Auth, Save returns 202, listing returns 200 with ec
 The fixture is an actual MCP SDK server over HTTP. It rejects invalid credentials with 403 so a browser HTTP-auth challenge does not intercept fetch requests. No mocks or model calls are used in live verification. The browser waits for the initial form load before editing fields
 
 Files: check-final.log, regression-tests.log, regression-before.log, backend-tests.log, backend-regression-before.log, ui-build.log, happy-path.json, public-happy-path.json, origin-boundary.json and matching before/after screenshots/network JSON
+
+IPv6 route verification: POST /mcp-rest/test/tools/list with http://[::1]:9/mcp returns a structured connection error with HTTP 200, rather than an origin-parsing 500. See ipv6-preview.json and verify-ipv6.py. Backend cases cover IPv6 same/different origins, default ports, casing and invalid ports
