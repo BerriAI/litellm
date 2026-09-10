@@ -6,7 +6,6 @@ from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
     Final,
-    Optional,
     cast,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
     get_args,
 )
@@ -35,7 +34,7 @@ else:
 class VectorStoreIndexRegistry:
     def __init__(
         self,
-        vector_store_indexes: Optional[list[LiteLLM_ManagedVectorStoreIndex]] = None,
+        vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] | None = None,
     ):
         self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = (
             vector_store_indexes if vector_store_indexes is not None else []
@@ -109,7 +108,7 @@ class VectorStoreIndexRegistry:
 class VectorStoreRegistry:
     def __init__(
         self,
-        vector_stores: Optional[list[LiteLLM_ManagedVectorStore]] = None,
+        vector_stores: list[LiteLLM_ManagedVectorStore] | None = None,
     ):
         self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores if vector_stores is not None else []
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
