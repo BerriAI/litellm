@@ -135,6 +135,24 @@ def test_full_url_api_base_that_already_ends_with_the_native_path_is_not_doubled
     assert base == "https://my-resource.cognitiveservices.azure.com/openai/deployments/model-router"
 
 
+@pytest.mark.parametrize("relayed_deployment", ["gpt-4o", "GPT-4o"])
+def test_deployment_root_api_base_is_not_repeated_when_the_relay_carries_the_deployment_path(relayed_deployment):
+    url, base = AzureAIPassthroughConfig().get_complete_url(
+        api_base="https://my-resource.openai.azure.com/openai/deployments/gpt-4o",
+        api_key="key",
+        model="gpt-4o",
+        endpoint=f"aoai-gpt-4o/openai/deployments/{relayed_deployment}/chat/completions",
+        request_query_params={"api-version": "2024-10-21"},
+        litellm_params={"litellm_metadata": {"model_group": "aoai-gpt-4o"}},
+    )
+
+    assert str(url) == (
+        f"https://my-resource.openai.azure.com/openai/deployments/{relayed_deployment}/chat/completions"
+        "?api-version=2024-10-21"
+    )
+    assert base == "https://my-resource.openai.azure.com"
+
+
 def test_parse_relay_under_a_models_api_base_targets_the_foundry_root():
     url, _ = AzureAIPassthroughConfig().get_complete_url(
         api_base=f"{FOUNDRY_BASE}/models",

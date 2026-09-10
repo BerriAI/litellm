@@ -62,6 +62,22 @@ def foundry_root(api_base: str) -> str:
     return str(url.copy_with(path="/" + "/".join(root_segments), query=None)).rstrip("/")
 
 
+def without_repeated_native_prefix(root: str, native_endpoint: str) -> str:
+    url: Final = httpx.URL(root)
+    root_segments: Final = tuple(segment for segment in url.path.split("/") if segment)
+    native_segments: Final = tuple(segment.casefold() for segment in native_endpoint.split("/") if segment)
+    overlap: Final = next(
+        (
+            length
+            for length in range(min(len(root_segments), len(native_segments)), 0, -1)
+            if tuple(segment.casefold() for segment in root_segments[-length:]) == native_segments[:length]
+        ),
+        0,
+    )
+    kept_segments: Final = root_segments[: len(root_segments) - overlap]
+    return str(url.copy_with(path="/" + "/".join(kept_segments), query=None)).rstrip("/")
+
+
 def relay_query_params(
     request_query_params: Mapping[str, object] | None,
     deployment_api_version: str | None,
@@ -111,7 +127,7 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
             raise ValueError("Azure AI api base not found: set `api_base` on the deployment or AZURE_AI_API_BASE")
 
         native_endpoint: Final = strip_leading_model_segment(endpoint, (model, model_group_from(litellm_params)))
-        root: Final = foundry_root(base_target_url).removesuffix(f"/{native_endpoint.strip('/')}")
+        root: Final = without_repeated_native_prefix(foundry_root(base_target_url), native_endpoint)
         query_params: Final = relay_query_params(
             request_query_params, api_version_from(litellm_params), base_target_url
         )
