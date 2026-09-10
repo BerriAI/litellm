@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use super::OcrAdapter;
+use super::super::OcrAdapter;
 use crate::Error;
 use crate::auth::error::AuthConfigurationError;
 use crate::auth::{InputSource, Sourced};
@@ -177,9 +177,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            validate_environment(&connection, &Default::default(), &|_| Some(
-                "environment-key".into()
-            ))
+            validate_environment(&connection, &Default::default(), &|_| {
+                Some("environment-key".into())
+            })
             .await
             .unwrap(),
             connection.extra_headers
@@ -193,9 +193,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            validate_environment(&connection, &Default::default(), &|_| Some(
-                "environment-key".into()
-            ))
+            validate_environment(&connection, &Default::default(), &|_| {
+                Some("environment-key".into())
+            })
             .await
             .unwrap()[0],
             ("Authorization".into(), "Bearer request-key".into())
