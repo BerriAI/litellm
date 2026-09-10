@@ -26,6 +26,7 @@ from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -3856,8 +3857,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         except Exception as e:
-            verbose_proxy_logger.warning("TTL preservation failed, falling back to regular pipeline: %s", e)
-            # Fallback to regular pipeline on error
+            log: Final = (
+                verbose_proxy_logger.debug
+                if isinstance(e, RedisCircuitBreakerOpenError)
+                else verbose_proxy_logger.warning
+            )
+            log("TTL preservation failed, falling back to regular pipeline: %s", e)
             await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                 increment_list=pipeline_operations,
                 litellm_parent_otel_span=parent_otel_span,
