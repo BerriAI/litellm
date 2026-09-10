@@ -2069,3 +2069,60 @@ class TestBackgroundResponseManagedObjectId:
         store = await self._stored_kwargs(self._encrypted_id("resp_no_deployment"), model_id=None)
 
         store.assert_not_awaited()
+
+
+class TestShouldStoreBackgroundResponse:
+    """The gate `responses_api` applies before it writes a managed row.
+
+    Storing a foreground create would bill a generation whose usage the create already
+    reported, and storing one the provider has already finished leaves a row no poll can
+    retire, so both arms have to stay closed.
+    """
+
+    @staticmethod
+    def _response(status: str):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        return ResponsesAPIResponse(
+            id="resp_abc",
+            created_at=0,
+            model="gpt-4o",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            status=status,
+        )
+
+    @pytest.mark.parametrize("status", ["queued", "in_progress"])
+    def test_a_background_create_the_provider_has_not_finished_is_stored(self, status):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            should_store_background_response,
+        )
+
+        assert should_store_background_response({"background": True}, self._response(status)) is True
+
+    @pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "incomplete"])
+    def test_a_background_create_already_terminal_is_not_stored(self, status):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            should_store_background_response,
+        )
+
+        assert should_store_background_response({"background": True}, self._response(status)) is False
+
+    @pytest.mark.parametrize("data", [{}, {"background": False}, {"background": None}])
+    def test_a_foreground_create_is_never_stored(self, data):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            should_store_background_response,
+        )
+
+        assert should_store_background_response(data, self._response("queued")) is False
+
+    def test_a_streaming_or_error_result_is_not_mistaken_for_a_response(self):
+        """The create path can hand back a streaming iterator, which has no status to read."""
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            should_store_background_response,
+        )
+
+        assert should_store_background_response({"background": True}, object()) is False
