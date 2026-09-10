@@ -1,9 +1,11 @@
+import logging
 from typing import Final
 
 import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.router_strategy.least_busy import IN_FLIGHT_COUNT_TTL_SECONDS, LeastBusyLoggingHandler
 
 GROUP: Final = "least-busy-group"
@@ -185,3 +187,24 @@ def test_calls_without_a_deployment_are_ignored() -> None:
     worker.log_pre_api_call(model="m", messages=[], kwargs={})
 
     assert shared.counts == {}
+
+
+class OpenBreakerRedis(SharedRedisCounters):
+    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
+        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(caplog: pytest.LogCaptureFixture) -> None:
+    worker: Final = _worker(OpenBreakerRedis())
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+        picked: Final = worker.get_available_deployments(GROUP, HEALTHY)
+
+    assert picked is DEPLOYMENT_B
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert sum("circuit breaker is open" in record.getMessage() for record in caplog.records) == 2
