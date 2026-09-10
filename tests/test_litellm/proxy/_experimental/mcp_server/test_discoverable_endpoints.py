@@ -11103,3 +11103,46 @@ async def test_identity_bound_authorization_carries_nonce_and_caller_through_cal
     assert sealed.upstream_code == "upstream-code"
     assert sealed.oauth_nonce == query["nonce"][0]
     assert returned["state"] == ["client-state"]
+
+
+@pytest.mark.asyncio
+async def test_enforced_login_warms_verified_token_readable_without_database_lookup(monkeypatch):
+    from types import SimpleNamespace
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _store_per_user_token_server_side
+    from litellm.proxy._experimental.mcp_server.oauth2_token_cache import mcp_per_user_token_cache
+    from litellm.proxy._experimental.mcp_server.oauth_identity_binding import current_binding_proof
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.dual_cache_token_backend import DualCacheTokenCacheBackend
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import CachedOAuthTokenStore
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import LazyPerUserOAuthTokenStore
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.v2_token_store import V2PerUserTokenStore
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv", name="srv", transport="http", auth_type="oauth2",
+        oauth_identity_binding={"mode": "enforce", "issuer": "https://idp.example", "audiences": ["client"],
+                                "caller_field": "user_id", "principal_claim": "sub"},
+    )
+    proof = await current_binding_proof(server.oauth_identity_binding, "alice", "srv")
+    cache = DualCache()
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-cache-warm-encryption-salt")
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", SimpleNamespace(invalidate_user_oauth_token_cache=AsyncMock()))
+    monkeypatch.setattr(db, "store_user_oauth_credential", AsyncMock())
+    await _store_per_user_token_server_side(
+        server=server, user_id="alice", token_response={"access_token": "alice-token", "refresh_token": "private", "expires_in": 3600},
+        identity_binding_proof=proof,
+    )
+    read = AsyncMock(return_value=None)
+    cached = CachedOAuthTokenStore(
+        V2PerUserTokenStore(read), default_ttl_seconds=300, backend=DualCacheTokenCacheBackend(cache, mcp_per_user_token_cache._codec()),
+    )
+    store = LazyPerUserOAuthTokenStore(lambda _: server, store_builder=lambda _: (cached, True), redis_available=lambda: True)
+    token = await store.fetch("alice", "srv")
+    assert token is not None and token.access_token == "alice-token"
+    assert token.identity_binding_proof == proof
+    assert token.refresh_token is None
+    read.assert_not_awaited()
