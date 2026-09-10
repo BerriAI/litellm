@@ -132,6 +132,19 @@ run "sidecars_must_not_share_a_loopback_port" {
   ]
 }
 
+run "collector_cannot_take_the_metrics_sidecar_health_port" {
+  command = plan
+
+  variables {
+    collector_enabled = true
+    collector_port    = 13133
+  }
+
+  expect_failures = [
+    var.collector_port,
+  ]
+}
+
 run "proxy_config_is_mounted_into_the_sidecar_too" {
   command = plan
 

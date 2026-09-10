@@ -677,8 +677,8 @@ variable "collector_port" {
   default     = 4010
 
   validation {
-    condition     = var.collector_port >= 1024 && var.collector_port <= 65535 && var.collector_port != 4000
-    error_message = "collector_port must be in 1024-65535 and not 4000."
+    condition     = var.collector_port >= 1024 && var.collector_port <= 65535 && !contains([4000, 13133], var.collector_port)
+    error_message = "collector_port must be in 1024-65535 and not 4000 (the gateway port) or 13133 (the metrics sidecar health port)."
   }
 }
 
