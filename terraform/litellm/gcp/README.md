@@ -269,6 +269,24 @@ instance-based billing on the gateway service. Unlike the AWS stack there is
 no `gateway_metrics_scrape_cidrs`: nothing outside the instance can reach the
 sidecar port, so there is no network rule to open
 
+### Autoscaling
+
+Cloud Run scales the gateway on request concurrency (plus its built-in CPU
+target), not on a metric you attach. Each instance takes up to
+`gateway_max_instance_request_concurrency` requests at once (default 80)
+and Cloud Run adds instances between `gateway_min_instances` and
+`gateway_max_instances` when the in-flight count fills up. That is the
+request-rate signal for this stack: lower the concurrency for LLM streams
+that hold a worker for tens of seconds, since a stream counts as one request
+for as long as it is open
+
+There is no tokens-per-second path here. Cloud Run's autoscaler has no
+custom-metric input, so the `litellm_total_tokens_metric_total` counter the
+proxy exposes cannot drive it. If you need token-based scaling on GCP, run
+the gateway on GKE with the Helm chart's `targetTokensPerSecond` (see
+"Dependencies only" below) rather than wiring the counter into Cloud
+Monitoring, which the autoscaler would ignore
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or
