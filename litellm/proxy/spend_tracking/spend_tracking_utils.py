@@ -4,6 +4,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
+from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel
@@ -862,7 +863,7 @@ _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 
 
 def _sanitize_request_body_for_spend_logs_payload(
-    request_body: dict,
+    request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
 ) -> dict:
@@ -1255,7 +1256,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
             standard_payload: Final = (kwargs or EMPTY_MAPPING).get("standard_logging_object")
             if isinstance(standard_payload, Mapping):
-                _request_body = {**_request_body, **classifier_audit_fields(standard_payload)}
+                _request_body = MappingProxyType({**_request_body, **classifier_audit_fields(standard_payload)})
 
             if kwargs is not None:
                 realtime_tools: Final = kwargs.get("realtime_tools")
