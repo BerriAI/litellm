@@ -113,6 +113,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
 from litellm.llms.anthropic.common_utils import (
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
+    strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
@@ -417,7 +418,8 @@ class LiteLLMAnthropicMessagesAdapter:
         model: str | None = None,
     ) -> list:
         new_messages: Final[list[AllMessageValues]] = []
-        for m in messages:
+        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        for m in replayable_messages:
             user_message: ChatCompletionUserMessage | None = None
             tool_message_list: list[ChatCompletionToolMessage] = []
             new_user_content_list: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
