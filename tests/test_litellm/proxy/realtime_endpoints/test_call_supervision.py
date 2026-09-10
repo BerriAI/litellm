@@ -265,6 +265,78 @@ async def test_confirmed_hangup_without_terminal_usage_matches_protocol(terminal
 
 
 @pytest.mark.asyncio
+async def test_shutdown_allows_hangup_longer_than_usage_drain_timeout():
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    sink = Sink(logger)
+    hangup_started = asyncio.Event()
+    allow_hangup = asyncio.Event()
+    hangup_finished = asyncio.Event()
+
+    async def hangup():
+        hangup_started.set()
+        await allow_hangup.wait()
+        await socket.messages.put({"type": "session.closed", "usage": {"total_tokens": 42}})
+        hangup_finished.set()
+
+    supervisor = CallSupervisor(
+        socket, sink, logger, UserAPIKeyAuth(), hangup, drain_timeout=0.01, termination_timeout=1
+    )
+    registry = CallSupervisors()
+    await socket.messages.put({"type": "session.created"})
+    await registry.start(supervisor)
+    shutdown = asyncio.create_task(registry.shutdown())
+    try:
+        await asyncio.wait_for(hangup_started.wait(), timeout=1)
+        await asyncio.sleep(0.04)
+        assert not shutdown.done()
+        assert not socket.closed
+        assert not hangup_finished.is_set()
+    finally:
+        allow_hangup.set()
+        await asyncio.wait_for(shutdown, timeout=1)
+    assert hangup_finished.is_set()
+    assert socket.closed
+    assert sink.logs == 1
+    assert sink.events[-1]["usage"]["total_tokens"] == 42
+    assert not logger.model_call_details.get("realtime_usage_incomplete")
+
+
+@pytest.mark.asyncio
+async def test_termination_timeout_cancels_hangup_and_finishes_cleanup():
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    sink = Sink(logger)
+    hangup_cancelled = asyncio.Event()
+
+    async def hangup():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            hangup_cancelled.set()
+
+    supervisor = CallSupervisor(
+        socket,
+        sink,
+        logger,
+        UserAPIKeyAuth(),
+        hangup,
+        drain_timeout=0.01,
+        termination_timeout=0.02,
+        terminal_usage_required=False,
+    )
+    await socket.messages.put({"type": "session.created"})
+    await supervisor.start()
+    await asyncio.wait_for(supervisor.close(), timeout=1)
+    assert hangup_cancelled.is_set()
+    assert socket.closed
+    assert sink.logs == 1
+    assert logger.model_call_details["realtime_usage_incomplete"] is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("closure", ["eof", "normal_close", "error"])
 @pytest.mark.parametrize("hangup_succeeds", [True, False])
 async def test_ga_observer_disconnect_requires_confirmed_hangup(closure, hangup_succeeds):

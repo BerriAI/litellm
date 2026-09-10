@@ -44,6 +44,7 @@ class CallSupervisor:
         ready_timeout: float = 20,
         lifetime: float = 3600,
         drain_timeout: float = 5,
+        termination_timeout: float = 60,
         terminal_usage_required: bool = True,
     ) -> None:
         self._upstream = upstream
@@ -54,6 +55,7 @@ class CallSupervisor:
         self._ready_timeout = ready_timeout
         self._lifetime = lifetime
         self._drain_timeout = drain_timeout
+        self._termination_timeout = termination_timeout
         self._terminal_usage_required = terminal_usage_required
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
@@ -112,7 +114,7 @@ class CallSupervisor:
             try:
                 if not self._terminal:
                     try:
-                        await asyncio.wait_for(self._close_call(), timeout=self._drain_timeout)
+                        await asyncio.wait_for(self._close_call(), timeout=self._termination_timeout)
                         self._close_confirmed = True
                     except Exception:  # noqa: BLE001  # provider exceptions can contain credentials
                         verbose_proxy_logger.error("Realtime observer could not terminate upstream call")

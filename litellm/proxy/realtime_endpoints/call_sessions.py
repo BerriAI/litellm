@@ -2,12 +2,14 @@ import base64
 import hashlib
 import json
 import time
+from collections.abc import Mapping
 from contextlib import AsyncExitStack
 from types import MappingProxyType
 from typing import Final, Literal
 
 import httpx
 from fastapi import HTTPException, Request, Response, WebSocket
+from pydantic import TypeAdapter
 from starlette.types import Message
 
 from litellm._logging import verbose_proxy_logger
@@ -44,10 +46,6 @@ from litellm.types.router import GenericLiteLLMParams
 
 
 async def supervise_codex_call(request: Request, call: CodexRealtimeCall, auth: UserAPIKeyAuth) -> None:
-    from collections.abc import Mapping
-
-    from pydantic import TypeAdapter
-
     import litellm
     from litellm.proxy.realtime_endpoints.call_supervision import CALL_SUPERVISORS, CallSupervisor
 
@@ -362,19 +360,27 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
             subprotocol=next((p for p in protocols if not p.startswith("openai-insecure-api-key.")), None)
         )
         await litellm._arealtime(  # pyright: ignore[reportPrivateUsage]  # dispatch for an already authorized call
-            **{  # mutable-ok: retain processed policy metadata while pinning the existing call's routing
-                **processed,
-                **build_sideband_request(call),
-                "extra_headers": MappingProxyType(
-                    {
-                        **configured_realtime_headers(processed.get("extra_headers")),
-                        **configured_realtime_headers(call.extra_headers),
-                    }
-                ),
-                "websocket": websocket,
-                "user_api_key_dict": auth,
-                "chatgpt_call_accounting": CallAccounting.SUPERVISED if call.usage_supervised else None,
-            }
+            model=f"chatgpt/{call.model}",
+            websocket=websocket,
+            **{
+                key: value
+                for key, value in {  # mutable-ok: retain processed metadata with pinned routing
+                    **processed,
+                    **build_sideband_request(call),
+                    "extra_headers": MappingProxyType(
+                        {
+                            **configured_realtime_headers(
+                                TypeAdapter(Mapping[str, object] | None).validate_python(processed.get("extra_headers"))
+                            ),
+                            **configured_realtime_headers(call.extra_headers),
+                        }
+                    ),
+                    "websocket": websocket,
+                    "user_api_key_dict": auth,
+                    "chatgpt_call_accounting": CallAccounting.SUPERVISED if call.usage_supervised else None,
+                }.items()
+                if key not in ("model", "websocket")
+            },
         )
     finally:
         if logging_obj is None or not logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
