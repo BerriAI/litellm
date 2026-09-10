@@ -31,6 +31,7 @@ from litellm.constants import (
     SESSION_ID_OMITTED_METADATA_KEY,
     X_LITELLM_DISABLE_CALLBACKS,
 )
+from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
@@ -83,10 +84,6 @@ _EXPLICIT_SESSION_HEADERS: Final = frozenset({"x-litellm-trace-id", "x-litellm-s
 # ``session-id``/``thread-id``; builds before the codex-api split sent
 # ``session_id``/``conversation_id``. Ordered session before thread.
 _CODEX_SESSION_ID_HEADERS: Final = ("session-id", "session_id", "thread-id", "conversation_id")
-# Matches every first-party Codex originator: codex-tui, codex_cli_rs, codex_exec,
-# codex_vscode, "Codex ...". A separator is required so an unrelated "codexfoo" client
-# does not read as Codex.
-_CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 # Session-id values must be non-empty strings of alphanumerics, hyphens, or underscores
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
@@ -808,16 +805,6 @@ def apply_missing_session_id_policy(
                 "Ignoring unknown general_settings.missing_session_id=%r; expected 'generate', 'reject' or 'omit'",
                 policy,
             )
-
-
-def is_codex_user_agent(user_agent: str) -> bool:
-    """Codex builds its user agent as ``<originator>/<version> ...`` and ships
-    several first-party originators: ``codex-tui``, ``codex_cli_rs``,
-    ``codex_exec`` (exec mode), ``codex_vscode`` (IDE extension) and ``Codex ...``
-    (see ``is_first_party_originator`` in codex-rs). They agree only on the
-    ``codex`` stem, and the TUI sends a bare ``codex-tui`` with no version at all,
-    so match the stem plus a separator rather than any one spelling."""
-    return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
 
 def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
