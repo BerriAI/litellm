@@ -1939,24 +1939,22 @@ def _ocr_model_info(
     litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None) if custom_pricing else None
     if litellm_params is None:
         return deployment_info
-    return OCRPricing(
-        ocr_cost_per_page=_request_or_deployment_price("ocr_cost_per_page", litellm_params, deployment_info),
-        ocr_cost_per_credit=_request_or_deployment_price("ocr_cost_per_credit", litellm_params, deployment_info),
-        annotation_cost_per_page=_request_or_deployment_price(
-            "annotation_cost_per_page", litellm_params, deployment_info
-        ),
+    return _layered_ocr_pricing(litellm_params, deployment_info)
+
+
+def _first_ocr_price(field: OCRPricingField, *sources: Mapping[str, object] | None) -> float | None:
+    return next(
+        (price for source in sources if source is not None and isinstance(price := source.get(field), int | float)),
+        None,
     )
 
 
-def _request_or_deployment_price(
-    field: OCRPricingField,
-    litellm_params: Mapping[str, object],
-    deployment_info: ModelInfo | None,
-) -> float | None:
-    request_price: Final = litellm_params.get(field)
-    if isinstance(request_price, int | float):
-        return request_price
-    return deployment_info.get(field) if deployment_info is not None else None
+def _layered_ocr_pricing(*sources: Mapping[str, object] | None) -> OCRPricing:
+    return OCRPricing(
+        ocr_cost_per_page=_first_ocr_price("ocr_cost_per_page", *sources),
+        ocr_cost_per_credit=_first_ocr_price("ocr_cost_per_credit", *sources),
+        annotation_cost_per_page=_first_ocr_price("annotation_cost_per_page", *sources),
+    )
 
 
 def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
@@ -1977,8 +1975,8 @@ def ocr_cost(
         model: str - model name
         custom_llm_provider: Optional[str] - custom LLM provider
         response: Optional[Any] - response object
-        model_info: Optional[OCRPricing] - deployment-specific model info; its OCR pricing
-            takes precedence over the model cost map
+        model_info: Optional[OCRPricing] - deployment-specific OCR pricing; each rate it sets
+            overrides the model cost map's, the rest fall back to the map
 
     Returns:
         Tuple[float, float]: cost of OCR processing
@@ -1997,19 +1995,14 @@ def ocr_cost(
         raise ValueError("OCR response usage_info is None")
 
     credits: Final = getattr(response.usage_info, "credits", None)
-    has_custom_ocr_pricing: Final = model_info is not None and (
-        model_info.get("ocr_cost_per_page") is not None
-        or model_info.get("annotation_cost_per_page") is not None
-        or (credits is not None and model_info.get("ocr_cost_per_credit") is not None)
-    )
-    pricing: Final = model_info if has_custom_ocr_pricing else _cost_map_model_info(model, custom_llm_provider)
+    pricing: Final = _layered_ocr_pricing(model_info, _cost_map_model_info(model, custom_llm_provider))
 
-    cost_per_credit: Final = pricing.get("ocr_cost_per_credit") if pricing is not None else None
+    cost_per_credit: Final = pricing.get("ocr_cost_per_credit")
     if credits is not None and cost_per_credit is not None:
         return cost_per_credit * credits, 0.0
 
-    ocr_cost_per_page: Final = pricing.get("ocr_cost_per_page") if pricing is not None else None
-    annotation_cost_per_page: Final = pricing.get("annotation_cost_per_page") if pricing is not None else None
+    ocr_cost_per_page: Final = pricing.get("ocr_cost_per_page")
+    annotation_cost_per_page: Final = pricing.get("annotation_cost_per_page")
     annotation_rate: Final = annotation_cost_per_page if annotation_cost_per_page is not None else ocr_cost_per_page
 
     pages_processed: Final = response.usage_info.pages_processed
