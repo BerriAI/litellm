@@ -29,7 +29,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if not client_id:
         raise ValueError("Microsoft Agent 365: client_id is required")
     if not client_secret:
-        raise ValueError("Microsoft Agent 365: client_secret (or api_key) is required")
+        raise ValueError(
+            "Microsoft Agent 365: client secret is required. Set client_secret, api_key, or AGENT365_CLIENT_SECRET"
+        )
 
     guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:

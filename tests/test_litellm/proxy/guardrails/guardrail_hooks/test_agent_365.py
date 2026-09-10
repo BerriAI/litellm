@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.exceptions import Timeout as LitellmTimeout
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365Guardrail,
@@ -165,8 +166,9 @@ class TestInitializeGuardrail:
             tenant_id="tenant-abc",
             client_id="client-xyz",
         )
-        with pytest.raises(ValueError, match="client_secret"):
+        with pytest.raises(ValueError, match="client_secret") as exc_info:
             initialize_guardrail(params, {"guardrail_name": "a365"})
+        assert redact_string(str(exc_info.value)) == str(exc_info.value)
 
     def test_env_var_fallbacks(self, monkeypatch):
         monkeypatch.delenv("AGENT365_RESOURCE_APP_ID", raising=False)
