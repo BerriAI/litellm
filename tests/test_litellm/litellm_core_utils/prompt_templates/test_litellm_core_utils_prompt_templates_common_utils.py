@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
+    parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
@@ -189,6 +190,15 @@ def test_convert_prefix_message_to_non_prefix_messages():
 
 
 # ── split_concatenated_json_objects tests ──
+
+
+def test_parse_tool_call_arguments_concatenated_objects():
+    """Concatenated JSON objects are split instead of raising Extra data."""
+    raw = '{"city": "Paris"}{"units": "celsius"}'
+    result = parse_tool_call_arguments(
+        raw, tool_name="weather", context="chat completions"
+    )
+    assert result == [{"city": "Paris"}, {"units": "celsius"}]
 
 
 def test_split_concatenated_json_single_object():

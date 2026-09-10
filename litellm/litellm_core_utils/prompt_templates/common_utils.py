@@ -2213,8 +2213,9 @@ def parse_tool_call_arguments(
 
     When the JSON is malformed (e.g. truncated by the model), this function
     attempts a lightweight repair (closing unmatched brackets/braces) before
-    raising an error.  A warning is logged whenever repair succeeds so that
-    callers are aware the arguments were not perfectly formed.
+    attempting to split concatenated JSON objects.  A warning is logged
+    whenever repair or splitting succeeds so that callers are aware the
+    arguments were not perfectly formed.
 
     Args:
         arguments: The JSON string containing tool arguments, or None.
@@ -2223,7 +2224,8 @@ def parse_tool_call_arguments(
 
     Returns:
         Parsed arguments (usually a dict, but may be any JSON-deserializable
-        type such as list, str, int, float, or None).  Returns empty dict if
+        type such as list, str, int, float, or None).  Concatenated JSON
+        objects are returned as a list of dicts.  Returns empty dict if
         arguments is None or empty.
 
     Raises:
@@ -2248,6 +2250,20 @@ def parse_tool_call_arguments(
                 "..." if len(arguments) > 200 else "",
             )
             return repaired
+
+        split_arguments: Final = split_concatenated_json_objects(arguments)
+        if split_arguments:
+            verbose_logger.warning(
+                "Recovered %d concatenated tool call argument object(s) for tool '%s' "
+                "(%s). Original (%d chars): %.200s%s",
+                len(split_arguments),
+                tool_name or "<unknown>",
+                context or "unknown context",
+                len(arguments),
+                arguments,
+                "..." if len(arguments) > 200 else "",
+            )
+            return split_arguments
 
         error_parts: Final = ["Failed to parse tool call arguments"]
 
@@ -2279,8 +2295,7 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     The walk degrades gracefully: if the string is malformed or truncated
     (e.g. a stream that ended mid-tool-call), whatever complete objects were
     parsed before the bad tail are returned and the remainder is discarded
-    with a warning, rather than raising.  The sole caller
-    (``_convert_to_bedrock_tool_call_invoke``) treats an empty result as
+    with a warning, rather than raising.  Callers treat an empty result as
     ``input={}`` so the conversation can continue instead of hard-failing.
 
     Returns

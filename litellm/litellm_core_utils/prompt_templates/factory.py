@@ -5353,7 +5353,9 @@ class NormalizedToolCall(TypedDict):
     arguments: dict[str, object]
 
 
-def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str) -> dict[str, object]:
+def _parse_tool_call_arguments(
+    raw: object, tool_name: str | None, context: str
+) -> dict[str, object] | list[dict[str, object]]:
     # Anthropic's tool_use blocks already carry a parsed dict in "input";
     # chat completions and the Responses API carry a JSON string that may be
     # truncated by the model, so route those through the repair-aware parser.
@@ -5367,11 +5369,43 @@ def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str)
     )
 
     try:
-        parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
+        parsed: Final = parse_tool_call_arguments(
+            normalized_raw, tool_name=tool_name, context=context
+        )
     except ValueError as e:
         verbose_logger.warning("Failed to parse tool call arguments: %s", e)
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    if isinstance(parsed, dict):
+        return parsed
+    if (
+        isinstance(parsed, list)
+        and parsed
+        and all(isinstance(item, dict) for item in parsed)
+    ):
+        return parsed
+    return {}
+
+
+def _append_normalized_tool_calls(
+    result: list[NormalizedToolCall],
+    call_id: str | None,
+    name: str | None,
+    parsed_arguments: dict[str, object] | list[dict[str, object]],
+) -> None:
+    if isinstance(parsed_arguments, dict):
+        result.append(
+            NormalizedToolCall(id=call_id, name=name, arguments=parsed_arguments)
+        )
+        return
+    for argument_index, arguments in enumerate(parsed_arguments):
+        split_call_id: Final = (
+            call_id
+            if argument_index == 0 or call_id is None
+            else f"{call_id}_{argument_index}"
+        )
+        result.append(
+            NormalizedToolCall(id=split_call_id, name=name, arguments=arguments)
+        )
 
 
 def _tool_calls_from_chat_completion_response(
@@ -5392,16 +5426,15 @@ def _tool_calls_from_chat_completion_response(
         if fn is None:
             continue
         name = get_attribute_or_key(fn, "name")
-        result.append(
-            NormalizedToolCall(
-                id=get_attribute_or_key(tc, "id"),
-                name=name,
-                arguments=_parse_tool_call_arguments(
-                    get_attribute_or_key(fn, "arguments", "{}"),
-                    tool_name=name,
-                    context="chat completions",
-                ),
-            )
+        _append_normalized_tool_calls(
+            result,
+            get_attribute_or_key(tc, "id"),
+            name,
+            _parse_tool_call_arguments(
+                get_attribute_or_key(fn, "arguments", "{}"),
+                tool_name=name,
+                context="chat completions",
+            ),
         )
     return result
 
@@ -5415,16 +5448,15 @@ def _tool_calls_from_responses_api_response(response: object) -> list[Normalized
         if get_attribute_or_key(item, "type") != "function_call":
             continue
         name = get_attribute_or_key(item, "name")
-        result.append(
-            NormalizedToolCall(
-                id=get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id"),
-                name=name,
-                arguments=_parse_tool_call_arguments(
-                    get_attribute_or_key(item, "arguments", "{}"),
-                    tool_name=name,
-                    context="responses API",
-                ),
-            )
+        _append_normalized_tool_calls(
+            result,
+            get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id"),
+            name,
+            _parse_tool_call_arguments(
+                get_attribute_or_key(item, "arguments", "{}"),
+                tool_name=name,
+                context="responses API",
+            ),
         )
     return result
 

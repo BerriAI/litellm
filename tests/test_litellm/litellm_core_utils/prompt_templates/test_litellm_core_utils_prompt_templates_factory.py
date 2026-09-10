@@ -3401,6 +3401,37 @@ def test_get_tool_calls_from_response_warns_for_malformed_arguments(caplog):
     assert "Failed to parse tool call arguments" in caplog.text
 
 
+def test_get_tool_calls_from_response_splits_concatenated_arguments():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "search",
+                                "arguments": '{"query": "first"}{"query": "second"}',
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [
+        {"id": "call_1", "name": "search", "arguments": {"query": "first"}},
+        {"id": "call_1_1", "name": "search", "arguments": {"query": "second"}},
+    ]
+
+
 def test_group_tool_exchanges_pairs_assistant_with_its_tool_rows():
     from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
 
