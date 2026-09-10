@@ -179,6 +179,8 @@ def harness():
     router = MagicMock(spec=Router)
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
+    router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    router.model_list = []
     router.acreate_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -1165,6 +1167,8 @@ def retrieve_harness():
     router = MagicMock(spec=Router)
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
+    router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    router.model_list = []
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -1622,6 +1626,8 @@ def list_harness():
     router = MagicMock(spec=Router)
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
+    router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    router.model_list = []
     router.alist_batches = AsyncMock(return_value=FakeListPage([]))
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -2020,6 +2026,8 @@ def cancel_harness():
     router = MagicMock(spec=Router)
     router.model_group_alias = {}
     router.get_model_access_groups = MagicMock(return_value={})
+    router.resolve_model_name_from_model_id = MagicMock(side_effect=lambda model_id: model_id)
+    router.model_list = []
     router.acancel_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -2816,3 +2824,53 @@ async def test_cancel__model_encoded_id_rejects_key_without_model_grant(cancel_h
     assert exc_info.value.code == "403"
     cancel_harness.creds_resolver.assert_not_called()
     cancel_harness.litellm_acancel.assert_not_called()
+
+
+def _b64_unified_id(decoded: str) -> str:
+    return base64.urlsafe_b64encode(decoded.encode()).decode().rstrip("=")
+
+
+UNIFIED_FILE_ID_FOR_GPT4O_MINI = _b64_unified_id(
+    "litellm_proxy:application/octet-stream;unified_id,c4843482-b176-4901-8292-7523fd0f2c6e;"
+    "target_model_names,gpt-4o-mini;llm_output_file_id,file-provider;llm_output_file_model_id,dep-1"
+)
+UNIFIED_BATCH_ID_FOR_GPT4O_MINI = _b64_unified_id(UNIFIED_BATCH_ID)
+
+
+@pytest.mark.asyncio
+async def test_create__unified_file_id_rejects_key_without_model_grant(harness):
+    """The model carried inside a unified file id is caller-controlled too, so it is checked against the key's grants."""
+    set_body(
+        harness,
+        {
+            "input_file_id": UNIFIED_FILE_ID_FOR_GPT4O_MINI,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_create(harness, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    harness.router_acreate.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__unified_batch_id_rejects_key_without_model_grant(retrieve_harness):
+    with pytest.raises(ProxyException) as exc_info:
+        await call_retrieve(retrieve_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    retrieve_harness.router_aretrieve.assert_not_called()
+    retrieve_harness.creds_resolver.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__unified_batch_id_rejects_key_without_model_grant(cancel_harness):
+    with pytest.raises(ProxyException) as exc_info:
+        await call_cancel(cancel_harness, UNIFIED_BATCH_ID_FOR_GPT4O_MINI, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    cancel_harness.router_acancel.assert_not_called()

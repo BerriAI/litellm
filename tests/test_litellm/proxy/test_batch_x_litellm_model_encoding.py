@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     get_batch_id_from_unified_batch_id,
@@ -412,11 +413,7 @@ async def test_cancel_batch_with_unified_id_routes_with_decoded_model_and_batch_
     mock_request.url.path = f"/v1/batches/{unified_batch_id}/cancel"
     mock_fastapi_response = MagicMock()
     mock_fastapi_response.headers = {}
-    mock_user_api_key_dict = MagicMock()
-    mock_user_api_key_dict.parent_otel_span = None
-    mock_user_api_key_dict.user_id = "test_user"
-    mock_user_api_key_dict.allowed_model_region = None
-    mock_user_api_key_dict.team_metadata = {}
+    mock_user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="test_user", team_metadata={})
 
     with (
         patch("litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing") as mock_processor_cls,
