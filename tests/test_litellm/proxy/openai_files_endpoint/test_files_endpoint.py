@@ -4841,7 +4841,7 @@ def test_delete_file_answers_400_for_an_id_outside_the_configured_bucket(mocker:
     assert "configured storage bucket" in response.json()["error"]["message"]
 
 
-def _bedrock_batch_router() -> Router:
+def _cloud_files_router() -> Router:
     return Router(
         model_list=[
             {
@@ -4854,23 +4854,41 @@ def _bedrock_batch_router() -> Router:
                     "s3_bucket_name": "my-bucket",
                 },
             },
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.8-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "us-central1",
+                    "gcs_bucket_name": "my-gcs-bucket",
+                },
+            },
         ]
     )
 
 
 RAW_S3_FILE_ID: Final = "s3://my-bucket/litellm-batch-outputs/job-123/abc/input.jsonl.out"
+RAW_GCS_FILE_ID: Final = "gs://my-gcs-bucket/litellm-vertex-files/publishers/google/models/gemini-3.8-flash/abc123"
 
 
-@pytest.mark.parametrize("route_prefix", ("/bedrock/v1/files", "/v1/files", "/files"))
+@pytest.mark.parametrize(
+    ("route_prefix", "raw_file_id", "model_name"),
+    (
+        ("/bedrock/v1/files", RAW_S3_FILE_ID, "bedrock-claude"),
+        ("/v1/files", RAW_S3_FILE_ID, "bedrock-claude"),
+        ("/files", RAW_S3_FILE_ID, "bedrock-claude"),
+        ("/vertex_ai/v1/files", RAW_GCS_FILE_ID, "vertex-gemini"),
+    ),
+)
 def test_delete_file_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
-    mocker: MockerFixture, monkeypatch, route_prefix: str
+    mocker: MockerFixture, monkeypatch, route_prefix: str, raw_file_id: str, model_name: str
 ):
     from urllib.parse import quote
 
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
-    bedrock_router = _bedrock_batch_router()
+    bedrock_router = _cloud_files_router()
     proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
@@ -4884,12 +4902,12 @@ def test_delete_file_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
         api_key="test-key",
         user_role=LitellmUserRoles.INTERNAL_USER,
         user_id="test-user",
-        models=["bedrock-claude"],
+        models=["bedrock-claude", "vertex-gemini"],
     )
 
     try:
         response = client.delete(
-            f"{route_prefix}/{quote(RAW_S3_FILE_ID, safe='')}?model=bedrock-claude",
+            f"{route_prefix}/{quote(raw_file_id, safe='')}?model={model_name}",
             headers={"Authorization": "Bearer test-key"},
         )
     finally:
@@ -4906,7 +4924,7 @@ def test_delete_file_forwards_a_raw_cloud_id_from_a_proxy_admin_key(mocker: Mock
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
-    bedrock_router = _bedrock_batch_router()
+    bedrock_router = _cloud_files_router()
     proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
