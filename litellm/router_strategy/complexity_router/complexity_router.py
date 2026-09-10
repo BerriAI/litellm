@@ -39,6 +39,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    is_codex_user_agent,
 )
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -388,6 +389,13 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | N
 _REMINDER_OPEN: Final = "<system-reminder>"
 _REMINDER_CLOSE: Final = "</system-reminder>"
 _DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
+_CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
+    ("<environment_context>", "</environment_context>"),
+    ("<recommended_plugins>", "</recommended_plugins>"),
+    ("<user_instructions>", "</user_instructions>"),
+    ("<environments_instructions>", "</environments_instructions>"),
+    ("# agents.md instructions for ", "</instructions>"),
+)
 
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
@@ -622,6 +630,18 @@ def _last_human_ask_index(
     )
 
 
+def _is_reminder_only_turn(message: Mapping[str, object], marker_pairs: tuple[tuple[str, str], ...]) -> bool:
+    if message.get("role") != "user":
+        return False
+    content: Final = message.get("content")
+    if not isinstance(content, str) and not (
+        isinstance(content, list) and all(isinstance(part, Mapping) and part.get("type") == "text" for part in content)
+    ):
+        return False
+    text: Final = _message_text(content)
+    return bool(text.strip()) and not _strip_reminder_blocks(text, marker_pairs)
+
+
 def _newest_turn_is_human_ask(
     messages: Sequence[Mapping[str, object]] | None,
     marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
@@ -632,21 +652,23 @@ def _newest_turn_is_human_ask(
     Anchored on `_last_human_ask_index` so every surface's plumbing reads as a continuation:
     chat-completions tool turns are role=tool, Messages-surface tool_result turns flatten to empty
     human text, and a hybrid turn carrying an ask alongside a tool_result still counts as an ask.
-    Compared against the newest non-system message rather than the raw tail, because Claude Code
-    appends a system-role reminder after the human turn; that trailing plumbing is neither an ask
-    nor loop traffic and must not turn a fresh ask into a continuation. An unreadable request (no
-    messages) is treated as a continuation: there is no ask to classify, which is the same reading
-    `_extract_current_ask_and_system_prompt` gives it downstream.
+    Trailing system messages and complete text-only reminders do not turn a fresh ask into a
+    continuation. Assistant turns and non-text content, including tool results alongside reminders,
+    still form continuation boundaries. An unreadable request has no ask to classify.
     """
     if not messages:
         return False
-    newest_non_system: Final = next(
-        (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") != "system"),
+    newest_activity: Final = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].get("role") != "system" and not _is_reminder_only_turn(messages[index], marker_pairs)
+        ),
         None,
     )
-    if newest_non_system is None:
+    if newest_activity is None:
         return False
-    return _last_human_ask_index(messages, marker_pairs) == newest_non_system
+    return _last_human_ask_index(messages, marker_pairs) == newest_activity
 
 
 def _iter_system_scope_texts(
@@ -1979,6 +2001,7 @@ class ComplexityRouter(CustomLogger):
             raise ValueError("classifier_llm_config is not set")
 
         include_assistant: Final = self.config.classifier_context_include_assistant_turns
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or {})
         context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
         prior_turns: Final = (
             _extract_prior_turns(
@@ -1988,20 +2011,14 @@ class ComplexityRouter(CustomLogger):
                 budget_chars=self.config.classifier_context_budget_chars,
                 per_turn_chars=self.config.classifier_context_per_turn_chars,
                 include_assistant=include_assistant,
-                marker_pairs=self._reminder_markers,
+                marker_pairs=marker_pairs,
             )
             if context_enabled
             else ()
         )
         has_prior_conversation: Final = (
             context_enabled
-            and len(
-                tuple(
-                    islice(
-                        _iter_context_turns_newest_first(messages or (), include_assistant, self._reminder_markers), 2
-                    )
-                )
-            )
+            and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))
             > 1
         )
 
@@ -2512,7 +2529,7 @@ class ComplexityRouter(CustomLogger):
             body if isinstance(body, Mapping) else None,
             resolved_messages,
             tuple(self.config.plan_mode_patterns or ()),
-            self._reminder_markers,
+            self._reminder_markers_for_request(request_kwargs),
         )
 
     def _matched_housekeeping_sentinel(self, newest_ask: str | None) -> str | None:
@@ -3333,6 +3350,18 @@ class ComplexityRouter(CustomLogger):
         """
         return _extract_current_ask_and_system_prompt(messages)
 
+    def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
+        if self.config.reminder_markers is not None:
+            return self._reminder_markers
+        if any(
+            is_codex_user_agent(user_agent)
+            for metadata_key in ("litellm_metadata", "metadata")
+            if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
+            if isinstance(user_agent := metadata.get("user_agent"), str)
+        ):
+            return _CODEX_REMINDER_MARKERS
+        return _DEFAULT_REMINDER_MARKERS
+
     @staticmethod
     def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
         """Metadata may land on `metadata` or `litellm_metadata` depending on the
@@ -3434,6 +3463,7 @@ class ComplexityRouter(CustomLogger):
         # chat-completions messages, so it is real work on every non-chat surface, and
         # both the conversation shape and the classifier read the same list.
         resolved_messages: Final = self._resolve_messages(messages, request_kwargs)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs)
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity: Final = self._uses_tier_pin
@@ -3443,7 +3473,7 @@ class ComplexityRouter(CustomLogger):
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
         pin_replay_allowed: Final = bool(self.config.session_affinity) or not _newest_turn_is_human_ask(
-            resolved_messages, self._reminder_markers
+            resolved_messages, marker_pairs
         )
 
         if cache_key is not None and pin_replay_allowed:
@@ -3454,7 +3484,7 @@ class ComplexityRouter(CustomLogger):
                 pin_escalation_keyword: str | None = None
                 if self.escalation_keywords:
                     user_message: Final = (
-                        _newest_turn_ask(resolved_messages, self._reminder_markers) if resolved_messages else None
+                        _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
                     )
                     if user_message is not None:
                         pin_escalation_keyword = self._matched_escalation_keyword(user_message)
@@ -3642,7 +3672,8 @@ class ComplexityRouter(CustomLogger):
         # Determine whether the original request used messages directly
         has_original_messages: Final = messages is not None and len(messages) > 0
 
-        user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, self._reminder_markers)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs)
+        user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, marker_pairs)
         classifier_images: Final = self._classifier_image_parts(resolved_messages)
 
         if user_message is None and not classifier_images:
@@ -3676,7 +3707,7 @@ class ComplexityRouter(CustomLogger):
             )
 
         ask: Final = user_message or ""
-        newest_ask: Final = _newest_turn_ask(resolved_messages, self._reminder_markers)
+        newest_ask: Final = _newest_turn_ask(resolved_messages, marker_pairs)
         escalation_keyword: Final = self._matched_escalation_keyword(newest_ask) if newest_ask is not None else None
         # Resolved here rather than beside the classifier because the keyword-override path below
         # returns before any classification runs, and a forced tier gets stuck for the same reason
