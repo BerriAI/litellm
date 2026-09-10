@@ -1416,7 +1416,6 @@ class TestLoginConfigClaude:
             patch("requests.get", return_value=poll_response),
             patch("litellm.proxy.client.cli.commands.auth.save_cli_token"),
             patch("litellm.proxy.client.cli.interface.show_commands"),
-            patch("litellm.proxy.client.cli.commands.auth.CLAUDE_SETTINGS_PATH", settings_path),
             patch(
                 "litellm.proxy.client.cli.commands.auth.SETTINGS_FILE_OWNERS",
                 (SettingsFileOwner(backup_path, "lite up", "lite down"),),
@@ -1426,7 +1425,9 @@ class TestLoginConfigClaude:
                 return_value="/usr/local/bin/lite",
             ),
         ):
-            result = self.runner.invoke(login, args, obj={"base_url": base_url})
+            result = self.runner.invoke(
+                login, args, obj={"base_url": base_url}, env={"CLAUDE_CONFIG_DIR": str(settings_path.parent)}
+            )
         return result, settings_path, backup_path
 
     def test_default_login_does_not_touch_claude_settings(self, tmp_path):
@@ -1445,7 +1446,7 @@ class TestLoginConfigClaude:
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://test.example.com"
         assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://test.example.com auth print-token"
-        assert "Configured Claude Code" in result.output
+        assert f"Configured Claude Code: {settings_path} now routes through https://test.example.com." in result.output
 
     def test_flag_preserves_unrelated_settings_on_an_existing_file(self, tmp_path):
         settings_path = tmp_path / "claude" / "settings.json"

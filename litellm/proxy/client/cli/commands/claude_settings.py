@@ -30,6 +30,7 @@ ENABLE_GATEWAY_MODEL_DISCOVERY_KEY: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DI
 ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
 
 CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
+CLAUDE_CONFIG_DIR_ENV: Final = "CLAUDE_CONFIG_DIR"
 BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
 AUTOROUTE_BACKUP_PATH: Final = Path.home() / ".litellm" / "autorouter" / "claude_settings_backup.json"
 
@@ -53,6 +54,14 @@ _SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
 
 class ClaudeSettingsError(Exception):
     """Raised for any user-actionable failure while reading or writing Claude Code settings."""
+
+
+def claude_settings_path(environ: Mapping[str, str]) -> Path:
+    """The settings.json Claude Code reads: under CLAUDE_CONFIG_DIR when set, else ~/.claude/settings.json."""
+    config_dir: Final = environ.get(CLAUDE_CONFIG_DIR_ENV, "")
+    if not config_dir:
+        return CLAUDE_SETTINGS_PATH
+    return Path(config_dir).expanduser() / "settings.json"
 
 
 def load_json_or_empty(path: Path) -> dict[str, JsonValue]:
@@ -173,6 +182,7 @@ __all__ = (
     "API_KEY_HELPER_KEY",
     "AUTOROUTE_BACKUP_PATH",
     "BACKUP_PATH",
+    "CLAUDE_CONFIG_DIR_ENV",
     "CLAUDE_SETTINGS_PATH",
     "ENABLE_GATEWAY_MODEL_DISCOVERY_KEY",
     "ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE",
@@ -182,6 +192,7 @@ __all__ = (
     "SETTINGS_FILE_OWNERS",
     "ClaudeSettingsError",
     "SettingsFileOwner",
+    "claude_settings_path",
     "lite_api_key_helper_configured",
     "load_json_or_empty",
     "merge_claude_settings",

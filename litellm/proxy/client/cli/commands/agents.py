@@ -4,6 +4,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -12,7 +13,7 @@ import requests
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
-from .claude_settings import CLAUDE_SETTINGS_PATH, lite_api_key_helper_configured
+from .claude_settings import claude_settings_path, lite_api_key_helper_configured
 from .cmd_quoting import quote_for_cmd
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
@@ -542,10 +543,12 @@ def resolve_api_key(ctx: click.Context) -> str:
 _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
-def _helper_supplies_token(ctx_obj: CliContextObj, base_url: str, profiles: frozenset[str]) -> bool:
+def _helper_supplies_token(
+    ctx_obj: CliContextObj, base_url: str, profiles: frozenset[str], settings_path: Path
+) -> bool:
     if PROFILE_ANTHROPIC not in profiles or not ctx_obj.get("api_key_from_token_file"):
         return False
-    return lite_api_key_helper_configured(base_url, CLAUDE_SETTINGS_PATH)
+    return lite_api_key_helper_configured(base_url, settings_path)
 
 
 def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
@@ -555,10 +558,11 @@ def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify
     api_key: Final = resolve_api_key(ctx)
 
     display_name, profiles = agent_profile(binary)
-    helper_supplies_token: Final = _helper_supplies_token(ctx_obj, base_url, profiles)
+    settings_path: Final = claude_settings_path(os.environ)
+    helper_supplies_token: Final = _helper_supplies_token(ctx_obj, base_url, profiles, settings_path)
     click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}")
     if helper_supplies_token:
-        click.echo(f"litellm: {display_name} reads its key from the apiKeyHelper in {CLAUDE_SETTINGS_PATH}")
+        click.echo(f"litellm: {display_name} reads its key from the apiKeyHelper in {settings_path}")
 
     try:
         run_agent(
