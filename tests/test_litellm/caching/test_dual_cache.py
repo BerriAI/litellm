@@ -610,6 +610,10 @@ class _OpenBreakerRedis:
     async def async_increment_pipeline(self, increment_list, **kwargs):
         raise AssertionError("never reached")
 
+    @_redis_circuit_breaker_guard
+    async def async_increment(self, key, value, **kwargs):
+        raise AssertionError("never reached")
+
     @_redis_circuit_breaker_guard_sync
     def get_cache(self, key, **kwargs):
         raise AssertionError("never reached")
@@ -630,8 +634,9 @@ class _OpenBreakerRedis:
         lambda cache: cache.async_increment_cache_pipeline(
             increment_list=[RedisPipelineIncrementOperation(key="k", increment_value=1.0, ttl=60)]
         ),
+        lambda cache: cache.async_increment_cache("k", 1.0),
     ],
-    ids=["get", "batch_get", "set", "set_pipeline", "increment_pipeline"],
+    ids=["get", "batch_get", "set", "set_pipeline", "increment_pipeline", "increment"],
 )
 async def test_an_open_circuit_breaker_is_not_an_error_per_request(caplog, call):
     """While the breaker is open every request is refused by design, and the breaker already
