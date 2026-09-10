@@ -195,6 +195,102 @@ func TestCreateKeySendsConfigSuppliedKey(t *testing.T) {
 	}
 }
 
+// The proxy validates each model_max_budget entry as a BudgetConfig object and
+// 500s on a bare number, so the JSON string must reach /key/generate as nested
+// objects and the proxy's response must map back to equivalent JSON in state.
+func TestCreateKeySendsModelMaxBudgetAsBudgetObjects(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/generate" {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &captured)
+			w.Write([]byte(`{"key": "sk-test", "token_id": "hash-1"}`))
+			return
+		}
+		w.Write([]byte(`{"key": "hash-1", "info": {"model_max_budget": {"gpt-4o-mini": {"budget_limit": 50, "time_period": "30d", "rpm_limit": 60}}}}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := newKeyResourceData(t, map[string]interface{}{
+		"model_max_budget": `{"gpt-4o-mini": {"budget_limit": 50, "time_period": "30d"}}`,
+	})
+
+	if diags := resourceKeyCreate(context.Background(), d, client); diags.HasError() {
+		t.Fatalf("create returned error: %v", diags)
+	}
+
+	budgets, ok := captured["model_max_budget"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("create payload model_max_budget = %v, want object", captured["model_max_budget"])
+	}
+	cfg, ok := budgets["gpt-4o-mini"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("model_max_budget[gpt-4o-mini] = %v, want BudgetConfig object", budgets["gpt-4o-mini"])
+	}
+	if cfg["budget_limit"] != float64(50) || cfg["time_period"] != "30d" {
+		t.Errorf("BudgetConfig = %v, want budget_limit 50 and time_period 30d", cfg)
+	}
+
+	var state map[string]interface{}
+	if err := json.Unmarshal([]byte(d.Get("model_max_budget").(string)), &state); err != nil {
+		t.Fatalf("state model_max_budget %q is not JSON: %v", d.Get("model_max_budget"), err)
+	}
+	if got, _ := state["gpt-4o-mini"].(map[string]interface{}); got["budget_limit"] != float64(50) || got["rpm_limit"] != float64(60) {
+		t.Errorf("state model_max_budget = %v, want the BudgetConfig read back from /key/info", state)
+	}
+}
+
+// Schema version 0 stored model_max_budget as map(number); that state cannot
+// decode into the version 1 string attribute, so the upgrader must drop it.
+func TestKeyStateUpgradeV0DropsMapModelMaxBudget(t *testing.T) {
+	upgraded, err := resourceKey().StateUpgraders[0].Upgrade(context.Background(), map[string]interface{}{
+		"id":               "hash-1",
+		"key_alias":        "legacy",
+		"model_max_budget": map[string]interface{}{"gpt-4o-mini": 50.0},
+	}, nil)
+	if err != nil {
+		t.Fatalf("upgrade returned error: %v", err)
+	}
+	if _, present := upgraded["model_max_budget"]; present {
+		t.Errorf("upgraded state still carries map model_max_budget: %v", upgraded["model_max_budget"])
+	}
+	if upgraded["key_alias"] != "legacy" {
+		t.Errorf("upgrade dropped unrelated attribute: %v", upgraded)
+	}
+}
+
+func TestKeyModelMaxBudgetValidationRequiresBudgetObjects(t *testing.T) {
+	validate := resourceKey().Schema["model_max_budget"].ValidateFunc
+	for _, valid := range []string{
+		`{}`,
+		`{"gpt-4o-mini": {"budget_limit": 50, "time_period": "30d"}}`,
+		`{"gpt-4o-mini": {"max_budget": 50, "rpm_limit": 60}, "gpt-4o": {"budget_duration": "1d", "tpm_limit": 1000}}`,
+	} {
+		if _, errs := validate(valid, "model_max_budget"); len(errs) != 0 {
+			t.Errorf("validate(%s) = %v, want accepted", valid, errs)
+		}
+	}
+	for _, invalid := range []string{
+		`null`,
+		`[]`,
+		`"gpt-4o-mini"`,
+		`50`,
+		`{"gpt-4o-mini": 50}`,
+		`{"gpt-4o-mini": null}`,
+		`{"gpt-4o-mini": [50]}`,
+		`{"gpt-4o-mini": {}}`,
+		`{"gpt-4o-mini": {"budget_limt": 50}}`,
+		`{"gpt-4o-mini": {"budget_limit": 50, "max_tokens": 100}}`,
+		`not json`,
+	} {
+		if _, errs := validate(invalid, "model_max_budget"); len(errs) == 0 {
+			t.Errorf("validate(%s) accepted a value that would send no per-model budget", invalid)
+		}
+	}
+}
+
 // The proxy 400s on budget_duration: "", so an unset duration must be
 // omitted from the update payload entirely.
 func TestUpdateKeyOmitsEmptyBudgetDuration(t *testing.T) {
