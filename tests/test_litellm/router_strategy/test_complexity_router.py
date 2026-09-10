@@ -5,6 +5,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 """
 
 import asyncio
+from copy import deepcopy
 import logging
 import sys
 import time
@@ -194,7 +195,14 @@ class TestComplexityRouterInit:
             complexity_router_config=basic_config,
         )
 
-        assert router._reminder_markers == (("<system-reminder>", "</system-reminder>"),)
+        from litellm.router_strategy.complexity_router.complexity_router import _extract_current_ask_and_system_prompt
+
+        assert (
+            _extract_current_ask_and_system_prompt(
+                [{"role": "user", "content": "<system-reminder>noise</system-reminder>hello"}], router._reminder_markers
+            )[0]
+            == "hello"
+        )
 
     def test_init_without_config(self, mock_router_instance):
         """Test initialization without configuration uses defaults."""
@@ -7601,10 +7609,274 @@ _ASKED = {"role": "user", "content": _ASK}
 _ANSWERED = {"role": "assistant", "content": "Working on it."}
 _TOOL_RESULT = {"type": "tool_result", "tool_use_id": "x", "content": "out"}
 _REMINDER = "<system-reminder>Budget: 42 tokens remaining. Do not mention this.</system-reminder>"
+_CODEX_NEW_TASK: Final = (
+    "Message Type: NEW_TASK\nTask name: /root/cache_worker\nSender: /root\nPayload:\n"
+    "Implement and test a thread-safe bounded LRU cache."
+)
+_CODEX_ENVELOPES: Final = (
+    "<environment_context>LITELLM ESCALATE cwd=/repo</environment_context>",
+    "<recommended_plugins>LITELLM ESCALATE plugin list</recommended_plugins>",
+    "<user_instructions>LITELLM ESCALATE preferences</user_instructions>",
+    "<environments_instructions>LITELLM ESCALATE environment</environments_instructions>",
+    "# AGENTS.md instructions for /repo with spaces/中文\n<INSTRUCTIONS>LITELLM ESCALATE instructions</INSTRUCTIONS>",
+)
 
 
 class TestContextAwareClassifier:
     """Test the new classifier context window and trajectory signals."""
+
+    @pytest.mark.parametrize(
+        "tail,expected",
+        (
+            ([{"role": "user", "content": [{"type": "text", "text": _CODEX_ENVELOPES[0]}]}], True),
+            ([{"role": "assistant", "content": _CODEX_ENVELOPES[0]}], False),
+            ([{"role": "tool", "content": _CODEX_ENVELOPES[0]}], False),
+            ([{"role": "user", "content": " "}], False),
+            (
+                [{"role": "user", "content": [_TOOL_RESULT, {"type": "text", "text": _CODEX_ENVELOPES[0]}]}],
+                False,
+            ),
+            (
+                [{"role": "user", "content": [{"type": "image_url"}, {"type": "text", "text": _CODEX_ENVELOPES[0]}]}],
+                False,
+            ),
+        ),
+    )
+    def test_only_text_reminder_tails_are_ignored_for_new_asks(self, tail: list[dict[str, object]], expected: bool) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _CODEX_REMINDER_MARKERS,
+            _newest_turn_is_human_ask,
+        )
+
+        assert _newest_turn_is_human_ask([_ASKED, *tail], _CODEX_REMINDER_MARKERS) is expected
+        assert _newest_turn_is_human_ask(tail, _CODEX_REMINDER_MARKERS) is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("new_ask", (_CODEX_NEW_TASK, "Now design cache invalidation"))
+    @pytest.mark.parametrize("responses_api", (False, True))
+    @pytest.mark.parametrize("session_affinity", (False, True))
+    async def test_codex_tail_preserves_new_ask_and_tool_continuation_boundaries(
+        self, new_ask: str, responses_api: bool, session_affinity: bool
+    ) -> None:
+        completion: Final = AsyncMock(
+            side_effect=[_llm_response('{"tier":"SIMPLE"}'), _llm_response('{"tier":"COMPLEX"}')]
+        )
+        router: Final = ComplexityRouter(
+            model_name="router",
+            litellm_router_instance=MagicMock(acompletion=completion, cache=DualCache()),
+            complexity_router_config={
+                "tiers": {"SIMPLE": "simple-model", "COMPLEX": "task-model"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "classification_mode": "user_turn",
+                "session_affinity": session_affinity,
+                "escalation_keywords": [],
+            },
+        )
+        metadata: Final = {"user_agent": "codex-tui", "session_id": "codex-tail-session"}
+        first_messages: Final = [{"role": "user", "content": "Hello"}]
+        tail: Final = [{"role": "user", "content": envelope} for envelope in _CODEX_ENVELOPES]
+        new_messages: Final = [
+            *first_messages,
+            {"role": "assistant", "content": "Hello"},
+            {"role": "user", "content": new_ask},
+            *tail,
+        ]
+        continuation: Final = [
+            *new_messages,
+            {"role": "assistant", "content": "Working on it"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "read-cache", "content": "cache source"},
+                    {"type": "text", "text": _CODEX_ENVELOPES[0]},
+                ],
+            },
+            *tail,
+        ]
+        results: Final = [
+            await router.async_pre_routing_hook(
+                model="router",
+                request_kwargs=(
+                    {"input": messages, "litellm_metadata": {**metadata, "user_api_key_request_route": "/v1/responses"}}
+                    if responses_api
+                    else {"metadata": metadata}
+                ),
+                messages=None if responses_api else messages,
+                input=messages if responses_api else None,
+            )
+            for messages in (first_messages, new_messages, continuation)
+        ]
+
+        assert [result.model for result in results] == (
+            ["simple-model", "simple-model", "simple-model"]
+            if session_affinity
+            else ["simple-model", "task-model", "task-model"]
+        )
+        assert completion.await_count == (1 if session_affinity else 2)
+        assert results[-1].routing_decision["cause"] == (
+            "session_affinity_pin" if session_affinity else "user_turn_continuation"
+        )
+        if not session_affinity:
+            assert completion.call_args.kwargs["messages"][1]["content"].endswith(f"Classify this message:\n{new_ask}")
+        assert results[1].messages == (None if responses_api else new_messages)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
+    @pytest.mark.parametrize("user_agent", (None, "curl/8.7.1", "codexify/1.0"))
+    async def test_non_codex_requests_preserve_tagged_asks(self, envelope: str, user_agent: str | None) -> None:
+        completion: Final = AsyncMock(return_value=_llm_response('{"tier":"COMPLEX"}'))
+        router: Final = ComplexityRouter(
+            model_name="router",
+            litellm_router_instance=MagicMock(acompletion=completion),
+            complexity_router_config={
+                "tiers": {"COMPLEX": "task-model"},
+                "default_model": "fallback-model",
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "escalation_keywords": [],
+            },
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="router",
+            request_kwargs={"metadata": {"user_agent": user_agent}} if user_agent is not None else {},
+            messages=[{"role": "user", "content": envelope}],
+        )
+
+        assert response is not None
+        assert response.model == "task-model"
+        completion.assert_awaited_once()
+        assert completion.call_args.kwargs["messages"][1]["content"].strip() == f"Classify this message:\n{envelope}"
+
+    @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
+    def test_codex_envelopes_preserve_delegated_task_and_prior_context(self, envelope: str) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _CODEX_REMINDER_MARKERS,
+            _extract_current_ask_and_system_prompt,
+            _extract_prior_turns,
+            _newest_turn_ask,
+            _newest_turn_is_human_ask,
+        )
+
+        messages: Final = [
+            {"role": "user", "content": f"{envelope}\nDesign cache invalidation"},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": envelope}, {"type": "text", "text": _CODEX_NEW_TASK}],
+            },
+            {"role": "developer", "content": "<permissions instructions>developer scope</permissions instructions>"},
+            {"role": "user", "content": envelope},
+        ]
+
+        assert _extract_current_ask_and_system_prompt(messages, _CODEX_REMINDER_MARKERS)[0] == _CODEX_NEW_TASK
+        assert _extract_prior_turns(messages, _CODEX_NEW_TASK, 1, 100, None, False, _CODEX_REMINDER_MARKERS) == (
+            ("user", "Design cache invalidation"),
+        )
+        assert _newest_turn_ask(messages, _CODEX_REMINDER_MARKERS) is None
+        assert _newest_turn_is_human_ask(messages, _CODEX_REMINDER_MARKERS) is False
+        assert _extract_current_ask_and_system_prompt([messages[-1]], _CODEX_REMINDER_MARKERS)[0] is None
+
+    @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
+    def test_codex_marker_override_and_incomplete_blocks_preserve_text(self, envelope: str) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _CODEX_REMINDER_MARKERS,
+            _strip_reminder_blocks,
+        )
+
+        incomplete: Final = envelope.rsplit("</", 1)[0]
+        assert _strip_reminder_blocks(f"before {envelope.upper()} after", _CODEX_REMINDER_MARKERS) == "before after"
+        assert _strip_reminder_blocks(incomplete, _CODEX_REMINDER_MARKERS) == incomplete
+        assert _strip_reminder_blocks(envelope) == envelope
+        assert _strip_reminder_blocks(f"<custom>noise</custom>{envelope}", (("<custom>", "</custom>"),)) == envelope
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("responses_api", (False, True))
+    async def test_codex_routing_preserves_original_request(self, responses_api: bool) -> None:
+        completion: Final = AsyncMock(return_value=_llm_response('{"tier":"COMPLEX"}'))
+        router: Final = ComplexityRouter(
+            model_name="codex-router",
+            litellm_router_instance=MagicMock(acompletion=completion),
+            complexity_router_config={
+                "tiers": {"COMPLEX": "task-model", "REASONING": "escalated-model"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "keyword_tier_rules": [{"keywords": ["LITELLM ESCALATE"], "tier": "REASONING"}],
+            },
+        )
+        messages: Final = [
+            {"role": "user", "content": _CODEX_NEW_TASK},
+            {"role": "user", "content": "\n".join(_CODEX_ENVELOPES)},
+        ]
+        original: Final = deepcopy(messages)
+        request_kwargs: Final = (
+            {
+                "input": messages,
+                "litellm_metadata": {"user_api_key_request_route": "/v1/responses", "user_agent": "codex-tui"},
+            }
+            if responses_api
+            else {"metadata": {"user_agent": "codex-tui"}}
+        )
+
+        response: Final = await router.async_pre_routing_hook(
+            model="codex-router",
+            request_kwargs=request_kwargs,
+            messages=None if responses_api else messages,
+            input=messages if responses_api else None,
+        )
+
+        assert response is not None
+        assert response.model == "task-model"
+        completion.assert_awaited_once()
+        assert completion.call_args.kwargs["messages"][1]["content"].strip() == (
+            f"Classify this message:\n{_CODEX_NEW_TASK}"
+        )
+        assert messages == original
+        if responses_api:
+            assert response.messages is None
+            assert request_kwargs["input"] == original
+        else:
+            assert response.messages == original
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("custom_markers", (False, True))
+    async def test_codex_markers_are_request_scoped_and_respect_overrides(self, custom_markers: bool) -> None:
+        completion: Final = AsyncMock(return_value=_llm_response('{"tier":"COMPLEX"}'))
+        router: Final = ComplexityRouter(
+            model_name="router",
+            litellm_router_instance=MagicMock(acompletion=completion),
+            complexity_router_config={
+                "tiers": {"COMPLEX": "task-model"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "classifier_context_window_size": 2,
+                "escalation_keywords": [],
+                **({"reminder_markers": [{"open": "<custom>", "close": "</custom>"}]} if custom_markers else {}),
+            },
+        )
+        envelope: Final = "\n".join(_CODEX_ENVELOPES)
+        prior: Final = f"{envelope}\nDesign cache invalidation"
+        messages: Final = [
+            {"role": "user", "content": prior},
+            {"role": "user", "content": _CODEX_NEW_TASK},
+            {"role": "user", "content": envelope},
+        ]
+        for user_agent in ("codex-tui", "curl/8.7.1", "codex_cli_rs/0.62.0"):
+            response: Final = await router.async_pre_routing_hook(
+                model="router", request_kwargs={"metadata": {"user_agent": user_agent}}, messages=messages
+            )
+            assert response is not None
+            assert response.model == "task-model"
+            payload: Final = completion.call_args.kwargs["messages"][1]["content"]
+            if user_agent.startswith("codex") and not custom_markers:
+                assert payload.endswith(f"Classify this message:\n{_CODEX_NEW_TASK}")
+                assert "Design cache invalidation" in payload
+                assert "LITELLM ESCALATE" not in payload
+            else:
+                assert payload.endswith(f"Classify this message:\n{envelope}")
+                assert prior in payload
+            assert response.messages == messages
+        assert completion.await_count == 3
 
     @pytest.mark.parametrize(
         "messages,expected_ask",
@@ -13661,6 +13933,7 @@ class _OutputCeilingRecorder(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         self.seen.append((model, kwargs.get("optional_params", {}).get("max_tokens")))
+
 
 NON_REASONING_TIERS: Final = {
     "NON_REASONING": "gpt-4o-mini",
