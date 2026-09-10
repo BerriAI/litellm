@@ -6,8 +6,8 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://jina.ai/reranker
 """
 
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 from httpx import URL, Response
 
@@ -39,7 +39,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: Sequence[str | Mapping[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

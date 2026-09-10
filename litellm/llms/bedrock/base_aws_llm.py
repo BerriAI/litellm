@@ -1,13 +1,17 @@
+import asyncio
 import base64
+import contextvars
 import hashlib
 import json
 import os
 import re
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import partial
 from threading import Lock
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -16,6 +20,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
+    AWS_SIGNING_MAX_THREADS,
     BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
     BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES,
     BEDROCK_IAM_CACHE_MAX_ENTRIES,
@@ -48,10 +53,22 @@ _STS_REGION_FROM_ENDPOINT_PATTERN: Final = re.compile(
 SIGV4_COMPUTED_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "date"})
 
 
-class Boto3CredentialsInfo(BaseModel):
-    credentials: Credentials
+class BedrockRequestTarget(BaseModel):
     aws_region_name: str
     aws_bedrock_runtime_endpoint: str | None
+
+
+class Boto3CredentialsInfo(BedrockRequestTarget):
+    credentials: Credentials
+
+
+class BearerRequestTarget(BedrockRequestTarget):
+    credentials: None = None
+
+
+def bedrock_bearer_token(api_key: str | None) -> str | None:
+    token: Final = api_key if api_key is not None else get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+    return token or None
 
 
 class _WebIdentityTokenClaims(BaseModel):
@@ -68,7 +85,11 @@ class AwsAuthError(Exception):
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
-class BaseAWSLLM:
+class SignsRequestsWithAWS:
+    pass
+
+
+class BaseAWSLLM(SignsRequestsWithAWS):
     # Process-wide IAM credential cache (shared across instances — Bedrock passthrough is per-request).
     # Storage is in-process memory only: no Redis backend unless attached elsewhere. Entry TTL: static
     # access-key + secret + region use ``_get_default_ttl_for_boto3_credentials`` (~59 minutes); ambient
@@ -125,7 +146,7 @@ class BaseAWSLLM:
 
         return get_ssl_verify(ssl_verify=ssl_verify)
 
-    def get_cache_key(self, credential_args: dict[str, str | None]) -> str:
+    def get_cache_key(self, credential_args: Mapping[str, str | bool | None]) -> str:
         """
         Generate a unique cache key based on the credential arguments.
         """
@@ -135,8 +156,8 @@ class BaseAWSLLM:
 
     def _get_or_set_cached_credentials(
         self,
-        credential_args: dict[str, str | None],
-        credential_fetcher: Callable[[], tuple[Any, int | None]],
+        credential_args: Mapping[str, str | bool | None],
+        credential_fetcher: Callable[[], tuple[Credentials, int | None]],
     ) -> Any:
         """
         Read-through IAM cache on the process-wide ``DualCache``.
@@ -271,7 +292,19 @@ class BaseAWSLLM:
             aws_external_id,
         )
 
-        args: Final = {k: v for k, v in locals().items() if k.startswith("aws_") or k == "ssl_verify"}
+        args: Final = {
+            "aws_access_key_id": aws_access_key_id,
+            "aws_secret_access_key": aws_secret_access_key,
+            "aws_session_token": aws_session_token,
+            "aws_region_name": aws_region_name,
+            "aws_session_name": aws_session_name,
+            "aws_profile_name": aws_profile_name,
+            "aws_role_name": aws_role_name,
+            "aws_web_identity_token": aws_web_identity_token,
+            "aws_sts_endpoint": aws_sts_endpoint,
+            "aws_external_id": aws_external_id,
+            "ssl_verify": ssl_verify,
+        }
 
         #########################################################
         # Handle diff boto3 auth flows
@@ -1387,9 +1420,26 @@ class BaseAWSLLM:
         else:
             return f"https://bedrock-runtime.{aws_region_name}.{dns_suffix}"
 
+    @overload
     def _get_boto_credentials_from_optional_params(
-        self, optional_params: dict, model: str | None = None
-    ) -> Boto3CredentialsInfo:
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        model: str | None = None,
+        bearer_token: None = None,
+    ) -> Boto3CredentialsInfo: ...
+
+    @overload
+    def _get_boto_credentials_from_optional_params(
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        model: str | None = None,
+        *,
+        bearer_token: str,
+    ) -> BearerRequestTarget: ...
+
+    def _get_boto_credentials_from_optional_params(
+        self, optional_params: dict, model: str | None = None, bearer_token: str | None = None
+    ) -> Boto3CredentialsInfo | BearerRequestTarget:
         """
         Get boto3 credentials from optional params
 
@@ -1420,6 +1470,12 @@ class BaseAWSLLM:
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_external_id: Final = optional_params.pop("aws_external_id", None)
 
+        if bearer_token is not None:
+            return BearerRequestTarget(
+                aws_region_name=aws_region_name,
+                aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            )
+
         credentials: Final[Credentials] = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
@@ -1432,7 +1488,6 @@ class BaseAWSLLM:
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
         )
-
         return Boto3CredentialsInfo(
             credentials=credentials,
             aws_region_name=aws_region_name,
@@ -1451,14 +1506,9 @@ class BaseAWSLLM:
         api_key: str | None = None,
         supports_bearer_token: bool = True,
     ) -> AWSPreparedRequest:
-        if not supports_bearer_token:
-            aws_bearer_token: str | None = None
-        elif api_key is not None:
-            aws_bearer_token = api_key
-        else:
-            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+        aws_bearer_token: Final = bedrock_bearer_token(api_key) if supports_bearer_token else None
 
-        if aws_bearer_token:
+        if aws_bearer_token is not None:
             try:
                 from botocore.awsrequest import AWSRequest
             except ImportError:
@@ -1555,13 +1605,9 @@ class BaseAWSLLM:
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
-        if api_key is not None:
-            aws_bearer_token: str | None = api_key
-        else:
-            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+        aws_bearer_token: Final = bedrock_bearer_token(api_key)
 
-        # If aws bearer token is set, use it directly in the header
-        if aws_bearer_token:
+        if aws_bearer_token is not None:
             headers = headers or {}
             headers["Content-Type"] = "application/json"
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
@@ -1631,3 +1677,52 @@ class BaseAWSLLM:
             request_headers_dict["Authorization"] = incoming_authorization
 
         return request_headers_dict, request.body
+
+
+def sign_aws_json_post(
+    get_credentials: Callable[[], Credentials],
+    service_name: str,
+    aws_region_name: str | None,
+    url: str,
+    body: str,
+    headers: Mapping[str, str],
+) -> AWSPreparedRequest:
+    try:
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+    except ImportError:
+        raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.")
+
+    aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
+    SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
+    return aws_request.prepare()
+
+
+_SignParams = ParamSpec("_SignParams")
+_SignedRequest = TypeVar("_SignedRequest")
+
+AWS_SIGNING_EXECUTOR: Final = ThreadPoolExecutor(max_workers=AWS_SIGNING_MAX_THREADS, thread_name_prefix="aws-signing")
+
+
+async def run_aws_signing(
+    sign: Callable[_SignParams, _SignedRequest],
+    /,
+    *args: _SignParams.args,
+    **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped signing signature
+) -> _SignedRequest:
+    context: Final = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(
+        AWS_SIGNING_EXECUTOR, partial(context.run, sign, *args, **kwargs)
+    )
+
+
+async def sign_request_off_loop_if_aws(
+    provider_config: object,
+    sign_request: Callable[_SignParams, _SignedRequest],
+    /,
+    *args: _SignParams.args,
+    **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped sign_request signature
+) -> _SignedRequest:
+    if isinstance(provider_config, SignsRequestsWithAWS):
+        return await run_aws_signing(sign_request, *args, **kwargs)
+    return sign_request(*args, **kwargs)

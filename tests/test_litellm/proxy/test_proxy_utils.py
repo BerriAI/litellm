@@ -6,7 +6,8 @@ from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import ProxyErrorTypes
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -945,6 +946,47 @@ def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map(
     assert response["max_output_tokens"] == 8000
 
 
+def test_create_model_info_response_uses_deployment_mode_for_auto_router():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+            },
+            {
+                "model_name": "claude-auto",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": "claude-sonnet",
+                            "MEDIUM": "claude-sonnet",
+                            "COMPLEX": "claude-sonnet",
+                        }
+                    },
+                    "complexity_router_default_model": "claude-sonnet",
+                },
+                "model_info": {
+                    "mode": "chat",
+                    "max_input_tokens": 1_000_000,
+                    "max_output_tokens": 128_000,
+                },
+            },
+        ]
+    )
+
+    response = create_model_info_response(
+        model_id="claude-auto",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["mode"] == "chat"
+    assert response["max_input_tokens"] == 1_000_000
+    assert response["max_output_tokens"] == 128_000
+
+
 def test_create_model_info_response_deployment_limits_override_cost_map():
     router = MagicMock()
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
@@ -1835,6 +1877,44 @@ def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
 
 
 @pytest.mark.asyncio
+async def test_a_dispatched_failure_is_counted_off_the_event_loop():
+    from unittest.mock import AsyncMock, patch
+
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("claude-fable-5")
+    request_data = {
+        "litellm_logging_obj": _LoggingObj(
+            {
+                "first_api_call_start_time": 1700000000.0,
+                "call_type": "acompletion",
+                "model": "claude-fable-5",
+                "messages": [{"role": "user", "content": text * 100}],
+            }
+        ),
+        "metadata": {},
+    }
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alert_types = []
+    with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+        _, took, lags = await timed_with_loop_lags(
+            lambda: proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        )
+
+    assert request_data["combined_usage_object"].prompt_tokens > 0
+    assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.asyncio
 async def test_proxy_only_error_expected_4xx_skips_traceback_for_both_handlers(monkeypatch):
     """Regression for LIT-6043: an expected 4xx must not format a traceback for
     either the async or the threaded sync failure handler."""
@@ -2047,3 +2127,83 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
         litellm.model_cost.update(saved_model_cost)
 
     assert response["mode"] == "embedding"
+
+
+@pytest.mark.parametrize(
+    "key_metadata, team_metadata, expected_to_run",
+    [
+        ({"guardrails": ["key-scoped-guardrail"]}, None, True),
+        ({}, {"guardrails": ["key-scoped-guardrail"]}, True),
+        ({"guardrails": ["some-other-guardrail"]}, None, False),
+        ({}, None, False),
+    ],
+)
+def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata, team_metadata, expected_to_run):
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    guardrail = CustomGuardrail(guardrail_name="key-scoped-guardrail", event_hook="pre_mcp_call", default_on=False)
+    kwargs = {
+        "name": "ask_question",
+        "arguments": {"question": "hello"},
+        "server_name": "deepwiki",
+        "user_api_key_auth": UserAPIKeyAuth(metadata=key_metadata, team_metadata=team_metadata),
+    }
+    request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
+
+    with patch(  # test-quality-ok: the key-guardrail premium gate reads this proxy_server module global and has no injection seam
+        "litellm.proxy.proxy_server.premium_user", True
+    ):
+        synthetic = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+
+    assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is expected_to_run
+
+
+class _TracebackRecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.received_traceback: str | None = None
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        self.received_traceback = traceback_str
+        return None
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeypatch):
+    """A pass-through upstream failure hands the hook the httpx traceback, whose
+    message quotes the upstream URL with the provider key in its query string.
+    Every callback, custom loggers included, must receive it redacted."""
+    import traceback
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    provider_key = "AIza" + "S" * 35
+    upstream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key={provider_key}"
+    response = httpx.Response(400, request=httpx.Request("POST", upstream_url))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        upstream_traceback = traceback.format_exc()
+    assert provider_key in upstream_traceback
+
+    recorder = _TracebackRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alert_types = []
+    with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+        await proxy_logging_obj.post_call_failure_hook(
+            request_data={"metadata": {}},
+            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=upstream_traceback,
+        )
+
+    assert recorder.received_traceback is not None
+    assert provider_key not in recorder.received_traceback
+    assert "REDACTED" in recorder.received_traceback

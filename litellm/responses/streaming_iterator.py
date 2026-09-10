@@ -13,10 +13,12 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runti
 
 import httpx
 from openai._streaming import SSEDecoder
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeIs
 
 import litellm
 from litellm.constants import (
+    EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
@@ -273,6 +275,9 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
+        self._raw_response_headers: Mapping[str, str] = MappingProxyType(
+            dict(self.response.headers or {})  # mutable-ok: immediately frozen by MappingProxyType
+        )
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -407,23 +412,7 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
-                    # Add cost to usage object if include_cost_in_streaming_usage is True
-                    if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
-                        response_obj: Final[ResponsesAPIResponse | None] = getattr(
-                            openai_responses_api_chunk, "response", None
-                        )
-                        if response_obj:
-                            usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
-                            if usage_obj is not None:
-                                try:
-                                    cost: Final[float | None] = self.logging_obj._response_cost_calculator(
-                                        result=response_obj
-                                    )
-                                    if cost is not None:
-                                        setattr(usage_obj, "cost", cost)
-                                except Exception:
-                                    # Best-effort usage cost annotation should not break stream replay.
-                                    pass
+                    _stamp_responses_usage_cost(getattr(openai_responses_api_chunk, "response", None), self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -450,18 +439,8 @@ class BaseResponsesAPIStreamingIterator:
         if self._persist_completed_response_before_logging:
             self._persist_completed_response_to_cache(is_async=is_async)
 
-        # Create a copy for logging to avoid modifying the response object that will be returned to the user
-        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
-        # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
-        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
-        logging_response = self.completed_response
-        if self.completed_response is not None and hasattr(self.completed_response, "model_dump"):
-            try:
-                logging_response = type(self.completed_response).model_validate(self.completed_response.model_dump())
-            except Exception:
-                # Fallback to original if serialization fails
-                pass
+        logging_response: Final[object] = _logging_copy(self.completed_response)
+        self._restore_provider_response_headers(logging_response)
 
         end_time: Final = datetime.now()
         if is_async:
@@ -496,6 +475,36 @@ class BaseResponsesAPIStreamingIterator:
             )
         self._run_post_success_hooks(end_time=end_time)
 
+    def _restore_provider_response_headers(self, logging_response: object) -> None:
+        """Re-apply the provider's response headers to the copy handed to logging callbacks.
+
+        ``model_validate(model_dump())`` in ``_logging_copy`` drops pydantic private attributes, so the
+        ``_hidden_params`` the provider transform set on the nested response are lost. Returns early
+        when the event was not a pydantic model and logging got the original, so logging-only state
+        never lands on the object the caller is iterating.
+        """
+        if logging_response is self.completed_response:
+            return
+        target: Final[object] = getattr(logging_response, "response", None)
+        if not isinstance(target, ResponsesAPIResponse):
+            return
+        existing: Final[Mapping[str, object]] = target._hidden_params
+        source_hidden: Final[object] = getattr(
+            getattr(self.completed_response, "response", None), "_hidden_params", None
+        )
+        source: Final[Mapping[str, object]] = source_hidden if isinstance(source_hidden, Mapping) else EMPTY_MAPPING
+        processed: Final[object] = source.get("additional_headers") or self._hidden_params.get("additional_headers")
+        raw: Final[object] = source.get("headers") or self._raw_response_headers
+        headers: Final[Mapping[str, object]] = processed if isinstance(processed, Mapping) else EMPTY_MAPPING
+        raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
+        # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
+        # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
+        target._hidden_params = {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
+            "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+            "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+            **existing,
+        }
+
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
 
@@ -525,7 +534,7 @@ class BaseResponsesAPIStreamingIterator:
     def _record_failed_response_usage(self, response_obj: ResponsesAPIResponse | None) -> None:
         if response_obj is None or self.logging_obj is None:
             return
-        usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+        usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
         if usage_obj is None:
             return
         try:
@@ -1274,6 +1283,56 @@ def _add_text_like_part_events(
         )
 
 
+def _logging_copy(event: object) -> object:
+    """Hand logging callbacks a copy, so their usage rewrite (Responses shape to chat shape) never
+    reaches the event the caller is iterating. The round trip through ``model_dump`` sidesteps the
+    deepcopy pickle errors of #17192; when a provider payload fails validation (LIT-7391), shallow
+    copies of the event and its nested response still keep the caller's ``usage`` attribute separate."""
+    if not isinstance(event, BaseModel):
+        return event
+    try:
+        return type(event).model_validate(event.model_dump())
+    except Exception:
+        return _detached_shallow_copy(event)
+
+
+def _detached_shallow_copy(event: BaseModel) -> BaseModel:
+    nested: Final[object] = getattr(event, "response", None)
+    if isinstance(nested, BaseModel):
+        return event.model_copy(update={"response": nested.model_copy()})
+    return event.model_copy()
+
+
+def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
+    if isinstance(usage, ResponseAPIUsage):
+        return usage
+    if not isinstance(usage, dict):
+        return None
+    try:
+        return ResponseAPIUsage.model_validate(usage)
+    except ValidationError:
+        return None
+
+
+def _stamp_responses_usage_cost(
+    response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
+) -> None:
+    if response_obj is None or logging_obj is None:
+        return
+    usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
+    if usage_obj is None:
+        return
+    response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
+    if isinstance(getattr(usage_obj, "cost", None), (int, float)):
+        return
+    try:
+        cost: Final[float | None] = logging_obj._response_cost_calculator(result=response_obj)
+    except Exception:
+        return
+    if isinstance(cost, (int, float)) and cost > 0:
+        setattr(usage_obj, "cost", cost)
+
+
 def build_synthetic_response_events(
     *,
     transformed: ResponsesAPIResponse,
@@ -1281,15 +1340,7 @@ def build_synthetic_response_events(
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = _get_openai_response_types()
-    if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-        usage_obj: Final = transformed.usage if hasattr(transformed, "usage") else None
-        if usage_obj is not None:
-            try:
-                cost: Final[float | None] = logging_obj._response_cost_calculator(result=transformed)
-                if cost is not None:
-                    setattr(usage_obj, "cost", cost)
-            except Exception:
-                pass
+    _stamp_responses_usage_cost(transformed, logging_obj)
 
     events: Final[list[ResponsesAPIStreamingResponse]] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
