@@ -152,6 +152,13 @@ spec:
             {{- if .Values.billingMetrics.enabled }}
             {{- include "litellm.billingMetricsEnv" . | nindent 12 }}
             {{- end }}
+            {{- if .Values.metricsServer.enabled }}
+            {{- if eq (int .Values.metricsServer.port) (int .Values.service.port) }}
+            {{- fail "metricsServer.port must differ from service.port" }}
+            {{- end }}
+            - name: PROMETHEUS_METRICS_PORT
+              value: {{ .Values.metricsServer.port | quote }}
+            {{- end }}
             {{- if .Values.migrationJob.enabled }}
             # Schema updates are owned by the dedicated migrations Job; skip
             # the proxy's startup `prisma db push` so N replicas don't race
@@ -189,6 +196,11 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            {{- if .Values.metricsServer.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metricsServer.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.livenessProbe.path | quote }}

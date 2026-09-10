@@ -25,6 +25,7 @@ from ...common_utils import (
     AnthropicModelInfo,
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
+    strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
@@ -82,7 +83,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         Processes both `system` and `messages` content blocks.
         """
 
-        def _sanitize(cache_control: Any) -> None:
+        def _sanitize(cache_control: object) -> None:
             if isinstance(cache_control, dict):
                 cache_control.pop("scope", None)
 
@@ -147,7 +148,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return system_param
 
     @staticmethod
-    def _as_system_content_blocks(value: Any) -> list:
+    def _as_system_content_blocks(value: object) -> list:
         if value is None:
             return []
         if isinstance(value, list):
@@ -157,7 +158,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return [value]
 
     @staticmethod
-    def _is_system_role_message(message: Any) -> bool:
+    def _is_system_role_message(message: object) -> bool:
         return isinstance(message, dict) and message.get("role") == "system"
 
     _CONVERTED_SYSTEM_NOTE: Final = (
@@ -613,7 +614,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=messages,
+            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
             max_tokens=max_tokens,
             model=model,
             **anthropic_messages_optional_request_params,

@@ -592,6 +592,12 @@ describe("classifier prompt and fallback", () => {
       timeout_ms: 1,
     });
   });
+
+  it.each([{}, { system_prompt: "x" }])("normalizeClassifierLlmConfig carries vision through %o", (extra) => {
+    const base = { model: "m", timeout_ms: 1, ...extra };
+    const vision = { enabled: true, max_images: 2 };
+    expect(normalizeClassifierLlmConfig({ ...base, vision })).toEqual({ ...base, vision });
+  });
 });
 
 describe("tier labels", () => {
@@ -697,6 +703,49 @@ describe("buildComplexityRouterConfig scorer knobs", () => {
   it("emits what was set", () => {
     expect(buildComplexityRouterConfig(tuned).tier_boundaries).toEqual(BOUNDARIES);
   });
+
+  it("serializes custom rows without changing weights, matcher order, or optional-field absence", () => {
+    const weights = { codePresence: 0.12345678901234568, unknownStoredWeight: 9 };
+    const dimension = { name: "internalFrameworks", weight: 0.3765432109876543, keywords: ["ORBITMESH", "fluxgate"] };
+    const graded = { name: "sqlDdl", weight: 0.5, patterns: ["create table"], scoring_mode: "match_count" as const };
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      dimensionWeights: weights,
+      customDimensions: [
+        { id: "row-1", ...dimension },
+        { id: "row-2", ...graded },
+      ],
+    });
+    expect(payload.dimension_weights).toEqual(weights);
+    expect(payload.custom_dimensions).toEqual([dimension, graded]);
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("custom_dimensions");
+    expect(buildComplexityRouterConfig({ ...baseParams, customDimensions: [] }).custom_dimensions).toEqual([]);
+  });
+
+  it.each([
+    ["heuristic", undefined, true],
+    ["heuristic_first", "heuristic", true],
+    ["hybrid", "heuristic", true],
+    ["llm", "heuristic", false],
+    ["custom", "heuristic", false],
+    ["llm", "default_model", false],
+    ["custom", "default_model", false],
+    ["heuristic_v2", undefined, false],
+  ] as const)(
+    "%s with fallback %s only emits custom dimensions when its scorer decides",
+    (classifierType, classifierFallback, emits) => {
+      const dimension = { name: "d", weight: 0.4, keywords: ["orbitmesh"] };
+      const params = {
+        ...baseParams,
+        classifierType,
+        classifierFallback,
+        customDimensions: [{ id: "row", ...dimension }],
+      };
+      const payload = buildComplexityRouterConfig(params);
+      if (emits) expect(payload.custom_dimensions).toEqual([dimension]);
+      else expect(payload).not.toHaveProperty("custom_dimensions");
+    },
+  );
 
   it("drops them when the classifier falls back to the default model and nothing is scored", () => {
     expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
@@ -1054,12 +1103,17 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       tierBoundaries: { simple_medium: 0.1, medium_complex: 0.25, complex_reasoning: 0.5 },
       tokenThresholds: { short: 1, long: 2 },
       dimensionWeights: { length: 1 },
+      customDimensions: [{ id: "row-1", name: "sqlDdl", weight: 0.4, keywords: ["orbitmesh"] }],
       reasoningOverrideMinScore: 0.5,
       heuristicFirstMaxTier: "SIMPLE",
       hybridBoundaryMargin: 0.03,
       customTechnicalKeywords: ["kubernetes"],
+      stallEscalationEnabled: true,
+      stallEscalationWindow: 6,
+      stallEscalationRepeatThreshold: 3,
     };
-    const emittingType = key === "heuristic_first_max_tier" ? "heuristic_first" : "llm";
+    // custom_dimensions only ever ship when the scorer decides, so "llm" cannot prove it emits.
+    const emittingType = key === "heuristic_first_max_tier" || key === "custom_dimensions" ? "heuristic_first" : "llm";
     const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;
     expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: typeForKey })).toHaveProperty(key);
     expect(build(loaded)).not.toHaveProperty(key);
@@ -1152,6 +1206,35 @@ describe("hydrateCustomTierSet", () => {
   });
 });
 
+describe("buildComplexityRouterConfig stall escalation", () => {
+  it("omits all three keys when the toggle is off, since the backend rejects them next to session pinning", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, stallEscalationEnabled: false });
+    expect(config).not.toHaveProperty("stall_escalation_enabled");
+    expect(config).not.toHaveProperty("stall_escalation_window");
+    expect(config).not.toHaveProperty("stall_escalation_repeat_threshold");
+  });
+
+  it("emits the toggle and both knobs when it is on", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      stallEscalationEnabled: true,
+      stallEscalationWindow: 8,
+      stallEscalationRepeatThreshold: 4,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.stall_escalation_enabled).toBe(true);
+    expect(config.stall_escalation_window).toBe(8);
+    expect(config.stall_escalation_repeat_threshold).toBe(4);
+  });
+
+  it("emits the toggle alone when neither knob was touched, so both track the backend defaults", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, stallEscalationEnabled: true });
+    expect(config.stall_escalation_enabled).toBe(true);
+    expect(config).not.toHaveProperty("stall_escalation_window");
+    expect(config).not.toHaveProperty("stall_escalation_repeat_threshold");
+  });
+});
+
 describe("dryRunRejection", () => {
   it("blocks the save on a rejection whose message is missing, which the write would return as a raw 400", () => {
     expect(dryRunRejection({ valid: false })).toBe("The proxy rejected this auto-router configuration");
@@ -1168,5 +1251,40 @@ describe("dryRunRejection", () => {
   it("lets a valid verdict through, including the fail-open one a transport failure returns", () => {
     expect(dryRunRejection({ valid: true })).toBeNull();
     expect(dryRunRejection({ valid: true, error: null })).toBeNull();
+  });
+});
+
+describe("classifier vision wire payload", () => {
+  const vision = { enabled: true, max_images: 3 };
+  const classifierLlmConfig = { model: "classifier", timeout_ms: 3000, vision };
+
+  it("keeps vision through the standard-tier payload", () => {
+    const params = { ...baseParams, classifierType: "llm" as const, classifierLlmConfig };
+    const payload = buildComplexityRouterConfig(params);
+
+    expect(payload.classifier_llm_config).toMatchObject({ vision });
+  });
+
+  it("keeps vision through the custom-tier payload", () => {
+    const customTierSet = {
+      tiers: [
+        { id: "simple", name: "simple", definition: "small talk", models: ["gpt-4o-mini"] },
+        { id: "complex", name: "complex", definition: "hard work", models: ["gpt-4o"] },
+      ],
+      fallback_tier_id: "simple",
+    };
+    const payload = buildComplexityRouterConfig({ ...baseParams, customTierSet, classifierLlmConfig });
+
+    expect(payload.classifier_llm_config).toMatchObject({ vision });
+  });
+
+  it("keeps an untouched classifier config free of vision", () => {
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "classifier", timeout_ms: 3000 },
+    });
+
+    expect(payload.classifier_llm_config).not.toHaveProperty("vision");
   });
 });

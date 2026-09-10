@@ -441,3 +441,5 @@ ImplementationSpecific
 {{- .pathType -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}

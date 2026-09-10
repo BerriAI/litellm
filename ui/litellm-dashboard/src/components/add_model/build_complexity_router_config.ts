@@ -1,5 +1,5 @@
-import { KeywordTierRule } from "./KeywordTierRules";
 import type { ModelGroup } from "../llm_calls/fetch_models";
+import { KeywordTierRule } from "./KeywordTierRules";
 import {
   type CustomTierSet,
   type TierRow,
@@ -11,6 +11,7 @@ import {
   tierRowByName,
 } from "./tier_rows";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { type CustomDimension, type CustomDimensionRow, serializeCustomDimensions } from "./custom_dimensions";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -39,6 +40,9 @@ import {
   usesLlmClassifier,
 } from "./ComplexityRouterConfig";
 
+export type ClassifierVisionConfig = { enabled?: boolean; max_images?: number };
+export type ClassifierLLMConfigWire = ClassifierLLMConfig & { vision?: ClassifierVisionConfig };
+
 /**
  * Drop an empty system_prompt so the payload carries an override only when there is one. The
  * backend rejects a blank string rather than reading it as "use the default", and sending `""`
@@ -61,7 +65,8 @@ export const normalizeClassifierLlmConfig = ({
   reasoning_effort,
   classification_rubric,
   system_prompt,
-}: ClassifierLLMConfig): ClassifierLLMConfig =>
+  vision,
+}: ClassifierLLMConfigWire): ClassifierLLMConfigWire =>
   system_prompt?.trim()
     ? {
         model,
@@ -69,6 +74,7 @@ export const normalizeClassifierLlmConfig = ({
         ...(circuit_breaker_enabled !== undefined && { circuit_breaker_enabled }),
         ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
         ...(reasoning_effort && { reasoning_effort }),
+        ...(vision && { vision }),
         system_prompt,
       }
     : {
@@ -78,6 +84,7 @@ export const normalizeClassifierLlmConfig = ({
         ...(circuit_breaker_cooldown_seconds !== undefined && { circuit_breaker_cooldown_seconds }),
         ...(reasoning_effort && { reasoning_effort }),
         ...(classification_rubric && { classification_rubric }),
+        ...(vision && { vision }),
       };
 
 interface ScorerKnobInputs {
@@ -86,6 +93,7 @@ interface ScorerKnobInputs {
   tierBoundaries: TierBoundaries | undefined;
   tokenThresholds: TokenThresholds | undefined;
   dimensionWeights: DimensionWeights | undefined;
+  customDimensions: CustomDimensionRow[] | undefined;
   reasoningOverrideMinScore: number | undefined;
 }
 
@@ -100,25 +108,33 @@ const scorerKnobPayload = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
-}: ScorerKnobInputs) =>
-  heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
+}: ScorerKnobInputs) => {
+  const role = heuristicScoringRoleFor(classifierType, classifierFallback);
+  return role === "never"
     ? {}
     : {
         ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
         ...(tokenThresholds && { token_thresholds: tokenThresholds }),
         ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        // Only a scorer that decides accepts these; the backend rejects them on every other
+        // classifier, so a fallback-only router must not carry rows a switch left behind.
+        ...(role === "decides" &&
+          customDimensions !== undefined && { custom_dimensions: serializeCustomDimensions(customDimensions) }),
         ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
       };
+};
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
+  enableNonReasoningTier?: boolean;
   customTierSet?: CustomTierSet;
   defaultModel: string | undefined;
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
-  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierLlmConfig: ClassifierLLMConfigWire | undefined;
   classifierContextWindowSize: number | undefined;
   classifierContextBudgetChars: number | undefined;
   classifierContextIncludeAssistantTurns: boolean | undefined;
@@ -138,6 +154,9 @@ export interface BuildComplexityRouterConfigParams {
   embeddingModel: string | undefined;
   matchThreshold: number;
   escalationKeywords: string[];
+  stallEscalationEnabled?: boolean;
+  stallEscalationWindow?: number;
+  stallEscalationRepeatThreshold?: number;
   adaptive: boolean;
   adaptiveWeights: AdaptiveRouterWeights;
   tierDistancePenalty: number;
@@ -146,6 +165,7 @@ export interface BuildComplexityRouterConfigParams {
   tierBoundaries?: TierBoundaries;
   tokenThresholds?: TokenThresholds;
   dimensionWeights?: DimensionWeights;
+  customDimensions?: CustomDimensionRow[];
   reasoningOverrideMinScore?: number;
   tierModelParams?: TierModelParamsByTier;
   enableContextWindowEscalation?: boolean;
@@ -171,6 +191,7 @@ export interface TierDefinitionPayload {
 
 export interface ComplexityRouterConfigPayload {
   tiers: ComplexityTiers | Record<string, string[]>;
+  enable_non_reasoning_tier?: boolean;
   tier_definitions?: TierDefinitionPayload[];
   fallback_tier?: string;
   default_model?: string;
@@ -199,6 +220,9 @@ export interface ComplexityRouterConfigPayload {
   embedding_model?: string;
   match_threshold?: number;
   escalation_keywords?: string[];
+  stall_escalation_enabled?: boolean;
+  stall_escalation_window?: number;
+  stall_escalation_repeat_threshold?: number;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
@@ -207,6 +231,7 @@ export interface ComplexityRouterConfigPayload {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  custom_dimensions?: CustomDimension[];
   reasoning_override_min_score?: number;
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
@@ -318,7 +343,7 @@ export const getSemanticConfigError = ({
 };
 
 interface CustomTierWireFieldInputs {
-  classifierLlmConfig: ClassifierLLMConfig | undefined;
+  classifierLlmConfig: ClassifierLLMConfigWire | undefined;
   planModeMinTierId: string | undefined;
   classificationPrompt: string | undefined;
   classificationExamples: string | undefined;
@@ -350,12 +375,33 @@ export const customTierWireFields = (
           circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
         }),
         ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
+        ...(classifierLlmConfig.vision && { vision: classifierLlmConfig.vision }),
       },
     }),
     session_affinity: false,
     ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
     ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
     ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
+  };
+};
+
+/** The built-in tier pools and the opt-in flag, read back from a stored config. `tiers` is
+ * rewritten wholesale on save, so a stored tier this misses is deleted by any unrelated edit. */
+export const hydrateBuiltInTiers = (
+  storedTiers: Partial<Record<keyof ComplexityTiers, unknown>> | undefined,
+  storedFlag: boolean | undefined,
+): { tiers: ComplexityTiers; enable_non_reasoning_tier: boolean } => {
+  const nonReasoning: string[] = normalizeTierModels(storedTiers?.NON_REASONING);
+  const enable_non_reasoning_tier: boolean = storedFlag === true || nonReasoning.length > 0;
+  return {
+    enable_non_reasoning_tier,
+    tiers: {
+      SIMPLE: normalizeTierModels(storedTiers?.SIMPLE),
+      MEDIUM: normalizeTierModels(storedTiers?.MEDIUM),
+      COMPLEX: normalizeTierModels(storedTiers?.COMPLEX),
+      REASONING: normalizeTierModels(storedTiers?.REASONING),
+      ...(enable_non_reasoning_tier && { NON_REASONING: nonReasoning }),
+    },
   };
 };
 
@@ -447,6 +493,7 @@ const classifierWireFields = (
 
 export const buildComplexityRouterConfig = ({
   tiers,
+  enableNonReasoningTier,
   customTierSet,
   defaultModel,
   planModeMinTier,
@@ -472,6 +519,9 @@ export const buildComplexityRouterConfig = ({
   embeddingModel,
   matchThreshold,
   escalationKeywords,
+  stallEscalationEnabled,
+  stallEscalationWindow,
+  stallEscalationRepeatThreshold,
   adaptive,
   adaptiveWeights,
   tierDistancePenalty,
@@ -480,6 +530,7 @@ export const buildComplexityRouterConfig = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
   tierModelParams,
   enableContextWindowEscalation,
@@ -501,6 +552,7 @@ export const buildComplexityRouterConfig = ({
     tierBoundaries,
     tokenThresholds,
     dimensionWeights,
+    customDimensions,
     reasoningOverrideMinScore,
   };
   const scorerKnobs = scorerKnobPayload(scorerInputs);
@@ -519,6 +571,8 @@ export const buildComplexityRouterConfig = ({
 
   const payload: ComplexityRouterConfigPayload = {
     tiers,
+    // The backend rejects the flag beside a custom tier set.
+    ...(!customTierSet && enableNonReasoningTier && { enable_non_reasoning_tier: true }),
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
@@ -541,6 +595,15 @@ export const buildComplexityRouterConfig = ({
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,
+    // Only written when on: the backend rejects it alongside session_affinity, user_turn mode and
+    // a custom tier set, so an off router must not carry the key into any of those saves.
+    ...(stallEscalationEnabled && {
+      stall_escalation_enabled: true,
+      ...(stallEscalationWindow !== undefined && { stall_escalation_window: stallEscalationWindow }),
+      ...(stallEscalationRepeatThreshold !== undefined && {
+        stall_escalation_repeat_threshold: stallEscalationRepeatThreshold,
+      }),
+    }),
     ...(semanticMatchingEnabled && {
       semantic_keyword_matching: true,
       embedding_model: embeddingModel,

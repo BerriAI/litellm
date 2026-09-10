@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from typing import Final
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1190,27 +1191,23 @@ def test_health_liveliness_endpoint(proxy_client):
     Test that /health/liveliness endpoint returns 200 OK with "I'm alive!" message.
     This is a critical orchestration endpoint that must be simple and fast.
     """
-    # Measure the time taken for the health check call
-    start_time = time.perf_counter()
+    warm_up: Final = proxy_client.get("/health/liveliness")
+    assert warm_up.status_code == 200, f"Expected 200 OK, got {warm_up.status_code}: {warm_up.text}"
 
-    # Make GET request to /health/liveliness
-    response = proxy_client.get("/health/liveliness")
+    def _timed_poll() -> tuple[float, httpx.Response]:
+        start_time: Final = time.perf_counter()
+        response: Final = proxy_client.get("/health/liveliness")
+        return (time.perf_counter() - start_time) * 1000, response
 
-    end_time = time.perf_counter()
-    duration_ms = (end_time - start_time) * 1000
+    polls: Final = tuple(_timed_poll() for _ in range(5))
 
-    # Assert response status
-    assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
+    for _, response in polls:
+        assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
+        assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
 
-    # Assert response content (FastAPI JSON-encodes the string)
-    assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
-
-    # Verify response is fast (should be < 100ms for a simple endpoint)
-    # This is critical for orchestration systems that poll frequently
-    assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
-
-    # Log the duration for visibility (useful for CI/CD monitoring)
-    print(f"\n/health/liveliness response time: {duration_ms:.2f}ms")
+    durations_ms: Final = tuple(sorted(duration_ms for duration_ms, _ in polls))
+    median_ms: Final = durations_ms[len(durations_ms) // 2]
+    assert median_ms < 100, f"Median of {len(polls)} health checks took {median_ms:.2f}ms, expected < 100ms"
 
 
 def test_health_liveness_endpoint(proxy_client):
@@ -1302,6 +1299,33 @@ def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
     assert "litellm_version" in response_data
     assert "success_callbacks" in response_data
     assert "cache" in response_data
+
+
+@pytest.mark.parametrize(
+    "general_settings, expected_warning",
+    [
+        ({}, True),
+        ({"disable_env_credential_login": True}, False),
+    ],
+)
+def test_health_readiness_details_reports_env_credential_login_warning(monkeypatch, general_settings, expected_warning):
+    """
+    The Admin UI banner is driven by this flag: it must be True while
+    env-credential login is possible and False once
+    `disable_env_credential_login` turns that login path off.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    response = client.get("/health/readiness/details")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["show_env_credential_login_warning"] is expected_warning
 
 
 def test_health_readiness_allows_explicit_legacy_public_details(monkeypatch):

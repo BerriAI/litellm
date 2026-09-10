@@ -212,6 +212,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             raise BedrockError(
                 message=f"Error parsing response: {raw_response.text}, error: {e}",
                 status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
 
         verbose_logger.debug(
@@ -241,6 +242,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             raise BedrockError(
                 message=f"Error setting response content: {e}. Response: {completion_response}",
                 status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
 
         # Calculate usage from headers

@@ -37,6 +37,7 @@ from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsR
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    PROMPT_CARRYING_GUARDRAIL_FIELDS,
     CallTypes,
     CostBreakdown,
     StandardLoggingGuardrailInformation,
@@ -589,6 +590,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
                 metadata=metadata,
                 standard_logging_payload=standard_logging_payload,
                 omit_when_missing=_omits_session_id_when_missing(metadata),
+                batch_trace_session_id=_get_batch_trace_session_id(call_type=call_type, request_id=id),
             ),
             request_duration_ms=_get_request_duration_ms(start_time, end_time),
             status=_get_status_for_spend_log(
@@ -627,20 +629,44 @@ def _omits_session_id_when_missing(metadata: Mapping[str, object] | None) -> boo
     return general_settings.get("missing_session_id") == "omit"
 
 
+_BATCH_TRACE_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.create_batch.value,
+        CallTypes.acreate_batch.value,
+        CallTypes.retrieve_batch.value,
+        CallTypes.aretrieve_batch.value,
+    }
+)
+
+
+def _get_batch_trace_session_id(call_type: str | None, request_id: str | None) -> str | None:
+    """A batch's create row and its poller-written cost row both derive their request id
+    from the same batch id (the cost row appends BATCH_COST_REQUEST_ID_SUFFIX), so using
+    that id as the session groups the batch lifecycle into one trace on the logs UI. The
+    poller builds its own logging context, so per-request trace ids can never link them."""
+    if call_type not in _BATCH_TRACE_CALL_TYPES or not request_id:
+        return None
+    return request_id.removesuffix(BATCH_COST_REQUEST_ID_SUFFIX)
+
+
 def _get_session_id_for_spend_log(
     kwargs: Mapping[str, object],
     metadata: Mapping[str, object] | None,
     standard_logging_payload: StandardLoggingPayload | None,
     omit_when_missing: bool,
+    batch_trace_session_id: str | None = None,
 ) -> str | None:
     """Under `omit` only `metadata.session_id`, the key Langfuse reads, counts as a session; `litellm_session_id` may
-    be a copied trace id."""
+    be a copied trace id. Batch call types carry a deterministic session derived from the batch id, which outranks
+    the per-request trace ids because those differ between the create call and the cost poller's row."""
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
         return str(session_id) if session_id else None
 
     from litellm._uuid import uuid
 
+    if batch_trace_session_id is not None:
+        return batch_trace_session_id
     if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
         return str(standard_logging_payload.get("trace_id"))
     if kwargs.get("litellm_trace_id") is not None:
@@ -1073,13 +1099,6 @@ def _sanitize_guardrail_information_for_spend_logs(
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
 
 
-_PROMPT_CARRYING_GUARDRAIL_FIELDS: Final = (
-    "guardrail_request",
-    "guardrail_response",
-    "match_details",
-    "classification",
-)
-
 _NUMERIC_COMPRESSION_STAT_KEYS: Final = (
     "tokens_before",
     "tokens_after",
@@ -1114,7 +1133,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     preserved_stats: Final = _numeric_compression_stats_from_guardrail_response(entry.get("guardrail_response"))
     redacted: Final[StandardLoggingGuardrailInformation] = {
         **entry,
-        **{key: REDACTED_BY_LITELM_STRING for key in _PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
+        **{key: REDACTED_BY_LITELM_STRING for key in PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
     }
     if preserved_stats is None:
         return redacted

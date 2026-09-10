@@ -17,6 +17,22 @@ import {
 import Teams from "./Teams";
 import { chooseSelectOption } from "../../tests/test-utils";
 
+vi.mock("./mcp_server_management/MCPServerSelector", () => ({
+  default: ({
+    onChange,
+  }: {
+    onChange: (selection: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="select-mcp-toolset"
+      onClick={() => onChange({ servers: [], accessGroups: [], toolsets: ["ts-1"] })}
+    >
+      Select MCP toolset
+    </button>
+  ),
+}));
+
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (...args: unknown[]) => can(...args),
@@ -1341,6 +1357,16 @@ describe("Teams - the exact bytes the create call sends", () => {
       models: ["no-default-models"],
       mcp_tool_permissions: {},
     });
+  });
+
+  it("includes selected MCP toolsets in the create object permission", async () => {
+    await openCreateModal();
+    await openSection("MCP Settings", /Allowed MCP Servers/);
+    fireEvent.click(screen.getByTestId("select-mcp-toolset"));
+
+    const payload = await submit();
+
+    expect(payload.object_permission).toStrictEqual({ mcp_toolsets: ["ts-1"] });
   });
 
   it.each([

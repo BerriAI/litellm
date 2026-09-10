@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 import httpx
@@ -502,6 +503,7 @@ class LiteLLMRoutes(enum.Enum):
     mcp_inference_routes = [
         "/mcp",
         "/mcp/",
+        "/mcp/proxy",
         "/mcp/{subpath}",
         "/mcp/tools",
         "/mcp/tools/list",
@@ -835,6 +837,14 @@ class LiteLLMRoutes(enum.Enum):
         "/team/daily/activity/aggregated",
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
+        # POST/GET the team's logging callbacks, and DELETE one of them. Every
+        # handler calls _verify_team_access, which admits only a proxy admin, an
+        # org admin for the team, or an admin of this team.
+        #
+        # team_id is a free-form string, so it spells these with the same path
+        # converter the router uses; the gate matches that converter.
+        "/team/{team_id:path}/callback",
+        "/team/{team_id:path}/callback/{callback_name}",
         "/model/new",
         "/model/update",
         "/model/delete",
@@ -848,6 +858,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
+        "/vector_store/info",
         # Project read routes - endpoint scopes results to caller's teams (non-admin)
         "/project/list",
         "/project/info",
@@ -1276,12 +1287,20 @@ class UpdateKeyRequest(KeyRequestBase):
     # else they will get overwritten
     duration: str | None = None
     spend: float | None = None
+    soft_budget: float | None = None
     metadata: dict | None = None
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
     auto_rotate: bool | None = None
     rotation_interval: str | None = None
     organization_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_blank_team_id(cls, values: object) -> object:
+        if isinstance(values, Mapping) and values.get("team_id") == "":
+            return MappingProxyType({k: v for k, v in values.items() if k != "team_id"})
+        return values
 
     @field_validator("organization_id", mode="before")
     @classmethod
@@ -1379,6 +1398,35 @@ def _dcr_bridge_auth_type_error(auth_type: object) -> ValueError:
     )
 
 
+def _per_server_oauth_discovery_error() -> ValueError:
+    return ValueError(
+        "per_server_oauth_discovery is only supported for auth_type oauth2 with oauth2_flow "
+        "authorization_code and without delegate_auth_to_upstream."
+    )
+
+
+def is_per_server_oauth_discovery_eligible(
+    auth_type: object, oauth2_flow: object, delegate_auth_to_upstream: object
+) -> bool:
+    return auth_type == MCPAuth.oauth2 and oauth2_flow == "authorization_code" and not delegate_auth_to_upstream
+
+
+def _reject_unsupported_per_server_oauth_discovery(values: object, require_auth_type: bool) -> None:
+    """Partial updates may omit eligibility fields; those are checked against the stored row by the
+    update endpoint. Every field the payload does carry must be eligible on its own."""
+    if not isinstance(values, dict) or not values.get("per_server_oauth_discovery"):
+        return
+    auth_type_ok: Final = values.get("auth_type") == MCPAuth.oauth2 or (
+        not require_auth_type and "auth_type" not in values
+    )
+    oauth2_flow_ok: Final = values.get("oauth2_flow") == "authorization_code" or (
+        not require_auth_type and "oauth2_flow" not in values
+    )
+    if auth_type_ok and oauth2_flow_ok and not values.get("delegate_auth_to_upstream"):
+        return
+    raise _per_server_oauth_discovery_error()
+
+
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str | None = None
     server_name: str | None = None
@@ -1420,6 +1468,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None
@@ -1484,6 +1533,12 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
             return values
         raise _dcr_bridge_auth_type_error(auth_type)
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_per_server_oauth_discovery_auth_type(cls, values: object) -> object:
+        _reject_unsupported_per_server_oauth_discovery(values, require_auth_type=True)
+        return values
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1526,6 +1581,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None
@@ -1569,6 +1625,12 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
         if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
             return values
         raise _dcr_bridge_auth_type_error(auth_type)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_per_server_oauth_discovery_auth_type(cls, values: object) -> object:
+        _reject_unsupported_per_server_oauth_discovery(values, require_auth_type=False)
+        return values
 
 
 from litellm.models.mcp_server import (  # noqa: E402
@@ -2638,6 +2700,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
     )
+    enable_openai_websocket_passthrough: bool | None = Field(
+        default=None,
+        description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
+    )
     user_header_name: str | None = Field(
         None,
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
@@ -2770,6 +2836,18 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "UI username/password login. Default is False."
         ),
     )
+    disable_env_credential_login: bool | None = Field(
+        None,
+        description=(
+            "If True, disables signing in to the Admin UI with the environment credentials: "
+            "UI_USERNAME/UI_PASSWORD, or the master key when UI_PASSWORD is unset (that fallback "
+            "means env-credential login is always live by default). Database users with passwords "
+            "are unaffected. LOCKOUT RISK: create at least one proxy admin user with a password "
+            "before enabling, or nobody can sign in to the UI. A locked-out admin can still "
+            "administer the proxy over the API with the master key, and can unset this setting "
+            "and restart the proxy to restore env-credential login. Default is False."
+        ),
+    )
     disable_budget_reservation: bool | None = Field(
         None,
         description=(
@@ -2784,7 +2862,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Enable only if your deployment is experiencing phantom "
             "BudgetExceededError responses caused by leaked reservations "
             "(see GitHub issue #27639). "
-            "A proxy-level WARNING is logged on every request while this flag "
+            "An INFO notice is logged once per worker at config load while this flag "
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
@@ -3535,7 +3613,9 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="OpenTelemetry",
         litellm_callback_params=[
             "OTEL_EXPORTER",
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
             "OTEL_ENDPOINT",
+            "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
         ],
     )
@@ -5088,8 +5168,25 @@ class CostEstimateRequest(LiteLLMPydanticObjectBase):
     model: str = Field(description="Model name (from /model_group/info)")
     input_tokens: int = Field(description="Expected input tokens per request", ge=0)
     output_tokens: int = Field(description="Expected output tokens per request", ge=0)
+    cache_read_input_tokens: int = Field(
+        default=0, description="Input tokens read from the prompt cache; counted within input_tokens", ge=0
+    )
+    cache_creation_input_tokens: int = Field(
+        default=0, description="Input tokens written to the prompt cache; counted within input_tokens", ge=0
+    )
+    reasoning_tokens: int = Field(
+        default=0, description="Reasoning tokens the model emits; counted within output_tokens", ge=0
+    )
     num_requests_per_day: int | None = Field(default=None, description="Number of requests per day", ge=0)
     num_requests_per_month: int | None = Field(default=None, description="Number of requests per month", ge=0)
+
+    @model_validator(mode="after")
+    def validate_token_subsets(self) -> "CostEstimateRequest":
+        if self.cache_read_input_tokens + self.cache_creation_input_tokens > self.input_tokens:
+            raise ValueError("cache_read_input_tokens plus cache_creation_input_tokens cannot exceed input_tokens")
+        if self.reasoning_tokens > self.output_tokens:
+            raise ValueError("reasoning_tokens cannot exceed output_tokens")
+        return self
 
 
 class CostEstimateResponse(LiteLLMPydanticObjectBase):
@@ -5098,6 +5195,9 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
     model: str
     input_tokens: int
     output_tokens: int
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    reasoning_tokens: int = 0
     num_requests_per_day: int | None = None
     num_requests_per_month: int | None = None
     # Per-request costs
@@ -5105,17 +5205,33 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
     input_cost_per_request: float = Field(description="Input token cost per request (before margin)")
     output_cost_per_request: float = Field(description="Output token cost per request (before margin)")
     margin_cost_per_request: float = Field(default=0.0, description="Margin/fee added per request")
+    cache_read_cost_per_request: float = Field(default=0.0, description="Cache-read share of input_cost_per_request")
+    cache_creation_cost_per_request: float = Field(
+        default=0.0, description="Cache-write share of input_cost_per_request"
+    )
+    reasoning_cost_per_request: float = Field(default=0.0, description="Reasoning share of output_cost_per_request")
     # Daily costs (if num_requests_per_day provided)
     daily_cost: float | None = Field(default=None, description="Total daily cost (includes margin)")
     daily_input_cost: float | None = Field(default=None, description="Daily input token cost")
     daily_output_cost: float | None = Field(default=None, description="Daily output token cost")
     daily_margin_cost: float | None = Field(default=None, description="Daily margin/fee")
+    daily_cache_read_cost: float | None = Field(default=None, description="Cache-read share of daily_input_cost")
+    daily_cache_creation_cost: float | None = Field(default=None, description="Cache-write share of daily_input_cost")
+    daily_reasoning_cost: float | None = Field(default=None, description="Reasoning share of daily_output_cost")
     # Monthly costs (if num_requests_per_month provided)
     monthly_cost: float | None = Field(default=None, description="Total monthly cost (includes margin)")
     monthly_input_cost: float | None = Field(default=None, description="Monthly input token cost")
     monthly_output_cost: float | None = Field(default=None, description="Monthly output token cost")
     monthly_margin_cost: float | None = Field(default=None, description="Monthly margin/fee")
-    # Pricing info
-    input_cost_per_token: float | None = None
-    output_cost_per_token: float | None = None
+    monthly_cache_read_cost: float | None = Field(default=None, description="Cache-read share of monthly_input_cost")
+    monthly_cache_creation_cost: float | None = Field(
+        default=None, description="Cache-write share of monthly_input_cost"
+    )
+    monthly_reasoning_cost: float | None = Field(default=None, description="Reasoning share of monthly_output_cost")
+    # Pricing info: the rates this request's usage bills at, after token tiers and regional multipliers
+    input_cost_per_token: float | None = Field(default=None, description="Rate billed per input token")
+    output_cost_per_token: float | None = Field(default=None, description="Rate billed per output token")
+    cache_read_input_token_cost: float | None = Field(default=None, description="Rate billed per cache-read token")
+    cache_creation_input_token_cost: float | None = Field(default=None, description="Rate billed per cache-write token")
+    output_cost_per_reasoning_token: float | None = Field(default=None, description="Rate billed per reasoning token")
     provider: str | None = None
