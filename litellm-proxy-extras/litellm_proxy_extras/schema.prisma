@@ -1593,6 +1593,33 @@ model LiteLLM_ShadowEvalFunnel {
 }
 
 // ---------------------------------------------------------------------------
+// Session Replay
+//
+// One row per replay job: a recorded session re-run against several model arms,
+// whose end results are judged blind. Single writer (the job's own task), so
+// progress and result live on the row rather than in append-only attempt rows.
+// ---------------------------------------------------------------------------
+model LiteLLM_SessionReplayJob {
+  id                String    @id @default(cuid())
+  session_id        String
+  status            String    @default("running") // running | completed | failed | stopped
+  arms              Json
+  judge_model       String
+  max_turns         Int
+  source_request_id String?   // the recorded request whose body seeded the transcript
+  turns_completed   Int       @default(0)
+  result            Json?
+  error             String?
+  created_by        String?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @default(now()) @updatedAt
+  finished_at       DateTime?
+
+  @@index([session_id])
+  @@index([created_at])
+}
+
+// ---------------------------------------------------------------------------
 // Workflow Run Tracking
 //
 // Generic durable state tracking for any agent or automated workflow.

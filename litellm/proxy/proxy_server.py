@@ -539,6 +539,9 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
+from litellm.proxy.management_endpoints.session_replay_endpoints import (
+    router as session_replay_management_router,
+)
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -18602,6 +18605,7 @@ app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(auto_router_management_router)
+app.include_router(session_replay_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)

@@ -1242,6 +1242,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/session_replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Session Replays
+         * @description List session replay jobs, newest first.
+         */
+        get: operations["list_session_replays_auto_router_session_replay_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/session_replay/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Session Replay
+         * @description Replay a recorded session against several model arms and judge the end results blind.
+         *
+         *     The recorded user and tool_result turns are the fixed environment; each arm generates
+         *     its own assistant turns, so the arms diverge from the recording and from each other.
+         *     Judging compares the final answer each arm reached against the human turns the
+         *     recording actually contained.
+         *
+         *     Spend logs truncate stored prompts, so the replayed request is smaller than the one
+         *     that was recorded. Every job reports that gap under `fidelity`; read a verdict against
+         *     it rather than as a clean comparison.
+         *
+         *     A replay issues one billable call per recorded turn per arm, so `max_turns` bounds it
+         *     and one session can have only one running job.
+         */
+        post: operations["start_session_replay_auto_router_session_replay_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auto_router/session_replay/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Replay
+         * @description Read one session replay job, including its verdict once it has finished.
+         */
+        get: operations["get_session_replay_auto_router_session_replay__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/shadow_eval": {
         parameters: {
             query?: never;
@@ -36049,6 +36121,162 @@ export interface components {
             /** Timeout */
             timeout?: number | null;
         };
+        /** SessionReplayArmResponse */
+        SessionReplayArmResponse: {
+            /**
+             * Final Text
+             * @default
+             */
+            final_text: string;
+            /** Label */
+            label: string;
+            /** Model */
+            model: string;
+            /** Output Tokens */
+            readonly output_tokens: number;
+            /** Prompt Tokens */
+            readonly prompt_tokens: number;
+            /**
+             * Served Models
+             * @default []
+             */
+            served_models: string[];
+            /**
+             * Turns
+             * @default []
+             */
+            turns: components["schemas"]["SessionReplayTurnResponse"][];
+        };
+        /** SessionReplayArmSpec */
+        SessionReplayArmSpec: {
+            /** Label */
+            label: string;
+            /** Model */
+            model: string;
+        };
+        /**
+         * SessionReplayFidelityResponse
+         * @description How much of the recorded prompt actually survived into the replay.
+         *
+         *     Spend logs truncate every stored string at MAX_STRING_LENGTH_PROMPT_IN_DB, so a replay
+         *     runs against a smaller prompt than the recording did. Reported on every job so a result
+         *     is never read as a clean comparison when it is not one.
+         */
+        SessionReplayFidelityResponse: {
+            /**
+             * Recorded Prompt Tokens
+             * @default 0
+             */
+            recorded_prompt_tokens: number;
+            /**
+             * Replayed First Turn Prompt Tokens
+             * @default 0
+             */
+            replayed_first_turn_prompt_tokens: number;
+            /**
+             * Truncated Strings
+             * @default 0
+             */
+            truncated_strings: number;
+        };
+        /** SessionReplayJobListResponse */
+        SessionReplayJobListResponse: {
+            /**
+             * Jobs
+             * @default []
+             */
+            jobs: components["schemas"]["SessionReplayJobResponse"][];
+        };
+        /** SessionReplayJobResponse */
+        SessionReplayJobResponse: {
+            /**
+             * Arms
+             * @default []
+             */
+            arms: components["schemas"]["SessionReplayArmResponse"][];
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Error */
+            error?: string | null;
+            fidelity?: components["schemas"]["SessionReplayFidelityResponse"] | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /**
+             * Human Asks
+             * @default []
+             */
+            human_asks: string[];
+            /** Job Id */
+            job_id: string;
+            /** Judge Model */
+            judge_model: string;
+            /** Max Turns */
+            max_turns: number;
+            /** Session Id */
+            session_id: string;
+            /** Source Request Id */
+            source_request_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "completed" | "failed" | "stopped";
+            /**
+             * Turns Completed
+             * @default 0
+             */
+            turns_completed: number;
+            verdict?: components["schemas"]["SessionReplayVerdictResponse"] | null;
+        };
+        /** SessionReplayTurnResponse */
+        SessionReplayTurnResponse: {
+            /** Attached */
+            attached: boolean;
+            /** Error */
+            error?: string | null;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /** Served Model */
+            served_model?: string | null;
+            /** Stop Reason */
+            stop_reason?: string | null;
+            /**
+             * Text Chars
+             * @default 0
+             */
+            text_chars: number;
+            /**
+             * Tool Calls
+             * @default 0
+             */
+            tool_calls: number;
+            /** Turn */
+            turn: number;
+        };
+        /** SessionReplayVerdictResponse */
+        SessionReplayVerdictResponse: {
+            /** Confidence */
+            confidence?: number | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+            /** Winner */
+            winner?: string | null;
+        };
         /**
          * ShadowEvalJobResponse
          * @description A shadow-eval job over one or more targets, each with its own budget and stop state;
@@ -36485,6 +36713,20 @@ export interface components {
             medium_complex: number;
             /** Simple Medium */
             simple_medium: number;
+        };
+        /** StartSessionReplayRequest */
+        StartSessionReplayRequest: {
+            /** Arms */
+            arms: components["schemas"]["SessionReplayArmSpec"][];
+            /** Judge Model */
+            judge_model: string;
+            /**
+             * Max Turns
+             * @default 20
+             */
+            max_turns: number;
+            /** Session Id */
+            session_id: string;
         };
         /**
          * StartShadowEvalRequest
@@ -41769,6 +42011,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterClassifierDefaultPromptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_session_replays_auto_router_session_replay_get: {
+        parameters: {
+            query?: {
+                /** @description Only jobs for this session */
+                session_id?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReplayJobListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_session_replay_auto_router_session_replay_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartSessionReplayRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReplayJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_replay_auto_router_session_replay__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionReplayJobResponse"];
                 };
             };
             /** @description Validation Error */
