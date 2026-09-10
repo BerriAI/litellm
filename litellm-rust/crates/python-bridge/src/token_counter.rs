@@ -1,4 +1,6 @@
+use std::num::NonZero;
 use std::sync::Arc;
+use std::thread::available_parallelism;
 
 use litellm_python_interop::release_gil;
 use litellm_token_counter::{
@@ -7,16 +9,21 @@ use litellm_token_counter::{
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
+use tokio::sync::Semaphore;
 
+use crate::constants::TOKEN_COUNT_FALLBACK_PARALLELISM;
 use crate::errors::RustBridgeDeclined;
 use crate::execution::run_async;
 
 /// Counts the input tokens of a raw request body off the Python event loop with
 /// the GIL released. Python owns which requests get here and what to do with
-/// the count.
+/// the count. At most one encode per core runs at a time; the rest wait in the
+/// async task, where a cancelled Python awaiter drops them before any blocking
+/// work is scheduled.
 #[pyclass(frozen)]
 struct TokenCounter {
     inner: Arc<CoreTokenCounter>,
+    encode_slots: Arc<Semaphore>,
 }
 
 #[pymethods]
@@ -27,15 +34,21 @@ impl TokenCounter {
             .map_err(token_count_error_to_pyerr)?;
         Ok(Self {
             inner: Arc::new(inner),
+            encode_slots: Arc::new(Semaphore::new(encode_parallelism())),
         })
     }
 
     fn acount_request<'py>(&self, py: Python<'py>, body: &[u8]) -> PyResult<Bound<'py, PyAny>> {
         let counter = Arc::clone(&self.inner);
+        let encode_slots = Arc::clone(&self.encode_slots);
         let body = body.to_vec();
         run_async(
             py,
             async move {
+                let _slot = encode_slots
+                    .acquire_owned()
+                    .await
+                    .map_err(|error| Error::Task(error.to_string()))?;
                 tokio::task::spawn_blocking(move || count_body(&counter, &body))
                     .await
                     .map_err(|error| Error::Task(error.to_string()))?
@@ -43,6 +56,10 @@ impl TokenCounter {
             token_count_error_to_pyerr,
         )
     }
+}
+
+fn encode_parallelism() -> usize {
+    available_parallelism().map_or(TOKEN_COUNT_FALLBACK_PARALLELISM, NonZero::get)
 }
 
 fn count_body(counter: &CoreTokenCounter, body: &[u8]) -> Result<InputTokenCount, Error> {

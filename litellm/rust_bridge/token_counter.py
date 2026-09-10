@@ -14,6 +14,8 @@ from litellm._logging import verbose_logger
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.runtime import BridgeErrorContext, RustHandled, aattempt
+from litellm.utils import claude_json_str
+from litellm.utils import uses_anthropic_tokenizer as _python_uses_anthropic_tokenizer
 
 
 class RustTokenCounter(Protocol):
@@ -51,13 +53,11 @@ TOKEN_COUNTER: Final = NativeBinding("TokenCounter", validate=_as_factory)
 def uses_anthropic_tokenizer(model: str) -> bool:
     if litellm.disable_token_counter is True or litellm.disable_hf_tokenizer_download is True:
         return False
-    return model in litellm.anthropic_models and "claude-3" not in model
+    return _python_uses_anthropic_tokenizer(model)
 
 
 @lru_cache(maxsize=4)
 def _anthropic_counter(factory: RustTokenCounterFactory) -> RustTokenCounter:
-    from litellm.utils import claude_json_str
-
     return factory(claude_json_str)
 
 
