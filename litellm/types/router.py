@@ -12,7 +12,9 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -307,7 +309,6 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
 
     custom_llm_provider: str | None = None
-    rust: bool | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
@@ -315,6 +316,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     timeout: float | str | httpx.Timeout | None = None  # if str, pass in as os.environ/
     stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
     max_retries: int | None = None
+    drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
@@ -404,6 +406,18 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
                 filtered["max_retries"] = int(filtered["max_retries"])
             return filtered
         return data
+
+    @field_validator("drop_params", mode="before")
+    @classmethod
+    def coerce_drop_params(cls, value: object) -> bool | str | None:
+        normalized: Final = normalize_drop_params(value)
+        if normalized is not None:
+            return normalized
+        if isinstance(value, str):
+            return value
+        if value is not None:
+            verbose_logger.warning("drop_params=%r is not a flag value, treating it as unset", value)
+        return None
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -511,6 +525,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     input_cost_per_second: float | None
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
+    output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None

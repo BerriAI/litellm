@@ -38,6 +38,14 @@ def flush_shared_bedrock_iam_cache():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _clean_ssl_env(monkeypatch):
+    """get_ssl_verify reads these, so the sts client's verify= would otherwise depend on
+    the ambient environment. The published images set SSL_CERT_FILE."""
+    for env_var in ("SSL_CERT_FILE", "SSL_VERIFY"):
+        monkeypatch.delenv(env_var, raising=False)
+
+
 def test_base_aws_llm_instances_share_process_wide_iam_cache():
     """Regression LIT-2662: new instances must reuse iam_cache (Bedrock passthrough is per-request)."""
     first = BaseAWSLLM()

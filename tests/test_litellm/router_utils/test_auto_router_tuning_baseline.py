@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
+from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.router_utils.auto_router_tuning_baseline import (
     DEFAULT_TUNING_FINGERPRINT,
     HEURISTIC_V1_TUNING_FIELDS,
@@ -20,6 +22,33 @@ from litellm.router_utils.auto_router_tuning_baseline import (
 
 _TIERS = {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"}
 _ALT_TIERS = {**_TIERS, "COMPLEX": "other-strong"}
+_KEYWORD_DIMENSION: Final = {"name": "internalFrameworks", "weight": 0.7, "keywords": ["orbitmesh"]}
+_HISTORICAL_FINGERPRINTS: Final = (
+    ({}, "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"),
+    (
+        {"custom_dimensions": [_KEYWORD_DIMENSION]},
+        "b5c3c3f3be6341a8a16148d68d9067e03f94ed01a0bbfcde7955763042744372",
+    ),
+    (
+        {"custom_dimensions": [{"name": "sqlDdl", "weight": 0.4, "patterns": [r"\bCREATE\s{1,4}TABLE\b"]}]},
+        "814ce0017fc7f60a160b262f658d910e9bdf784e6139a4ba4f1e2657aa203950",
+    ),
+    (
+        {
+            "tiers": _TIERS,
+            "dimension_weights": {"codePresence": 0.3},
+            "custom_dimensions": [
+                {
+                    "name": "internalFrameworks",
+                    "weight": 0.2,
+                    "keywords": ["orbitmesh", "fluxgate"],
+                    "patterns": [r"\bALTER\s{1,4}TABLE\b"],
+                }
+            ],
+        },
+        "38970dc9224e265ab38c89674563d8d0537822591f9239b45251db6f5ca6cc39",
+    ),
+)
 
 
 def _router(
@@ -58,6 +87,7 @@ class TestTuningFingerprint:
             "reasoning_override_min_score": 0.05,
             "token_thresholds": {"simple": 20, "complex": 500},
             "dimension_weights": {"codePresence": 0.9},
+            "custom_dimensions": [{"name": "internalFrameworks", "weight": 0.7, "keywords": ["orbitmesh"]}],
             "code_keywords": ["orionflow"],
             "reasoning_keywords": ["deduce"],
             "technical_keywords": ["ledgerkit"],
@@ -72,6 +102,30 @@ class TestTuningFingerprint:
             config["classifier_llm_config"] = {"model": "judge"}
         assert tuning_fingerprint(config) != DEFAULT_TUNING_FINGERPRINT
 
+    def test_explicit_empty_tier_model_configs_follow_omission(self) -> None:
+        assert tuning_fingerprint({"tier_model_configs": {}}) == DEFAULT_TUNING_FINGERPRINT
+
+    @pytest.mark.parametrize(("config", "fingerprint"), _HISTORICAL_FINGERPRINTS)
+    def test_fingerprints_recorded_before_scoring_mode_existed_are_preserved(
+        self, config: Mapping[str, object], fingerprint: str
+    ) -> None:
+        """Literal hashes captured from the merged implementation at 9bc9104102, before CustomDimension.scoring_mode."""
+        assert tuning_fingerprint(config) == fingerprint
+
+    def test_binary_scoring_mode_hashes_like_its_absence(self) -> None:
+        historical: Final = tuning_fingerprint({"custom_dimensions": [_KEYWORD_DIMENSION]})
+        explicit: Final = tuning_fingerprint({"custom_dimensions": [{**_KEYWORD_DIMENSION, "scoring_mode": "binary"}]})
+        reserialized: Final = ComplexityRouterConfig.model_validate(
+            {"custom_dimensions": [_KEYWORD_DIMENSION]}
+        ).model_dump(mode="json", include={"custom_dimensions"})
+        assert reserialized["custom_dimensions"][0]["scoring_mode"] == "binary"
+        assert reserialized["custom_dimensions"][0]["patterns"] == []
+        assert historical == explicit == tuning_fingerprint(reserialized)
+        assert (
+            tuning_fingerprint({"custom_dimensions": [{**_KEYWORD_DIMENSION, "scoring_mode": "match_count"}]})
+            != historical
+        )
+
     def test_tier_model_overrides_change_the_fingerprint(self) -> None:
         plain = tuning_fingerprint({"tiers": {"SIMPLE": "x"}})
         with_override = tuning_fingerprint(
@@ -80,10 +134,38 @@ class TestTuningFingerprint:
         assert plain != with_override
 
     def test_non_tuning_fields_do_not_change_the_fingerprint(self) -> None:
-        assert tuning_fingerprint({"return_raw_model_name": True, "session_affinity": True}) == DEFAULT_TUNING_FINGERPRINT
+        assert (
+            tuning_fingerprint({"return_raw_model_name": True, "session_affinity": True}) == DEFAULT_TUNING_FINGERPRINT
+        )
 
     def test_invalid_config_has_no_fingerprint(self) -> None:
         assert tuning_fingerprint({"tier_boundaries": "not-a-mapping"}) is None
+
+    def test_a_release_changing_a_shipped_default_is_not_an_operator_edit(self, monkeypatch) -> None:
+        """An omitted setting follows the shipped default and stays off the quota when that default moves;
+        only what the operator wrote is fingerprinted, so an explicit value equal to the old default still counts."""
+        import litellm.router_strategy.complexity_router.config as config_module
+
+        untouched = _router("a", {})
+        tiers_only = _router("b", {"tiers": _TIERS})
+        pinned = _router("c", {"dimension_weights": dict(config_module.DEFAULT_DIMENSION_WEIGHTS)})
+        baselines = snapshot_tuning_baselines([untouched, tiers_only, pinned])
+        assert tuning_fingerprint(pinned["litellm_params"]["complexity_router_config"]) != DEFAULT_TUNING_FINGERPRINT
+
+        monkeypatch.setattr(
+            config_module,
+            "DEFAULT_DIMENSION_WEIGHTS",
+            {**config_module.DEFAULT_DIMENSION_WEIGHTS, "codePresence": 0.99},
+        )
+        monkeypatch.setattr(
+            config_module,
+            "DEFAULT_TIER_BOUNDARIES",
+            {**config_module.DEFAULT_TIER_BOUNDARIES, "simple_medium": 0.42},
+        )
+
+        assert tuning_fingerprint({}) == DEFAULT_TUNING_FINGERPRINT
+        assert mutable_tuned_identities([untouched, tiers_only, pinned], baselines) == frozenset()
+        assert mutable_tuned_identities([untouched], snapshot_tuning_baselines([])) == frozenset()
 
 
 class TestRouterIdentity:
@@ -161,12 +243,18 @@ class TestQuota:
         new_c = _router("c", {"tiers": _TIERS})
 
         assert tuning_quota_violation(candidate=edited_a, others=[legacy_b], baselines=baselines, limit=1) is None
-        assert tuning_quota_violation(candidate=edited_a, others=[edited_a, legacy_b], baselines=baselines, limit=1) is None
+        assert (
+            tuning_quota_violation(candidate=edited_a, others=[edited_a, legacy_b], baselines=baselines, limit=1)
+            is None
+        )
         assert tuning_quota_violation(candidate=legacy_a, others=[edited_b], baselines=baselines, limit=1) is None
         assert tuning_quota_violation(candidate=edited_b, others=[edited_a], baselines=baselines, limit=1) is not None
         assert tuning_quota_violation(candidate=new_c, others=[edited_a], baselines=baselines, limit=1) is not None
         assert tuning_quota_violation(candidate=new_c, others=[edited_a], baselines=baselines, limit=None) is None
-        assert tuning_quota_violation(candidate=legacy_a, others=[edited_a, edited_b], baselines=baselines, limit=1) is None
+        assert (
+            tuning_quota_violation(candidate=legacy_a, others=[edited_a, edited_b], baselines=baselines, limit=1)
+            is None
+        )
 
     def test_reverting_to_baseline_frees_the_quota(self) -> None:
         legacy_a = _router("a", {"tiers": _TIERS})
@@ -174,7 +262,42 @@ class TestQuota:
         baselines = snapshot_tuning_baselines([legacy_a, legacy_b])
         edited_b = _router("b", {"tiers": _TIERS})
         assert tuning_quota_violation(candidate=edited_b, others=[legacy_a], baselines=baselines, limit=1) is None
-        assert tuning_quota_violation(candidate=edited_b, others=[legacy_a, edited_b], baselines=baselines, limit=1) is None
+        assert (
+            tuning_quota_violation(candidate=edited_b, others=[legacy_a, edited_b], baselines=baselines, limit=1)
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        "edit",
+        [
+            pytest.param({"weight": 0.9}, id="weight"),
+            pytest.param({"scoring_mode": "match_count"}, id="scoring-mode"),
+        ],
+    )
+    def test_custom_dimension_add_edit_and_revert_share_one_quota_slot(self, edit: Mapping[str, object]) -> None:
+        baselines: Final = snapshot_tuning_baselines(())
+        original: Final = _router("a", {})
+        config: Final = {"custom_dimensions": [_KEYWORD_DIMENSION]}
+        edited_config: Final = {"custom_dimensions": [{**_KEYWORD_DIMENSION, **edit}]}
+        added: Final = _router("a", config)
+        edited: Final = _router("a", edited_config)
+        second: Final = _router("b", config)
+
+        assert tuning_fingerprint(config) != tuning_fingerprint(edited_config)
+        assert mutable_tuned_identities((added,), baselines) == {router_identity(original)}
+        assert tuning_quota_violation(candidate=added, others=(original,), baselines=baselines, limit=1) is None
+        assert tuning_quota_violation(candidate=edited, others=(added,), baselines=baselines, limit=1) is None
+        assert tuning_quota_violation(candidate=second, others=(edited,), baselines=baselines, limit=1) is not None
+        assert tuning_quota_violation(candidate=original, others=(edited,), baselines=baselines, limit=1) is None
+        assert mutable_tuned_identities((original,), baselines) == frozenset()
+        assert tuning_quota_violation(candidate=second, others=(original,), baselines=baselines, limit=1) is None
+
+    def test_graded_dimension_recorded_at_snapshot_is_its_own_baseline(self) -> None:
+        graded: Final = _router("a", {"custom_dimensions": [{**_KEYWORD_DIMENSION, "scoring_mode": "match_count"}]})
+        baselines: Final = snapshot_tuning_baselines((graded,))
+        assert mutable_tuned_identities((graded,), baselines) == frozenset()
+        reverted_to_binary: Final = _router("a", {"custom_dimensions": [_KEYWORD_DIMENSION]})
+        assert mutable_tuned_identities((reverted_to_binary,), baselines) == {router_identity(graded)}
 
     def test_violation_message_names_the_limit_and_remedy(self) -> None:
         message = tuning_limit_violation(held=2, limit=1)
