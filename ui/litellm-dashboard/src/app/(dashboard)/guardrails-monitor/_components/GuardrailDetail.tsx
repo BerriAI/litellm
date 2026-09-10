@@ -1,13 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Settings, Shield, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
-import { getGuardrailsUsageDetail, getGuardrailsUsageLogs } from "@/components/networking";
+import { getGuardrailsUsageLogs } from "@/components/networking";
+import { useGuardrailsUsageDetail } from "@/app/(dashboard)/hooks/guardrails/useGuardrailsUsage";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
+import { GuardrailUsageBreakdown } from "./GuardrailUsageBreakdown";
 import { LogViewer } from "@/components/GuardrailsMonitor/LogViewer";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
 import type { LogEntry } from "@/components/GuardrailsMonitor/mockData";
@@ -36,11 +38,7 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
     data: detailData,
     isLoading: detailLoading,
     error: detailError,
-  } = useQuery({
-    queryKey: ["guardrails-usage-detail", guardrailId, startDate, endDate],
-    queryFn: () => getGuardrailsUsageDetail(accessToken!, guardrailId, startDate, endDate),
-    enabled: !!accessToken && !!guardrailId,
-  });
+  } = useGuardrailsUsageDetail(guardrailId, { accessToken, startDate, endDate });
   const { data: logsData, isLoading: logsLoading } = useQuery({
     queryKey: ["guardrails-usage-logs", guardrailId, logsPage, logsPageSize],
     queryFn: () =>
@@ -193,6 +191,8 @@ export function GuardrailDetail({ guardrailId, onBack, accessToken = null, start
               subtitle={data.avgLatency != null ? "Per request (avg)" : "No data"}
             />
           </div>
+
+          {detailData && <GuardrailUsageBreakdown detail={detailData} />}
 
           {logViewer("all")}
         </TabsContent>

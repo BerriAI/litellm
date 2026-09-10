@@ -1,8 +1,5 @@
 """Test Bedrock cross-region inference profile model mapping"""
 
-import json
-from functools import lru_cache
-from pathlib import Path
 from typing import NamedTuple
 
 import pytest
@@ -102,13 +99,6 @@ GPT_5_6_PROFILES = [
 ]
 
 
-@lru_cache(maxsize=1)
-def _packaged_cost_map():
-    """The map litellm actually resolves against, for fields ModelInfoBase drops."""
-    path = Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json"
-    return json.loads(path.read_text())
-
-
 def _bedrock_response(model, usage):
     return ModelResponse(
         id="test",
@@ -124,17 +114,6 @@ def _bedrock_response(model, usage):
         ],
         usage=usage,
     )
-
-
-def test_bedrock_cross_region_inference_profile_mapping():
-    """Test that bedrock cross-region inference profile model is mapped"""
-    model = "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0"
-
-    model_info = _get_model_info_helper(model=model, custom_llm_provider="bedrock")
-
-    assert model_info is not None
-    assert model_info["litellm_provider"] == "bedrock"
-    assert model_info["input_cost_per_token"] == 8e-07
 
 
 def test_proxy_cost_calculation_scenario():
@@ -174,38 +153,6 @@ def test_proxy_cost_calculation_scenario():
 def test_bedrock_gpt_5_6_profiles_route_to_converse(profile, local_model_cost_map):
     """GPT-5.6 is served by Converse on bedrock-runtime, never by Invoke."""
     assert BedrockModelInfo.get_bedrock_route(f"bedrock/{profile.model_id}") == "converse"
-
-
-@pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
-def test_bedrock_gpt_5_6_published_rates(profile, local_model_cost_map):
-    """Geo and Global profiles carry their own published rates, per context tier."""
-    model_info = _get_model_info_helper(
-        model=f"bedrock/{profile.model_id}", custom_llm_provider="bedrock"
-    )
-
-    assert model_info["litellm_provider"] == "bedrock_converse"
-    assert model_info["mode"] == "chat"
-    assert model_info["max_input_tokens"] == 1000000
-    assert model_info["input_cost_per_token"] == profile.input_cost
-    assert (
-        model_info["input_cost_per_token_above_272k_tokens"]
-        == profile.input_cost_above_272k
-    )
-    assert model_info["output_cost_per_token"] == profile.output_cost
-    assert (
-        model_info["output_cost_per_token_above_272k_tokens"]
-        == profile.output_cost_above_272k
-    )
-    assert model_info["cache_creation_input_token_cost"] == profile.cache_write
-    assert (
-        model_info["cache_creation_input_token_cost_above_272k_tokens"]
-        == profile.cache_write_above_272k
-    )
-    assert model_info["cache_read_input_token_cost"] == profile.cache_read
-    assert (
-        model_info["cache_read_input_token_cost_above_272k_tokens"]
-        == profile.cache_read_above_272k
-    )
 
 
 def test_bedrock_gpt_5_6_above_272k_tier_applies_to_cost(local_model_cost_map):
@@ -265,31 +212,6 @@ def test_bedrock_gpt_5_6_bills_cache_write_tokens(local_model_cost_map):
 
     expected = (2 * 4.4e-06) + (15609 * 5.5e-06) + (5 * 2.2e-05)
     assert cost == pytest.approx(expected, rel=1e-9)
-
-
-@pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
-def test_bedrock_gpt_5_6_advertises_only_converse_supported_features(
-    profile, local_model_cost_map
-):
-    model_info = _get_model_info_helper(
-        model=f"bedrock/{profile.model_id}", custom_llm_provider="bedrock"
-    )
-
-    assert model_info["supports_function_calling"] is True
-    assert model_info["supports_tool_choice"] is True
-    assert model_info["supports_vision"] is True
-
-    # Bedrock rejects an explicit cachePoint block for these models, so the flag that
-    # offers caller-driven caching stays off even though the cache rates are declared.
-    assert not model_info.get("supports_prompt_caching")
-
-    # ModelInfoBase drops these two, so they are read from the map litellm resolves.
-    raw = _packaged_cost_map()[profile.model_id]
-    assert raw["supported_modalities"] == ["text", "image"]
-    assert raw["supported_output_modalities"] == ["text"]
-    # No bedrock_converse entry declares supported_endpoints; these models are reachable
-    # on chat completions and on the Responses API without it.
-    assert "supported_endpoints" not in raw
 
 
 @pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)

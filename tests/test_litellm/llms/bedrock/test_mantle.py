@@ -128,6 +128,12 @@ def test_mantle_messages_url_construction():
 _VPC_ENDPOINT = "https://vpce-0a1b2c3d.bedrock-mantle.us-gov-west-1.vpce.amazonaws.com"
 
 
+@pytest.fixture(autouse=True)
+def no_ambient_mantle_api_base(monkeypatch):
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+
+
 def test_mantle_chat_url_honors_api_base_host():
     config = AmazonMantleConfig()
     url = config.get_complete_url(
@@ -188,6 +194,48 @@ def test_mantle_messages_url_honors_aws_bedrock_runtime_endpoint():
             "aws_region_name": "us-gov-west-1",
             "aws_bedrock_runtime_endpoint": _VPC_ENDPOINT,
         },
+        litellm_params={},
+    )
+    assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
+
+
+_ENV_ENDPOINT = "https://bedrock-mantle.us-east-1.api.aws.internal.example.com"
+
+
+@pytest.mark.parametrize("config_cls", [AmazonMantleConfig, AmazonMantleMessagesConfig])
+@pytest.mark.parametrize(
+    "env_value",
+    [_ENV_ENDPOINT, f"{_ENV_ENDPOINT}/", f"{_ENV_ENDPOINT}/v1", f"{_ENV_ENDPOINT}/openai/v1"],
+)
+def test_mantle_url_honors_bedrock_mantle_api_base_env(monkeypatch, config_cls, env_value):
+    monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", env_value)
+    url = config_cls().get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params={"aws_region_name": "us-east-1"},
+        litellm_params={},
+    )
+    assert url == f"{_ENV_ENDPOINT}/anthropic/v1/messages"
+
+
+@pytest.mark.parametrize("config_cls", [AmazonMantleConfig, AmazonMantleMessagesConfig])
+@pytest.mark.parametrize(
+    ("api_base", "optional_params"),
+    [
+        (_VPC_ENDPOINT, {"aws_region_name": "us-gov-west-1"}),
+        (None, {"aws_region_name": "us-gov-west-1", "aws_bedrock_runtime_endpoint": _VPC_ENDPOINT}),
+    ],
+)
+def test_mantle_url_explicit_endpoint_beats_bedrock_mantle_api_base_env(
+    monkeypatch, config_cls, api_base, optional_params
+):
+    monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", _ENV_ENDPOINT)
+    url = config_cls().get_complete_url(
+        api_base=api_base,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params=optional_params,
         litellm_params={},
     )
     assert url == f"{_VPC_ENDPOINT}/anthropic/v1/messages"

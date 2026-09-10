@@ -32,7 +32,7 @@ import {
   modelSentinelOptions,
   parseAllowedRoutes,
 } from "./keyEditFieldNormalizers";
-import { KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
+import { KeyBudgetNumberField, KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
 import {
   AgentsAndGroups,
   KeyEditFormValues,
@@ -54,7 +54,6 @@ import {
 import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
 import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
@@ -138,7 +137,9 @@ export function KeyEditView({
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
   const allowedRoutes = parseAllowedRoutes(allowedRoutesValue);
   const isModelsDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
-  const mcpServersAndGroups = form.watch("mcp_servers_and_groups");
+  const mcpSelection = form.watch("mcp_servers_and_groups") as
+    | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
+    | undefined;
   const mcpToolPermissions = form.watch("mcp_tool_permissions");
 
   useEffect(() => {
@@ -165,7 +166,7 @@ export function KeyEditView({
       if (!accessToken) return;
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }
@@ -303,9 +304,9 @@ export function KeyEditView({
     }
   };
 
-  const handleOrganizationChange = (setField: (value: string | undefined) => void, orgId: string | undefined) => {
+  const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
     setField(orgId);
-    setSelectedOrganizationId(orgId || null);
+    setSelectedOrganizationId(orgId);
     form.setValue("team_id", undefined);
   };
 
@@ -416,17 +417,19 @@ export function KeyEditView({
             )}
           </FormField>
 
-          <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-            {({ ref: _ref, ...field }) => (
-              <NumericalInput
-                {...field}
-                value={field.value ?? ""}
-                step={0.01}
-                style={{ width: "100%" }}
-                placeholder="Enter a numerical value"
-              />
-            )}
-          </FormField>
+          <KeyBudgetNumberField
+            control={form.control}
+            name="max_budget"
+            label="Max Budget (USD)"
+            placeholder="Enter a numerical value"
+          />
+
+          <KeyBudgetNumberField
+            control={form.control}
+            name="soft_budget"
+            label="Soft Budget (USD)"
+            placeholder="Get alerts when spend crosses this value, without blocking requests"
+          />
 
           <FormField control={form.control} name="budget_duration" label="Reset Budget">
             {({ value, onChange, id }) => (
@@ -751,9 +754,9 @@ export function KeyEditView({
           <div className="mb-6">
             <MCPToolPermissions
               accessToken={accessToken || ""}
-              selectedServers={((mcpServersAndGroups as { servers?: string[] } | undefined)?.servers || []).filter(
-                (s: string) => s !== NO_MCP_SERVERS_SENTINEL,
-              )}
+              selectedServers={mcpSelection?.servers || []}
+              selectedAccessGroups={mcpSelection?.accessGroups || []}
+              selectedToolsets={mcpSelection?.toolsets || []}
               toolPermissions={(mcpToolPermissions as Record<string, string[]> | undefined) || {}}
               onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
             />

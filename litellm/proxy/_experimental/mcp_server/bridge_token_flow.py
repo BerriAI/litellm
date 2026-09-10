@@ -101,16 +101,27 @@ class _ResolvedKey:
     key: "UserAPIKeyAuth"
 
 
-_KeyResolutionFailure = Literal["no_active_key", "unavailable", "unresolvable"]
+_KeyResolutionFailure = Literal["no_active_key", "unavailable", "faulted", "unresolvable"]
 """Why a token request yielded no active litellm key, kept distinct so a caller statuses each truthfully
 instead of blaming the client for a gateway problem:
 - ``no_active_key``: none was presented, or the presented key is unknown / blocked / expired (the
   caller's request is at fault)
 - ``unavailable``: the auth database was transiently unreachable while resolving (retryable)
+- ``faulted``: the auth database's query engine reported a fault that retrying will not clear (still a
+  503, but the wording must not tell the operator to wait)
 - ``unresolvable``: the gateway cannot resolve identity right now (no DB connection, or an unexpected
   error) -- a gateway fault, not the caller's
 The classification mirrors admission's ``_reload_admitted_key`` so the mint (ingress) and admission
 (egress) never disagree on the status of the same outage."""
+
+
+def _database_failure(exc: Exception) -> Literal["unavailable", "faulted"]:
+    from litellm.proxy.db.exception_handler import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        PrismaDBExceptionHandler,
+    )
+
+    fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(exc) or exc
+    return "faulted" if PrismaDBExceptionHandler.is_permanent_database_fault(fault) else "unavailable"
 
 
 async def _resolve_active_litellm_key(request: Request) -> "_ResolvedKey | _KeyResolutionFailure":
@@ -170,7 +181,7 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
         return "no_active_key"
     except Exception as exc:  # noqa: BLE001  # classify: a DB outage is retryable, anything else is an opaque gateway fault
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(exc):
-            return "unavailable"
+            return _database_failure(exc)
         verbose_logger.debug(
             "_reload_active_key_by_hash: unexpected key-resolution error (%s)",
             type(exc).__name__,
@@ -225,8 +236,9 @@ async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResol
     except (ProxyException, HTTPException):
         return "no_active_key"
     except Exception as exc:  # noqa: BLE001  # a DB outage is retryable; a missing user (get_user_object's wrapped ValueError) or any other resolution failure fails closed as no_active_key, never a 500
-        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
-            return "unavailable"
+        outage: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(exc)
+        if outage is not None:
+            return _database_failure(outage)
         verbose_logger.debug("_reload_active_user_by_id: user-resolution error (%s)", type(exc).__name__)
         return "no_active_key"
     if user_object is None:
@@ -383,6 +395,7 @@ _BridgeMintError = Literal[
     "no_identity",
     "invalid_refresh",
     "identity_unavailable",
+    "identity_faulted",
     "identity_unresolvable",
     "not_configured",
     "no_upstream_token",
@@ -432,6 +445,13 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
                 503,
                 "temporarily_unavailable",
                 "the authentication database is temporarily unreachable; retry shortly",
+            )
+        case "identity_faulted":
+            status, code, desc = (
+                503,
+                "temporarily_unavailable",
+                "the authentication database reported a fault that is not a transient outage; "
+                "retrying will not help until the gateway deployment is repaired",
             )
         case "identity_unresolvable":
             status, code, desc = (
@@ -485,6 +505,8 @@ def _key_resolution_failure_to_mint_error(failure: _KeyResolutionFailure) -> _Br
             return "no_identity"
         case "unavailable":
             return "identity_unavailable"
+        case "faulted":
+            return "identity_faulted"
         case "unresolvable":
             return "identity_unresolvable"
         case _:
@@ -569,6 +591,8 @@ def _refresh_key_failure_to_mint_error(failure: _KeyResolutionFailure) -> _Bridg
             return "invalid_refresh"
         case "unavailable":
             return "identity_unavailable"
+        case "faulted":
+            return "identity_faulted"
         case "unresolvable":
             return "identity_unresolvable"
         case _:

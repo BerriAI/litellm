@@ -66,6 +66,7 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    NonNegativeInt,
     PrivateAttr,
     SerializerFunctionWrapHandler,
     field_serializer,
@@ -631,7 +632,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     type: Required[Literal["reasoning"]]
     id: str
     encrypted_content: str | None
-    summary: list["ChatCompletionReasoningSummaryTextBlock"]
+    summary: ReadOnly[list[ChatCompletionReasoningSummaryTextBlock]]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
@@ -1321,6 +1322,18 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     model_config = {"extra": "allow"}
 
 
+class WebSearchToolUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    num_requests: NonNegativeInt
+
+
+class ResponsesToolUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    web_search: WebSearchToolUsage | None = None
+
+
 ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]
 """
 The status of the response generation.
@@ -1549,6 +1562,9 @@ class ResponseFailedEvent(BaseLiteLLMOpenAIResponseObject):
 class ResponseIncompleteEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE]
     response: ResponsesAPIResponse
+
+
+ResponsesTerminalEvent: TypeAlias = ResponseCompletedEvent | ResponseIncompleteEvent | ResponseFailedEvent
 
 
 class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):

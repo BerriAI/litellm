@@ -15,6 +15,8 @@ export const UI_BASE_URL = (
 // writable path (the image runner already exports TMPDIR) to relocate them.
 export const ARTIFACT_DIR = process.env.E2E_UI_ARTIFACT_DIR || ".";
 
+export const MOCK_PRESIDIO_URL = (process.env.E2E_MOCK_PRESIDIO_URL || "http://127.0.0.1:8091").replace(/\/+$/, "");
+
 const storagePath = (name: string): string => path.join(ARTIFACT_DIR, name);
 
 // Storage state paths for each role
@@ -30,6 +32,7 @@ export const E2E_PROXY_ADMIN_EMAIL = "admin@test.local";
 export const E2E_INTERNAL_USER_ID = "e2e-internal-user";
 export const E2E_INTERNAL_USER_EMAIL = "internal@test.local";
 export const E2E_TEAM_ADMIN_USER_ID = "e2e-team-admin";
+export const E2E_SEEDED_USER_PASSWORD = "E2e-Test-Pass-2026!";
 
 // Key aliases for seeded test keys (match seed.sql)
 export const E2E_UPDATE_LIMITS_KEY_ALIAS = "e2eUpdateLimitsKey";
