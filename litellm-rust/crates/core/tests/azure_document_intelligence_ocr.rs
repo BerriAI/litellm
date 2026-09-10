@@ -76,9 +76,10 @@ fn invalid_page_types_return_typed_errors(#[case] pages: Value) {
 fn invalid_page_values_never_panic(#[case] pages: Value) {
     let input = serde_json::from_value(json!({"pages":pages})).unwrap();
     assert!(
-        crate::ocr::registry::AzureDocumentIntelligence::FORMAT
-            .map_params(input)
-            .is_err()
+        crate::ocr::formats::document_intelligence::AzureDocumentIntelligenceOcrFormat::map_params(
+            input
+        )
+        .is_err()
     );
 }
 #[tokio::test]
@@ -109,9 +110,10 @@ async fn document_intelligence_maps_features(#[case] features: Value, #[case] ex
 #[case(json!(""))]
 fn document_intelligence_rejects_invalid_features(#[case] features: Value) {
     assert!(
-        crate::ocr::registry::AzureDocumentIntelligence::FORMAT
-            .map_params(serde_json::from_value(json!({"features":features})).unwrap())
-            .is_err()
+        crate::ocr::formats::document_intelligence::AzureDocumentIntelligenceOcrFormat::map_params(
+            serde_json::from_value(json!({"features":features})).unwrap()
+        )
+        .is_err()
     );
 }
 #[tokio::test]

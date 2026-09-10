@@ -27,9 +27,7 @@ pub(crate) fn params<I>(_integration: &I, value: Value) -> MappedParams<I>
 where
     I: OcrIntegration,
 {
-    I::FORMAT
-        .map_params(serde_json::from_value(value).unwrap())
-        .unwrap()
+    I::Format::map_params(serde_json::from_value(value).unwrap()).unwrap()
 }
 
 pub(crate) fn transform<I>(
@@ -41,13 +39,12 @@ pub(crate) fn transform<I>(
 where
     I: OcrIntegration,
 {
-    let params = I::FORMAT.map_params(serde_json::from_value(options.clone()).unwrap())?;
+    let params = I::Format::map_params(serde_json::from_value(options.clone()).unwrap())?;
     let preserve_native_response = integration.preserve_native_response(&params);
-    transform_format(&I::FORMAT, model, value, options, preserve_native_response)
+    transform_format::<I::Format>(model, value, options, preserve_native_response)
 }
 
 pub(crate) fn transform_format<F>(
-    format: &F,
     model: &str,
     value: Value,
     options: Value,
@@ -56,12 +53,12 @@ pub(crate) fn transform_format<F>(
 where
     F: OcrFormat,
 {
-    let params = format.map_params(serde_json::from_value(options).unwrap())?;
+    let params = F::map_params(serde_json::from_value(options).unwrap())?;
     let decoded = decode_response(
         &serde_json::to_vec(&value).unwrap(),
         preserve_native_response,
     )?;
-    let mut response = format.transform_response(model, decoded.data, &params)?;
+    let mut response = F::transform_response(model, decoded.data, &params)?;
     response.provider_native_response = decoded.native;
     Ok(response.into_json())
 }
@@ -84,11 +81,10 @@ where
             &[],
         )
         .await?;
-    format_body(&I::FORMAT, model, document.into(), options)
+    format_body::<I::Format>(model, document.into(), options)
 }
 
 pub(crate) fn format_body<F>(
-    format: &F,
     model: &str,
     document: F::PreparedDocument,
     options: Value,
@@ -96,8 +92,8 @@ pub(crate) fn format_body<F>(
 where
     F: OcrFormat,
 {
-    let params = format.map_params(serde_json::from_value(options).unwrap())?;
-    Ok(serde_json::to_value(format.transform_request(model, document, &params)?).unwrap())
+    let params = F::map_params(serde_json::from_value(options).unwrap())?;
+    Ok(serde_json::to_value(F::transform_request(model, document, &params)?).unwrap())
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> OcrRequest {

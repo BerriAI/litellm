@@ -15,7 +15,6 @@ impl OcrIntegration for VertexDeepSeek {
     type Backend = VertexBackend;
     type Format = DeepSeekOcrFormat;
     type DocumentPreparation = super::PassThrough;
-    const FORMAT: Self::Format = DeepSeekOcrFormat;
 
     async fn prepare(
         &self,

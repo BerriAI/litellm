@@ -16,7 +16,6 @@ impl OcrIntegration for AzureMistral {
     type Backend = AzureBackend;
     type Format = MistralOcrFormat;
     type DocumentPreparation = super::RequireInline;
-    const FORMAT: Self::Format = MistralOcrFormat;
 
     async fn prepare(
         &self,

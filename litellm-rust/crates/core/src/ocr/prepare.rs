@@ -32,7 +32,7 @@ pub(crate) fn prepare_ocr_call<I>(
 where
     I: OcrIntegration,
 {
-    let params = I::FORMAT.map_params(params)?;
+    let params = I::Format::map_params(params)?;
     Ok(MappedOcrRequest {
         integration,
         model,

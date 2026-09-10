@@ -15,7 +15,6 @@ impl OcrIntegration for VertexMistral {
     type Backend = VertexBackend;
     type Format = MistralOcrFormat;
     type DocumentPreparation = super::RequireInline;
-    const FORMAT: Self::Format = MistralOcrFormat;
 
     async fn prepare(
         &self,

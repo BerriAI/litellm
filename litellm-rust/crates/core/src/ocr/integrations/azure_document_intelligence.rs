@@ -19,7 +19,6 @@ impl OcrIntegration for AzureDocumentIntelligence {
     type Backend = AzureBackend;
     type Format = AzureDocumentIntelligenceOcrFormat;
     type DocumentPreparation = super::PassThrough;
-    const FORMAT: Self::Format = AzureDocumentIntelligenceOcrFormat;
 
     async fn prepare(
         &self,

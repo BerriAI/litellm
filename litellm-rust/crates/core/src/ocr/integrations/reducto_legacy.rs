@@ -13,7 +13,7 @@ impl OcrIntegration for ReductoLegacy {
     type Backend = ReductoBackend;
     type Format = ReductoParseLegacyFormat;
     type DocumentPreparation = super::ReductoUpload;
-    const FORMAT: Self::Format = ReductoParseLegacyFormat;
+    const GUARDRAIL_STAGE: super::GuardrailStage = super::GuardrailStage::Document;
 
     async fn prepare(
         &self,
@@ -28,8 +28,6 @@ impl OcrIntegration for ReductoLegacy {
             headers: reducto::authenticate(connection, env_lookup)?,
         })
     }
-
-    const GUARDRAIL_STAGE: super::GuardrailStage = super::GuardrailStage::Document;
 
     fn preserve_native_response(&self, _params: &ReductoLegacyParams) -> bool {
         true

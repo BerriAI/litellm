@@ -13,7 +13,6 @@ impl OcrIntegration for MistralDirect {
     type Backend = MistralBackend;
     type Format = MistralOcrFormat;
     type DocumentPreparation = super::PassThrough;
-    const FORMAT: Self::Format = MistralOcrFormat;
 
     async fn prepare(
         &self,

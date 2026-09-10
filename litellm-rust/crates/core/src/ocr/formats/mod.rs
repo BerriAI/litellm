@@ -26,15 +26,13 @@ pub trait OcrFormat: Send + Sync + Sized + 'static {
         Ok(())
     }
 
-    fn map_params(&self, params: Self::InputParams) -> Result<Self::MappedParams, OcrRequestError>;
+    fn map_params(params: Self::InputParams) -> Result<Self::MappedParams, OcrRequestError>;
     fn transform_request(
-        &self,
         model: &str,
         document: Self::PreparedDocument,
         params: &Self::MappedParams,
     ) -> Result<Self::RequestBody, OcrRequestError>;
     fn transform_response(
-        &self,
         model: &str,
         response: Self::ResponseBody,
         params: &Self::MappedParams,

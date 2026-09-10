@@ -118,7 +118,10 @@ impl MediaFetcher {
     }
 
     async fn validate_url(&self, url: &Url) -> Result<(), MediaError> {
-        if !matches!(url.scheme(), "http" | "https") {
+        if !matches!(url.scheme(), "http" | "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
             return Err(MediaError::BlockedUrl);
         }
         let host = url.host_str().ok_or(MediaError::BlockedUrl)?;
@@ -354,5 +357,16 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.to_string().contains("network policy"));
+    }
+
+    #[tokio::test]
+    async fn rejects_url_credentials_before_network_access() {
+        let fetcher = MediaFetcher::new().expect("media fetcher builds");
+        let url =
+            Url::parse("https://user:password@8.8.8.8/document").expect("credentialed URL parses");
+        assert!(matches!(
+            fetcher.validate_url(&url).await,
+            Err(MediaError::BlockedUrl)
+        ));
     }
 }

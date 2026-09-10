@@ -39,7 +39,6 @@ pub trait OcrIntegration: Send + Sync + Sized + 'static {
     type DocumentPreparation: DocumentPreparation<
         Output: Into<<Self::Format as OcrFormat>::PreparedDocument>,
     >;
-    const FORMAT: Self::Format;
     const GUARDRAIL_STAGE: GuardrailStage = GuardrailStage::RequestBody;
 
     fn supports_native_request_format(&self) -> bool {

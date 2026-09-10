@@ -13,7 +13,7 @@ impl OcrIntegration for ReductoV3 {
     type Backend = ReductoBackend;
     type Format = ReductoParseV3Format;
     type DocumentPreparation = super::ReductoUpload;
-    const FORMAT: Self::Format = ReductoParseV3Format;
+    const GUARDRAIL_STAGE: super::GuardrailStage = super::GuardrailStage::Document;
 
     async fn prepare(
         &self,
@@ -28,8 +28,6 @@ impl OcrIntegration for ReductoV3 {
             headers: reducto::authenticate(connection, env_lookup)?,
         })
     }
-
-    const GUARDRAIL_STAGE: super::GuardrailStage = super::GuardrailStage::Document;
 
     fn preserve_native_response(&self, _params: &ReductoV3Params) -> bool {
         true

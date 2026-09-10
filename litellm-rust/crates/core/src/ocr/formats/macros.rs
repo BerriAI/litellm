@@ -36,7 +36,6 @@ macro_rules! ocr_format {
 
             #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
             fn map_params(
-                &self,
                 params: Self::InputParams,
             ) -> Result<Self::MappedParams, $crate::ocr::error::OcrRequestError> {
                 $map(params)
@@ -44,7 +43,6 @@ macro_rules! ocr_format {
 
             #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
             fn transform_request(
-                &self,
                 model: &str,
                 document: Self::PreparedDocument,
                 params: &Self::MappedParams,
@@ -54,7 +52,6 @@ macro_rules! ocr_format {
 
             #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
             fn transform_response(
-                &self,
                 model: &str,
                 response: Self::ResponseBody,
                 params: &Self::MappedParams,

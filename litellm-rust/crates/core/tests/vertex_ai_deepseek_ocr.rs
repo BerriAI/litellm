@@ -8,8 +8,7 @@ use serde_json::json;
 #[case("deepseek-ocr-maas")]
 #[case("deepseek-ai/deepseek-ocr-maas")]
 fn deepseek_request_uses_single_provider_namespace(#[case] model: &str) {
-    let result = format_body(
-        &DeepSeekOcrFormat,
+    let result = format_body::<DeepSeekOcrFormat>(
         model,
         serde_json::from_value::<OcrDocument>(
             json!({"type":"image_url","image_url":"gs://bucket/a.png"}),
@@ -39,8 +38,7 @@ fn vertex_deepseek_response_wraps_markdown_content(
     #[case] content: serde_json::Value,
     #[case] expected: &str,
 ) {
-    let result = transform_format(
-        &DeepSeekOcrFormat,
+    let result = transform_format::<DeepSeekOcrFormat>(
         "model",
         json!({"choices":[{"message":{"content":content}}],"usage":{"prompt_tokens":1}}),
         json!({}),
@@ -59,6 +57,8 @@ fn deepseek_rejects_missing_content_and_invalid_structured_pages() {
         json!({"choices":[{"message":{"content":""}}]}),
         json!({"choices":[{"message":{"content":{"pages":[{"markdown":42}]}}}]}),
     ] {
-        assert!(transform_format(&DeepSeekOcrFormat, "model", response, json!({}), false).is_err());
+        assert!(
+            transform_format::<DeepSeekOcrFormat>("model", response, json!({}), false).is_err()
+        );
     }
 }
