@@ -193,6 +193,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         msg_type: Final = json_message.get("type")
 
         if msg_type == "session.update":
+            # Vertex handles session.update itself and never reaches the parent's handler, so the
+            # declared input audio rate has to be recorded here or the Vertex path silently keeps
+            # the default no matter what the client declares.
+            self._record_input_audio_sample_rate(json_message.get("session") or {})
             if session_configuration_request is None:
                 setup_config: Final = self._build_vertex_ai_setup_config(model, json_message.get("session") or {})
                 gemini_setup_msg: Final = json.dumps({"setup": setup_config})

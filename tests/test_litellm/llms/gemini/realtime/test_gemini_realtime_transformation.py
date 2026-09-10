@@ -2110,14 +2110,19 @@ def test_client_declared_input_audio_rate_is_honored_on_the_wire():
         {"audio": {"input": {"format": {"type": "audio/pcm"}}}},
         {"audio": {"input": {"format": {"type": "audio/pcm", "rate": 0}}}},
         {"audio": {"input": {"format": {"type": "audio/pcm", "rate": -1}}}},
+        {"audio": {"input": {"format": {"type": "audio/pcm", "rate": 7999}}}},
+        {"audio": {"input": {"format": {"type": "audio/pcm", "rate": 48001}}}},
+        {"audio": {"input": {"format": {"type": "audio/pcm", "rate": 100_000_000}}}},
         {"audio": {"input": {"format": {"type": "audio/pcm", "rate": "24000"}}}},
         {"audio": {"input": {"format": {"type": "audio/pcm", "rate": True}}}},
         {"input_audio_format": "pcm16"},
     ],
 )
 def test_malformed_or_absent_declared_rate_keeps_the_native_default(session):
-    """Anything that is not a usable positive integer rate, including the rate-less beta shape and
-    a bool (which is an int subclass), must leave the 16kHz default alone rather than corrupt it."""
+    """Anything that is not a plausible PCM rate, including the rate-less beta shape, a bool (which
+    is an int subclass), and rates outside 8000-48000, must leave the 16kHz default alone. The
+    out-of-range cases matter because the rate feeds the spend estimate: an unclamped 100MHz
+    declaration would bill a long session as a few milliseconds."""
     from typing import Final
 
     config: Final = GeminiRealtimeConfig()
@@ -2141,6 +2146,64 @@ def test_declared_rate_also_drives_the_billed_audio_duration(patch_gemini_transc
     assert usage is not None
     assert usage["input_tokens"] == 50
     assert usage["output_tokens"] == 6
+
+
+def test_vertex_records_the_declared_rate_from_its_own_session_update():
+    """VertexAIRealtimeConfig handles session.update itself and never calls the parent's handler, so
+    without recording the rate on that path a Vertex client's declaration is silently discarded."""
+    from typing import Final
+
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+
+    config: Final = VertexAIRealtimeConfig(access_token="t", project="p", location="us-central1")
+    config.transform_realtime_request(
+        _session_update_message({"audio": {"input": {"format": {"type": "audio/pcm", "rate": 24000}}}}),
+        "gemini-3.5-transcribe-live",
+    )
+    assert _sent_audio_mime_type(config) == "audio/pcm;rate=24000"
+
+
+def test_a_later_rate_declaration_cannot_reprice_already_buffered_audio(
+    patch_gemini_transcribe_live_cost_map_entry,
+):
+    """Audio is converted to seconds at the rate in force when it arrived. Otherwise a client could
+    stream at 16kHz and then declare 24kHz before the estimate is consumed, billing 2/3 of what it
+    actually sent while the backend still processed all of it."""
+    from typing import Final
+
+    config: Final = GeminiRealtimeConfig()
+    # 96000 bytes at the 16kHz default is 3s -> 75 in / 9 out.
+    config.transform_realtime_request(_input_audio_append_message(96000), "gemini-3.5-transcribe-live")
+    config.transform_realtime_request(
+        _session_update_message({"audio": {"input": {"format": {"type": "audio/pcm", "rate": 24000}}}}),
+        "gemini-3.5-transcribe-live",
+    )
+
+    usage: Final = config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live")
+    assert usage is not None
+    assert usage["input_tokens"] == 75
+    assert usage["output_tokens"] == 9
+
+
+def test_each_chunk_is_billed_at_the_rate_declared_when_it_arrived(
+    patch_gemini_transcribe_live_cost_map_entry,
+):
+    """Mixed-rate sessions bill per chunk: 96000 bytes at 16kHz (3s) then 96000 at 24kHz (2s) is 5s
+    total, not 5s at either single rate."""
+    from typing import Final
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(_input_audio_append_message(96000), "gemini-3.5-transcribe-live")
+    config.transform_realtime_request(
+        _session_update_message({"audio": {"input": {"format": {"type": "audio/pcm", "rate": 24000}}}}),
+        "gemini-3.5-transcribe-live",
+    )
+    config.transform_realtime_request(_input_audio_append_message(96000), "gemini-3.5-transcribe-live")
+
+    usage: Final = config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live")
+    assert usage is not None
+    assert usage["input_tokens"] == 125  # 5s * 25 audio tokens/sec
+    assert usage["output_tokens"] == 15  # round(5 * 175 / 60)
 
 
 def test_transcribe_live_completed_event_carries_estimated_usage(patch_gemini_transcribe_live_cost_map_entry):
