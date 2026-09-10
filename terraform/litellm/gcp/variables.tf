@@ -206,6 +206,45 @@ variable "gateway_num_workers" {
   }
 }
 
+variable "gateway_connection_pool_enabled" {
+  description = <<-EOT
+    Run an in-container PgBouncer (transaction mode, loopback) in each gateway
+    instance, shared by every uvicorn worker. Without it each of the
+    `gateway_num_workers` workers opens its own Prisma pool straight to
+    Cloud SQL, so an instance's footprint against the database connection
+    ceiling is workers x connection_limit and grows with every instance. Sets
+    LITELLM_PGBOUNCER_ENABLED / LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS /
+    LITELLM_PGBOUNCER_MAX_CLIENT_CONN on the gateway container only. The
+    module's Cloud SQL authenticates with the static password in Secret
+    Manager, which is what the pooler needs. Mirrors the AWS stack's
+    gateway_connection_pool_enabled.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gateway_pool_max_db_connections" {
+  description = "Upstream Cloud SQL connections one gateway instance may hold when gateway_connection_pool_enabled is set, regardless of gateway_num_workers. 20 suits 4 workers."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.gateway_pool_max_db_connections >= 1
+    error_message = "gateway_pool_max_db_connections must be >= 1."
+  }
+}
+
+variable "gateway_pool_max_client_conn" {
+  description = "Client connections the in-container PgBouncer accepts from the gateway workers when gateway_connection_pool_enabled is set."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.gateway_pool_max_client_conn >= 1
+    error_message = "gateway_pool_max_client_conn must be >= 1."
+  }
+}
+
 # Cloud Run autoscales out of the box (request-rate driven). The min/max
 # bounds mirror the HPA replica bounds in helm/litellm/values.yaml so each
 # stack scales over the same range. Cloud Run has no direct CPU-utilization

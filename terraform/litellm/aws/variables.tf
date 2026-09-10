@@ -200,6 +200,45 @@ variable "gateway_num_workers" {
   }
 }
 
+variable "gateway_connection_pool_enabled" {
+  description = <<-EOT
+    Run an in-container PgBouncer (transaction mode, loopback) in each gateway
+    task, shared by every uvicorn worker. Without it each of the
+    `gateway_num_workers` workers opens its own Prisma pool straight to
+    Postgres, so a task's footprint against the database connection ceiling is
+    workers x connection_limit and grows with every task. Sets
+    LITELLM_PGBOUNCER_ENABLED / LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS /
+    LITELLM_PGBOUNCER_MAX_CLIENT_CONN on the gateway container only. Requires
+    an existing database via `database_url`: the module-created Aurora
+    authenticates with IAM tokens, which the pooler cannot follow because it
+    holds one static password for the life of the task.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gateway_pool_max_db_connections" {
+  description = "Upstream Postgres connections one gateway task may hold when gateway_connection_pool_enabled is set, regardless of gateway_num_workers. 20 suits 4 workers; a 5000-connection database then fits roughly 200 tasks."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.gateway_pool_max_db_connections >= 1
+    error_message = "gateway_pool_max_db_connections must be >= 1."
+  }
+}
+
+variable "gateway_pool_max_client_conn" {
+  description = "Client connections the in-container PgBouncer accepts from the gateway workers when gateway_connection_pool_enabled is set."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.gateway_pool_max_client_conn >= 1
+    error_message = "gateway_pool_max_client_conn must be >= 1."
+  }
+}
+
 variable "backend_cpu" {
   description = "Fargate CPU units for the backend task (1024 = 1 vCPU)."
   type        = number

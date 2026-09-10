@@ -213,6 +213,12 @@ locals {
   # otherwise we keep the image's ENTRYPOINT and only override `command`.
   gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
 
+  gateway_pool_env = var.gateway_connection_pool_enabled ? [
+    { name = "LITELLM_PGBOUNCER_ENABLED", value = "true" },
+    { name = "LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS", value = tostring(var.gateway_pool_max_db_connections) },
+    { name = "LITELLM_PGBOUNCER_MAX_CLIENT_CONN", value = tostring(var.gateway_pool_max_client_conn) },
+  ] : []
+
   metrics_enabled       = var.gateway_metrics_port != null
   metrics_multiproc_dir = "/tmp/litellm_prometheus_multiproc"
   metrics_volume        = "prometheus-multiproc"
@@ -253,7 +259,7 @@ locals {
 
   backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
 
-  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args};; *) exec uvicorn gateway.main:app ${local.gateway_uvicorn_args};; esac"
+  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run python -m gateway.launch ${local.gateway_uvicorn_args};; *) exec python -m gateway.launch ${local.gateway_uvicorn_args};; esac"
   backend_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args};; *) exec uvicorn backend.main:app ${local.backend_uvicorn_args};; esac"
 
   gateway_proxy_overrides = local.proxy_config_enabled ? {
@@ -298,6 +304,11 @@ resource "aws_ecs_task_definition" "gateway" {
       )
       error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
     }
+
+    precondition {
+      condition     = !var.gateway_connection_pool_enabled || local.byo_database
+      error_message = "gateway_connection_pool_enabled requires an existing database via database_url with create_database = false: the module-created Aurora authenticates with IAM tokens, which the in-container pgbouncer cannot follow because it holds a static database password."
+    }
   }
 
   family                   = "${local.name}-gateway"
@@ -323,6 +334,7 @@ resource "aws_ecs_task_definition" "gateway" {
           local.gateway_extra_env_list,
           local.proxy_config_env,
           local.metrics_env,
+          local.gateway_pool_env,
         )
         secrets     = concat(local.shared_secrets, local.gateway_extra_secrets_list)
         mountPoints = local.metrics_mount_points
