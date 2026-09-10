@@ -131,6 +131,7 @@ from litellm.proxy.db.health_check_latest import (
     fetch_latest_health_checks_for_models,
 )
 from litellm.proxy.db.log_db_metrics import log_db_metrics
+from litellm.proxy.db.pgbouncer import database_url_is_pooled
 from litellm.proxy.db.prisma_client import (
     PrismaWrapper,
     parse_iam_endpoint_from_url,
@@ -4007,6 +4008,7 @@ class PrismaClient:
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
             raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
         token_auth: Final = self.token_auth
+        writer_token_auth: Final = None if database_url_is_pooled() else token_auth
         # When read-replica routing is on, tag log lines with [writer]/[reader]
         # so the two wrappers' interleaved token refresh logs can be told apart.
         # Single-DB deployments get an empty prefix (logs unchanged).
@@ -4015,13 +4017,13 @@ class PrismaClient:
         if http_client is not None:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                token_auth=token_auth,
+                token_auth=writer_token_auth,
                 log_prefix=writer_log_prefix,
             )
         else:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                token_auth=token_auth,
+                token_auth=writer_token_auth,
                 log_prefix=writer_log_prefix,
             )
 

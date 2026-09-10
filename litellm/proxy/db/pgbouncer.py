@@ -18,19 +18,28 @@ Migrations and the schema diff run in the supervisor before the pooler is
 started, so they always go straight to Postgres. ``DATABASE_URL_READ_REPLICA``
 is left untouched.
 
-The pooler holds the database password from startup, so it cannot be combined
-with ``IAM_TOKEN_DB_AUTH`` or ``AZURE_POSTGRESQL_AUTH``: those rotate the
-password inside every worker on their own schedule, and PgBouncer would keep
-authenticating upstream with the expired token.
+The workers never hold the upstream credential: they log in to PgBouncer as
+``litellm_pgbouncer`` with a random password made at startup, and PgBouncer
+takes the database user's password from its auth file. Under
+``IAM_TOKEN_DB_AUTH`` or ``AZURE_POSTGRESQL_AUTH`` that password is a
+short-lived token, so the supervisor mints a new one before it expires,
+rewrites the auth file and asks PgBouncer to reload; only new upstream
+connections authenticate, so live ones are unaffected. The pooled
+``DATABASE_URL`` then carries a static password, and the workers must not run
+their own token refresh against it: ``LITELLM_PGBOUNCER_POOLED_DATABASE_URL``
+tells them so, while a read replica keeps refreshing its own token.
 """
 
 from __future__ import annotations
 
 import atexit
+import functools
 import os
 import re
+import secrets
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -39,6 +48,7 @@ import time
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -47,10 +57,18 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.db.token_auth import AZURE_POSTGRESQL_AUTH_ENV_VAR, IAM_TOKEN_DB_AUTH_ENV_VAR
+from litellm.proxy.db.token_auth import (
+    DatabaseTokenAuth,
+    IAMEndpoint,
+    mint_database_token,
+    parse_database_token_expiration,
+    parse_iam_endpoint_from_url,
+)
 
 PGBOUNCER_ENV_PREFIX: Final = "LITELLM_PGBOUNCER_"
+PGBOUNCER_POOLED_ENV_VAR: Final = "LITELLM_PGBOUNCER_POOLED_DATABASE_URL"
 PGBOUNCER_LISTEN_ADDR: Final = "127.0.0.1"
+PGBOUNCER_POOL_USER: Final = "litellm_pgbouncer"
 PGBOUNCER_INI_NAME: Final = "pgbouncer.ini"
 PGBOUNCER_USERLIST_NAME: Final = "userlist.txt"
 PGBOUNCER_CA_NAME: Final = "server-ca.pem"
@@ -59,13 +77,11 @@ PGBOUNCER_READY_TIMEOUT_SECONDS: Final = 15.0
 PGBOUNCER_STOP_GRACE_SECONDS: Final = 10.0
 PGBOUNCER_UNPRIVILEGED_USER: Final = "nobody"
 PGBOUNCER_MIN_VERSION: Final = (1, 19)
+PGBOUNCER_MAX_PASSWORD_BYTES: Final = 2048
 PGBOUNCER_VERSION_PATTERN: Final = re.compile(r"PgBouncer (\d+)\.(\d+)")
-PGBOUNCER_LIST_DELIMITER_PATTERN: Final = re.compile(r"[,\s]")
-PGBOUNCER_TOKEN_AUTH_CONFLICT: Final = (
-    f"the in-container pgbouncer cannot be combined with {IAM_TOKEN_DB_AUTH_ENV_VAR} or "
-    f"{AZURE_POSTGRESQL_AUTH_ENV_VAR}: each worker rotates the database password on its own schedule and the pooler "
-    "would keep using the expired token upstream. Disable the pooler or use a static database password"
-)
+PGBOUNCER_TOKEN_REFRESH_BUFFER_SECONDS: Final = 180.0
+PGBOUNCER_TOKEN_FALLBACK_REFRESH_SECONDS: Final = 600.0
+PGBOUNCER_TOKEN_RETRY_SECONDS: Final = 30.0
 
 # Prisma's client-side TLS params describe the hop to Postgres, which becomes
 # PgBouncer's server side. They move into ``server_tls_*`` and must not stay on
@@ -97,9 +113,17 @@ class PgBouncerSettings(BaseSettings):
 @dataclass(frozen=True, slots=True)
 class PgBouncerPlan:
     ini: str
-    userlist: str
     pooled_url: str
+    upstream_user: str
+    upstream_password: str | None
+    pool_password: str
     ca_source: str | None = None
+
+    def userlist(self, upstream_password: str) -> str:
+        return "".join(
+            f"{_userlist_quote(user)} {_userlist_quote(password)}\n"
+            for user, password in ((self.upstream_user, upstream_password), (PGBOUNCER_POOL_USER, self.pool_password))
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,7 +197,9 @@ def plan_pgbouncer(
 
     Params describing Prisma's own pool (``connection_limit``, ``pool_timeout``,
     ...) stay on the pooled URL; the TLS params and ``options`` describe the hop
-    to Postgres and move into the PgBouncer config. ``run_as_user`` is the
+    to Postgres and move into the PgBouncer config. The upstream password is
+    left out of the config on purpose: PgBouncer then takes it from the auth
+    file, which can be rewritten while it runs. ``run_as_user`` is the
     unprivileged user PgBouncer drops to when the proxy runs as root, which
     PgBouncer itself refuses to do.
     """
@@ -184,14 +210,12 @@ def plan_pgbouncer(
     dbname: Final = urllib.parse.unquote(parsed.path.lstrip("/"))
     username: Final = urllib.parse.unquote(parsed.username or "")
     password: Final = None if parsed.password is None else urllib.parse.unquote(parsed.password)
-    if not parsed.hostname or not username or password is None or not dbname:
+    if not parsed.hostname or not username or not dbname:
+        return PgBouncerError("DATABASE_URL must carry a host, user and database name for the in-container PgBouncer")
+    if username == PGBOUNCER_POOL_USER:
         return PgBouncerError(
-            "DATABASE_URL must carry a host, user, password and database name for the in-container PgBouncer"
-        )
-    if PGBOUNCER_LIST_DELIMITER_PATTERN.search(username):
-        return PgBouncerError(
-            f"the database user {username!r} cannot be named in PgBouncer's stats_users list: "
-            "PgBouncer splits list settings on commas and whitespace and has no quoting for them"
+            f"the database user cannot be named {PGBOUNCER_POOL_USER!r}: that is the user the workers log in to the "
+            "in-container PgBouncer as, and PgBouncer keeps one password per user"
         )
     if "sslidentity" in params:
         return PgBouncerError("client certificates (sslidentity) are not supported with the in-container PgBouncer")
@@ -212,7 +236,6 @@ def plan_pgbouncer(
             f"port={parsed.port or 5432}",
             f"dbname={_single_quoted(dbname)}",
             f"user={_single_quoted(username)}",
-            f"password={_single_quoted(password)}",
             *((f"connect_query={_single_quoted(connect_query)}",) if connect_query else ()),
         )
     )
@@ -227,7 +250,7 @@ def plan_pgbouncer(
             f"unix_socket_dir = {runtime_dir}",
             f"auth_file = {runtime_dir / PGBOUNCER_USERLIST_NAME}",
             "auth_type = scram-sha-256",
-            f"stats_users = {username}",
+            f"stats_users = {PGBOUNCER_POOL_USER}",
             "pool_mode = transaction",
             f"max_client_conn = {settings.max_client_conn}",
             f"default_pool_size = {settings.max_db_connections}",
@@ -238,39 +261,173 @@ def plan_pgbouncer(
             "",
         )
     )
-    userlist: Final = f"{_userlist_quote(username)} {_userlist_quote(password)}\n"
     pooled_query: Final = urllib.parse.urlencode(
         (*((key, value) for key, value in params.items() if key not in POOLED_URL_DROPPED_KEYS), ("pgbouncer", "true"))
     )
-    credentials: Final = f"{urllib.parse.quote(username, safe='')}:{urllib.parse.quote(password, safe='')}"
+    pool_password: Final = secrets.token_urlsafe(32)
     pooled_url: Final = urllib.parse.urlunsplit(
-        parsed._replace(netloc=f"{credentials}@{PGBOUNCER_LISTEN_ADDR}:{settings.port}", query=pooled_query)
+        parsed._replace(
+            netloc=f"{PGBOUNCER_POOL_USER}:{pool_password}@{PGBOUNCER_LISTEN_ADDR}:{settings.port}", query=pooled_query
+        )
     )
-    return PgBouncerPlan(ini=ini, userlist=userlist, pooled_url=pooled_url, ca_source=params.get("sslcert") or None)
+    return PgBouncerPlan(
+        ini=ini,
+        pooled_url=pooled_url,
+        upstream_user=username,
+        upstream_password=password,
+        pool_password=pool_password,
+        ca_source=params.get("sslcert") or None,
+    )
 
 
-def write_pgbouncer_files(plan: PgBouncerPlan, runtime_dir: Path, run_as_user: str | None) -> Path | PgBouncerError:
-    """Write the ini, userlist (both hold the password, so mode 0600) and CA copy, and return the ini path.
+def _write_private(path: Path, content: str, run_as_user: str | None) -> None:
+    with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
+        handle.write(content)
+    if run_as_user is not None:
+        shutil.chown(path, user=run_as_user)
+
+
+def write_pgbouncer_ini(plan: PgBouncerPlan, runtime_dir: Path, run_as_user: str | None) -> Path | PgBouncerError:
+    """Write the ini (mode 0600) and the CA copy, and return the ini path.
 
     ``run_as_user`` is the user PgBouncer drops to when started as root; it has
     to own the files it re-reads on reload and the socket directory.
     """
     ini_path: Final = runtime_dir / PGBOUNCER_INI_NAME
-    userlist_path: Final = runtime_dir / PGBOUNCER_USERLIST_NAME
     ca_path: Final = runtime_dir / PGBOUNCER_CA_NAME
     if plan.ca_source is not None:
         try:
             shutil.copyfile(plan.ca_source, ca_path)
         except OSError as error:
             return PgBouncerError(f"cannot read the CA bundle {plan.ca_source!r} named by sslcert: {error}")
-    for path, content in ((userlist_path, plan.userlist), (ini_path, plan.ini)):
-        path.touch(mode=0o600)
-        path.write_text(content, encoding="utf-8")
+    _write_private(ini_path, plan.ini, run_as_user)
     if run_as_user is not None:
         runtime_dir.chmod(0o700)
-        for path in (runtime_dir, ini_path, userlist_path, *((ca_path,) if plan.ca_source is not None else ())):
+        for path in (runtime_dir, *((ca_path,) if plan.ca_source is not None else ())):
             shutil.chown(path, user=run_as_user)
     return ini_path
+
+
+def write_userlist(userlist: str, runtime_dir: Path, run_as_user: str | None) -> Path:
+    """Replace the auth file in one step, so a PgBouncer starting or reloading meanwhile reads the old or the new one whole."""
+    userlist_path: Final = runtime_dir / PGBOUNCER_USERLIST_NAME
+    staged_path: Final = runtime_dir / f".{PGBOUNCER_USERLIST_NAME}.next"
+    _write_private(staged_path, userlist, run_as_user)
+    os.replace(staged_path, userlist_path)
+    return userlist_path
+
+
+def export_pooled_database_url(pooled_url: str) -> None:
+    os.environ["DATABASE_URL"] = pooled_url
+    os.environ[PGBOUNCER_POOLED_ENV_VAR] = "true"
+
+
+def database_url_is_pooled(environ: Mapping[str, str] = os.environ) -> bool:
+    return environ.get(PGBOUNCER_POOLED_ENV_VAR) == "true"
+
+
+@dataclass(frozen=True, slots=True)
+class PgBouncerTokenSource:
+    auth: DatabaseTokenAuth
+    endpoint: IAMEndpoint
+
+    def mint(self) -> str:
+        """The token as Postgres expects it: ``mint_database_token`` returns it percent-encoded for a URL."""
+        return urllib.parse.unquote(mint_database_token(self.auth, self.endpoint))
+
+    def expires_at(self, token: str) -> datetime | None:
+        return parse_database_token_expiration(self.auth, token)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class PgBouncerTokenRefresher:
+    """Keeps the token in PgBouncer's auth file current from a daemon thread.
+
+    ``install`` gets each fresh token and is expected to rewrite the auth file
+    and reload PgBouncer. The next refresh is due ``buffer_seconds`` before the
+    token expires, or ``fallback_seconds`` later when the expiry cannot be read.
+    A refresh that fails leaves the previous auth file in place and is retried
+    after ``retry_seconds``: the old token stays good until it expires, so a
+    transient credential-provider error costs nothing unless it persists.
+    """
+
+    def __init__(
+        self,
+        source: PgBouncerTokenSource,
+        install: Callable[[str], None],
+        *,
+        buffer_seconds: float = PGBOUNCER_TOKEN_REFRESH_BUFFER_SECONDS,
+        fallback_seconds: float = PGBOUNCER_TOKEN_FALLBACK_REFRESH_SECONDS,
+        retry_seconds: float = PGBOUNCER_TOKEN_RETRY_SECONDS,
+        now: Callable[[], datetime] = _utcnow,
+    ) -> None:
+        self._source: Final = source
+        self._install: Final = install
+        self._buffer_seconds: Final = buffer_seconds
+        self._fallback_seconds: Final = fallback_seconds
+        self._retry_seconds: Final = retry_seconds
+        self._now: Final = now
+        self._stopping: Final = threading.Event()
+        self._delay: float = 0.0
+        self._thread: threading.Thread | None = None
+
+    def refresh(self) -> float | PgBouncerError:
+        label: Final = self._source.auth.label
+        try:
+            token: Final = self._source.mint()
+        except Exception as mint_error:
+            return PgBouncerError(f"could not mint a {label} for the in-container pgbouncer: {mint_error!r}")
+        if len(token.encode()) >= PGBOUNCER_MAX_PASSWORD_BYTES:
+            return PgBouncerError(
+                f"the {label} is {len(token.encode())} bytes long, but PgBouncer's auth file holds passwords of at "
+                f"most {PGBOUNCER_MAX_PASSWORD_BYTES - 1} bytes"
+            )
+        try:
+            self._install(token)
+        except OSError as install_error:
+            return PgBouncerError(f"could not install the {label} into the pgbouncer auth file: {install_error}")
+        expires_at: Final = self._source.expires_at(token)
+        if expires_at is None:
+            return self._fallback_seconds
+        return max(self._retry_seconds, (expires_at - self._now()).total_seconds() - self._buffer_seconds)
+
+    def start(self) -> PgBouncerError | None:
+        primed: Final = self.refresh()
+        if isinstance(primed, PgBouncerError):
+            return primed
+        self._delay = primed
+        self._thread = threading.Thread(target=self._run, daemon=True, name="litellm-pgbouncer-token-refresh")
+        self._thread.start()
+        return None
+
+    def _run(self) -> None:
+        while not self._stopping.wait(self._delay):
+            self._delay = self._refresh_and_report()
+
+    def _refresh_and_report(self) -> float:
+        outcome: Final = self.refresh()
+        if isinstance(outcome, PgBouncerError):
+            verbose_proxy_logger.error(
+                "In-container pgbouncer keeps its current %s (%s); retrying in %.0fs.",
+                self._source.auth.label,
+                outcome.reason,
+                self._retry_seconds,
+            )
+            return self._retry_seconds
+        verbose_proxy_logger.info(
+            "In-container pgbouncer picked up a fresh %s; the next one is due in %.0fs.",
+            self._source.auth.label,
+            outcome,
+        )
+        return outcome
+
+    def stop(self) -> None:
+        self._stopping.set()
+        if self._thread is not None:
+            self._thread.join()
 
 
 def _port_open(port: int) -> bool:
@@ -453,12 +610,50 @@ class PgBouncerProcess:
         )
         threading.Thread(target=self._restart_after_delay, daemon=True, name="litellm-pgbouncer-supervisor").start()
 
+    def reload(self) -> None:
+        with self._lock:
+            if self._process is not None:
+                self._process.send_signal(signal.SIGHUP)
+
     def stop(self) -> None:
         with self._lock:
             self._stopping.set()
             process: Final = self._process
         if process is not None:
             _end(process)
+
+
+def install_pgbouncer_token(
+    plan: PgBouncerPlan, runtime_dir: Path, run_as_user: str | None, pooler: PgBouncerProcess, token: str
+) -> None:
+    write_userlist(plan.userlist(token), runtime_dir, run_as_user)
+    pooler.reload()
+
+
+def _install_upstream_password(
+    plan: PgBouncerPlan,
+    runtime_dir: Path,
+    run_as_user: str | None,
+    pooler: PgBouncerProcess,
+    token_auth: DatabaseTokenAuth | None,
+    upstream_url: str,
+) -> PgBouncerTokenRefresher | None | PgBouncerError:
+    if token_auth is None:
+        if plan.upstream_password is None:
+            return PgBouncerError(
+                "DATABASE_URL carries no password and neither IAM_TOKEN_DB_AUTH nor AZURE_POSTGRESQL_AUTH is on, "
+                "so the in-container PgBouncer has nothing to authenticate to Postgres with"
+            )
+        write_userlist(plan.userlist(plan.upstream_password), runtime_dir, run_as_user)
+        return None
+    refresher: Final = PgBouncerTokenRefresher(
+        PgBouncerTokenSource(auth=token_auth, endpoint=parse_iam_endpoint_from_url(upstream_url)),
+        functools.partial(install_pgbouncer_token, plan, runtime_dir, run_as_user, pooler),
+    )
+    failed: Final = refresher.start()
+    if failed is not None:
+        return failed
+    return refresher
 
 
 def _only_in_this_process(action: Callable[[], None]) -> Callable[[], None]:
@@ -475,7 +670,7 @@ def _only_in_this_process(action: Callable[[], None]) -> Callable[[], None]:
 def start_in_container_pgbouncer(
     settings: PgBouncerSettings,
     upstream_url: str,
-    token_auth_enabled: bool = False,
+    token_auth: DatabaseTokenAuth | None = None,
     register_exit_hook: Callable[[Callable[[], None]], object] = atexit.register,
 ) -> str | PgBouncerError:
     """Start the pooler for ``upstream_url`` and return the loopback URL the workers must use.
@@ -484,10 +679,9 @@ def start_in_container_pgbouncer(
     once the worker manager has returned, and only by the process that started
     it (gunicorn forks its workers, so they carry the hooks too). PgBouncer
     refuses to run as root, so a root proxy (the default image) has it drop to
-    ``nobody``.
+    ``nobody``. With ``token_auth`` the password on ``upstream_url`` is ignored:
+    the pooler mints its own tokens and renews them for as long as it runs.
     """
-    if token_auth_enabled:
-        return PgBouncerError(PGBOUNCER_TOKEN_AUTH_CONFLICT)
     version: Final = pgbouncer_version(settings.binary)
     if isinstance(version, PgBouncerError):
         return version
@@ -503,7 +697,7 @@ def start_in_container_pgbouncer(
     plan: Final = plan_pgbouncer(upstream_url, settings, runtime_dir, run_as_user)
     if isinstance(plan, PgBouncerError):
         return plan
-    ini_path: Final = write_pgbouncer_files(plan, runtime_dir, run_as_user)
+    ini_path: Final = write_pgbouncer_ini(plan, runtime_dir, run_as_user)
     if isinstance(ini_path, PgBouncerError):
         return ini_path
     pooler: Final = PgBouncerProcess(
@@ -511,15 +705,23 @@ def start_in_container_pgbouncer(
         port=settings.port,
         socket_path=unix_socket_path(runtime_dir, settings.port),
     )
+    refresher: Final = _install_upstream_password(plan, runtime_dir, run_as_user, pooler, token_auth, upstream_url)
+    if isinstance(refresher, PgBouncerError):
+        return refresher
     failed: Final = pooler.start()
     if failed is not None:
+        if refresher is not None:
+            refresher.stop()
         return failed
     register_exit_hook(_only_in_this_process(pooler.stop))
+    if refresher is not None:
+        register_exit_hook(_only_in_this_process(refresher.stop))
     verbose_proxy_logger.info(
-        "In-container pgbouncer (pid %s) listening on %s:%s; capping this pod at %s upstream database connections.",
+        "In-container pgbouncer (pid %s) listening on %s:%s; capping this pod at %s upstream database connections%s.",
         pooler.pid,
         PGBOUNCER_LISTEN_ADDR,
         settings.port,
         settings.max_db_connections,
+        "" if token_auth is None else f" and renewing its {token_auth.label} before each one expires",
     )
     return plan.pooled_url
