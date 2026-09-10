@@ -11017,6 +11017,14 @@ class Router:
         """
         return self.get_model_group_info(model_group)
 
+    def cached_model_group_info(self, model_group: str) -> ModelGroupInfo | None:
+        return self._cached_get_model_group_info(model_group)
+
+    @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+    def cached_deployment_model_info(self, model_id: str, model_name: str) -> ModelInfo | None:
+        """Read-only ``get_deployment_model_info``: the returned mapping is shared across callers."""
+        return self.get_deployment_model_info(model_id=model_id, model_name=model_name)
+
     async def get_remaining_model_group_usage(self, model_group: str) -> dict[str, int]:
         model_group_info: Final = self._cached_get_model_group_info(model_group)
 
@@ -11794,6 +11802,7 @@ class Router:
         result and bypass budget enforcement.
         """
         self._cached_get_model_group_info.cache_clear()
+        self.cached_deployment_model_info.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
 
