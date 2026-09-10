@@ -46,11 +46,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import (
+    default_sso_assertion_store,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     AssertionStoreUnavailable,
-    DbSSOAssertionStore,
     SSOAssertionStore,
-    SSOIdentityAssertion,
+    assertion_expired,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
     ExchangedToken,
@@ -63,6 +65,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
+    AuthResolution,
     AuthSpecKind,
     AwsSigV4Config,
     Byok,
@@ -74,6 +77,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     NoneConfig,
     PassthroughConfig,
     PrivateKeyJwtAuth,
+    ResolvedCredential,
     ServerSpec,
     SharedKey,
     Subject,
@@ -129,12 +133,12 @@ class UpstreamCredentialProvider:
         self._token_endpoint: TokenEndpointClient = token_endpoint or TokenEndpointClient()
         self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
         self._client_credentials_source = client_credentials_source or ClientCredentialsTokenSource()
-        self._sso_assertion_store: SSOAssertionStore = sso_assertion_store or DbSSOAssertionStore()
+        self._sso_assertion_store: SSOAssertionStore = sso_assertion_store or default_sso_assertion_store()
 
     async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
         match server.config:
             case NoneConfig():
-                return Ok(NoOpAuth())
+                return self._none(server)
             case ApiKeyConfig() as config:
                 return self._api_key(config)
             case PassthroughConfig():
@@ -145,11 +149,20 @@ class UpstreamCredentialProvider:
                 return await self._token_exchange(subject, server, config)
             case IdJagConfig() as config:
                 return await self._id_jag(subject, server, config)
-            case AuthorizationCodeConfig():
-                return await self._authorization_code(subject, server)
+            case AuthorizationCodeConfig() as config:
+                return await self._authorization_code(subject, server, config)
             case AwsSigV4Config():
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
+
+    def _none(self, server: ServerSpec) -> Result[httpx.Auth, CredError]:
+        try:
+            resource: Final = httpx.URL(server.resource)
+        except httpx.InvalidURL:
+            return Ok(NoOpAuth())
+        if resource.userinfo:
+            return Error(CredError.of_url_credentials_not_allowed())
+        return Ok(NoOpAuth())
 
     async def has_user_token(self, subject: Subject, server: ServerSpec) -> bool:
         """Whether a usable per-user token exists for this server (the preemptive 401's check).
@@ -237,7 +250,7 @@ class UpstreamCredentialProvider:
                     "Sign in through LiteLLM SSO so the gateway captures one."
                 )
             )
-        if _assertion_expired(assertion, datetime.now(timezone.utc)):
+        if assertion_expired(assertion, datetime.now(timezone.utc)):
             return Error(
                 CredError.of_precondition_required(
                     "The stored IdP identity assertion for this user has expired. Sign in through "
@@ -284,15 +297,19 @@ class UpstreamCredentialProvider:
 
         match await self._exchanged_tokens.get_or_compute(slot, _exchange, fingerprint=fingerprint):
             case Ok(access_token):
-                return Ok(StaticHeaderAuth(f"Bearer {access_token}"))
+                header_name, header_value = config.header(access_token)
+                return Ok(StaticHeaderAuth(header_value, header_name=header_name))
             case Error(err):
                 return Error(err)
 
-    async def _authorization_code(self, subject: Subject, server: ServerSpec) -> Result[StaticHeaderAuth, CredError]:
+    async def _authorization_code(
+        self, subject: Subject, server: ServerSpec, config: AuthorizationCodeConfig
+    ) -> Result[StaticHeaderAuth, CredError]:
         token: Final = await self._authz_token(subject, server)
         if token is None:
             return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
-        return Ok(StaticHeaderAuth(f"Bearer {token.access_token}", header_name="Authorization"))
+        header_name, header_value = config.header(token.access_token)
+        return Ok(StaticHeaderAuth(header_value, header_name=header_name))
 
     async def _client_credentials(
         self, server_id: str, config: ClientCredentialsConfig
@@ -307,7 +324,7 @@ class UpstreamCredentialProvider:
         match await self._client_credentials_source.get(server_id, config):
             case Ok(token):
                 refetch: Final = partial(self._client_credentials_source.refetch, server_id, config)
-                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch))
+                return Ok(ClientCredentialsBearerAuth(token.access_token, refetch, config))
             case Error(err):
                 return Error(err)
 
@@ -332,7 +349,8 @@ class UpstreamCredentialProvider:
             inbound.get_secret_value(), server, config, tenant_id=subject.tenant_id
         ):
             case Ok(token):
-                return Ok(StaticHeaderAuth(f"Bearer {token.access_token}", header_name="Authorization"))
+                header_name, header_value = config.header(token.access_token)
+                return Ok(StaticHeaderAuth(header_value, header_name=header_name))
             case Error(err):
                 return Error(err)
 
@@ -391,19 +409,6 @@ def _id_jag_slot_key(subject: Subject, server: ServerSpec) -> str:
     return hashlib.sha256(material.encode()).hexdigest()
 
 
-def _assertion_expired(assertion: SSOIdentityAssertion, now: datetime) -> bool:
-    """Whether the stored assertion's ``exp`` has passed. An assertion carrying no expiry is
-    treated as usable and left for the IdP to reject, since the store records what the id_token
-    claimed rather than imposing a lifetime of its own. A naive ``expires_at`` is read as UTC so a
-    stored value that lost its offset compares instead of raising.
-    """
-    expires_at: Final = assertion.expires_at
-    if expires_at is None:
-        return False
-    normalized: Final = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=timezone.utc)
-    return normalized <= now
-
-
 def _id_jag_fingerprint(subject_token: str, server_id: str, config: IdJagConfig) -> str:
     """What the cached leg-2 bearer was minted from: the subject token, the server, and the config.
 
@@ -445,3 +450,32 @@ def _client_auth_fingerprint(client_auth: ClientAuth) -> str:
 
 def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
     return Error(CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet"))
+
+
+async def resolve_credentials_with_source(
+    provider: UpstreamCredentialProvider, subject: Subject, server: ServerSpec
+) -> Result[ResolvedCredential, CredError]:
+    match await provider.resolve_credentials(subject, server):
+        case Error(err):
+            return Error(err)
+        case Ok(auth):
+            if isinstance(auth, NoOpAuth):
+                return Ok(ResolvedCredential(auth, AuthResolution.no_auth))
+            match server.config:
+                case NoneConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.no_auth))
+                case ApiKeyConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.static_token))
+                case PassthroughConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.oauth2_passthrough))
+                case ClientCredentialsConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.client_credentials))
+                case TokenExchangeConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.token_exchange))
+                case IdJagConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.id_jag))
+                case AuthorizationCodeConfig():
+                    return Ok(ResolvedCredential(auth, AuthResolution.stored_user_token))
+                case AwsSigV4Config():
+                    return Ok(ResolvedCredential(auth, AuthResolution.aws_sigv4))
+            assert_never(server.config)

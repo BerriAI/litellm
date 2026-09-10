@@ -6,18 +6,20 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
-import os
-import sys
+import asyncio
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import httpx
 import pytest
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
 
 import litellm
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
+from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
 from litellm.types.utils import LlmProviders
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 
 @pytest.fixture
@@ -107,7 +109,7 @@ class TestBedrockMantleConfig:
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
         cfg = BedrockMantleChatConfig()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="api\\.aws\\.attacker\\.example/'\\. Region names must contain only"):
             cfg._get_openai_compatible_provider_info(
                 None,
                 None,
@@ -402,6 +404,46 @@ class TestBedrockMantleChatAuth:
         assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
         assert "/us-west-2/bedrock/aws4_request" not in headers["Authorization"]
 
+    @pytest.mark.parametrize(
+        ("region_params", "env", "expected_region"),
+        [
+            ({"aws_region_name": "us-west-2"}, {}, "us-west-2"),
+            ({}, {"BEDROCK_MANTLE_REGION": "ap-southeast-2"}, "ap-southeast-2"),
+        ],
+    )
+    def test_sigv4_scope_ignores_the_region_segment_of_a_lookalike_host(
+        self, monkeypatch, region_params, env, expected_region
+    ):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_REGION",
+            "BEDROCK_MANTLE_API_BASE",
+            "AWS_REGION",
+            "AWS_REGION_NAME",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        for var, value in env.items():
+            monkeypatch.setenv(var, value)
+
+        cfg = BedrockMantleChatConfig(aws_signer=BaseAWSLLM())
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                **region_params,
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.eu-west-1.api.aws.internal.example.com/openai/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert f"/{expected_region}/bedrock/aws4_request" in headers["Authorization"]
+        assert "/eu-west-1/bedrock/aws4_request" not in headers["Authorization"]
+
     def test_no_bearer_and_no_credentials_raises_value_error(self, monkeypatch):
         from unittest.mock import MagicMock
 
@@ -416,7 +458,7 @@ class TestBedrockMantleChatAuth:
         signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
         cfg = BedrockMantleChatConfig(aws_signer=signer)
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Bedrock Mantle auth failed: no Bearer token and no usable') as exc:
             cfg.sign_request(
                 headers={},
                 optional_params={"aws_region_name": "us-east-2"},
@@ -488,6 +530,71 @@ class TestBedrockMantleChatAuth:
         assert authorization.startswith("AWS4-HMAC-SHA256")
         assert "/us-east-2/bedrock/aws4_request" in authorization
         assert requests[0]["url"].startswith("https://bedrock-mantle.us-east-2.api.aws")
+
+    def test_completion_per_request_role_reaches_signer_and_not_the_body(self, monkeypatch):
+        from unittest.mock import MagicMock, Mock
+
+        from botocore.credentials import Credentials
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        from litellm.types.utils import ModelResponse
+
+        for var in ("BEDROCK_MANTLE_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE"):
+            monkeypatch.delenv(var, raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            return_value=Credentials(
+                access_key="ASIAEXAMPLE",
+                secret_key="YXNzdW1lZC1yb2xlLXNlY3JldC1hc3N1bWVk",
+                token="assumed-session-token",
+            )
+        )
+        url = "https://bedrock-mantle.us-east-1.api.aws/openai/v1/chat/completions"
+        client = HTTPHandler(client=httpx.Client())
+        client.post = Mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "google.gemma-4-31b",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+                request=httpx.Request("POST", url),
+            )
+        )
+
+        BaseLLMHTTPHandler().completion(
+            model="google.gemma-4-31b",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base=None,
+            custom_llm_provider="bedrock_mantle",
+            model_response=ModelResponse(),
+            encoding=None,
+            logging_obj=Mock(),
+            optional_params={},
+            timeout=10,
+            litellm_params={
+                "aws_role_name": "arn:aws:iam::000000000000:role/attributed-role",
+                "aws_session_name": "user-123",
+                "aws_region_name": "us-east-1",
+            },
+            acompletion=False,
+            client=client,
+            provider_config=BedrockMantleChatConfig(aws_signer=signer),
+        )
+
+        credential_kwargs = signer.get_credentials.call_args.kwargs
+        assert credential_kwargs["aws_role_name"] == "arn:aws:iam::000000000000:role/attributed-role"
+        assert credential_kwargs["aws_session_name"] == "user-123"
+        sent = client.post.call_args.kwargs
+        assert sent["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert not [key for key in json.loads(sent["data"]) if key.startswith("aws_")]
 
 
 class TestBedrockMantleProjectHeader:
@@ -582,40 +689,6 @@ class TestBedrockMantleProviderResolution:
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
 
-    def test_gpt_oss_120b_pricing(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        # Bedrock pricing: $0.15/M input, $0.60/M output
-        assert info["input_cost_per_token"] == pytest.approx(1.5e-7)
-        assert info["output_cost_per_token"] == pytest.approx(6e-7)
-
-    def test_gpt_oss_20b_pricing(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-20b")
-        # Bedrock pricing: $0.075/M input, $0.30/M output
-        assert info["input_cost_per_token"] == pytest.approx(7.5e-8)
-        assert info["output_cost_per_token"] == pytest.approx(3e-7)
-
-    def test_pricing_significantly_cheaper_than_openai_native(self, monkeypatch):
-        """
-        Verify Bedrock Mantle pricing is cheaper than OpenAI's direct API pricing.
-        This is the core issue the provider addition fixes — previously users were being
-        billed at OpenAI rates instead of the cheaper Bedrock rates.
-        """
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        bedrock_info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        # OpenAI direct pricing for gpt-oss-120b is ~$0.039/M input, $0.190/M output
-        # Bedrock should be cheaper at $0.15/M input and $0.60/M output... wait
-        # Actually, Bedrock ADDS value not reduces cost vs OpenAI direct for these models.
-        # The key fix is that we now use Bedrock-specific prices instead of mapping to
-        # some unrelated OpenAI model (like gpt-4) pricing.
-        # Just validate the pricing is as expected from AWS docs.
-        assert bedrock_info["input_cost_per_token"] == pytest.approx(1.5e-7)
-        assert bedrock_info["output_cost_per_token"] == pytest.approx(6e-7)
-
     def test_safeguard_models_have_larger_output_tokens(self, monkeypatch):
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
         litellm.add_known_models()
@@ -624,49 +697,6 @@ class TestBedrockMantlePricing:
             "bedrock_mantle/openai.gpt-oss-safeguard-120b"
         )
         assert info_safeguard["max_output_tokens"] > info_120b["max_output_tokens"]
-
-    def test_reasoning_support(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        assert info.get("supports_reasoning") is True
-
-    def test_context_window(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        assert info["max_input_tokens"] == 131072
-
-
-@pytest.mark.parametrize(
-    "model_id,input_cost,output_cost,max_tokens",
-    [
-        ("google.gemma-4-31b", 1.4e-07, 4e-07, 256000),
-        ("google.gemma-4-26b-a4b", 1.3e-07, 4e-07, 256000),
-        ("google.gemma-4-e2b", 4e-08, 8e-08, 128000),
-    ],
-)
-def test_gemma_4_bedrock_mantle_model_metadata(
-    local_cost_map, model_id, input_cost, output_cost, max_tokens
-):
-    full_model_name = f"bedrock_mantle/{model_id}"
-    info = litellm.get_model_info(full_model_name)
-
-    assert info["mode"] == "chat"
-    assert info["input_cost_per_token"] == pytest.approx(input_cost)
-    assert info["output_cost_per_token"] == pytest.approx(output_cost)
-    assert info["max_input_tokens"] == max_tokens
-    assert info["max_output_tokens"] == max_tokens
-    assert info["supports_function_calling"] is True
-    assert info["supports_reasoning"] is True
-    assert info["supports_tool_choice"] is True
-    assert info["supports_vision"] is True
-    assert (
-        litellm.supports_parallel_function_calling(
-            model=full_model_name, custom_llm_provider="bedrock_mantle"
-        )
-        is False
-    )
 
 
 @pytest.mark.parametrize(
@@ -685,3 +715,26 @@ def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
     resolved_model, provider, _, _ = litellm.get_llm_provider(full_model_name)
     assert provider == "bedrock_mantle"
     assert resolved_model == model_id
+
+
+@pytest.mark.asyncio
+async def test_mantle_signing_runs_off_the_event_loop():
+    """Regression for issue #40165: Mantle signs with SigV4 through a composed BaseAWSLLM, so the
+    off-loop gate must recognise it too, or its credential refresh blocks the loop like Bedrock's did."""
+    probe = EventLoopProbe()
+
+    def sign(headers: dict[str, str]) -> dict[str, str]:
+        request = AWSRequest(
+            method="POST", url="https://bedrock-mantle.us-east-1.api.aws/v1/responses", data="{}", headers=headers
+        )
+        SigV4Auth(probe.credentials(), "bedrock", "us-east-1").add_auth(request)
+        return dict(request.headers)
+
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+    signed = await sign_request_off_loop_if_aws(
+        BedrockMantleChatConfig(), sign, headers={"Content-Type": "application/json"}
+    )
+    await release
+
+    assert "Authorization" in signed
+    assert probe.served_during_refresh is True

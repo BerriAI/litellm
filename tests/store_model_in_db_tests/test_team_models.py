@@ -5,7 +5,6 @@ import json
 from openai import AsyncOpenAI
 from litellm._uuid import uuid
 from httpx import AsyncClient
-from litellm._uuid import uuid
 import os
 
 TEST_MASTER_KEY = "sk-1234"

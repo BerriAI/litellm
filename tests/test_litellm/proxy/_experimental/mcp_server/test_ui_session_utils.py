@@ -137,7 +137,7 @@ async def test_build_effective_auth_contexts_appends_admitted_user_context(monke
     )
     reload_mock = AsyncMock(return_value=admitted_auth)
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
         reload_mock,
     )
 
@@ -153,7 +153,7 @@ async def test_build_effective_auth_contexts_never_widens_caller_passed_keys(mon
     normal_user = UserAPIKeyAuth(team_id="regular-team", user_id="user-1")
     reload_mock = AsyncMock()
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
         reload_mock,
     )
 
@@ -172,7 +172,7 @@ async def test_build_effective_auth_contexts_survives_admitted_reload_failure(mo
         AsyncMock(return_value=["team-a"]),
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
         AsyncMock(side_effect=HTTPException(status_code=503, detail="db down")),
     )
 
@@ -191,7 +191,7 @@ async def test_acting_user_auth_returns_admitted_subject_for_non_admin_sessions(
     admitted_auth = UserAPIKeyAuth(user_id="user-42")
     reload_mock = AsyncMock(return_value=admitted_auth)
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
         reload_mock,
     )
 
@@ -207,7 +207,7 @@ async def test_acting_user_auth_keeps_admin_sessions_and_passed_keys_unchanged(m
 
     reload_mock = AsyncMock()
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
         reload_mock,
     )
 
@@ -226,7 +226,7 @@ async def test_acting_user_auth_falls_back_to_session_auth_on_reload_failure(mon
 
     user_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-9", user_role="internal_user")
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
         AsyncMock(side_effect=HTTPException(status_code=503, detail="db down")),
     )
 
@@ -252,7 +252,7 @@ async def test_admitted_user_context_carries_the_request_span(monkeypatch):
         parent_otel_span=parent_span,
     )
     monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
         AsyncMock(return_value=UserAPIKeyAuth(user_id="user-42")),
     )
 

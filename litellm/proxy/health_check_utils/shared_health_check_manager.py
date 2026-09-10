@@ -1,7 +1,8 @@
 import asyncio
 import json
 import time
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
@@ -11,6 +12,9 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.health_check import perform_health_check
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 class SharedHealthCheckManager:
@@ -140,8 +144,8 @@ class SharedHealthCheckManager:
 
     async def cache_health_check_results(
         self,
-        healthy_endpoints: list[dict[str, Any]],
-        unhealthy_endpoints: list[dict[str, Any]],
+        healthy_endpoints: Sequence[Mapping[str, object]],
+        unhealthy_endpoints: Sequence[Mapping[str, object]],
     ) -> None:
         """
         Cache health check results in Redis.
@@ -185,6 +189,7 @@ class SharedHealthCheckManager:
         details: bool = True,
         max_concurrency: int | None = None,
         health_check_skip_disabled_background_models: bool = False,
+        router: "Router | None" = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         """
         Perform health check with shared state coordination.
@@ -235,6 +240,7 @@ class SharedHealthCheckManager:
                     details=details,
                     max_concurrency=max_concurrency,
                     health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
+                    router=router,
                 )
 
                 # Cache the results
@@ -254,6 +260,7 @@ class SharedHealthCheckManager:
                     details=details,
                     max_concurrency=max_concurrency,
                     health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
+                    router=router,
                 )
 
             # Lock not acquired — poll for cached results until the lock
@@ -309,6 +316,7 @@ class SharedHealthCheckManager:
                 details=details,
                 max_concurrency=max_concurrency,
                 health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
+                router=router,
             )
 
     async def is_health_check_in_progress(self) -> bool:
@@ -329,14 +337,14 @@ class SharedHealthCheckManager:
             verbose_proxy_logger.error("Error checking health check lock status: %s", str(e))
             return False
 
-    async def get_health_check_status(self) -> dict[str, Any]:
+    async def get_health_check_status(self) -> dict[str, object]:
         """
         Get the current status of health check coordination.
 
         Returns:
             Dict containing status information
         """
-        status: Final = {
+        status: Final[dict[str, object]] = {
             "pod_id": self.pod_id,
             "redis_available": self.redis_cache is not None,
             "lock_ttl": self.lock_ttl,

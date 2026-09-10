@@ -18,6 +18,7 @@ from litellm.exceptions import (
     ImageFetchError,
     MidStreamFallbackError,
     RateLimitError,
+    ServiceUnavailableError,
 )
 
 
@@ -312,3 +313,85 @@ class TestProxyHeaderExtraction:
         # Verify headers are extracted and prefixed correctly
         assert headers.get("llm_provider-x-request-id") == "req-abc123"
         assert headers.get("llm_provider-x-ms-region") == "eastus"
+
+
+class TestBedrockErrorHeaders:
+    """A BedrockError built with headers but no response still exposes them (LIT-5428)."""
+
+    def test_synthesized_response_carries_headers(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        error = BedrockError(
+            status_code=500,
+            message="Amazon Bedrock is unable to process your request.",
+            headers={"x-amzn-RequestId": "req-base-500"},
+        )
+
+        assert error.response.headers["x-amzn-requestid"] == "req-base-500"
+        assert str(error.request.url) == str(BedrockError(status_code=500, message="boom").request.url)
+        assert str(error.response.request.url) == str(error.request.url)
+
+    def test_synthesized_response_without_headers_stays_empty(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        error = BedrockError(status_code=500, message="boom")
+
+        assert dict(error.response.headers) == {}
+
+    def test_explicit_response_is_kept(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        provider_response = httpx.Response(
+            status_code=500,
+            headers={"x-amzn-RequestId": "from-response"},
+            request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+        )
+        error = BedrockError(
+            status_code=500,
+            message="boom",
+            headers={"x-amzn-RequestId": "from-headers"},
+            response=provider_response,
+        )
+
+        assert error.response is provider_response
+
+    def test_proxy_extraction_surfaces_bedrock_request_id(self):
+        """End-to-end shape the proxy error handler returns to the caller."""
+        from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+        from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+            get_response_headers,
+        )
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        provider_response = httpx.Response(
+            status_code=500,
+            headers={"x-amzn-RequestId": "req-proxy-500"},
+            text='{"message":"Amazon Bedrock is unable to process your request."}',
+            request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+        )
+
+        with pytest.raises(ServiceUnavailableError) as exc_info:
+            exception_type(
+                model="anthropic.claude-haiku-4-5-20251001-v1:0",
+                original_exception=BedrockError(
+                    status_code=500,
+                    message=provider_response.text,
+                    headers=provider_response.headers,
+                    response=provider_response,
+                ),
+                custom_llm_provider="bedrock",
+                completion_kwargs={},
+                extra_kwargs={},
+            )
+
+        # Mirrors ProxyBaseLLMRequestProcessing._handle_llm_api_exception
+        error = exc_info.value
+        headers = getattr(error, "headers", None) or {}
+        if not headers:
+            _response = getattr(error, "response", None)
+            if _response is not None:
+                _response_headers = getattr(_response, "headers", None)
+                if _response_headers:
+                    headers = get_response_headers(dict(_response_headers))
+
+        assert headers.get("llm_provider-x-amzn-requestid") == "req-proxy-500"

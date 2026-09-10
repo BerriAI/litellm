@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, MockedFunction, vi } from "vitest";
 
-import { renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import { Team } from "../key_team_helpers/key_list";
 import { TeamsResponse, useTeamsTable } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { TeamsTable } from "./TeamsTable";
@@ -151,7 +151,7 @@ describe("sort contract – only backend-sortable columns are sortable", () => {
 
   it("does not make Spend / Budget sortable (the backend rejects sort_by=spend)", () => {
     renderTable();
-    expect(screen.getByText("Spend / Budget").closest("button")).toBeNull();
+    expect(screen.queryByText("Spend / Budget").closest("button")).toBeNull();
     // Team and Created are the only sortable headers.
     expect(screen.getByText("Team").closest("button")).not.toBeNull();
     expect(screen.getByText("Created").closest("button")).not.toBeNull();
@@ -243,8 +243,7 @@ describe("row actions", () => {
     await user.click(await screen.findByText("Edit team"));
     expect(onEditTeam).toHaveBeenCalledWith(expect.objectContaining({ team_id: "team-1" }));
 
-    await user.click(screen.getByTestId("team-actions-team-1"));
-    await user.click(await screen.findByText("Delete team"));
+    await chooseSelectOption(user, screen.getByTestId("team-actions-team-1"), "Delete team", "menuitem");
     expect(onDeleteTeam).toHaveBeenCalledWith(expect.objectContaining({ team_id: "team-1" }));
   });
 

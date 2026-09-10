@@ -12,17 +12,20 @@ describe("SearchProviderLabel", () => {
   it("renders the exa_ai logo file for the exa_ai slug", () => {
     render(<SearchProviderLabel providerName="exa_ai" displayName="Exa AI" />);
     const img = screen.getByRole("img", { name: "Exa AI logo" });
-    expect(img.getAttribute("src")).toContain("exa_ai.png");
+    expect(img).toHaveAttribute("src", expect.stringContaining("exa_ai.png"));
   });
 
   it("renders the google_pse logo file for the google_pse slug", () => {
     render(<SearchProviderLabel providerName="google_pse" displayName="Google PSE" />);
-    expect(screen.getByRole("img", { name: "Google PSE logo" }).getAttribute("src")).toContain("google_pse.png");
+    expect(screen.getByRole("img", { name: "Google PSE logo" })).toHaveAttribute(
+      "src",
+      expect.stringContaining("google_pse.png"),
+    );
   });
 
   it("falls back to a letter avatar for a provider with no bundled logo", () => {
     render(<SearchProviderLabel providerName="brave" displayName="Brave Search" />);
-    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.getByText("B")).toBeInTheDocument();
     expect(screen.getByText("Brave Search")).toBeInTheDocument();
   });

@@ -5,7 +5,10 @@ from typing import Any, Final
 from httpx._types import RequestFiles
 
 import litellm
-from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+from litellm.llms.azure_ai.common_utils import (
+    AzureFoundryModelInfo,
+    get_azure_ai_auth_headers,
+)
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
@@ -71,16 +74,13 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         """
         Validate Azure AI Foundry environment and set up authentication
         """
-        api_key = AzureFoundryModelInfo.get_api_key(api_key)
-
-        if not api_key:
-            raise ValueError(
-                f"Azure AI API key is required for model {model}. Set AZURE_AI_API_KEY environment variable or pass api_key parameter."
-            )
-
         headers.update(
             {
-                "Api-Key": api_key,
+                **get_azure_ai_auth_headers(
+                    api_key=AzureFoundryModelInfo.get_api_key(api_key),
+                    litellm_params=litellm_params,
+                    api_key_header="Api-Key",
+                ),
                 "Content-Type": "application/json",
             }
         )

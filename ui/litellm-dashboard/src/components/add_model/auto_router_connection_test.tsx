@@ -29,7 +29,9 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
     const run = async () => {
       await Promise.all(
         targets.map(async (target, index) => {
-          const result = await testModelGroupConnection(accessToken, target.modelGroup, target.mode);
+          const result = target.requestParams
+            ? await testModelGroupConnection(accessToken, target.modelGroup, target.mode, target.requestParams)
+            : await testModelGroupConnection(accessToken, target.modelGroup, target.mode);
           if (cancelled) return;
           const cleaned: TargetResult =
             result.status === "error" ? { status: "error", error: cleanErrorMessage(result.error) } : result;
@@ -56,14 +58,14 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   return (
     <div className="space-y-3">
       <p className="mb-2 text-sm text-muted-foreground">
-        Each configured tier routes to a saved model group. Test Connection sends a minimal request through the proxy to
-        each one, exactly as the auto router would.
+        Test Connection sends a minimal request to every configured tier, classifier, default, and embedding model. The
+        classifier probe includes its reasoning effort override.
       </p>
       {targets.map((target, index) => {
         const result = results[index] ?? { status: "pending" };
         return (
           <div
-            key={`${target.modelGroup}-${target.mode}`}
+            key={`${target.labels.join("-")}-${target.modelGroup}-${target.mode}`}
             data-testid="auto-router-test-row"
             className="flex items-start gap-3 rounded-lg border p-3"
           >

@@ -5,6 +5,8 @@ Transforms OpenAI /v1/embeddings format to GigaChat format.
 API Documentation: https://developers.sber.ru/docs/ru/gigachat/api/reference/rest/post-embeddings
 """
 
+from __future__ import annotations
+
 import types
 from typing import Final
 
@@ -14,13 +16,11 @@ from litellm import LlmProviders
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
+from litellm.llms.gigachat.utils import get_api_base
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..authenticator import get_access_token
-
-# GigaChat API endpoint
-GIGACHAT_BASE_URL: Final = "https://gigachat.devices.sberbank.ru/api/v1"
 
 
 class GigaChatEmbeddingError(BaseLLMException):
@@ -78,9 +78,9 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         Returns provider info for GigaChat.
 
         Returns:
-            Tuple of (custom_llm_provider, api_base, dynamic_api_key)
+            tuple of (custom_llm_provider, api_base, dynamic_api_key)
         """
-        api_base = api_base or GIGACHAT_BASE_URL
+        api_base = get_api_base(api_base)
         return LlmProviders.GIGACHAT.value, api_base, api_key
 
     def get_complete_url(
@@ -93,7 +93,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         stream: bool | None = None,
     ) -> str:
         """Get the complete URL for embeddings endpoint."""
-        base: Final = api_base or GIGACHAT_BASE_URL
+        base: Final = get_api_base(api_base)
         return f"{base}/embeddings"
 
     def transform_embedding_request(
@@ -112,20 +112,10 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
             "input": ["text1", "text2", ...]
         }
         """
-        # Normalize input to list
-        if isinstance(input, str):
-            input_list: list = [input]
-        elif isinstance(input, list):
-            input_list = input
-        else:
-            input_list = [input]
-
-        # Remove gigachat/ prefix from model if present
-        model = model.removeprefix("gigachat/")
-
+        normalized_input: Final = [input] if isinstance(input, str) else input  # mutable-ok: preserve list API
         return {
-            "model": model,
-            "input": input_list,
+            "model": model.removeprefix("gigachat/"),
+            "input": normalized_input,
         }
 
     def transform_embedding_response(
@@ -191,7 +181,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         Set up headers with OAuth token for GigaChat.
         """
         # Get access token via OAuth
-        access_token: Final = get_access_token(api_key)
+        access_token: Final = get_access_token(credentials=api_key, litellm_params=litellm_params)
 
         default_headers: Final = {
             "Content-Type": "application/json",

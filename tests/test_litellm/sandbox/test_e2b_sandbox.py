@@ -293,7 +293,7 @@ async def test_public_lifecycle_create_run_delete():
 
 @pytest.mark.asyncio
 async def test_unsupported_provider_raises():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not-a-provider' is not a valid SandboxProviders"):
         await litellm.acreate_sandbox(provider="not-a-provider")
 
 
