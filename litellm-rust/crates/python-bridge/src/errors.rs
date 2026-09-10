@@ -42,6 +42,8 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
         | Error::InvalidType { .. }
         | Error::MissingField(_)
         | Error::MissingApiKey { .. }
+        | Error::MissingAzureAiCredentials
+        | Error::MissingAzureAiCredentialsOrAdToken
         | Error::Routing(_)
         // Nothing reached the provider, so serving it on Python cannot double
         // bill and is the only way the caller gets an answer at all.
