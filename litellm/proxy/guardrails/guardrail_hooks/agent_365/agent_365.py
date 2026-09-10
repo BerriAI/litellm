@@ -304,11 +304,17 @@ class Agent365Guardrail(CustomGuardrail):
                 reason="the Agent 365 endpoint returned a non-object JSON body",
             )
         verdict: Final[_EvaluateResponse] = parsed_verdict
+        allowed: Final = verdict.get("allowed")
+        if not isinstance(allowed, bool):
+            return self._handle_unavailable(
+                data=data,
+                tool_name=tool_name,
+                reason="the Agent 365 endpoint returned a verdict without a boolean 'allowed' field",
+            )
         raw_defender: Final = verdict.get("defender")
         defender: Final = raw_defender if isinstance(raw_defender, dict) else _DefenderResult()
         raw_correlation_id: Final = verdict.get("correlationId")
         correlation_id: Final = raw_correlation_id if isinstance(raw_correlation_id, str) else None
-        allowed: Final = verdict.get("allowed") is True
         self._record_verdict(
             data=data,
             verdict="Allow" if allowed else "Block",
