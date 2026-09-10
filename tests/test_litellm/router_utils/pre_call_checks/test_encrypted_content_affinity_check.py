@@ -1635,8 +1635,10 @@ def _bridge_replayed_anthropic_messages(minted_by: str) -> list:
 async def test_encrypted_content_affinity_strips_bridge_reasoning_from_messages_routed_to_another_group():
     """
     The /v1/messages twin of the tier-change case: the routed group holds no deployment
-    of the org that minted the reasoning, so the bridge-tagged blocks are stripped down
-    to their readable thinking text and the request dispatches to the routed pool.
+    of the org that minted the reasoning, so the bridge-tagged blocks are dropped whole
+    and the request dispatches to the routed pool. No unsigned thinking block may be left
+    behind: Anthropic and Bedrock reject a thinking block with a missing signature the
+    same way they reject a foreign one.
     """
     originating = _make_originating_mock(None, "key-a", model_name="gpt-reasoning-tier")
     mock_router = _make_router_mock_with_cooldown(
@@ -1660,9 +1662,9 @@ async def test_encrypted_content_affinity_strips_bridge_reasoning_from_messages_
     assert messages[1]["content"] is assistant_content
     assert assistant_content == [
         {"type": "thinking", "thinking": "Anthropic minted this one", "signature": "ErcCCpIBCBEYAipA"},
-        {"type": "thinking", "thinking": "The bridge packed this one"},
         {"type": "text", "text": "The zebra owner lives in the green house."},
     ]
+    assert all(block["signature"] for block in assistant_content if block["type"] == "thinking")
 
 
 class TestStripEncryptedReasoningFromInput:

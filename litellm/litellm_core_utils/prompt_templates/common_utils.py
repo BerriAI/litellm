@@ -1890,8 +1890,13 @@ def is_encrypted_reasoning_block(block: object) -> bool:
 
 
 def strip_encrypted_reasoning_from_messages(messages: object) -> None:
-    """Drop the encrypted reasoning a routed deployment cannot decrypt from Anthropic-shaped
-    history, keeping the readable thinking text.
+    """Drop the bridge-tagged reasoning blocks a routed deployment cannot decrypt from
+    Anthropic-shaped history.
+
+    The whole block goes, the way #40280 drops undecryptable Responses ``input`` items: a
+    provider that did not mint the block rejects it signed (a foreign signature) and unsigned
+    (a missing signature) alike, so keeping its text as an unsigned thinking block only moves
+    the 400 from the router to the provider.
 
     Mutates the content lists in place: the router's fallback snapshot shares these
     message objects, so a rebound list would replay the stripped blocks on the fallback hop.
@@ -1914,20 +1919,8 @@ def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
 
 def _strip_encrypted_reasoning_from_blocks(content: object) -> None:
     blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
-    stripped: Final = tuple(_without_encrypted_reasoning_block(block) for block in blocks)
-    blocks[:] = (block for block in stripped if block is not None)  # rebind-ok: list shared with fallback snapshot
-
-
-def _without_encrypted_reasoning_block(block: object) -> object | None:
-    if not is_encrypted_reasoning_block(block):
-        return block
-    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by is_encrypted_reasoning_block
-    if mapping.get("type") != "thinking" or not mapping.get("thinking"):
-        return None
-    kept: Final[dict[str, object]] = {  # mutable-ok: thinking block rebuilt without the undecryptable signature
-        key: value for key, value in mapping.items() if key != "signature"
-    }
-    return kept
+    kept: Final = tuple(block for block in blocks if not is_encrypted_reasoning_block(block))
+    blocks[:] = kept  # rebind-ok: shared with fallback snapshot
 
 
 def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
