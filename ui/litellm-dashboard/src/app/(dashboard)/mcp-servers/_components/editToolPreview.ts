@@ -21,7 +21,7 @@ const connectionConfig = (values: Readonly<Record<string, unknown>>) => {
 
 type EditToolPreview =
   | { readonly kind: "saved" }
-  | { readonly kind: "incomplete" }
+  | { readonly kind: "incomplete"; readonly message?: string }
   | { readonly kind: "preview"; readonly config: ReturnType<typeof connectionConfig> };
 
 export const getEditToolPreview = (
@@ -48,6 +48,20 @@ export const getEditToolPreview = (
   const incompleteHeaders = Object.values(config.static_headers).some((value) => !value.trim());
   if (!validUrl || missingNewCredential || incompleteHeaders) {
     return { kind: "incomplete" };
+  }
+  const savedConfig = connectionConfig(initialValues);
+  const changedOrigin =
+    !URL.canParse(savedConfig.url) || new URL(config.url).origin !== new URL(savedConfig.url).origin;
+  const reusesHeader = Object.entries(config.static_headers).some(
+    ([key, value]) => savedConfig.static_headers[key] === value,
+  );
+  const needsSavedCredential = AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(config.auth_type) && !config.credentials;
+  if (changedOrigin && (needsSavedCredential || reusesHeader)) {
+    return {
+      kind: "incomplete",
+      message:
+        "The server origin changed. Enter credentials and replace or remove saved static headers to preview tools.",
+    };
   }
   return { kind: "preview", config };
 };

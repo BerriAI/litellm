@@ -454,19 +454,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const toolPreviewKey = JSON.stringify(toolPreview);
 
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
     setTools([]);
     setToolsError(null);
     setIsLoadingTools(false);
     if (!accessToken || !mcpServer.server_id) return;
     if (toolPreview.kind === "incomplete") {
-      setToolsError("Complete the URL, authentication, and header settings to load tools.");
+      setToolsError(toolPreview.message ?? "Complete the URL, authentication, and header settings to load tools.");
       return;
     }
     setIsLoadingTools(true);
-    const timer = setTimeout(() => fetchTools(() => active), toolPreview.kind === "preview" ? 500 : 0);
+    const timer = setTimeout(
+      () => fetchTools(() => !controller.signal.aborted),
+      toolPreview.kind === "preview" ? 500 : 0,
+    );
     return () => {
-      active = false;
+      controller.abort();
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

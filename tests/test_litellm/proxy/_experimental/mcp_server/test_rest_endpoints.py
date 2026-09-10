@@ -128,7 +128,7 @@ class TestExecuteWithMcpClient:
         payload: Final = NewMCPServerRequest(
             server_id=saved.server_id,
             server_name="edited",
-            url="https://edited.example/mcp",
+            url="https://stored.example/corrected-mcp",
             transport=MCPTransport.sse,
             auth_type=auth_type,
             credentials={"auth_value": auth_value} if auth_value is not None else None,
@@ -146,12 +146,47 @@ class TestExecuteWithMcpClient:
             oauth2_headers=staged.oauth2_headers,
         )
         assert result == {
-            "url": "https://edited.example/mcp",
+            "url": "https://stored.example/corrected-mcp",
             "transport": MCPTransport.sse,
             "headers": {"X-Preview": "edited", **expected_auth},
         }
         assert manager.get_mcp_server_by_id(saved.server_id) is saved
         assert saved.url == "https://stored.example/mcp"
+
+    @pytest.mark.parametrize(
+        "url", ("https://other.example/mcp", "http://stored.example/mcp", "https://stored.example:8443/mcp")
+    )
+    @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
+    def test_static_preview_does_not_inherit_credentials_across_origins(
+        self, monkeypatch: pytest.MonkeyPatch, url: str, explicit_credential: str | None
+    ) -> None:
+        from starlette.datastructures import Headers
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+        saved: Final = MCPServer(
+            server_id="saved-preview-server",
+            name="saved",
+            url="https://stored.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            authentication_token="preview:stored",
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {saved.server_id: saved}
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+        payload: Final = NewMCPServerRequest(
+            server_id=saved.server_id,
+            url=url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            credentials={"auth_value": explicit_credential} if explicit_credential else None,
+        )
+        staged: Final = rest_endpoints._stage_server_test(payload, Headers())
+        assert staged.mcp_auth_header == explicit_credential
+        assert staged.request.credentials == payload.credentials
 
     @pytest.mark.asyncio
     async def test_redacts_stack_trace(self, monkeypatch):
