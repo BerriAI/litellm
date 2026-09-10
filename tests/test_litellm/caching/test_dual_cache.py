@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -576,3 +577,64 @@ async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
     assert mock_redis.async_set_cache.call_args[0][:2] == (key_after, val_after)
 
     assert in_memory.get_cache(key_after) == val_after
+
+
+@pytest.fixture
+def dual_cache_with_open_breaker():
+    """A DualCache whose Redis tier is behind an already-open circuit breaker.
+
+    The Redis client is a mock that fails the test if anything reaches it, so every
+    guarded call has to be short-circuited by the breaker.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import _is_redis_timeout_failure
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    with (
+        patch("asyncio.get_running_loop", side_effect=RuntimeError("No running event loop")),
+        patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+            "litellm._redis.get_redis_client", return_value=MagicMock()
+        ),
+    ):
+        redis_cache = RedisCache(host="127.0.0.1", port=6379)
+    unreachable = AsyncMock()
+    unreachable.get.side_effect = AssertionError("an open breaker must not touch Redis")
+    unreachable.mget.side_effect = AssertionError("an open breaker must not touch Redis")
+    unreachable.set.side_effect = AssertionError("an open breaker must not touch Redis")
+    unreachable.pipeline.side_effect = AssertionError("an open breaker must not touch Redis")
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        redis_cache._circuit_breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
+    assert redis_cache._circuit_breaker.is_open() is True
+    with patch.object(redis_cache, "init_async_client", return_value=unreachable):
+        yield DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call, expected",
+    [
+        pytest.param(lambda c: c.async_get_cache("lit7468"), lambda n: None, id="async_get_cache"),
+        pytest.param(
+            lambda c: c.async_batch_get_cache(["lit7468", "lit7460"]), lambda n: [None, None], id="async_batch_get_cache"
+        ),
+        pytest.param(lambda c: c.async_set_cache("lit7468", "v"), lambda n: None, id="async_set_cache"),
+        pytest.param(lambda c: c.async_set_cache_pipeline([("lit7468", "v")]), lambda n: None, id="async_set_cache_pipeline"),
+        pytest.param(lambda c: c.async_increment_cache("lit7468", 1.0, ttl=60), float, id="async_increment_cache"),
+    ],
+)
+async def test_open_breaker_is_a_quiet_cache_miss(dual_cache_with_open_breaker, call, expected, caplog):
+    """While the breaker is open, every cache operation must degrade to the in-memory result
+    without logging anything above DEBUG.
+
+    Before this, each skipped call raised a generic exception that DualCache caught and logged
+    as a full ERROR traceback. Under production request rates that was hundreds of stack
+    formats per second per replica, enough to pin every proxy at 100% CPU on a Redis blip.
+    """
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    for n in range(1, 51):
+        assert await call(dual_cache_with_open_breaker) == expected(n)
+
+    noisy = [r for r in caplog.records if r.levelno > logging.DEBUG]
+    assert noisy == [], f"an open breaker must be silent per call, got {[r.getMessage() for r in noisy]}"

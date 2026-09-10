@@ -23,7 +23,7 @@ from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 from .base_cache import BaseCache
 from .in_memory_cache import InMemoryCache
-from .redis_cache import RedisCache
+from .redis_cache import RedisCache, RedisCircuitBreakerOpenError
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -250,6 +250,8 @@ class DualCache(BaseCache):
 
             print_verbose(f"get cache: cache result: {result}")
             return result
+        except RedisCircuitBreakerOpenError:
+            return None
         except Exception:
             verbose_logger.error(traceback.format_exc())
 
@@ -319,6 +321,9 @@ class DualCache(BaseCache):
                         redis_result: Final = await self.redis_cache.async_batch_get_cache(
                             sublist_keys, parent_otel_span=parent_otel_span
                         )
+                    except RedisCircuitBreakerOpenError:
+                        self._rollback_redis_batch_key_reservations(previous_access_times)
+                        return result
                     except Exception:
                         # Do not throttle subsequent callers if the Redis read fails.
                         self._rollback_redis_batch_key_reservations(previous_access_times)
@@ -352,6 +357,8 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only is False:
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
+        except RedisCircuitBreakerOpenError:
+            return
         except Exception as e:
             verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
 
@@ -371,6 +378,8 @@ class DualCache(BaseCache):
                 await self.redis_cache.async_set_cache_pipeline(
                     cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )
+        except RedisCircuitBreakerOpenError:
+            return
         except Exception as e:
             verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
 
@@ -409,6 +418,8 @@ class DualCache(BaseCache):
                 )
 
             return result
+        except RedisCircuitBreakerOpenError:
+            return result
         except Exception as e:
             verbose_logger.warning(
                 "Redis async_increment_cache failed, falling back to in-memory result: %s",
@@ -437,6 +448,8 @@ class DualCache(BaseCache):
                     parent_otel_span=parent_otel_span,
                 )
 
+            return result
+        except RedisCircuitBreakerOpenError:
             return result
         except Exception as e:
             verbose_logger.warning(

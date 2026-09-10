@@ -1013,3 +1013,131 @@ async def test_breaker_metrics_track_state_and_failure_class():
     breaker.record_success()
     assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before
     assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before + 1
+
+
+@pytest.mark.asyncio
+async def test_pool_exhaustion_counts_as_a_timeout_not_a_hard_failure():
+    """redis-py reports a blocking pool that waited out its timeout as a ConnectionError
+    chained from the underlying TimeoutError. That is Redis being slow, the same signal as
+    a read timeout, so a burst of them must go through the duration gate instead of opening
+    the breaker on the fifth one as though Redis had refused the connection.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _is_redis_timeout_failure,
+        _run_under_circuit_breaker,
+    )
+
+    def pool_exhausted() -> RedisConnectionError:
+        """Built the way redis-py's BlockingConnectionPool.get_connection raises it."""
+        try:
+            try:
+                raise asyncio.TimeoutError()
+            except asyncio.TimeoutError as err:
+                raise RedisConnectionError("No connection available.") from err
+        except RedisConnectionError as chained:
+            return chained
+
+    assert _is_redis_timeout_failure(pool_exhausted()) is True
+    assert _is_redis_timeout_failure(RedisConnectionError("Connection refused")) is False
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
+
+    async def pool_exhausted_call():
+        raise pool_exhausted()
+
+    for _ in range(breaker.failure_threshold + 1):
+        with pytest.raises(RedisConnectionError, match="No connection available"):
+            await _run_under_circuit_breaker(breaker, "op", pool_exhausted_call)
+
+    assert breaker.is_open() is False, "an instantaneous burst of pool waits must not open the breaker"
+
+
+@pytest.mark.asyncio
+async def test_success_admitted_before_the_breaker_opened_cannot_close_it():
+    """Only the HALF_OPEN recovery probe may close the breaker.
+
+    A call that was already in flight when the breaker opened knows nothing about whether
+    Redis has recovered. Letting its late success close the breaker made the state flap
+    OPEN -> CLOSED -> OPEN under load, and every OPEN transition re-logged the warning while
+    the next five failures each paid the full socket timeout again.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        RedisCircuitBreakerOpenError,
+        _run_under_circuit_breaker,
+    )
+
+    breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=60)
+    release_slow_success = asyncio.Event()
+
+    async def slow_success():
+        await release_slow_success.wait()
+        return "ok"
+
+    async def refused():
+        raise RedisConnectionError("refused")
+
+    in_flight = asyncio.create_task(_run_under_circuit_breaker(breaker, "slow", slow_success))
+    await asyncio.sleep(0)
+    for _ in range(breaker.failure_threshold):
+        with pytest.raises(RedisConnectionError):
+            await _run_under_circuit_breaker(breaker, "op", refused)
+    assert breaker.is_open() is True
+
+    release_slow_success.set()
+    assert await in_flight == "ok"
+
+    assert breaker.is_open() is True, "a pre-open success is not a recovery probe"
+    with pytest.raises(RedisCircuitBreakerOpenError):
+        await _run_under_circuit_breaker(breaker, "op", slow_success)
+
+
+@pytest.mark.asyncio
+async def test_open_breaker_raises_its_own_exception_type():
+    """Callers with an optional cache need to tell the expected fast-fail apart from a real error."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        RedisCircuitBreakerOpenError,
+        _run_under_circuit_breaker,
+    )
+
+    breaker = RedisCircuitBreaker(failure_threshold=1, recovery_timeout=60)
+
+    async def refused():
+        raise RedisConnectionError("refused")
+
+    with pytest.raises(RedisConnectionError):
+        await _run_under_circuit_breaker(breaker, "op", refused)
+
+    with pytest.raises(RedisCircuitBreakerOpenError, match="circuit breaker is open"):
+        await _run_under_circuit_breaker(breaker, "op", refused)
+
+
+@pytest.mark.asyncio
+async def test_recovery_probe_still_closes_the_breaker():
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=1, recovery_timeout=0.05)
+
+    async def refused():
+        raise RedisConnectionError("refused")
+
+    async def recovered():
+        return "ok"
+
+    with pytest.raises(RedisConnectionError):
+        await _run_under_circuit_breaker(breaker, "op", refused)
+    assert breaker.is_open() is True
+
+    await asyncio.sleep(0.06)
+    assert await _run_under_circuit_breaker(breaker, "probe", recovered) == "ok"
+    assert breaker.is_open() is False

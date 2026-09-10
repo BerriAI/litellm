@@ -6,6 +6,7 @@ import atexit
 import contextvars
 import inspect
 import logging
+import time
 from collections.abc import Coroutine, Iterator
 from typing import Final
 
@@ -16,6 +17,7 @@ from litellm.constants import (
     LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS,
     LOGGING_WORKER_CLEAR_PERCENTAGE,
     LOGGING_WORKER_CONCURRENCY,
+    LOGGING_WORKER_ERROR_TRACEBACK_INTERVAL_SECONDS,
     LOGGING_WORKER_MAX_QUEUE_SIZE,
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
     MAX_ITERATIONS_TO_CLEAR_QUEUE,
@@ -47,10 +49,14 @@ class LoggingWorker:
         timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
         max_queue_size: int = LOGGING_WORKER_MAX_QUEUE_SIZE,
         concurrency: int = LOGGING_WORKER_CONCURRENCY,
+        error_traceback_interval: float = LOGGING_WORKER_ERROR_TRACEBACK_INTERVAL_SECONDS,
     ):
         self.timeout = timeout
         self.max_queue_size = max_queue_size
         self.concurrency = concurrency
+        self.error_traceback_interval = error_traceback_interval
+        self._last_error_traceback_at: float | None = None
+        self._errors_since_traceback: int = 0
         self._queue: asyncio.Queue[LoggingTask] | None = None
         self._worker_task: asyncio.Task | None = None
         self._running_tasks: set[asyncio.Task] = set()
@@ -163,13 +169,28 @@ class LoggingWorker:
                         timeout=self.timeout,
                     )
                 except Exception as e:
-                    verbose_logger.exception("LoggingWorker error: %s", e)
+                    self._log_task_error(e)
                 finally:
                     self._untrack_dequeued(task)
                     self._queue.task_done()
         finally:
             # Always release semaphore, even if queue is None
             sem.release()
+
+    def _log_task_error(self, error: Exception) -> None:
+        """One traceback per interval: a stalled backend fails every in-flight task at once."""
+        now: Final = time.monotonic()
+        last_traceback_at: Final = self._last_error_traceback_at
+        if last_traceback_at is not None and now - last_traceback_at < self.error_traceback_interval:
+            self._errors_since_traceback += 1
+            return
+        verbose_logger.exception(
+            "LoggingWorker error (%d more suppressed since the last traceback): %r",
+            self._errors_since_traceback,
+            error,
+        )
+        self._last_error_traceback_at = now
+        self._errors_since_traceback = 0
 
     async def _worker_loop(self) -> None:
         """Main worker loop that gets tasks and schedules them to run concurrently."""
