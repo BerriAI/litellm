@@ -760,7 +760,6 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     # model_info fields like team_id or access groups. SPECIAL_MODEL_INFO_PARAMS are
     # mirrored between litellm_params and model_info by Deployment.__init__, so the
     # clear propagates to both blobs.
-    # CLEARABLE_LITELLM_PARAMS lists non-mirrored litellm_params that explicit null may clear.
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
             if getattr(updated_patch.litellm_params, field) is None and field in NULL_CLEARABLE_LITELLM_PARAMS:
