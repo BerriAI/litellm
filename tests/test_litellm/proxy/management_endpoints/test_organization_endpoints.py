@@ -1,7 +1,8 @@
 import asyncio
 import json
 from litellm._uuid import uuid
-from typing import Optional, cast
+from types import MappingProxyType
+from typing import Final, Mapping, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1241,15 +1242,36 @@ def _organization_route_targets() -> list[tuple[str, str]]:
     ]
 
 
+_ORGANIZATION_ROUTE_REQUESTS: Final[Mapping[tuple[str, str], Mapping[str, object]]] = MappingProxyType(
+    {
+        ("POST", "/organization/new"): {"json": {"organization_alias": "org-under-test"}},
+        ("DELETE", "/organization/delete"): {"json": {"organization_ids": ["org-under-test"]}},
+        ("GET", "/organization/info"): {"params": {"organization_id": "org-under-test"}},
+        ("POST", "/organization/info"): {"json": {"organizations": ["org-under-test"]}},
+        ("POST", "/organization/member_add"): {
+            "json": {"organization_id": "org-under-test", "member": {"user_id": "user-1", "role": "internal_user"}}
+        },
+        ("PATCH", "/organization/member_update"): {"json": {"organization_id": "org-under-test", "user_id": "user-1"}},
+        ("DELETE", "/organization/member_delete"): {"json": {"organization_id": "org-under-test", "user_id": "user-1"}},
+    }
+)
+
+
+def _organization_request(method: str, path: str) -> Mapping[str, object]:
+    return _ORGANIZATION_ROUTE_REQUESTS.get((method, path), {"json": {}})
+
+
 def _organization_test_client() -> TestClient:
     from fastapi import FastAPI
 
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.management_endpoints.organization_endpoints import router
+    from litellm.proxy.proxy_server import openai_exception_handler
 
     app = FastAPI()
     app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN
     )
@@ -1258,25 +1280,30 @@ def _organization_test_client() -> TestClient:
 
 @pytest.mark.parametrize(("method", "path"), _organization_route_targets())
 def test_organization_routes_are_blocked_without_enterprise_license(monkeypatch, method, path):
-    """Every /organization route is enterprise-only, even for a proxy admin."""
+    """Every /organization route is enterprise-only, even for a proxy admin sending a valid request."""
     import litellm.proxy.proxy_server as proxy_server
 
     monkeypatch.setattr(proxy_server, "premium_user", False, raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
 
-    response = _organization_test_client().request(method, path, json={})
+    response = _organization_test_client().request(method, path, **_organization_request(method, path))
 
     assert response.status_code == 403
     assert "Organizations" in response.json()["detail"]["error"]
 
 
 @pytest.mark.parametrize(("method", "path"), _organization_route_targets())
-def test_organization_routes_pass_the_license_gate_with_enterprise_license(monkeypatch, method, path):
-    """With a license the gate is transparent: whatever fails next, it is not the license check."""
+def test_organization_routes_reach_their_handler_with_enterprise_license(monkeypatch, method, path):
+    """The same request a license refuses above now reaches the handler, which is the code reporting the missing database."""
     import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import CommonProxyErrors
 
     monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
     monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
 
-    response = _organization_test_client().request(method, path, json={})
+    response = _organization_test_client().request(method, path, **_organization_request(method, path))
 
-    assert "LiteLLM Enterprise" not in response.text
+    assert response.status_code == 500
+    assert any(
+        message in response.text for message in (CommonProxyErrors.db_not_connected_error.value, "No db connected")
+    )
