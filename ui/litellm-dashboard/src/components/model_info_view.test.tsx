@@ -1707,7 +1707,7 @@ describe("ModelInfoView", () => {
         expect(payload.litellm_params.cache_control_injection_points).toEqual([{ location: "message", role: "user" }]);
       });
 
-      it("drops the stored injection points when the operator turns the toggle off", async () => {
+      it("sends an explicit null when the operator turns the toggle off so the backend clears the stored points", async () => {
         withCachePoints([{ location: "message", role: "user" }]);
         const user = userEvent.setup();
         await enterEditMode(user);
@@ -1715,7 +1715,7 @@ describe("ModelInfoView", () => {
         await user.click(screen.getByRole("switch"));
         const payload = await save(user);
 
-        expect(payload.litellm_params).not.toHaveProperty("cache_control_injection_points");
+        expect(payload.litellm_params.cache_control_injection_points).toBeNull();
       });
 
       it("adds a typed index as a string, matching what the deployment already stores", async () => {

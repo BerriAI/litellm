@@ -396,8 +396,11 @@ export default function ModelInfoView({
       }
 
       // Handle cache control settings
+      const hadInjectionPoints = Boolean(localModelData?.litellm_params?.cache_control_injection_points);
       if (values.cache_control && (values.cache_control_injection_points?.length ?? 0) > 0) {
         updatedLitellmParams.cache_control_injection_points = values.cache_control_injection_points;
+      } else if (hadInjectionPoints) {
+        updatedLitellmParams.cache_control_injection_points = null;
       } else {
         delete updatedLitellmParams.cache_control_injection_points;
       }
