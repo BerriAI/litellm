@@ -2,8 +2,9 @@ import base64
 import hashlib
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
+from contextvars import Token
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -14,7 +15,11 @@ from starlette.types import Message
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY, RealTimeStreaming
+from litellm.litellm_core_utils.realtime_streaming import (
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    RealTimeStreaming,
+    realtime_attachment_cleanup,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.chatgpt.codex import (
     CodexRealtimeCall,
@@ -331,6 +336,7 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
     )
     logging_obj: Logging | None = None  # rebind-ok: cleanup needs the logger only after pre-call succeeds
     attachment_limiter: _PROXY_MaxParallelRequestsHandler | _PROXY_MaxParallelRequestsHandler_v3 | None = None
+    cleanup_token: Token[Callable[[], Awaitable[None]] | None] | None = None
     try:
         try:
             api_key: Final = get_websocket_api_key(websocket)
@@ -387,6 +393,13 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
         await websocket.accept(
             subprotocol=next((p for p in protocols if not p.startswith("openai-insecure-api-key.")), None)
         )
+        if attachment_limiter is not None:
+            selected_limiter: Final = attachment_limiter
+
+            async def release_attachment() -> None:
+                await selected_limiter.async_release_realtime_attachment(data, auth)
+
+            cleanup_token = realtime_attachment_cleanup.set(release_attachment)
         await litellm._arealtime(  # pyright: ignore[reportPrivateUsage]  # dispatch for an already authorized call
             model=f"chatgpt/{call.model}",
             websocket=websocket,
@@ -415,5 +428,7 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
             if attachment_limiter is not None:
                 await attachment_limiter.async_release_realtime_attachment(data, auth)
         finally:
+            if cleanup_token is not None:
+                realtime_attachment_cleanup.reset(cleanup_token)
             if logging_obj is None or not logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
                 await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)

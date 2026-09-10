@@ -664,3 +664,94 @@ async def test_supervisor_constructor_failure_closes_effective_connection(monkey
         release.assert_awaited_once_with(budget_reservation=auth.budget_reservation)
         invalidate.assert_not_awaited()
     assert "private-cleanup-credential" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_attachment_releases_quota_before_upstream_close_handshake(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    import websockets
+
+    import litellm
+    from litellm.proxy import proxy_server as server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _request_stash
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy = ProxyLogging(UserApiKeyCache())
+    monkeypatch.setattr(litellm, "callbacks", [])
+    proxy._add_proxy_hooks()
+    monkeypatch.setattr(server, "proxy_logging_obj", proxy)
+    monkeypatch.setattr(
+        server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {"model_name": "voice", "litellm_params": {"model": "openai/gpt-realtime-1.5", "api_key": "test"}}
+            ]
+        ),
+    )
+    monkeypatch.setattr(codex, "can_key_call_resolved_model", AsyncMock())
+    monkeypatch.setenv("LITELLM_SALT_KEY", "attachment-close-order-test")
+    from litellm.llms.chatgpt.authenticator import Authenticator
+
+    monkeypatch.setattr(Authenticator, "get_access_token", lambda self: "test-token")
+    monkeypatch.setattr(Authenticator, "get_account_id", lambda self: "test-account")
+    closing = asyncio.Event()
+    finish_close = asyncio.Event()
+
+    class Backend:
+        async def recv(self, **kwargs):
+            await asyncio.Event().wait()
+
+        async def send(self, value):
+            return None
+
+    class Connection:
+        async def __aenter__(self):
+            return Backend()
+
+        async def __aexit__(self, *args):
+            closing.set()
+            await finish_close.wait()
+
+    monkeypatch.setattr(websockets, "connect", lambda *args, **kwargs: Connection())
+    auth = UserAPIKeyAuth(api_key="close-order-owner", max_parallel_requests=1)
+    call = CodexRealtimeCall(
+        call_id="rtc_test",
+        model="gpt-live-1-codex",
+        alias="voice",
+        usage_supervised=True,
+        owner=hashlib.sha256(b"Bearer owner").hexdigest(),
+        expires_at=time.time() + 300,
+    )
+    ws = WebSocket(
+        {
+            "type": "websocket",
+            "path": "/v1/live/test",
+            "query_string": b"",
+            "headers": [(b"authorization", b"Bearer owner")],
+            "scheme": "ws",
+            "server": ("localhost", 80),
+        },
+        AsyncMock(side_effect=[{"type": "websocket.connect"}, {"type": "websocket.disconnect", "code": 1000}]),
+        AsyncMock(),
+    )
+    token = _request_stash.set(None)
+    request = asyncio.create_task(codex.codex_realtime_sideband(ws, encode_call(call), auth))
+    try:
+        await asyncio.wait_for(closing.wait(), timeout=5)
+        limiter = proxy.get_proxy_hook("parallel_request_limiter")
+        value = await proxy.internal_usage_cache.async_get_cache(
+            "{api_key:close-order-owner}:max_parallel_requests", litellm_parent_otel_span=None, local_only=True
+        )
+        assert limiter._gauge_in_flight_from_cache_value(value) == 0
+    finally:
+        finish_close.set()
+        await asyncio.wait_for(request, timeout=5)
+        _request_stash.reset(token)
+    value = await proxy.internal_usage_cache.async_get_cache(
+        "{api_key:close-order-owner}:max_parallel_requests", litellm_parent_otel_span=None, local_only=True
+    )
+    assert limiter._gauge_in_flight_from_cache_value(value) == 0

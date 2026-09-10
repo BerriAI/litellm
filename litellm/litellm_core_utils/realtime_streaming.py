@@ -1,7 +1,8 @@
 import asyncio
 import json
 import traceback
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
@@ -25,6 +26,10 @@ from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
 from .realtime_errors import client_close_code, realtime_error_event, websocket_close_reason
+
+realtime_attachment_cleanup: Final[ContextVar[Callable[[], Awaitable[None]] | None]] = ContextVar(
+    "realtime_attachment_cleanup", default=None
+)
 
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
@@ -1581,7 +1586,12 @@ class RealTimeStreaming:
         finally:
             forward_task.cancel()
             client_task.cancel()
-            await asyncio.gather(forward_task, client_task, return_exceptions=True)
+            try:
+                await asyncio.gather(forward_task, client_task, return_exceptions=True)
+            finally:
+                cleanup: Final = realtime_attachment_cleanup.get()
+                if not self._account_usage and cleanup is not None:
+                    await cleanup()
 
     async def _close_client(self, close: BackendClose) -> None:
         redacted_message: Final = redact_internal_details_from_client_message(close.message)

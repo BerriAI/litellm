@@ -3438,3 +3438,37 @@ async def test_live_attachment_does_not_dispatch_duplicate_usage():
     await stream.log_messages()
     worker.ensure_initialized_and_enqueue.assert_not_called()
     logger.dispatch_success_handlers.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_usage", [False, True])
+async def test_attachment_cleanup_runs_in_owning_context_only(account_usage):
+    from litellm.litellm_core_utils.realtime_streaming import realtime_attachment_cleanup
+
+    contexts = []
+
+    async def one(name):
+        task = asyncio.current_task()
+        callback = AsyncMock(side_effect=lambda: contexts.append((name, asyncio.current_task() is task)))
+        token = realtime_attachment_cleanup.set(callback)
+        try:
+            websocket = MagicMock()
+            websocket.receive_text = AsyncMock(side_effect=RuntimeError("disconnected"))
+            backend = MagicMock()
+
+            async def recv(**kwargs):
+                await asyncio.Event().wait()
+
+            backend.recv = recv
+            stream = RealTimeStreaming(websocket, backend, MagicMock(), account_usage=account_usage)
+            await stream.bidirectional_forward()
+            if account_usage:
+                callback.assert_not_awaited()
+            else:
+                callback.assert_awaited_once()
+        finally:
+            realtime_attachment_cleanup.reset(token)
+
+    await asyncio.gather(one("first"), one("second"))
+    assert sorted(contexts) == ([] if account_usage else [("first", True), ("second", True)])
+    assert realtime_attachment_cleanup.get() is None
