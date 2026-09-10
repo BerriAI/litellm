@@ -69,19 +69,21 @@ def test_native_ocr_sends_model_and_document_to_mistral_ocr_path(ocr_server: Rec
     assert ocr_server.requests[0].body == {"model": "mistral-ocr-latest", "document": OCR_DOCUMENT}
 
 
-def test_native_ocr_rejects_file_document_before_callbacks_or_provider_request(ocr_server: RecordingServer) -> None:
-    ocr_server.expected_requests = 0
-    recorder: Final = RecordingLogger()
+def test_native_ocr_prepares_file_document_like_python(ocr_server: RecordingServer) -> None:
+    response: Final = call_native_ocr(
+        ocr_server,
+        document={"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
+    )
 
-    with pytest.raises(NotImplementedError, match="OCR file document preparation"):
-        call_native_ocr(
-            ocr_server,
-            document={"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
-            callbacks=[recorder],
-        )
-
-    assert ocr_server.requests == []
-    assert recorder.events == ()
+    assert response.pages[0].markdown == "native OCR response"
+    assert_native_request(ocr_server)
+    assert ocr_server.requests[0].body == {
+        "model": "mistral-ocr-latest",
+        "document": {
+            "type": "document_url",
+            "document_url": "data:application/pdf;base64,JVBERi0xLjQ=",
+        },
+    }
 
 
 def test_native_ocr_sends_pages_and_image_options(ocr_server: RecordingServer) -> None:
@@ -313,9 +315,8 @@ async def test_public_azure_ocr_token_provider_failure_prevents_pre_call_callbac
     [
         {"azure_ad_token": "oidc/assertion", "client_id": "client", "tenant_id": "tenant"},
         {"model": "azure_ai/doc-intelligence/prebuilt-read"},
-        {"document": {"type": "file", "file": b"pdf"}},
     ],
-    ids=["oidc-assertion", "document-intelligence-model", "file-document"],
+    ids=["oidc-assertion", "document-intelligence-model"],
 )
 def test_native_azure_ocr_rejects_unsupported_configuration_before_token_or_callbacks(
     ocr_server: RecordingServer,

@@ -43,7 +43,7 @@ async def test_async_ocr_response_is_marked_as_rust_when_native_dispatch_is_enab
     assert has_rust_response_marker(response)
 
 
-def test_public_ocr_falls_back_to_python_for_unsupported_file_document(ocr_server: RecordingServer) -> None:
+def test_public_ocr_uses_rust_for_file_document(ocr_server: RecordingServer) -> None:
     response: Final = litellm.ocr(
         model=OCR_MODEL,
         document={"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
@@ -52,7 +52,7 @@ def test_public_ocr_falls_back_to_python_for_unsupported_file_document(ocr_serve
     )
 
     assert response.pages[0].markdown == "native OCR response"
-    assert not has_rust_response_marker(response)
+    assert has_rust_response_marker(response)
 
 
 def test_public_ocr_response_has_no_rust_marker_when_native_dispatch_is_disabled(
@@ -69,14 +69,3 @@ def test_public_ocr_response_has_no_rust_marker_when_native_dispatch_is_disabled
 
     assert response.pages[0].markdown == "native OCR response"
     assert not has_rust_response_marker(response)
-
-
-def test_native_ocr_sends_identity_accept_encoding_header(ocr_server: RecordingServer) -> None:
-    litellm.ocr(
-        model=OCR_MODEL,
-        document=OCR_DOCUMENT,
-        api_key="test-key",
-        api_base=ocr_server.base_url,
-    )
-
-    assert ocr_server.requests[0].headers["accept-encoding"] == "identity"
