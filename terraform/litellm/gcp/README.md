@@ -243,10 +243,12 @@ Behavior matches the AWS stack 1:1; the variable names are identical
 `gateway_metrics_port` adds a `metrics` sidecar
 (`python -m litellm.proxy.prometheus_metrics_server`) to the gateway Cloud Run
 service that aggregates the workers' samples over an in-memory volume shared
-with the gateway container, so a scrape never runs on an inference worker.
-Cloud Run only routes traffic to the gateway container, so the load balancer
-keeps hitting port 4000 and the sidecar port is reachable on localhost inside
-the instance only. To get the series out, the stack also adds Google's
+with the gateway container, so the collector's scrape never runs on an
+inference worker. Cloud Run only routes traffic to the gateway container, so
+the load balancer keeps hitting port 4000 (including the gateway's own
+authenticated `/metrics`, which stays as it was) and the sidecar port is
+reachable on localhost inside the instance only. To get the series out, the
+stack also adds Google's
 [Managed Service for Prometheus sidecar](https://cloud.google.com/stackdriver/docs/managed-prometheus/cloudrun-sidecar)
 (`gateway_metrics_collector_image`) with a `RunMonitoring` config stored in
 Secret Manager that scrapes `localhost:<port>/metrics` every 30s and writes to

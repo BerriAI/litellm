@@ -178,3 +178,23 @@ run "metrics_port_rejects_gateway_port" {
 
   expect_failures = [var.gateway_metrics_port]
 }
+
+run "metrics_port_rejects_collector_health_port" {
+  command = plan
+
+  variables {
+    gateway_metrics_port = 13133
+  }
+
+  expect_failures = [var.gateway_metrics_port]
+}
+
+run "metrics_port_rejects_fractional_port" {
+  command = plan
+
+  variables {
+    gateway_metrics_port = 4000.5
+  }
+
+  expect_failures = [var.gateway_metrics_port]
+}
