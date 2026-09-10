@@ -2579,6 +2579,40 @@ async def native_classifier_http() -> AsyncIterator[tuple[AsyncHTTPHandler, Magi
 class TestEncryptedTaskClassifier:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("classifier_type", ["llm", "heuristic_first", "hybrid"])
+    @pytest.mark.parametrize("codex", [True, False])
+    @pytest.mark.parametrize(
+        "reminder",
+        [
+            "<environment_context>cwd=/repo</environment_context>",
+            "<user_instructions>Keep answers concise</user_instructions>",
+        ],
+    )
+    async def test_encrypted_task_detection_uses_request_reminder_markers(
+        self, classifier_type: str, codex: bool, reminder: str
+    ):
+        router, dependency = _native_classifier_router(classifier_type=classifier_type)
+        task: Final = _encrypted_agent_task()
+        request: Final = {
+            "input": [task, {"role": "user", "content": reminder}],
+            "metadata": {"user_agent": "codex-tui" if codex else "curl/8.7.1"},
+        }
+        original: Final = deepcopy(request)
+
+        result: Final = await router.async_pre_routing_hook(model="encrypted-router", request_kwargs=request)
+
+        assert request == original
+        assert result.model == ("deep-model" if codex else "cheap-model")
+        if codex:
+            assert result.routing_decision["cause"] == "llm_classifier"
+            assert result.routing_decision["tier"] == "REASONING"
+            dependency.aresponses.assert_awaited_once()
+            assert dependency.aresponses.call_args.kwargs["input"][-1] == task
+            dependency.acompletion.assert_not_called()
+        else:
+            dependency.aresponses.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("classifier_type", ["llm", "heuristic_first", "hybrid"])
     @pytest.mark.parametrize("tier,model", [("SIMPLE", "cheap-model"), ("REASONING", "deep-model")])
     async def test_encrypted_task_routes_by_native_verdict(self, classifier_type: str, tier: str, model: str):
         router, dependency = _native_classifier_router(json.dumps({"tier": tier}), classifier_type)
