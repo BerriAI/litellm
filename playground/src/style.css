@@ -210,6 +210,13 @@ h1 {
   grid-template-rows: auto 1fr;
 }
 
+.editor-body {
+  display: grid;
+  grid-template-columns: 10.5rem minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
 .filebar,
 .output-header {
   display: flex;
@@ -232,32 +239,78 @@ h1 {
 .editor-container,
 .cm-editor {
   height: 100%;
+  min-width: 0;
   min-height: 0;
+}
+
+.file-tree {
+  min-width: 0;
+  overflow: auto;
+  border-right: 1px solid #292e36;
+  background: #0f1216;
+  color: #aeb4bd;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.tree-title {
+  margin: 0;
+  padding: 0.75rem 0.8rem 0.55rem;
+  color: #686f7a;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.tree-folder {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  color: #d3d7dd;
+  font-weight: 650;
+}
+
+.tree-folder::before {
+  color: #777f8b;
+  content: '\25BE';
+  font-size: 0.65rem;
 }
 
 .file-nav {
   display: flex;
-  align-self: stretch;
-  gap: 0.15rem;
+  flex-direction: column;
 }
 
-.file-tab {
-  padding: 0.35rem 0.65rem;
+.file-tree-item {
+  position: relative;
+  width: 100%;
+  padding: 0.42rem 0.55rem 0.42rem 2.05rem;
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-left: 2px solid transparent;
   color: #858c97;
   background: transparent;
   cursor: pointer;
   font-family: inherit;
+  text-align: left;
 }
 
-.file-tab:hover,
-.file-tab[data-active='true'] {
+.file-tree-item::before {
+  position: absolute;
+  left: 0.85rem;
+  color: #c96f43;
+  content: 'rs';
+  font-size: 0.62rem;
+}
+
+.file-tree-item:hover,
+.file-tree-item[data-active='true'] {
   color: #eef0f3;
+  background: #191d23;
 }
 
-.file-tab[data-active='true'] {
-  border-bottom-color: #bd5b2f;
+.file-tree-item[data-active='true'] {
+  border-left-color: #bd5b2f;
 }
 
 .cm-editor {
@@ -309,6 +362,10 @@ h1 {
 
   .editor-panel {
     height: 65vh;
+  }
+
+  .editor-body {
+    grid-template-columns: 8.5rem minmax(0, 1fr);
   }
 
   .output-panel {

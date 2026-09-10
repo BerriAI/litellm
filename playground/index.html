@@ -54,10 +54,17 @@
 
         <section class="editor-panel" aria-label="Rust editor">
           <div class="filebar">
-            <nav id="file-nav" class="file-nav" aria-label="Project files"></nav>
+            <span id="active-path">src/main.rs</span>
             <span id="revision" class="revision"></span>
           </div>
-          <div id="editors"></div>
+          <div class="editor-body">
+            <aside class="file-tree" aria-label="Project files">
+              <p class="tree-title">EXPLORER</p>
+              <div class="tree-folder">src</div>
+              <nav id="file-nav" class="file-nav"></nav>
+            </aside>
+            <div id="editors"></div>
+          </div>
         </section>
 
         <section class="output-panel" aria-live="polite">

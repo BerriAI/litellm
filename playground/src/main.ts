@@ -109,6 +109,7 @@ const runStatus = requireElement<HTMLSpanElement>('run-status');
 const output = requireElement<HTMLPreElement>('output');
 const editorsParent = requireElement<HTMLDivElement>('editors');
 const fileNav = requireElement<HTMLElement>('file-nav');
+const activePath = requireElement<HTMLSpanElement>('active-path');
 
 const commandClickDefinition = EditorView.domEventHandlers({
   mousedown(event, view) {
@@ -202,6 +203,7 @@ const main = async () => {
     buttons.forEach((button, candidate) => {
       button.dataset.active = String(candidate === uri);
     });
+    activePath.textContent = info.files.find(file => file.uri === uri)?.path ?? uri;
     view.focus();
     return view;
   };
@@ -228,7 +230,7 @@ const main = async () => {
 
   info.files.forEach(file => {
     const button = document.createElement('button');
-    button.className = 'file-tab';
+    button.className = 'file-tree-item';
     button.type = 'button';
     button.textContent = file.path.replace('src/', '');
     button.addEventListener('click', () => showFile(file.uri));
