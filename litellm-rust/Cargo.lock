@@ -1608,7 +1608,6 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-types",
  "base64 0.22.1",
- "indexmap",
  "rand 0.8.7",
  "reqwest",
  "rstest",
@@ -1617,7 +1616,6 @@ dependencies = [
  "serde_path_to_error",
  "sha2 0.10.9",
  "thiserror 2.0.19",
- "tokenizers",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1633,6 +1631,7 @@ dependencies = [
  "litellm-ai-gateway",
  "litellm-core",
  "litellm-python-interop",
+ "litellm-token-counter",
  "pyo3",
  "pyo3-async-runtimes",
  "serde",
@@ -1651,6 +1650,22 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "litellm-token-counter"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "indexmap",
+ "itoa",
+ "rand 0.8.7",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokenizers",
+ "unicode-normalization-alignments",
 ]
 
 [[package]]

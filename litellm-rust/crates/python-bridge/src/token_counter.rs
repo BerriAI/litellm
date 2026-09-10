@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use litellm_core::token_counter::types::CountableRequest;
-use litellm_core::token_counter::{
-    InputTokenCount, TokenCountError, TokenCounter as CoreTokenCounter,
-};
 use litellm_python_interop::release_gil;
+use litellm_token_counter::{
+    CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
+};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
@@ -39,23 +38,30 @@ impl TokenCounter {
             async move {
                 tokio::task::spawn_blocking(move || count_body(&counter, &body))
                     .await
-                    .map_err(|error| TokenCountError::Encode(error.to_string()))?
+                    .map_err(|error| Error::Task(error.to_string()))?
             },
             token_count_error_to_pyerr,
         )
     }
 }
 
-fn count_body(counter: &CoreTokenCounter, body: &[u8]) -> Result<InputTokenCount, TokenCountError> {
+fn count_body(counter: &CoreTokenCounter, body: &[u8]) -> Result<InputTokenCount, Error> {
     let request = CountableRequest::parse(body)?;
     counter.count_request(&request)
 }
 
-fn token_count_error_to_pyerr(error: TokenCountError) -> PyErr {
+fn token_count_error_to_pyerr(error: Error) -> PyErr {
+    let message = error.to_string();
     match error {
-        TokenCountError::Load(message) => PyValueError::new_err(message),
-        TokenCountError::Unsupported(message) => RustBridgeDeclined::new_err(message),
-        TokenCountError::Encode(message) => PyRuntimeError::new_err(message),
+        Error::Load(_) => PyValueError::new_err(message),
+        Error::RequestParse(_)
+        | Error::MissingInput
+        | Error::FloatText
+        | Error::ContentBlock
+        | Error::ArrayItems
+        | Error::JsonSerialization(_)
+        | Error::JsonUtf8(_) => RustBridgeDeclined::new_err(message),
+        Error::Encode(_) | Error::Task(_) => PyRuntimeError::new_err(message),
     }
 }
 
