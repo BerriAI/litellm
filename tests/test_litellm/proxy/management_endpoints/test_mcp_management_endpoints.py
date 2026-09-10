@@ -4807,7 +4807,7 @@ async def test_store_mcp_oauth_user_credential_blocked_when_identity_binding_enf
     """The direct opaque-token POST must be closed for enforce-mode identity-bound servers,
     otherwise it bypasses the token-relay principal check."""
     from litellm.proxy._types import MCPOAuthUserCredentialRequest
-    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp import MCPAuth, MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
 
     if not mgmt_endpoints.MCP_AVAILABLE:
@@ -4824,6 +4824,7 @@ async def test_store_mcp_oauth_user_credential_blocked_when_identity_binding_enf
         name=server_id,
         url="https://mcp.example.com",
         transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
         oauth_identity_binding=MCPOAuthIdentityBinding(
             mode="enforce",
             issuer="https://idp.example.com",

@@ -246,3 +246,28 @@ async def test_lazy_store_invalidate_works_after_redis_chain_is_built() -> None:
 
     assert build_calls == 1
     assert redis_store.invalidations == [("u", "s")]
+
+
+@pytest.mark.asyncio
+async def test_enforcement_invalidates_cached_legacy_credentials_before_use():
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    server = MCPServer(
+        server_id="srv", name="srv", transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce", issuer="https://idp.example.com", audiences=["client"],
+        ),
+    )
+    cached = _RecordingStore("belongs-to-bob")
+
+    async def read_legacy(user_id, server_id):
+        return {"access_token": "belongs-to-bob", "refresh_token": "bobs-refresh"}
+
+    store = LazyPerUserOAuthTokenStore(
+        lambda server_id: server, store_builder=lambda lookup: (cached, False),
+        redis_available=lambda: False, credential_reader=read_legacy,
+    )
+    assert await store.fetch("alice", "srv") is None
+    assert cached.calls == []
+    assert cached.invalidations == [("alice", "srv")]

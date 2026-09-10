@@ -18,6 +18,11 @@ from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointAuthConfigError,
 )
+from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
+    BindingValidator,
+    RefreshTokenPresented,
+    enforce_oauth_identity_binding,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
@@ -39,6 +44,7 @@ class CredentialPersist(Protocol):
         refresh_token: str | None,
         expires_in: int | None,
         scopes: tuple[str, ...] | None,
+        identity_binding_proof: str | None = None,
     ) -> None: ...
 
 
@@ -78,11 +84,13 @@ class AuthorizationCodeRefresher:
         persist: CredentialPersist,
         *,
         clock: Callable[[], float] = time.time,
+        identity_validator: BindingValidator = enforce_oauth_identity_binding,
     ) -> None:
         self._server_lookup = server_lookup
         self._token_endpoint = token_endpoint
         self._persist = persist
         self._clock = clock
+        self._identity_validator = identity_validator
 
     async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
         if token.refresh_token is None:
@@ -104,6 +112,15 @@ class AuthorizationCodeRefresher:
         except TokenEndpointAuthConfigError as exc:
             verbose_logger.warning("MCP OAuth refresh misconfigured for server %s: %s", server_id, exc)
             return None
+        binding: Final = server.oauth_identity_binding
+        if binding is not None and binding.mode == "enforce":
+            await self._identity_validator(
+                server=server,
+                token_response={},
+                litellm_user_id=user_id,
+                grant_type="refresh_token",
+                refresh_ownership=RefreshTokenPresented(token.refresh_token),
+            )
         form: Final = {
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
@@ -116,12 +133,30 @@ class AuthorizationCodeRefresher:
         if not isinstance(access_token, str) or not access_token:
             return None
 
+        binding_proof: Final = await self._identity_validator(
+            server=server,
+            token_response=body,
+            litellm_user_id=user_id,
+            grant_type="refresh_token",
+            refresh_ownership=RefreshTokenPresented(token.refresh_token),
+        )
         rotated: Final = body.get("refresh_token")
         new_refresh: Final = rotated if isinstance(rotated, str) and rotated else token.refresh_token
         expires_in: Final = _parse_expires_in(body.get("expires_in"))
         scopes: Final = _parse_scopes(body.get("scope")) or token.scopes
 
-        await self._persist(user_id, server_id, access_token, new_refresh, expires_in, scopes or None)
+        if binding_proof is not None:
+            await self._persist(
+                user_id,
+                server_id,
+                access_token,
+                new_refresh,
+                expires_in,
+                scopes or None,
+                identity_binding_proof=binding_proof,
+            )
+        else:
+            await self._persist(user_id, server_id, access_token, new_refresh, expires_in, scopes or None)
         return OAuthToken(
             access_token=access_token,
             expires_at=self._clock() + expires_in if expires_in is not None else None,

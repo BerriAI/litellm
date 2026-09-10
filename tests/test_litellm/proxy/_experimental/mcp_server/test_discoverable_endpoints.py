@@ -8194,15 +8194,17 @@ async def test_token_exchange_refresh_passes_presented_refresh_ownership():
 
 
 @pytest.mark.asyncio
-async def test_token_exchange_authorization_code_passes_no_refresh_ownership():
+async def test_token_exchange_authorization_code_passes_no_refresh_ownership(monkeypatch):
     from fastapi import Request
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         exchange_token_with_server,
+        seal_bridge_authorization_code,
     )
     from litellm.proxy._types import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
 
+    monkeypatch.setenv("LITELLM_SALT_KEY", "identity-binding-test-salt")
     server = MCPServer(
         server_id="srv-1",
         name="srv-1",
@@ -8244,16 +8246,17 @@ async def test_token_exchange_authorization_code_passes_no_refresh_ownership():
             request=request,
             mcp_server=server,
             grant_type="authorization_code",
-            code="auth-code",
+            code=seal_bridge_authorization_code("auth-code", "user-a", "srv-1", "login-nonce"),
             redirect_uri="https://litellm.example.com/callback",
             client_id="cid",
             client_secret=None,
-            code_verifier=None,
+            code_verifier="test-verifier",
         )
 
     assert result.status_code == 200
     assert json.loads(result.body)["access_token"] == "at"
     assert enforce.await_args.kwargs["refresh_ownership"] is None
+    assert enforce.await_args.kwargs["expected_nonce"] == "login-nonce"
 
 
 def _upstream_token_response(status_code: int, *, json_body: object = None, text_body: str = "") -> "httpx.Response":
@@ -11049,3 +11052,54 @@ def test_introspect_route_answers_for_authenticated_caller(monkeypatch):
     assert active.status_code == 200
     assert active.json()["active"] is True
     assert active.json()["sub"] == "u1"
+
+
+@pytest.mark.asyncio
+async def test_identity_bound_authorization_carries_nonce_and_caller_through_callback(monkeypatch):
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+    from fastapi import Request
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _oauth_state_cookie_name, authorize_with_server, callback, open_bridge_authorization_code,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "identity-binding-test-salt")
+    server = MCPServer(
+        server_id="srv", name="srv", transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+        client_id="client", authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce", issuer="https://idp.example.com", audiences=["client"],
+        ),
+    )
+    request = Request({"type": "http", "scheme": "https", "server": ("proxy.example.com", 443),
+                       "path": "/authorize", "query_string": b"", "headers": []})
+    with (
+        patch(  # test-quality-ok: isolate authenticated request resolution from the real encrypted OAuth round trip
+              "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+              new=AsyncMock(return_value="alice")),
+        patch(  # test-quality-ok: isolate user access lookup while testing nonce and caller preservation
+              "litellm.proxy._experimental.mcp_server.discoverable_endpoints._bridge_authorize_access_denial",
+              new=AsyncMock(return_value=None)),
+    ):
+        authorized = await authorize_with_server(
+            request, server, "client", "http://127.0.0.1:6274/callback", state="client-state",
+            code_challenge="pkce-challenge", code_challenge_method="S256",
+        )
+    query = parse_qs(urlparse(authorized.headers["location"]).query)
+    assert len(query["nonce"][0]) >= 32
+    cookies = SimpleCookie()
+    cookies.load(authorized.headers["set-cookie"])
+    name = _oauth_state_cookie_name(query["state"][0])
+    callback_request = Request({**request.scope, "path": "/callback",
+                               "headers": [(b"cookie", f"{name}={cookies[name].value}".encode())]})
+    completed = await callback(callback_request, code="upstream-code", state=query["state"][0])
+    returned = parse_qs(urlparse(completed.headers["location"]).query)
+    sealed = open_bridge_authorization_code(returned["code"][0])
+    assert sealed.litellm_user_id == "alice"
+    assert sealed.mcp_server_id == "srv"
+    assert sealed.upstream_code == "upstream-code"
+    assert sealed.oauth_nonce == query["nonce"][0]
+    assert returned["state"] == ["client-state"]

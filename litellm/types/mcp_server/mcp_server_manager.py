@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing_extensions import Self
 
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
@@ -42,7 +43,7 @@ class MCPOAuthIdentityBinding(BaseModel):
     """Per-server policy binding stored per-user OAuth credentials to the authenticated LiteLLM caller.
 
     When enabled for an interactive oauth2 server, the token relay validates the upstream OIDC
-    ``id_token`` (signature via the pinned issuer's JWKS, issuer, audience, expiry) and compares its
+    ``id_token`` (signature via the pinned issuer's JWKS, issuer, audience, expiry, nonce) and compares its
     principal claim to the LiteLLM caller's trusted identity before the token is returned, stored,
     or cached. ``audit`` logs mismatches without changing behavior; ``enforce`` fails closed with
     403 ``oauth_principal_mismatch`` and disables the direct ``oauth-user-credential`` POST, which
@@ -245,6 +246,14 @@ class MCPServer(BaseModel):
         breaking regression introduced with the M2M feature.
         """
         return self.oauth2_flow == "client_credentials"
+
+    @model_validator(mode="after")
+    def validate_identity_binding_mode(self) -> Self:
+        binding: Final = self.oauth_identity_binding
+        if binding is not None and binding.mode != "disabled":
+            if not self.needs_user_oauth_token or self.delegate_auth_to_upstream:
+                raise ValueError("oauth_identity_binding requires gateway-managed per-user OAuth2 credentials")
+        return self
 
     @property
     def needs_user_oauth_token(self) -> bool:

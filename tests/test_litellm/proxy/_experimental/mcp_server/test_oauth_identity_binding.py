@@ -13,7 +13,9 @@ from pydantic import ValidationError
 
 from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     RefreshOwnershipProven,
+    VerifiedRefreshToken,
     RefreshTokenPresented,
+    current_binding_proof,
     _discover_jwks_url,
     _fetch_issuer_jwks,
     _load_caller_principal,
@@ -21,7 +23,7 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     _select_signing_key,
     enforce_oauth_identity_binding,
 )
-from litellm.types.mcp import MCPTransport
+from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
 
 ISSUER: Final = "https://idp.example.com"
@@ -48,6 +50,8 @@ def _sign_id_token(claims: Mapping[str, object]) -> str:
         "aud": AUDIENCE,
         "exp": int(time.time()) + 300,
         "iat": int(time.time()),
+        "nonce": "test-nonce",
+        "sub": "upstream-user",
         **claims,
     }
     return jwt.encode(payload, _PRIVATE_PEM, algorithm="RS256", headers={"kid": KID})
@@ -65,8 +69,8 @@ def _caller_loader(email: str | None):
 
 
 def _stored_refresh_token_loader(refresh_token: str | None):
-    async def load(_user_id: str, _server_id: str) -> str | None:
-        return refresh_token
+    async def load(_user_id: str, _server_id: str, _binding: MCPOAuthIdentityBinding) -> VerifiedRefreshToken | None:
+        return VerifiedRefreshToken(refresh_token, "verified-binding") if refresh_token else None
 
     return load
 
@@ -77,6 +81,7 @@ def _server(mode: str = "enforce", **binding_overrides: object) -> MCPServer:
         name="srv-1",
         url="https://mcp.example.com",
         transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
         oauth_identity_binding=MCPOAuthIdentityBinding(
             mode=mode,
             issuer=ISSUER,
@@ -181,7 +186,9 @@ async def test_load_caller_principal_supports_user_id_and_database_email():
 
 @pytest.mark.asyncio
 async def test_load_stored_refresh_token_returns_credential_and_fails_closed():
-    get_credential: Final = AsyncMock(return_value={"refresh_token": "rt-1"})
+    binding: Final = _server(caller_field="user_id", principal_claim="sub").oauth_identity_binding
+    proof: Final = await current_binding_proof(binding, "user-a", "srv-1")
+    get_credential: Final = AsyncMock(return_value={"refresh_token": "rt-1", "identity_binding_proof": proof})
     with (
         patch(  # test-quality-ok: stored-token loading is a lazy database boundary without injection
             "litellm.proxy._experimental.mcp_server.db.get_user_oauth_credential",
@@ -192,13 +199,15 @@ async def test_load_stored_refresh_token_returns_credential_and_fails_closed():
             return_value="prisma",
         ),
     ):
-        assert await _load_stored_refresh_token("user-a", "srv-1") == "rt-1"
+        assert await _load_stored_refresh_token("user-a", "srv-1", binding) == VerifiedRefreshToken("rt-1", proof)
+        get_credential.return_value = {"refresh_token": "rt-1"}
+        assert await _load_stored_refresh_token("user-a", "srv-1", binding) is None
 
     with patch(  # test-quality-ok: stored-token loading is a lazy database boundary without injection
         "litellm.proxy.utils.get_prisma_client_or_throw",
         side_effect=RuntimeError("database unavailable"),
     ):
-        assert await _load_stored_refresh_token("user-a", "srv-1") is None
+        assert await _load_stored_refresh_token("user-a", "srv-1", binding) is None
 
 
 @pytest.mark.asyncio
@@ -209,11 +218,12 @@ async def test_matching_principal_passes():
         token_response={"access_token": "at", "id_token": token},
         litellm_user_id="user-a",
         grant_type="authorization_code",
+        expected_nonce="test-nonce",
         refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader("alice@example.com"),
     )
-    assert result is None
+    assert result is not None
 
 
 @pytest.mark.asyncio
@@ -225,6 +235,7 @@ async def test_mismatched_principal_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
@@ -243,6 +254,7 @@ async def test_missing_upstream_principal_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
@@ -263,6 +275,7 @@ async def test_jwks_fetch_failure_is_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=fail,
             caller_principal_loader=_caller_loader("alice@example.com"),
@@ -284,6 +297,7 @@ async def test_missing_signing_key_is_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=no_keys,
             caller_principal_loader=_caller_loader("alice@example.com"),
@@ -301,6 +315,7 @@ async def test_missing_caller_principal_is_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader(None),
@@ -334,11 +349,12 @@ async def test_user_id_principal_matching_uses_exact_comparison():
         token_response={"access_token": "at", "id_token": token},
         litellm_user_id="user-a",
         grant_type="authorization_code",
+        expected_nonce="test-nonce",
         refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader("user-a"),
     )
-    assert result is None
+    assert result is not None
 
 
 @pytest.mark.asyncio
@@ -349,6 +365,7 @@ async def test_missing_id_token_rejected_on_authorization_code():
             token_response={"access_token": "at"},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
@@ -369,7 +386,7 @@ async def test_refresh_without_id_token_allowed_when_presented_token_matches_sto
         caller_principal_loader=_caller_loader("alice@example.com"),
         stored_refresh_token_loader=_stored_refresh_token_loader("rt-1"),
     )
-    assert result is None
+    assert result is not None
 
 
 @pytest.mark.asyncio
@@ -407,21 +424,18 @@ async def test_refresh_without_id_token_rejects_missing_stored_token():
 
 
 @pytest.mark.asyncio
-async def test_refresh_without_id_token_passes_when_bridge_proves_ownership():
-    async def fail_if_called(_user_id: str, _server_id: str) -> str | None:
-        raise AssertionError("stored refresh token loader should not be called")
-
-    result: Final = await enforce_oauth_identity_binding(
-        server=_server(),
-        token_response={"access_token": "at"},
-        litellm_user_id="user-a",
-        grant_type="refresh_token",
-        refresh_ownership=RefreshOwnershipProven(),
-        jwks_fetcher=_jwks_fetcher,
-        caller_principal_loader=_caller_loader("alice@example.com"),
-        stored_refresh_token_loader=fail_if_called,
-    )
-    assert result is None
+async def test_identity_envelope_does_not_prove_upstream_binding():
+    with pytest.raises(HTTPException) as error:
+        await enforce_oauth_identity_binding(
+            server=_server(),
+            token_response={"access_token": "at"},
+            litellm_user_id="user-a",
+            grant_type="refresh_token",
+            refresh_ownership=RefreshOwnershipProven(),
+            jwks_fetcher=_jwks_fetcher,
+            caller_principal_loader=_caller_loader("alice@example.com"),
+        )
+    assert error.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -464,6 +478,7 @@ async def test_audit_mode_logs_but_does_not_reject():
         token_response={"access_token": "at", "id_token": token},
         litellm_user_id="user-a",
         grant_type="authorization_code",
+        expected_nonce="test-nonce",
         refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader("alice@example.com"),
@@ -480,6 +495,7 @@ async def test_unverified_email_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
@@ -503,6 +519,7 @@ async def test_wrong_issuer_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
@@ -519,6 +536,7 @@ async def test_no_litellm_identity_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id=None,
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
@@ -533,6 +551,7 @@ async def test_disabled_binding_is_noop():
         token_response={"access_token": "at"},
         litellm_user_id=None,
         grant_type="authorization_code",
+        expected_nonce="test-nonce",
         refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader(None),
@@ -553,6 +572,7 @@ async def test_no_binding_is_noop():
         token_response={"access_token": "at"},
         litellm_user_id=None,
         grant_type="authorization_code",
+        expected_nonce="test-nonce",
         refresh_ownership=None,
         jwks_fetcher=_jwks_fetcher,
         caller_principal_loader=_caller_loader(None),
@@ -576,9 +596,52 @@ async def test_wrong_audience_rejected():
             token_response={"access_token": "at", "id_token": token},
             litellm_user_id="user-a",
             grant_type="authorization_code",
+            expected_nonce="test-nonce",
             refresh_ownership=None,
             jwks_fetcher=_jwks_fetcher,
             caller_principal_loader=_caller_loader("alice@example.com"),
         )
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail["error"] == "oauth_identity_binding_failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nonce", [None, "another-login"])
+async def test_authorization_code_rejects_missing_or_foreign_nonce(nonce):
+    token = _sign_id_token({"email": "alice@example.com", "email_verified": True, "nonce": nonce})
+    with pytest.raises(HTTPException) as error:
+        await enforce_oauth_identity_binding(
+            server=_server(),
+            token_response={"access_token": "at", "id_token": token},
+            litellm_user_id="user-a",
+            grant_type="authorization_code",
+            refresh_ownership=None,
+            expected_nonce="this-login",
+            jwks_fetcher=_jwks_fetcher,
+            caller_principal_loader=_caller_loader("alice@example.com"),
+        )
+    assert error.value.status_code == 403
+    assert error.value.detail["error"] == "oauth_identity_binding_failed"
+
+
+@pytest.mark.asyncio
+async def test_binding_proof_rejects_changed_user_or_policy():
+    from litellm.proxy._experimental.mcp_server.oauth_identity_binding import credential_binding_matches
+
+    binding = _server(caller_field="user_id", principal_claim="sub").oauth_identity_binding
+    proof = await current_binding_proof(binding, "alice", "srv-1")
+    credential = {"identity_binding_proof": proof}
+    assert await credential_binding_matches(binding, "alice", "srv-1", credential)
+    assert not await credential_binding_matches(binding, "bob", "srv-1", credential)
+    assert not await credential_binding_matches(binding, "alice", "other-server", credential)
+    changed = binding.model_copy(update={"audiences": ["different-client"]})
+    assert not await credential_binding_matches(changed, "alice", "srv-1", credential)
+
+
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth_delegate, MCPAuth.true_passthrough])
+def test_identity_binding_rejects_modes_without_gateway_credential_custody(auth_type):
+    with pytest.raises(ValidationError, match="gateway-managed per-user"):
+        MCPServer(
+            server_id="srv", name="srv", transport=MCPTransport.http, auth_type=auth_type,
+            oauth_identity_binding=_server().oauth_identity_binding,
+        )
