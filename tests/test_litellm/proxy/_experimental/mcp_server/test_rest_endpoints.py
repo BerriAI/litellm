@@ -2865,6 +2865,39 @@ class TestCallToolRestAPI:
         assert standard_logging_object["status"] == "failure"
         assert standard_logging_object["error_str"] == str(guardrail_error)
 
+    async def test_failure_logging_error_does_not_replace_guardrail_error(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        guardrail_error = HTTPException(status_code=400, detail={"error": "Content blocked"})
+
+        async def fake_add_litellm_data_to_request(**kwargs):
+            return kwargs.get("data", {})
+
+        async def blocking_pre_call_hook(user_api_key_dict, data, call_type):
+            raise guardrail_error
+
+        failure_logging = AsyncMock(side_effect=RuntimeError("spend log db down"))
+        monkeypatch.setattr(
+            proxy_server, "add_litellm_data_to_request", fake_add_litellm_data_to_request, raising=False
+        )
+        monkeypatch.setattr(proxy_server, "proxy_config", {}, raising=False)
+        monkeypatch.setattr(proxy_server.proxy_logging_obj, "pre_call_hook", blocking_pre_call_hook)
+        monkeypatch.setattr(rest_endpoints, "fire_mcp_tool_call_failure_logging", failure_logging, raising=False)
+
+        request = _build_request(
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {"q": "confidential"}},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.call_tool_rest_api(
+                request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", request_route="/mcp-rest/tools/call")
+            )
+
+        assert exc_info.value is guardrail_error
+        failure_logging.assert_awaited_once()
+
     async def test_success_logging_cancellation_propagates(self, monkeypatch):
         fire_logging = AsyncMock(side_effect=asyncio.CancelledError())
         monkeypatch.setattr(

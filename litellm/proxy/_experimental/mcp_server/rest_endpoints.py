@@ -233,6 +233,20 @@ if MCP_AVAILABLE:
             return result
         return outcome
 
+    async def _safe_fire_mcp_tool_call_failure_logging(
+        logging_obj: "LiteLLMLoggingObj | None",
+        exception: Exception,
+        start_time: datetime,
+        user_api_key_auth: UserAPIKeyAuth,
+        request_data: Mapping[str, object],
+    ) -> None:
+        try:
+            await fire_mcp_tool_call_failure_logging(
+                logging_obj, exception, start_time, user_api_key_auth, request_data
+            )
+        except Exception as logging_error:
+            verbose_logger.warning("MCP tool call failure logging failed (continuing): %s", logging_error)
+
     def _relay_upstream_auth_http_exception(e: MCPUpstreamAuthError, request: Request) -> HTTPException:
         """Convert a client-forwarded pass-through upstream 401 into an HTTPException that preserves the
         upstream WWW-Authenticate, so a standards-compliant MCP client can run the upstream OAuth flow
@@ -1142,7 +1156,7 @@ if MCP_AVAILABLE:
                 )
             except Exception as e:
                 request_data: Final = proxy_base_llm_response_processor.data
-                await fire_mcp_tool_call_failure_logging(
+                await _safe_fire_mcp_tool_call_failure_logging(
                     request_data.get("litellm_logging_obj"), e, _tool_start_time, user_api_key_dict, request_data
                 )
                 raise
