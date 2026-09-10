@@ -1,34 +1,21 @@
-//! Input token counting for a request body, mirroring `litellm.token_counter`
-//! for the shapes it can count exactly. Everything else is declined so the host
-//! keeps its own counter as the reference.
-
-mod python_json;
-mod tools;
-pub mod types;
-
 use serde::Serialize;
-use thiserror::Error as ThisError;
 
-use crate::constants::{
-    NAMED_TOOL_CHOICE_TOKENS, REPLY_PRIMING_TOKENS, TOKENS_PER_MESSAGE, TOKENS_PER_NAME,
-    TOOL_CHOICE_NONE_TOKENS, TOOL_DEFINITIONS_TOKENS, TOOLS_WITH_SYSTEM_MESSAGE_DISCOUNT,
-};
-use tools::format_function_definitions;
-use types::{
+use crate::Error;
+use crate::byte_level::ByteLevelCounter;
+use crate::python_json;
+use crate::tools::format_function_definitions;
+use crate::types::{
     ContentBlock, ContentItem, CountableRequest, Message, MessageContent, TextValue, ToolChoice,
+    ToolDefinition,
 };
 
-#[derive(Debug, ThisError, PartialEq, Eq)]
-pub enum TokenCountError {
-    #[error("failed to load tokenizer: {0}")]
-    Load(String),
-    /// The body is outside the shape this counter mirrors exactly. Hosts with a
-    /// reference counter treat this as "fall back", not "fail".
-    #[error("unsupported by the rust token counter: {0}")]
-    Unsupported(String),
-    #[error("tokenization failed: {0}")]
-    Encode(String),
-}
+const TOKENS_PER_MESSAGE: usize = 3;
+const TOKENS_PER_NAME: usize = 1;
+const REPLY_PRIMING_TOKENS: usize = 3;
+const TOOL_DEFINITIONS_TOKENS: usize = 9;
+const TOOLS_WITH_SYSTEM_MESSAGE_DISCOUNT: usize = 4;
+const TOOL_CHOICE_NONE_TOKENS: usize = 1;
+const NAMED_TOOL_CHOICE_TOKENS: usize = 7;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct InputTokenCount {
@@ -41,30 +28,39 @@ pub struct InputTokenCount {
 /// event loop.
 pub struct TokenCounter {
     tokenizer: tokenizers::Tokenizer,
+    byte_level: Option<ByteLevelCounter>,
 }
 
 impl TokenCounter {
     /// Load a HuggingFace `tokenizer.json` document. The host reads the file.
-    pub fn from_json(tokenizer_json: &str) -> Result<Self, TokenCountError> {
+    pub fn from_json(tokenizer_json: &str) -> Result<Self, Error> {
         let tokenizer = tokenizer_json
             .parse::<tokenizers::Tokenizer>()
-            .map_err(|error| TokenCountError::Load(error.to_string()))?;
-        Ok(Self { tokenizer })
+            .map_err(Error::Load)?;
+        let byte_level = ByteLevelCounter::detect(&tokenizer);
+        Ok(Self {
+            tokenizer,
+            byte_level,
+        })
     }
 
-    pub fn count_text(&self, text: &str) -> Result<usize, TokenCountError> {
+    pub fn count_text(&self, text: &str) -> Result<usize, Error> {
+        if let Some(count) = self
+            .byte_level
+            .as_ref()
+            .and_then(|counter| counter.count(&self.tokenizer, text))
+        {
+            return Ok(count);
+        }
         self.tokenizer
             .encode_fast(text, true)
             .map(|encoding| encoding.len())
-            .map_err(|error| TokenCountError::Encode(error.to_string()))
+            .map_err(Error::Encode)
     }
 
     /// Mirrors the host's key precedence: `messages`, then `prompt`, then
     /// `input`, then `query` plus `documents`.
-    pub fn count_request(
-        &self,
-        request: &CountableRequest,
-    ) -> Result<InputTokenCount, TokenCountError> {
+    pub fn count_request(&self, request: &CountableRequest) -> Result<InputTokenCount, Error> {
         let input_tokens = if let Some(messages) = &request.messages {
             self.count_messages(request, messages)?
         } else if let Some(prompt) = &request.prompt {
@@ -75,9 +71,7 @@ impl TokenCounter {
             self.count_optional_text_value(request.query.as_ref())?
                 + self.count_optional_text_value(request.documents.as_ref())?
         } else {
-            return Err(TokenCountError::Unsupported(
-                "request has no countable input".to_string(),
-            ));
+            return Err(Error::MissingInput);
         };
         Ok(InputTokenCount {
             model: request.model.clone(),
@@ -89,7 +83,7 @@ impl TokenCounter {
         &self,
         request: &CountableRequest,
         messages: &[Message],
-    ) -> Result<usize, TokenCountError> {
+    ) -> Result<usize, Error> {
         let message_tokens = messages
             .iter()
             .map(|message| self.count_message(message))
@@ -105,25 +99,23 @@ impl TokenCounter {
         Ok(message_tokens + extra_tokens)
     }
 
-    fn count_optional_text_value(
-        &self,
-        value: Option<&TextValue>,
-    ) -> Result<usize, TokenCountError> {
+    fn count_optional_text_value(&self, value: Option<&TextValue>) -> Result<usize, Error> {
         value.map_or(Ok(0), |value| self.count_text_value(value))
     }
 
     /// `str()` for scalars, `json.dumps()` for objects, lists flattened, nulls
     /// skipped. Floats are declined because Python's `repr` and Rust's float
     /// formatting disagree on exponents.
-    fn count_text_value(&self, value: &TextValue) -> Result<usize, TokenCountError> {
+    fn count_text_value(&self, value: &TextValue) -> Result<usize, Error> {
         match value {
             TextValue::Null => Ok(0),
             TextValue::Bool(true) => self.count_text("True"),
             TextValue::Bool(false) => self.count_text("False"),
-            TextValue::Integer(number) => self.count_text(&number.to_string()),
-            TextValue::Float(_) => Err(TokenCountError::Unsupported(
-                "float text values are counted by the python path".to_string(),
-            )),
+            TextValue::Number(number) => match (number.as_i64(), number.as_u64()) {
+                (Some(number), _) => self.count_text(itoa::Buffer::new().format(number)),
+                (_, Some(number)) => self.count_text(itoa::Buffer::new().format(number)),
+                _ => Err(Error::FloatText),
+            },
             TextValue::Text(text) => self.count_text(text),
             TextValue::List(items) => items
                 .iter()
@@ -133,7 +125,7 @@ impl TokenCounter {
         }
     }
 
-    fn count_message(&self, message: &Message) -> Result<usize, TokenCountError> {
+    fn count_message(&self, message: &Message) -> Result<usize, Error> {
         let role_tokens = match &message.role {
             Some(role) => self.count_text(role)?,
             None => 0,
@@ -153,7 +145,7 @@ impl TokenCounter {
         Ok(TOKENS_PER_MESSAGE + role_tokens + name_tokens + content_tokens)
     }
 
-    fn count_content_item(&self, item: &ContentItem) -> Result<usize, TokenCountError> {
+    fn count_content_item(&self, item: &ContentItem) -> Result<usize, Error> {
         match item {
             ContentItem::Text(text) => self.count_text(text),
             ContentItem::Block(ContentBlock::Text { text }) => self.count_text(text),
@@ -169,18 +161,16 @@ impl TokenCounter {
                     None => Ok(0),
                 }
             }
-            ContentItem::Block(ContentBlock::Unsupported) => Err(TokenCountError::Unsupported(
-                "content block type is counted by the python path".to_string(),
-            )),
+            ContentItem::Block(ContentBlock::Unsupported) => Err(Error::ContentBlock),
         }
     }
 
     fn count_extra(
         &self,
-        tools: &[types::ToolDefinition],
+        tools: &[ToolDefinition],
         tool_choice: Option<&ToolChoice>,
         includes_system_message: bool,
-    ) -> Result<usize, TokenCountError> {
+    ) -> Result<usize, Error> {
         let tool_tokens = if tools.is_empty() {
             0
         } else {
@@ -202,6 +192,3 @@ impl TokenCounter {
         Ok(REPLY_PRIMING_TOKENS + tool_tokens + choice_tokens)
     }
 }
-
-#[cfg(test)]
-mod tests;

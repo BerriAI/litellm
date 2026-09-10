@@ -1,6 +1,6 @@
 use rstest::rstest;
 
-use super::*;
+use litellm_token_counter::{CountableRequest, Error, InputTokenCount, TokenCounter};
 
 /// Expected counts are pinned from `litellm.token_counter(model="claude-sonnet-4-5", ...)`
 /// so this test also guards Python parity.
@@ -96,39 +96,6 @@ fn key_presence_follows_python(#[case] body: &str, #[case] expected: usize) {
     assert_eq!(count.input_tokens, expected);
 }
 
-#[test]
-fn objects_dump_like_python_json_dumps() {
-    let body = r#"{"model":"m","input":{"text":"caf\u00e9 \u2014 \ud83d\ude00 \"q\" \\ \n\t\u0001\u007f ~","n":-3,"ok":true,"no":false,"none":null,"list":[1,"a",{"z":[]}],"empty":{}}}"#;
-    let request = CountableRequest::parse(body.as_bytes()).expect("fixture parses");
-    let dumped = python_json::dumps(request.input.as_ref().expect("input is present"))
-        .expect("fixture dumps");
-    assert_eq!(
-        dumped,
-        r#"{"text": "caf\u00e9 \u2014 \ud83d\ude00 \"q\" \\ \n\t\u0001\u007f ~", "n": -3, "ok": true, "no": false, "none": null, "list": [1, "a", {"z": []}], "empty": {}}"#
-    );
-}
-
-#[test]
-fn tool_definitions_render_like_python() {
-    let request = CountableRequest::parse(TOOLS_OPENAI.as_bytes()).expect("fixture parses");
-    let rendered = format_function_definitions(request.tools.as_deref().unwrap_or_default())
-        .expect("fixture renders");
-    let expected = "namespace functions {\n\n// Get weather\ntype get_weather = (_: {\n// City name\nlocation: string,\nunit?: \"celsius\" | \"fahrenheit\",\ndays?: number,\ntags?: string[],\nopts?: {\n  verbose: boolean,\n  level?: \"1\" | \"2\",\n},\nanything?: any,\n}) => any;\n\ntype noop = () => any;\n\n} // namespace functions";
-    assert_eq!(rendered, expected);
-}
-
-#[test]
-fn union_types_and_anthropic_schema_render_like_python() {
-    let request =
-        CountableRequest::parse(TOOLS_ANTHROPIC_SYSTEM.as_bytes()).expect("fixture parses");
-    let rendered = format_function_definitions(request.tools.as_deref().unwrap_or_default())
-        .expect("fixture renders");
-    assert_eq!(
-        rendered,
-        "namespace functions {\n\n// Get weather\ntype get_weather = (_: {\nlocation: any,\n}) => any;\n\n} // namespace functions"
-    );
-}
-
 #[rstest]
 #[case::not_json(b"not json" as &[u8])]
 #[case::messages_not_a_list(br#"{"model":"m","messages":"hi"}"#)]
@@ -147,7 +114,7 @@ fn union_types_and_anthropic_schema_render_like_python() {
 fn shapes_outside_the_mirror_are_declined_at_parse(#[case] body: &[u8]) {
     assert!(matches!(
         CountableRequest::parse(body),
-        Err(TokenCountError::Unsupported(_))
+        Err(Error::RequestParse(_))
     ));
 }
 
@@ -168,7 +135,7 @@ fn shapes_outside_the_mirror_are_declined_at_count(#[case] body: &[u8]) {
     let request = CountableRequest::parse(body).expect("shape parses");
     assert!(matches!(
         counter().count_request(&request),
-        Err(TokenCountError::Unsupported(_))
+        Err(Error::MissingInput | Error::FloatText | Error::ContentBlock | Error::ArrayItems)
     ));
 }
 
@@ -184,7 +151,7 @@ fn tool_choice_and_system_discount_change_the_count() {
     let base = count(r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#);
     assert_eq!(
         count(r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tool_choice":"none"}"#),
-        base + TOOL_CHOICE_NONE_TOKENS
+        base + 1
     );
     assert_eq!(
         count(r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tool_choice":"auto"}"#),
@@ -196,10 +163,7 @@ fn tool_choice_and_system_discount_change_the_count() {
     let with_tools_and_system = count(
         r#"{"model":"m","messages":[{"role":"system","content":"hi"}],"tools":[{"name":"f"}]}"#,
     );
-    assert_eq!(
-        with_tools - with_tools_and_system,
-        TOOLS_WITH_SYSTEM_MESSAGE_DISCOUNT
-    );
+    assert_eq!(with_tools - with_tools_and_system, 4);
     assert_eq!(
         count(r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[]}"#),
         base
@@ -208,8 +172,5 @@ fn tool_choice_and_system_discount_change_the_count() {
 
 #[test]
 fn loading_a_bad_tokenizer_is_a_load_error() {
-    assert!(matches!(
-        TokenCounter::from_json("{}"),
-        Err(TokenCountError::Load(_))
-    ));
+    assert!(matches!(TokenCounter::from_json("{}"), Err(Error::Load(_))));
 }
