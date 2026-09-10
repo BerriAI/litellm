@@ -1234,7 +1234,7 @@ if MCP_AVAILABLE:
         return client_id, client_secret, scopes
 
     _STAGED_AUTH_VALUE_AUTH_TYPES: Final = frozenset(
-        (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic, MCPAuth.authorization)
+        (MCPAuth.api_key, MCPAuth.bearer_token, MCPAuth.basic, MCPAuth.authorization, MCPAuth.token)
     )
 
     @dataclass(frozen=True, slots=True)
@@ -1318,8 +1318,15 @@ if MCP_AVAILABLE:
             if _oauth2_flow == "client_credentials" and not request.token_url:
                 _oauth2_flow = None
 
+            # Static previews inherit credentials before this step, but must not resolve back to
+            # the saved record during client creation and discard the edited connection settings.
+            preview_server_id: Final = (
+                ""
+                if request.auth_type in _STAGED_AUTH_VALUE_AUTH_TYPES or request.auth_type in (None, MCPAuth.none)
+                else request.server_id or ""
+            )
             server_model: Final = MCPServer(
-                server_id=request.server_id or "",
+                server_id=preview_server_id,
                 name=request.alias or request.server_name or "",
                 url=request.url,
                 transport=request.transport,
