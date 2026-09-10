@@ -663,6 +663,25 @@ async def test_async_http_handler_http2_transport():
         monkeypatch.undo()
 
 
+@pytest.mark.asyncio
+async def test_async_http_handler_http2_request():
+    requests: list[httpx.Request] = []
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = AsyncHTTPHandler(http2=True)
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    try:
+        response = await handler.get("https://example.com/search")
+        assert response.json() == {"ok": True}
+        assert requests[0].url == "https://example.com/search"
+    finally:
+        await handler.close()
+
+
 def test_http_handler_http2_transport():
     http2_handler = HTTPHandler(http2=True)
     default_handler = HTTPHandler()
@@ -672,6 +691,24 @@ def test_http_handler_http2_transport():
     finally:
         http2_handler.close()
         default_handler.close()
+
+
+def test_http_handler_http2_request():
+    requests: list[httpx.Request] = []
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = HTTPHandler(http2=True)
+    handler.client.close()
+    handler.client = httpx.Client(transport=httpx.MockTransport(mock_handler))
+    try:
+        response = handler.get("https://example.com/search")
+        assert response.json() == {"ok": True}
+        assert requests[0].url == "https://example.com/search"
+    finally:
+        handler.close()
 
 
 @pytest.mark.asyncio
