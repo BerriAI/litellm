@@ -135,17 +135,6 @@ class BatchCreateBody(BaseModel):
 class BatchObject(BaseModel):
     id: str
     status: str
-    metadata: dict[str, str] | None = None
-    created_at: int | None = None
-
-
-class BatchList(BaseModel):
-    data: list[BatchObject] = []
-
-
-class BatchListQuery(BaseModel):
-    model: str
-    limit: int
 
 
 class ProviderQuery(BaseModel):
@@ -381,11 +370,13 @@ class SpendClient:
         ).user_id
 
     def delete_user(self, user_id: str) -> None:
-        _ = self.proxy.transport.post(
-            "/user/delete",
-            headers=self.proxy.transport.master,
-            json=UserDeleteBody(user_ids=[user_id]),
-            response_type=UserDeleteResponse,
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/user/delete",
+                headers=self.proxy.transport.master,
+                json=UserDeleteBody(user_ids=[user_id]),
+                response_type=UserDeleteResponse,
+            )
         )
 
     def generate_key_record(self, body: KeyGenerateBody) -> KeyGenerateResponse:
@@ -473,16 +464,6 @@ class SpendClient:
                 response_type=BatchObject,
             )
         )
-
-    def list_batches(self, key: str, model: str, *, limit: int) -> list[BatchObject]:
-        return unwrap(
-            self.proxy.transport.get(
-                "/v1/batches",
-                headers=self.proxy.transport.bearer(key),
-                params=BatchListQuery(model=model, limit=limit),
-                response_type=BatchList,
-            )
-        ).data
 
     def retrieve_batch(self, key: str, batch_id: str, *, provider: str) -> BatchObject:
         return unwrap(
