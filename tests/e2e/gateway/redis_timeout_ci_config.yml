@@ -17,3 +17,5 @@ router_settings:
   fallbacks:
     - redis-timeout-primary:
         - redis-timeout-backup
+    - redis-timeout-embed-primary:
+        - redis-timeout-embed-backup

@@ -920,7 +920,7 @@ class LiteLLMParamsBody(BaseModel):
     auto_router_default_model: str | None = None
     auto_router_embedding_model: str | None = None
     tags: list[str] | None = None
-    mock_response: str | None = None
+    mock_response: str | list[float] | None = None
     timeout: float | None = None
     tpm: int | None = None
     weight: int | None = None
