@@ -1284,9 +1284,16 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     model_config = {"extra": "allow"}
 
 
+class CachedTokensDetails(BaseModel):
+    text_tokens: int | None = None
+    audio_tokens: int | None = None
+    image_tokens: int | None = None
+
+
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
     text_tokens: int | None = None
 
     model_config = {"extra": "allow"}
@@ -2204,10 +2211,17 @@ class OpenAIRealtimeInputAudioTranscriptionCompleted(TypedDict):
     transcript: ReadOnly[str]
 
 
+class OpenAIRealtimeCachedTokensDetails(TypedDict, total=False):
+    text_tokens: ReadOnly[int]
+    audio_tokens: ReadOnly[int]
+    image_tokens: ReadOnly[int]
+
+
 class OpenAIRealtimeUsageTokenDetails(TypedDict):
     audio_tokens: ReadOnly[int]
     text_tokens: ReadOnly[int]
     cached_tokens: NotRequired[ReadOnly[int]]
+    cached_tokens_details: NotRequired[ReadOnly[OpenAIRealtimeCachedTokensDetails]]
 
 
 class OpenAIRealtimeResponseUsage(TypedDict):

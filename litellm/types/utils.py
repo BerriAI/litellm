@@ -58,6 +58,7 @@ from .llms.base import HiddenParams
 from .llms.openai import (
     AllMessageValues,
     Batch,
+    CachedTokensDetails,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionRedactedThinkingBlock,
@@ -1707,6 +1708,9 @@ class PromptTokensDetailsWrapper(
     cache_creation_token_details: CacheCreationTokenDetails | None = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
+    cached_tokens_details: CachedTokensDetails | None = None
+    """Details of cached (cache-hit) tokens sent to the model. OpenAI realtime naming; carries the per-modality cache-read split."""
+
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
         if name == "cache_write_tokens":
@@ -1753,6 +1757,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
+        if self.cached_tokens_details is None:
+            del self.cached_tokens_details
 
 
 class ServerToolUse(BaseModel):
