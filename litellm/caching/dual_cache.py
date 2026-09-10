@@ -178,7 +178,9 @@ class DualCache(BaseCache):
             print_verbose(f"get cache: cache result: {result}")
             return result
         except Exception as e:
-            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in get_cache", e)
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in get_cache", e, with_traceback=True
+            )
 
     def batch_get_cache(
         self,
@@ -218,7 +220,9 @@ class DualCache(BaseCache):
                 redis_result.get(key) if value is None else value for key, value in zip(keys, result)
             )
         except Exception as e:
-            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in batch_get_cache", e)
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in batch_get_cache", e, with_traceback=True
+            )
 
     async def async_get_cache(
         self,
@@ -251,7 +255,9 @@ class DualCache(BaseCache):
             print_verbose(f"get cache: cache result: {result}")
             return result
         except Exception as e:
-            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_get_cache", e)
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_get_cache", e, with_traceback=True
+            )
 
     def _reserve_redis_batch_keys(
         self,
@@ -340,7 +346,13 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_batch_get_cache", e)
+            log_redis_failure(
+                verbose_logger,
+                logging.ERROR,
+                "LiteLLM Cache: exception in async_batch_get_cache",
+                e,
+                with_traceback=True,
+            )
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
         print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
@@ -353,7 +365,9 @@ class DualCache(BaseCache):
             if self.redis_cache is not None and local_only is False:
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
         except Exception as e:
-            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e)
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
+            )
 
     # async_batch_set_cache
     async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs):
@@ -372,7 +386,9 @@ class DualCache(BaseCache):
                     cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )
         except Exception as e:
-            log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e)
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
+            )
 
     async def async_increment_cache(
         self,

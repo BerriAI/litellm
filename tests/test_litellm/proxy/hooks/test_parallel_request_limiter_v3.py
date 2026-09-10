@@ -6257,3 +6257,24 @@ async def test_an_open_circuit_breaker_falls_back_to_the_pipeline_without_a_warn
 
     assert await handler.internal_usage_cache.dual_cache.async_get_cache("quiet_key") == 10.0
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_a_warning(caplog):
+    from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+
+    async def refused_script(keys, args):
+        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+    handler.batch_rate_limiter_script = refused_script
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        values = await handler._execute_redis_batch_rate_limiter_script(
+            ["{quiet}:window", "{quiet}:counter"], now_int=int(time.time())
+        )
+
+    assert isinstance(values, list)
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
