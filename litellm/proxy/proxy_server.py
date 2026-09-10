@@ -2501,7 +2501,9 @@ async def get_current_spend(
     Fallback chain:
     1. Redis counter (cross-pod, authoritative)
     2. In-memory counter (single-instance or Redis failure)
-    3. Reseed from authoritative DB spend (counter expired, cross-pod stale)
+    3. Reseed from authoritative DB spend (counter expired, cross-pod stale):
+       entity rows for primary counters, the maintained window-spend row (or
+       spend-logs aggregate) for per-window counters
     4. Caller-supplied fallback (DB unavailable, cold start)
 
     When ``max_budget`` is supplied, the counter is re-checked against the
@@ -2519,7 +2521,14 @@ async def get_current_spend(
     and cached in-process for a few seconds, so a persistently stale counter
     drives at most one read per counter per window rather than one per request.
     """
-    current, verified = await _read_spend_counter_estimate(counter_key=counter_key, fallback_spend=fallback_spend)
+    current, verified = await _read_spend_counter_estimate(
+        counter_key=counter_key,
+        fallback_spend=fallback_spend,
+        window_entity_type=window_entity_type,
+        window_entity_id=window_entity_id,
+        window_duration=window_duration,
+        window_start=window_start,
+    )
     if fallback_authoritative:
         verified = True
 
@@ -2696,7 +2705,14 @@ async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None
     return (float(in_memory_val) if in_memory_val is not None else None), False
 
 
-async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:
+async def _read_spend_counter_estimate(
+    counter_key: str,
+    fallback_spend: float,
+    window_entity_type: str | None = None,
+    window_entity_id: str | None = None,
+    window_duration: str | None = None,
+    window_start: datetime | None = None,
+) -> tuple[float, bool]:
     """Return (spend, authoritative). ``authoritative`` is True when the value
     came from Redis or a fresh DB read (cross-pod truth), False when it came
     from the per-pod in-memory copy or the caller's fallback. Only the
@@ -2713,6 +2729,24 @@ async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) 
     )
     if db_spend is not None:
         return db_spend, True
+
+    # Window counters have no entity row (coalesced rejects the :window: key),
+    # so a cold one must reseed from the per-window DB total: a lost counter
+    # reading as a fresh empty window would bypass the window budget. The
+    # caller's fallback (a cumulative upper bound) only applies when the DB is
+    # unreachable too.
+    if window_start is not None and window_entity_type is not None and window_entity_id is not None:
+        window_spend: Final = await SpendCounterReseed.coalesced_window(
+            prisma_client=prisma_client,
+            spend_counter_cache=spend_counter_cache,
+            counter_key=counter_key,
+            entity_type=window_entity_type,
+            entity_id=window_entity_id,
+            window_duration=window_duration,
+            window_start=window_start,
+        )
+        if window_spend is not None:
+            return window_spend, True
 
     # 4. Caller-supplied fallback (DB unavailable).
     return fallback_spend, False
@@ -3270,6 +3304,7 @@ async def _ensure_window_spend_counter_initialized(
         entity_id=entity_id,
         window_duration=window_duration,
         window_start=window_start,
+        require_cache_warm=True,
     )
     if window_spend is None:
         verbose_proxy_logger.warning(

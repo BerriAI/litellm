@@ -385,6 +385,7 @@ class SpendCounterReseed:
         entity_id: str,
         window_duration: str | None,
         window_start: datetime,
+        require_cache_warm: bool = False,
     ) -> float | None:
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
@@ -440,5 +441,6 @@ class SpendCounterReseed:
                     "SpendCounterReseed.coalesced_window: failed to warm counter %s",
                     counter_key,
                 )
-                raise
+                if require_cache_warm:
+                    raise
             return window_spend

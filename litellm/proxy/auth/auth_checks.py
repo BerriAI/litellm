@@ -4926,9 +4926,10 @@ async def _virtual_key_multi_budget_check(
     Using budget_duration (not list index) keeps counters stable when windows are reordered
     or removed during a key update.
 
-    Note: counters are not seeded from DB on Redis cold-start. After a Redis flush,
-    per-window spend resets to zero within the current window period. This is an acceptable
-    trade-off: the DB stores reset_at timestamps but not per-window accumulated spend.
+    The per-window fallback is the key's cumulative spend: a conservative upper
+    bound of any single window, applied only when both the window counter and
+    the per-window DB total are unreadable, so a lost counter cannot read as a
+    fresh empty window and bypass the budget (#26672).
     """
     if not valid_token.budget_limits:
         return
@@ -4940,7 +4941,7 @@ async def _virtual_key_multi_budget_check(
         counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
-            fallback_spend=0.0,
+            fallback_spend=valid_token.spend or 0.0,
             max_budget=w["max_budget"],
             window_entity_type="Key",
             window_entity_id=valid_token.token,
@@ -5303,6 +5304,10 @@ async def _team_multi_budget_check(
     Each window has its own Redis counter keyed by spend:team:{team_id}:window:{budget_duration}.
     Using budget_duration (not list index) keeps counters stable when windows are reordered
     or removed during a team update.
+
+    The per-window fallback is the team's cumulative spend, an upper bound of any
+    single window, so a counter lost to a Redis flush cannot read as a fresh
+    empty window (#26672).
     """
     if team_object is None or not team_object.budget_limits:
         return
@@ -5314,7 +5319,7 @@ async def _team_multi_budget_check(
         counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
-            fallback_spend=0.0,
+            fallback_spend=team_object.spend or 0.0,
             max_budget=w["max_budget"],
             window_entity_type="Team",
             window_entity_id=team_object.team_id,

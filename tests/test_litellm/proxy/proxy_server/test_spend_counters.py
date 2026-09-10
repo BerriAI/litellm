@@ -400,6 +400,100 @@ async def test_get_current_spend_floors_window_against_logs_when_row_stale(monke
 
 
 @pytest.mark.asyncio
+async def test_get_current_spend_cold_window_counter_reseeds_from_db(monkeypatch):
+    """Issue #26672: a Redis flush losing a window counter must reseed it from
+    the per-window DB total (maintained row first), so the decision uses the
+    true window spend and later requests hit the re-warmed counter instead of
+    re-deriving it per request."""
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    window_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fake_prisma = _make_window_spend_prisma(
+        row=SimpleNamespace(window_start=window_start, spend=31.0),
+        spend_logs_total=100.0,
+    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    counter_key = "spend:key:tok:window:7d"
+    result = await ps.get_current_spend(
+        counter_key=counter_key,
+        fallback_spend=99.0,
+        max_budget=30.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_duration="7d",
+        window_start=window_start,
+    )
+
+    assert result == 31.0
+    fake_prisma.db.litellm_spendlogs.group_by.assert_not_awaited()
+    fake_cache.redis_cache.async_set_cache.assert_awaited_once_with(key=counter_key, value=31.0, nx=True)
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_cold_window_counter_admits_after_window_rollover(monkeypatch):
+    """Rollover regression: the reset job rolls the window row and zeroes the
+    counter. If the counter is then lost, the reseed must read the rolled row
+    (new window, spend 0) and admit, even though the caller's fallback (the
+    cumulative spend) sits far above the window limit."""
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    window_start = datetime(2026, 1, 8, tzinfo=timezone.utc)
+    fake_prisma = _make_window_spend_prisma(
+        row=SimpleNamespace(window_start=window_start, spend=0.0),
+    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:tok:window:7d",
+        fallback_spend=99.0,
+        max_budget=30.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_duration="7d",
+        window_start=window_start,
+    )
+
+    assert result == 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_window_rollover_admits_with_reset_counter(monkeypatch):
+    """The steady-state rollover shape: the reset job already set the counter
+    to the carried spend (0) and rolled the row. The read must admit without
+    the floor repair raising the counter off the reset value."""
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    window_start = datetime(2026, 1, 8, tzinfo=timezone.utc)
+    fake_prisma = _make_window_spend_prisma(
+        row=SimpleNamespace(window_start=window_start, spend=0.0),
+    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=0.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:tok:window:7d",
+        fallback_spend=99.0,
+        max_budget=30.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_duration="7d",
+        window_start=window_start,
+    )
+
+    assert result == 0.0
+    fake_cache.redis_cache.async_set_max.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_current_spend_fail_closed_rejects_when_unverifiable(monkeypatch):
     """With fail_closed_budget_enforcement on, an admit decision backed only by a
     per-pod fallback (Redis unreachable and DB unreadable) is rejected with 503

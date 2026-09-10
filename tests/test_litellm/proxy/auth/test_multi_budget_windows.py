@@ -2,13 +2,14 @@
 Unit tests for multi-budget-window enforcement on API keys.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
+import litellm.proxy.proxy_server as ps
+from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import _team_multi_budget_check, _virtual_key_multi_budget_check
 
 
 def _make_valid_token(**kwargs) -> UserAPIKeyAuth:
@@ -68,9 +69,7 @@ async def test_over_first_window_raises():
         call_count += 1
         return val
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 
@@ -100,9 +99,7 @@ async def test_over_second_window_raises():
         call_count += 1
         return val
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 
@@ -135,3 +132,67 @@ async def test_budget_limit_entry_objects_coerced():
     ):
         # Should not raise TypeError / KeyError — model_dump() coerces the object
         await _virtual_key_multi_budget_check(valid_token=token)
+
+
+def _flush_spend_counter(monkeypatch) -> None:
+    """Simulate the 2-pod issue #26672 state: Redis answers (so it is
+    reachable) but the window counter key is gone, and no DB is available to
+    reseed it, so the read falls all the way through to the caller's fallback."""
+    flushed_cache = MagicMock()
+    flushed_cache.redis_cache = MagicMock()
+    flushed_cache.redis_cache.async_get_cache = AsyncMock(return_value=None)
+    flushed_cache.in_memory_cache = MagicMock()
+    flushed_cache.in_memory_cache.get_cache = MagicMock(return_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", flushed_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+
+@pytest.mark.asyncio
+async def test_flushed_window_counter_with_over_budget_key_spend_still_rejects(monkeypatch):
+    """Issue #26672: a Redis flush losing the per-window counter must not read
+    as a fresh empty window. When neither the counter nor the per-window DB
+    total is readable, the key's cumulative spend (an upper bound of any
+    window) must still drive the rejection."""
+    _flush_spend_counter(monkeypatch)
+
+    token = _make_valid_token(
+        spend=99.0,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 30.0, "reset_at": None}],
+    )
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await _virtual_key_multi_budget_check(valid_token=token)
+
+    assert exc_info.value.status_code == 429
+    assert "1d" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_flushed_window_counter_with_under_budget_key_spend_admits(monkeypatch):
+    """The cumulative-spend fallback must not over-block: a key whose all-time
+    spend is below the window limit still admits when the counter is lost."""
+    _flush_spend_counter(monkeypatch)
+
+    token = _make_valid_token(
+        spend=5.0,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 30.0, "reset_at": None}],
+    )
+
+    # Should not raise
+    await _virtual_key_multi_budget_check(valid_token=token)
+
+
+@pytest.mark.asyncio
+async def test_flushed_window_counter_with_over_budget_team_spend_still_rejects(monkeypatch):
+    """Same leak as the key path, for a team window: a lost counter must not
+    bypass the team's per-window budget."""
+    _flush_spend_counter(monkeypatch)
+
+    team = LiteLLM_TeamTable(
+        team_id="team-1",
+        spend=99.0,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 30.0, "reset_at": None}],
+    )
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await _team_multi_budget_check(team_object=team)
