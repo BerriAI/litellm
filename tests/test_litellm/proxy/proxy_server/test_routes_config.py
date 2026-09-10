@@ -1135,6 +1135,45 @@ def test_get_config_callbacks_appends_runtime_only_callbacks(client, auth_as, mo
     ]
 
 
+def test_get_config_callbacks_accepts_scalar_and_null_yaml_callbacks(client, auth_as, mock_prisma, monkeypatch):
+    """`success_callback: langfuse` (a YAML scalar) is one configured callback, not eight single-letter ones, and a
+    `callbacks: null` key contributes nothing."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": "langfuse", "failure_callback": None, "callbacks": None},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    import litellm
+    from litellm.integrations.langsmith import LangsmithLogger
+
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse", LangsmithLogger()])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+
+    assert [(cb["name"], cb["type"], cb.get("read_only", False)) for cb in response.json()["callbacks"]] == [
+        ("langfuse", "success", False),
+        ("langsmith", "success", True),
+    ]
+
+
 def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_as, mock_prisma, monkeypatch):
     """A configured callback shows once as editable, whether the runtime holds its string or an initialized instance
     (arize initializes an ArizeLogger, logfire a bare OpenTelemetry that only its class identifies)."""
@@ -1347,6 +1386,8 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
+    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+
     import litellm
     from litellm._service_logger import ServiceLogging
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -1355,7 +1396,6 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import VectorStorePreCallHook
     from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
     from litellm.router import Router
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
     class _InventoryTestGuardrail(CustomGuardrail):
         pass
