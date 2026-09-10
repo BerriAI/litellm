@@ -1,5 +1,5 @@
-import { rust } from '@codemirror/lang-rust';
 import { markdown } from '@codemirror/lang-markdown';
+import { rust } from '@codemirror/lang-rust';
 import {
   languageServerExtensions,
   jumpToDefinition,
@@ -10,6 +10,7 @@ import {
   type WorkspaceFile,
 } from '@codemirror/lsp-client';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { Decoration, MatchDecorator, ViewPlugin } from '@codemirror/view';
 import { EditorView, basicSetup } from 'codemirror';
 
 import './style.css';
@@ -18,7 +19,7 @@ const STORAGE_KEY = 'litellm-rust-playground-files';
 const GUIDE_PATH = 'GUIDE.md';
 const DEFAULT_GUIDE = `# Prove the connection
 
-Cmd-click \`build_proof\` in \`src/main.rs\`. The Rust editor opens its definition in \`src/proof.rs\`.
+Click [the \`build_proof\` definition](playground://src/proof.rs#L9), or Cmd-click \`build_proof\` in \`src/main.rs\`.
 
 Hover \`litellm_core::Error\` for dependency type information.
 
@@ -147,6 +148,50 @@ const commandClickDefinition = EditorView.domEventHandlers({
   },
 });
 
+const playgroundLinkMatcher = new MatchDecorator({
+  regexp: /\[[^\]\n]+\]\(playground:\/\/[^)\s]+\)/g,
+  decoration: Decoration.mark({ class: 'cm-playground-link' }),
+});
+
+const playgroundLinkDecorations = ViewPlugin.fromClass(
+  class {
+    public decorations;
+
+    public constructor(view: EditorView) {
+      this.decorations = playgroundLinkMatcher.createDeco(view);
+    }
+
+    public update(update: Parameters<typeof playgroundLinkMatcher.updateDeco>[0]) {
+      this.decorations = playgroundLinkMatcher.updateDeco(update, this.decorations);
+    }
+  },
+  { decorations: instance => instance.decorations },
+);
+
+const markdownFileNavigation = (openTarget: (target: string) => boolean) =>
+  EditorView.domEventHandlers({
+    mousedown(event, view) {
+      if (event.button !== 0) {
+        return false;
+      }
+      const position = view.posAtCoords({ x: event.clientX, y: event.clientY });
+      if (position === null) {
+        return false;
+      }
+      const line = view.state.doc.lineAt(position);
+      const offset = position - line.from;
+      const matches = line.text.matchAll(/\[([^\]\n]+)\]\((playground:\/\/[^)\s]+)\)/g);
+      for (const match of matches) {
+        const start = match.index;
+        if (offset >= start && offset <= start + match[0].length && openTarget(match[2])) {
+          event.preventDefault();
+          return true;
+        }
+      }
+      return false;
+    },
+  });
+
 const connectTransport = (url: string): Promise<Transport> =>
   new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
@@ -213,22 +258,6 @@ const main = async () => {
   const buttons = new Map<string, HTMLButtonElement>();
   let activeUri = info.files[0]?.uri ?? '';
 
-  const markdownView = new EditorView({
-    doc: storedFiles[GUIDE_PATH] ?? DEFAULT_GUIDE,
-    extensions: [
-      basicSetup,
-      markdown(),
-      oneDark,
-      EditorView.lineWrapping,
-      EditorView.updateListener.of(update => {
-        if (update.docChanged) {
-          saveStoredFile(GUIDE_PATH, update.state.doc.toString());
-        }
-      }),
-    ],
-    parent: markdownEditorParent,
-  });
-
   const showFile = (uri: string) => {
     const view = views.get(uri);
     if (!view) {
@@ -244,6 +273,22 @@ const main = async () => {
     activePath.textContent = info.files.find(file => file.uri === uri)?.path ?? uri;
     view.focus();
     return view;
+  };
+
+  const openFileTarget = (target: string) => {
+    const match = /^playground:\/\/(.+?)(?:#L(\d+))?$/.exec(target);
+    const file = match ? info.files.find(candidate => candidate.path === match[1]) : undefined;
+    const view = file ? showFile(file.uri) : null;
+    if (!view) {
+      return false;
+    }
+    const requestedLine = Number(match?.[2] ?? 1);
+    const line = view.state.doc.line(Math.min(Math.max(requestedLine, 1), view.state.doc.lines));
+    view.dispatch({
+      selection: { anchor: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+    });
+    return true;
   };
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -300,6 +345,24 @@ const main = async () => {
       parent: container,
     });
     views.set(file.uri, view);
+  });
+
+  const markdownView = new EditorView({
+    doc: storedFiles[GUIDE_PATH] ?? DEFAULT_GUIDE,
+    extensions: [
+      basicSetup,
+      markdown(),
+      oneDark,
+      playgroundLinkDecorations,
+      markdownFileNavigation(openFileTarget),
+      EditorView.lineWrapping,
+      EditorView.updateListener.of(update => {
+        if (update.docChanged) {
+          saveStoredFile(GUIDE_PATH, update.state.doc.toString());
+        }
+      }),
+    ],
+    parent: markdownEditorParent,
   });
 
   showFile(activeUri);

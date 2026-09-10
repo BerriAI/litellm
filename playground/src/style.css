@@ -290,6 +290,13 @@ h1 {
   line-height: 1.65;
 }
 
+.cm-playground-link {
+  color: #79b8ff;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
 .output-panel {
   display: grid;
   grid-template-rows: auto 1fr;
