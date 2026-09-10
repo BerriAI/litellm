@@ -6,11 +6,12 @@ use super::types::{
     DocumentIntelligenceInputParams, DocumentIntelligenceParams, FeaturesInput, PagesInput,
 };
 use crate::ocr::error::OcrRequestError;
+use crate::ocr::prepare::ParsedProviderParams;
 
 pub(crate) fn decode_input_params(
     params: Map<String, Value>,
     prefix: &str,
-) -> Result<DocumentIntelligenceInputParams, OcrRequestError> {
+) -> Result<ParsedProviderParams<DocumentIntelligenceInputParams>, OcrRequestError> {
     if let Some(Value::Array(pages)) = params.get("pages") {
         if pages.iter().any(Value::is_boolean) {
             return Err(OcrRequestError::Pages("boolean page index".into()));
@@ -129,7 +130,37 @@ mod tests {
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, OcrRequestError> {
         let fields = value.as_object().unwrap().clone();
-        map_ocr_params(decode_input_params(fields, "optional_params")?)
+        map_ocr_params(decode_input_params(fields, "optional_params")?.known)
+    }
+
+    #[test]
+    fn input_params_retain_unknown_fields() {
+        let parsed = decode_input_params(
+            json!({
+                "pages": [0],
+                "future_ocr_option": true,
+                "extra_body": {"provider_option": "value"}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            "optional_params",
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.known.pages,
+            Some(PagesInput::ZeroBasedIndices(vec![0]))
+        );
+        assert_eq!(parsed.extra_params["future_ocr_option"], true);
+        assert_eq!(
+            parsed.extra_params["extra_body"],
+            json!({"provider_option": "value"})
+        );
+        assert_eq!(
+            serde_json::to_value(map_ocr_params(parsed.known).unwrap()).unwrap(),
+            json!({"pages": "1", "features": null})
+        );
     }
 
     #[rstest]

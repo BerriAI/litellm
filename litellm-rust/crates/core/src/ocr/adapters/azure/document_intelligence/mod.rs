@@ -83,6 +83,10 @@ fn map_ocr_params(
         request.optional_params.clone(),
         "optional_params",
     )?;
+    let crate::ocr::prepare::ParsedProviderParams {
+        known: params,
+        extra_params: _extra_params,
+    } = params;
     document_intelligence::map_ocr_params(params)
 }
 
