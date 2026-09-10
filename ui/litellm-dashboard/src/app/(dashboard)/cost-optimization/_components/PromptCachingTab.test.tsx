@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const mockGetGeneralSettingsCall = vi.fn();
@@ -33,11 +33,14 @@ describe("PromptCachingTab", () => {
       results: [],
       loading: false,
       isFetchingMore: false,
+      progress: { currentPage: 1, totalPages: 1 },
+      cancelled: false,
+      cancel: vi.fn(),
     };
-    const { getByTestId } = render(<PromptCachingTab accessToken="test-token" activity={activity} />);
+    render(<PromptCachingTab accessToken="test-token" activity={activity} />);
 
-    expect(getByTestId("caching-settings")).toBeInTheDocument();
-    expect(getByTestId("cache-leakage-card")).toBeInTheDocument();
+    expect(screen.getByTestId("caching-settings")).toBeInTheDocument();
+    expect(screen.getByTestId("cache-leakage-card")).toBeInTheDocument();
     await waitFor(() => expect(mockCacheLeakageCard).toHaveBeenCalledWith(expect.objectContaining({ activity })));
   });
 });

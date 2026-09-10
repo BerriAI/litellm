@@ -4,13 +4,11 @@ Tests for KeyManagementEventHooks.
 Validates that email and secret manager operations are independent and non-blocking.
 """
 
-import os
-import sys
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 
@@ -153,6 +151,44 @@ class TestKeyManagementEventHooksIndependentOperations:
 
         # Email should have been called despite secret manager failure
         assert email_called["called"] is True
+
+
+@pytest.mark.parametrize(
+    ("premium_user", "expected_audit_log_calls"),
+    ((True, 1), (False, 0)),
+)
+@pytest.mark.asyncio
+async def test_key_generated_audit_log_uses_license_default(
+    monkeypatch: pytest.MonkeyPatch,
+    premium_user: bool,
+    expected_audit_log_calls: int,
+):
+    from litellm.proxy._types import GenerateKeyRequest, GenerateKeyResponse, UserAPIKeyAuth
+
+    monkeypatch.setattr("litellm.store_audit_logs", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+    monkeypatch.delenv("LITELLM_STORE_AUDIT_LOGS", raising=False)
+
+    response = GenerateKeyResponse(key="sk-test-key", token_id="token-123")
+    with (
+        patch(
+            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+            new_callable=AsyncMock,
+        ) as mock_create_audit_log,
+        patch.object(
+            KeyManagementEventHooks,
+            "_store_virtual_key_in_secret_manager",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await KeyManagementEventHooks.async_key_generated_hook(
+            data=GenerateKeyRequest(),
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin-key", user_id="admin"),
+        )
+        await asyncio.sleep(0.01)
+
+    assert mock_create_audit_log.await_count == expected_audit_log_calls
 
 
 class TestRotateVirtualKeyInSecretManager:

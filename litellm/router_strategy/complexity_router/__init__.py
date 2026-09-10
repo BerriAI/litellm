@@ -9,22 +9,34 @@ No external API calls - all scoring is local and <1ms.
 
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
+    built_in_tier_classification_prompt,
     classification_system_prompt,
+    custom_tier_classification_prompt,
 )
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
+    ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
     ReminderMarkerPair,
+    TierDefinition,
+    normalize_classification_examples,
+    normalize_classification_prompt,
 )
 
 __all__ = [
     "DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE",
     "DEFAULT_COMPLEXITY_CONFIG",
+    "ClassificationRubric",
     "ComplexityRouter",
     "ComplexityRouterConfig",
     "ComplexityTier",
     "ReminderMarkerPair",
+    "TierDefinition",
+    "built_in_tier_classification_prompt",
     "classification_system_prompt",
+    "custom_tier_classification_prompt",
+    "normalize_classification_examples",
+    "normalize_classification_prompt",
 ]

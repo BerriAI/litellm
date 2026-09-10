@@ -37,9 +37,10 @@ from litellm.llms.vertex_ai.files.transformation import (
     _get_litellm_batch_custom_id_from_labels,
     _iter_openai_jsonl_entries,
     _iter_openai_jsonl_lines,
-    _openai_batch_jsonl_entry_to_vertex_wrapped_request,
+    _openai_batch_jsonl_entry_to_vertex_rows,
 )
 from litellm.types.llms.openai import CreateFileRequest
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 
 
 def _upload_stream(transformed) -> BaseFileUploadStream:
@@ -84,8 +85,9 @@ def _reference_vertex_jsonl_string(cfg: VertexAIFilesConfig, content: str) -> st
     transform, so the streaming path can be checked against it for parity."""
     entries = [json.loads(line) for line in content.splitlines() if line.strip()]
     return "\n".join(
-        json.dumps(_openai_batch_jsonl_entry_to_vertex_wrapped_request(entry, cfg._map_openai_to_vertex_params))
+        json.dumps(row)
         for entry in entries
+        for row in _openai_batch_jsonl_entry_to_vertex_rows(entry, cfg._map_openai_to_vertex_params)
     )
 
 
@@ -560,7 +562,7 @@ class TestStreamingMediaUpload:
 
     async def test_failed_upload_raises(self):
         raw = _make_openai_jsonl_bytes(80)
-        with pytest.raises(Exception):
+        with pytest.raises(VertexAIError):
             await self._run(raw, status=403)
 
     async def test_request_timeout_is_forwarded(self):

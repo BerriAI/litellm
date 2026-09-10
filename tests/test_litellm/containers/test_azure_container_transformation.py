@@ -1,12 +1,9 @@
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../"))
 
 import litellm
 from litellm.llms.azure.containers.transformation import AzureContainerConfig
