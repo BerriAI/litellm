@@ -106,8 +106,9 @@ impl IntoResponse for MessagesRouteError {
                 "no messages deployment is configured for this model".to_string(),
             ),
             Error::Auth(_)
-            | Error::MissingMistralApiKey
+            | Error::MissingApiKey { .. }
             | Error::MissingAzureAiCredentials
+            | Error::MissingAzureAiCredentialsOrAdToken
             | Error::MissingAzureDocumentIntelligenceCredentials
             | Error::MissingReductoApiKey => (
                 StatusCode::BAD_GATEWAY,
@@ -118,12 +119,7 @@ impl IntoResponse for MessagesRouteError {
             | Error::Connect(_)
             | Error::InvalidResponse(_)
             | Error::InvalidType { .. }
-            | Error::MissingField(_)
-            | Error::MissingApiKey { .. }
-            | Error::MissingAzureAiCredentials
-            | Error::MissingAzureAiCredentialsOrAdToken
-            | Error::MissingAzureDocumentIntelligenceCredentials
-            | Error::MissingReductoApiKey => (
+            | Error::MissingField(_) => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider request failed".to_string(),
             ),
