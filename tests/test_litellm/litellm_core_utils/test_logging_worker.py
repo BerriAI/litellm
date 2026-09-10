@@ -525,3 +525,48 @@ class TestLoggingWorker:
         asyncio.run(rebind_on_second_loop())
 
         assert sorted(executed) == [0, 1, 2, 3, 4]
+
+    @pytest.mark.asyncio
+    async def test_callback_timeout_burst_logs_one_traceback_per_interval(self, caplog):
+        """A slow logging backend times out every in-flight callback at once. Logging a full
+        traceback for each of them turns that stall into a CPU-bound log storm on every replica,
+        so the worker must emit one traceback per interval and count the rest.
+        """
+        caplog.set_level(logging.DEBUG, logger="LiteLLM")
+        worker = LoggingWorker(timeout=0.05, max_queue_size=200, concurrency=100, error_traceback_interval=60.0)
+        worker.start()
+
+        async def stalled_callback():
+            await asyncio.sleep(10)
+
+        for _ in range(40):
+            worker.enqueue(stalled_callback())
+
+        await asyncio.sleep(0.5)
+        await worker.stop()
+
+        errors = [r for r in caplog.records if r.levelno >= logging.ERROR and "LoggingWorker error" in r.getMessage()]
+        assert len(errors) == 1, f"expected one traceback for the burst, got {len(errors)}"
+        assert errors[0].exc_info is not None
+
+    @pytest.mark.asyncio
+    async def test_error_traceback_resumes_after_interval_with_suppressed_count(self, caplog):
+        caplog.set_level(logging.DEBUG, logger="LiteLLM")
+        worker = LoggingWorker(timeout=0.05, max_queue_size=200, concurrency=100, error_traceback_interval=0.2)
+        worker.start()
+
+        async def stalled_callback():
+            await asyncio.sleep(10)
+
+        for _ in range(5):
+            worker.enqueue(stalled_callback())
+        await asyncio.sleep(0.3)
+        for _ in range(3):
+            worker.enqueue(stalled_callback())
+        await asyncio.sleep(0.3)
+        await worker.stop()
+
+        messages = [r.getMessage() for r in caplog.records if "LoggingWorker error" in r.getMessage()]
+        assert len(messages) == 2, messages
+        assert "(0 more suppressed" in messages[0]
+        assert "(4 more suppressed" in messages[1]

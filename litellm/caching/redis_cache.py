@@ -17,6 +17,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
@@ -148,6 +149,10 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         return "unknown"
 
 
+class RedisCircuitBreakerOpenError(Exception):
+    """Expected fast-fail while the breaker is open; optional-cache callers treat it as a miss."""
+
+
 class RedisCircuitBreaker:
     """
     Tracks Redis health for a RedisCache instance.
@@ -163,8 +168,12 @@ class RedisCircuitBreaker:
                              (no success or hard failure in between) that reaches
                              failure_threshold and spans timeout_min_duration seconds
       OPEN      -> HALF_OPEN after recovery_timeout seconds
-      HALF_OPEN -> CLOSED    on success
-      HALF_OPEN -> OPEN      on failure (resets timer)
+      HALF_OPEN -> CLOSED    on the recovery probe's success
+      HALF_OPEN -> OPEN      on the recovery probe's failure (resets timer)
+
+    Every OPEN transition starts a new generation. A call reports its outcome only for the
+    generation it was admitted under, so a success from a call that was already in flight
+    when the breaker opened cannot close it and the HALF_OPEN probe is the only call that can.
 
     Timeouts are accounted separately from hard connectivity failures because the async
     Redis timeout includes time waiting for the worker event loop to resume: one loop
@@ -194,8 +203,13 @@ class RedisCircuitBreaker:
         self._timeout_count = 0
         self._timeout_streak_started_at: float | None = None
         self._opened_at: float | None = None
+        self._generation = 0
         self._state = self.CLOSED
         _breaker_metrics().record_state_change(None, self._state)
+
+    @property
+    def generation(self) -> int:
+        return self._generation
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
@@ -241,18 +255,19 @@ class RedisCircuitBreaker:
             if self._state != self.OPEN:
                 verbose_logger.warning(
                     "Redis circuit breaker OPENED after %d consecutive failures"
-                    " (%d hard connectivity) — fast-failing Redis calls for %ds",
+                    " (%d hard connectivity), fast-failing Redis calls for %ds",
                     self._failure_count,
                     self._hard_failure_count,
                     self.recovery_timeout,
                 )
+                self._generation += 1
             self._set_state(self.OPEN)
 
     def record_success(self) -> None:
         if not self.enabled:
             return
         if self._state == self.HALF_OPEN:
-            verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
+            verbose_logger.info("Redis circuit breaker CLOSED, Redis recovered")
         self._failure_count = 0
         self._hard_failure_count = 0
         self._timeout_count = 0
@@ -320,7 +335,10 @@ def _redis_timeout_error_types() -> tuple[type, ...]:
 
 
 def _is_redis_timeout_failure(exc: BaseException) -> bool:
-    return isinstance(exc, _redis_timeout_error_types())
+    """Follows __cause__: a blocking pool wait raises ConnectionError from asyncio.TimeoutError."""
+    if isinstance(exc, _redis_timeout_error_types()):
+        return True
+    return exc.__cause__ is not None and _is_redis_timeout_failure(exc.__cause__)
 
 
 class _BreakerMetrics:
@@ -391,21 +409,35 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
 
 
-def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> int:
-    """Reject the call if the breaker is open, else return the swallowed-failure count to compare against."""
+@dataclass(frozen=True, slots=True)
+class _BreakerAdmission:
+    swallowed_before: int
+    generation: int
+
+
+def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> _BreakerAdmission:
+    """Reject the call if the breaker is open, else snapshot what its outcome will be judged against."""
     if breaker.is_open():
-        raise Exception(f"Redis circuit breaker is open — skipping {name}")
-    return _swallowed_redis_failures.get()
+        raise RedisCircuitBreakerOpenError(f"Redis circuit breaker is open, skipping {name}")
+    return _BreakerAdmission(swallowed_before=_swallowed_redis_failures.get(), generation=breaker.generation)
 
 
-def _exit_circuit_breaker(breaker: RedisCircuitBreaker, swallowed_before: int) -> None:
-    """Record success only when nothing failed while the call ran.
+def _exit_circuit_breaker(breaker: RedisCircuitBreaker, admission: _BreakerAdmission) -> None:
+    """Record success only when nothing failed while the call ran and the breaker has not opened since.
 
     Several Redis methods catch their own connection errors and return a default, so a
     method that returned is not on its own proof of a healthy Redis.
     """
-    if _swallowed_redis_failures.get() == swallowed_before:
+    if admission.generation != breaker.generation:
+        return
+    if _swallowed_redis_failures.get() == admission.swallowed_before:
         breaker.record_success()
+
+
+def _fail_circuit_breaker(breaker: RedisCircuitBreaker, admission: _BreakerAdmission, exc: BaseException) -> None:
+    if admission.generation != breaker.generation or not _is_redis_health_failure(exc):
+        return
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(exc))
 
 
 async def _run_under_circuit_breaker(
@@ -418,14 +450,13 @@ async def _run_under_circuit_breaker(
     Shared by the method decorator and the Lua script executor so both feed the same
     health signal.
     """
-    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
+    admission: Final = _enter_circuit_breaker(breaker, name)
     try:
         result: Final = await call()
     except Exception as e:
-        if _is_redis_health_failure(e):
-            breaker.record_failure(is_timeout=_is_redis_timeout_failure(e))
+        _fail_circuit_breaker(breaker, admission, e)
         raise
-    _exit_circuit_breaker(breaker, swallowed_before)
+    _exit_circuit_breaker(breaker, admission)
     return result
 
 
@@ -435,14 +466,13 @@ def _run_under_circuit_breaker_sync(
     call: Callable[[], _RedisCallResult],
 ) -> _RedisCallResult:
     """Run one blocking Redis call under a circuit breaker, feeding the same health signal as the async path."""
-    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
+    admission: Final = _enter_circuit_breaker(breaker, name)
     try:
         result: Final = call()
     except Exception as e:
-        if _is_redis_health_failure(e):
-            breaker.record_failure()
+        _fail_circuit_breaker(breaker, admission, e)
         raise
-    _exit_circuit_breaker(breaker, swallowed_before)
+    _exit_circuit_breaker(breaker, admission)
     return result
 
 
@@ -1382,10 +1412,10 @@ class RedisCache(BaseCache):
         start_time: Final = time.time()
 
         try:
-            swallowed_before: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
+            admission: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
             _keys: Final = [self.check_and_fix_namespace(key=cache_key or "") for cache_key in _key_list]
             results: Final = self._run_redis_mget_operation(keys=_keys)
-            _exit_circuit_breaker(self._circuit_breaker, swallowed_before)
+            _exit_circuit_breaker(self._circuit_breaker, admission)
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -1409,6 +1439,8 @@ class RedisCache(BaseCache):
                 decoded_results[k] = v
 
             return decoded_results
+        except RedisCircuitBreakerOpenError:
+            return key_value_dict
         except Exception as e:
             failed_at: Final = time.time()
             self.service_logger_obj.service_failure_hook(
