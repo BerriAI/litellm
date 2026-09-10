@@ -212,7 +212,7 @@ h1 {
 
 .editor-body {
   display: grid;
-  grid-template-columns: 10.5rem minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 10.5rem;
   min-width: 0;
   min-height: 0;
 }
@@ -246,7 +246,7 @@ h1 {
 .file-tree {
   min-width: 0;
   overflow: auto;
-  border-right: 1px solid #292e36;
+  border-left: 1px solid #292e36;
   background: #0f1216;
   color: #aeb4bd;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -365,7 +365,7 @@ h1 {
   }
 
   .editor-body {
-    grid-template-columns: 8.5rem minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 8.5rem;
   }
 
   .output-panel {
