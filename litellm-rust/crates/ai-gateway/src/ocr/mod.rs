@@ -24,6 +24,7 @@ async fn core_ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
         custom_llm_provider: request.custom_llm_provider.map(str::to_string),
         extra_headers: request.extra_headers,
         optional_params: request.optional_params,
+        input_sources: Default::default(),
         timeout_seconds: request.timeout.map(|timeout| timeout.as_secs_f64()),
     })?;
     client
