@@ -634,6 +634,7 @@ async def estimate_cost(
     # Pinning one moment keeps an off-peak window that opens mid-quote from pricing the totals on
     # one side of it and the reported rates on the other.
     with pinned_billing_time(current_billing_time()):
+        # Use completion_cost which handles all the logic including margins/discounts
         try:
             cost_per_request: Final = completion_cost(
                 completion_response=mock_response,

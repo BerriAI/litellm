@@ -1323,7 +1323,7 @@ def _stamp_responses_usage_cost(
     if usage_obj is None:
         return
     response_obj.usage = usage_obj  # rebind-ok: the stamped cost has to ride on the response the client receives
-    if isinstance(usage_obj.cost, (int, float)):
+    if isinstance(getattr(usage_obj, "cost", None), (int, float)):
         return
     try:
         cost: Final[float | None] = logging_obj._response_cost_calculator(result=response_obj)
