@@ -13,8 +13,10 @@ spend transactions).
 
 ``DATABASE_URL`` is assembled from the same ``DATABASE_*`` inputs as the proxy container, and when
 ``LITELLM_PGBOUNCER_ENABLED`` is set it points at the PgBouncer that container already runs on the
-pod's loopback, so the sidecar must see the same env as the proxy. Works from any image that has
-``litellm`` installed:
+pod's loopback, so the sidecar must see the same env as the proxy. Under ``IAM_TOKEN_DB_AUTH`` or
+``AZURE_POSTGRESQL_AUTH`` that PgBouncer only accepts the token the proxy container minted, so the
+sidecar goes to Postgres directly and mints its own. Works from any image that has ``litellm``
+installed:
 
     python -m litellm.proxy.collector [--address unix:///path.sock]
 """
@@ -171,9 +173,15 @@ def apply_log_level(litellm_log: str | None) -> None:
         logger.setLevel(level)
 
 
-def pod_pgbouncer_database_url(pgbouncer: PgBouncerSettings, environ: Mapping[str, str]) -> str | PgBouncerError | None:
-    """The proxy container's PgBouncer URL for ``environ["DATABASE_URL"]``, or None when PgBouncer is off."""
-    if not pgbouncer.enabled:
+def pod_pgbouncer_database_url(
+    pgbouncer: PgBouncerSettings, environ: Mapping[str, str], *, token_auth: bool
+) -> str | PgBouncerError | None:
+    """The proxy container's PgBouncer URL for ``environ["DATABASE_URL"]``, or None to connect to Postgres directly.
+
+    Direct is the answer when PgBouncer is off, and also under token auth: that PgBouncer's auth file
+    only holds the token its own container minted, which this container cannot present.
+    """
+    if not pgbouncer.enabled or token_auth:
         return None
     upstream_url: Final = environ.get("DATABASE_URL")
     if upstream_url is None:
@@ -184,8 +192,13 @@ def pod_pgbouncer_database_url(pgbouncer: PgBouncerSettings, environ: Mapping[st
 def main(argv: Sequence[str]) -> None:
     os.environ.setdefault("LITELLM_JOB_ROLE", COLLECTOR_JOB_ROLE)
     apply_log_level(os.environ.get("LITELLM_LOG"))
-    DatabaseURLSettings.from_env().apply_to_env()
-    pooled: Final = pod_pgbouncer_database_url(PgBouncerSettings(), os.environ)
+    database: Final = DatabaseURLSettings.from_env()
+    database.apply_to_env()
+    pooled: Final = pod_pgbouncer_database_url(
+        PgBouncerSettings(),
+        os.environ,
+        token_auth=database.iam_token_db_auth or database.azure_postgresql_auth,
+    )
     if isinstance(pooled, PgBouncerError):
         sys.exit(f"LiteLLM collector: cannot use the pod's pgbouncer: {pooled.reason}")
     if pooled is not None:

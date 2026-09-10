@@ -189,12 +189,23 @@ def test_address_argument():
 def test_pod_pgbouncer_database_url_points_at_the_proxy_containers_pooler():
     """With pgbouncer on, the sidecar must not open its own upstream connections but share the pod's pooler."""
     upstream: Final = "postgresql://u:p@db.internal:5432/litellm?schema=public"
-    assert pod_pgbouncer_database_url(PgBouncerSettings(enabled=False), {"DATABASE_URL": upstream}) is None
+    environ: Final = {"DATABASE_URL": upstream}
+    assert pod_pgbouncer_database_url(PgBouncerSettings(enabled=False), environ, token_auth=False) is None
     assert (
-        pod_pgbouncer_database_url(PgBouncerSettings(enabled=True, port=6543), {"DATABASE_URL": upstream})
+        pod_pgbouncer_database_url(PgBouncerSettings(enabled=True, port=6543), environ, token_auth=False)
         == "postgresql://u:p@127.0.0.1:6543/litellm?schema=public&pgbouncer=true"
     )
-    assert isinstance(pod_pgbouncer_database_url(PgBouncerSettings(enabled=True), {}), PgBouncerError)
+    assert isinstance(pod_pgbouncer_database_url(PgBouncerSettings(enabled=True), {}, token_auth=False), PgBouncerError)
+
+
+def test_pod_pgbouncer_database_url_goes_direct_under_token_auth():
+    """The proxy's pgbouncer only knows the token that container minted, so the sidecar must mint its own upstream."""
+    iam_upstream: Final = "postgresql://u@db.internal:5432/litellm?schema=public"
+    assert (
+        pod_pgbouncer_database_url(PgBouncerSettings(enabled=True), {"DATABASE_URL": iam_upstream}, token_auth=True)
+        is None
+    )
+    assert pod_pgbouncer_database_url(PgBouncerSettings(enabled=True), {}, token_auth=True) is None
 
 
 @pytest.fixture
