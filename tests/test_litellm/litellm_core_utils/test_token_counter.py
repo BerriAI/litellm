@@ -5,6 +5,7 @@ import importlib
 import threading
 import time
 import traceback
+from concurrent.futures import Future, wait
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -201,6 +202,43 @@ async def test_offloaded_counts_do_not_borrow_from_the_shared_thread_pool():
     assert await counting == [3] * burst
     assert len(borrowed) > 1 and max(borrowed) == 0
     assert 1 < encoder.peak_in_flight <= TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+
+
+def _count_in_a_fresh_event_loop(text: str, result: Future[int]) -> None:
+    def slow_count(counted: str) -> int:
+        time.sleep(0.1)
+        return len(counted)
+
+    result.set_result(asyncio.run(offload_token_count(slow_count)(text)))
+
+
+def test_offloaded_counts_finish_in_every_event_loop_that_shares_the_process():
+    loops: Final = 2 * TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
+    results: Final = tuple(Future[int]() for _ in range(loops))
+    threads: Final = tuple(
+        threading.Thread(target=_count_in_a_fresh_event_loop, args=("a" * size, result), daemon=True)
+        for size, result in enumerate(results, start=1)
+    )
+    for thread in threads:
+        thread.start()
+
+    _, pending = wait(results, timeout=5)
+
+    assert not pending
+    assert tuple(result.result() for result in results) == tuple(range(1, loops + 1))
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("8", 8), ("0", 4), ("not-an-int", 4)],
+)
+def test_max_concurrent_counts_config_is_honoured(monkeypatch: pytest.MonkeyPatch, configured: str, expected: int):
+    monkeypatch.setenv("TOKEN_COUNTER_MAX_CONCURRENT_COUNTS", configured)
+    try:
+        assert importlib.reload(litellm.constants).TOKEN_COUNTER_MAX_CONCURRENT_COUNTS == expected
+    finally:
+        monkeypatch.delenv("TOKEN_COUNTER_MAX_CONCURRENT_COUNTS")
+        importlib.reload(litellm.constants)
 
 
 def test_token_counter_applies_the_default_cap():

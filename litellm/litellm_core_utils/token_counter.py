@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
 
 import anyio
+import anyio.lowlevel
 import httpx
 import tiktoken
 from tokenizers import Tokenizer
@@ -326,13 +327,28 @@ Type for a function that counts tokens in a string.
 EXTRAPOLATION_SAMPLES: Final = 16
 T_ParamSpec: Final = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
-_COUNT_OFFLOAD_LIMITER: Final = anyio.CapacityLimiter(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+_COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
+
+
+def _count_offload_limiter_for_this_loop() -> anyio.CapacityLimiter:
+    existing: Final = _COUNT_OFFLOAD_LIMITER.get(None)
+    if existing is not None:
+        return existing
+    created: Final = anyio.CapacityLimiter(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+    _COUNT_OFFLOAD_LIMITER.set(created)
+    return created
 
 
 def offload_token_count(
     function: Callable[T_ParamSpec, T_Retval],
 ) -> Callable[T_ParamSpec, Awaitable[T_Retval]]:
-    return asyncify(function, limiter=_COUNT_OFFLOAD_LIMITER)
+    async def offloaded(
+        *args: T_ParamSpec.args,
+        **kwargs: T_ParamSpec.kwargs,  # kwargs-ok: ParamSpec keeps the wrapped function's own keyword contract
+    ) -> T_Retval:
+        return await asyncify(function, limiter=_count_offload_limiter_for_this_loop())(*args, **kwargs)
+
+    return offloaded
 
 
 def _get_tiktoken_count_function(
