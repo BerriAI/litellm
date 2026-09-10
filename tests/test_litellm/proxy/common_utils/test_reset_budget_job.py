@@ -3054,6 +3054,67 @@ def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
     } in enduser_writes
 
 
+def test_budget_cascade_chunks_enduser_id_filters(reset_budget_job, mock_prisma_client, monkeypatch):
+    monkeypatch.setattr(reset_budget_job_module, "_ENDUSER_RESET_CHUNK_SIZE", 2)
+    budget = _budget_row(budget_id="budget-large", budget_duration="1d")
+    mock_prisma_client.data["budget"] = [budget]
+    mock_prisma_client.data["enduser"] = [
+        type(
+            "EndUser",
+            (),
+            {
+                "spend": 1.0,
+                "litellm_budget_table": budget,
+                "user_id": f"enduser-{index}",
+                "budget_id": "budget-large",
+            },
+        )
+        for index in range(5)
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    enduser_writes = _batch_writes(mock_prisma_client, "enduser")
+    chunks = [write["where"]["user_id"]["in"] for write in enduser_writes]
+    assert [len(chunk) for chunk in chunks] == [2, 2, 1]
+    assert [user_id for chunk in chunks for user_id in chunk] == [f"enduser-{index}" for index in range(5)]
+    assert len(mock_prisma_client.db.batchers) == 1
+
+
+def test_budget_cascade_chunks_plain_endusers_when_another_tier_rolls_over(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
+):
+    monkeypatch.setattr(reset_budget_job_module, "_ENDUSER_RESET_CHUNK_SIZE", 2)
+    rollover_budget = _budget_row(budget_id="budget-roll", budget_duration="1d", max_budget=10.0)
+    plain_budget = _budget_row(budget_id="budget-plain", budget_duration="1d")
+    plain_budget.max_budget = None
+    mock_prisma_client.data["budget"] = [rollover_budget, plain_budget]
+    mock_prisma_client.data["enduser"] = [
+        type(
+            "EndUser",
+            (),
+            {
+                "spend": 15.0 if index == 0 else 1.0,
+                "litellm_budget_table": rollover_budget if index == 0 else plain_budget,
+                "user_id": f"enduser-{index}",
+                "budget_id": "budget-roll" if index == 0 else "budget-plain",
+            },
+        )
+        for index in range(6)
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    plain_writes = [
+        write
+        for write in _batch_writes(mock_prisma_client, "enduser")
+        if "spend" not in write["where"]
+    ]
+    chunks = [write["where"]["user_id"]["in"] for write in plain_writes]
+    assert [len(chunk) for chunk in chunks] == [2, 2, 1]
+    assert [user_id for chunk in chunks for user_id in chunk] == [f"enduser-{index}" for index in range(1, 6)]
+
+
 def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabled(
     rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
 ):

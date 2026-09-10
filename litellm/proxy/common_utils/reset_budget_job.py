@@ -70,6 +70,7 @@ _RowT = TypeVar("_RowT")
 
 _LINKED_KEYS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"budget_duration": None, "spend": {"gt": 0}})
 _SPENT_ROWS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"spend": {"gt": 0}})
+_ENDUSER_RESET_CHUNK_SIZE: Final = 30_000
 
 
 class _BudgetLinkedRow(Protocol):
@@ -223,15 +224,20 @@ def _queue_budget_linked_resets(
         writes.queue_spend_zero(where=_budget_link_where(plain_ids, extra))
 
 
+def _enduser_id_chunks(user_ids: Sequence[str]) -> Iterable[list[str]]:
+    for start in range(0, len(user_ids), _ENDUSER_RESET_CHUNK_SIZE):
+        yield list(user_ids[start : start + _ENDUSER_RESET_CHUNK_SIZE])
+
+
 def _queue_enduser_resets(writes: LinkedSpendResetWrites, cascade: "_BudgetCascade") -> None:
     """End users are matched by id rather than budget link: rows with no
     budget_id ride the default budget tier (litellm.max_end_user_budget_id).
     Zero-before-decrement ordering matters here too (see
     _queue_budget_linked_resets)."""
     if not cascade.rollover_caps:
-        if cascade.endusers:
+        for user_ids in _enduser_id_chunks(tuple(row.user_id for row in cascade.endusers)):
             writes.queue_spend_zero(
-                where={"user_id": {"in": [row.user_id for row in cascade.endusers]}}
+                where={"user_id": {"in": user_ids}}
             )  # mutable-ok: prisma where filter must be a dict
         return
     tiered: Final = tuple((row.budget_id or litellm.max_end_user_budget_id, row.user_id) for row in cascade.endusers)
@@ -240,17 +246,18 @@ def _queue_enduser_resets(writes: LinkedSpendResetWrites, cascade: "_BudgetCasca
             user_ids := [uid for bid, uid in tiered if bid == budget_id]
         ):  # mutable-ok: prisma "in" filter takes a list
             continue
-        writes.queue_spend_zero(
-            where={"user_id": {"in": user_ids}, "spend": {"lte": cap}}
-        )  # mutable-ok: prisma where filter must be a dict
-        writes.queue_spend_decrement(
-            where={"user_id": {"in": user_ids}, "spend": {"gt": cap}}, amount=cap
-        )  # mutable-ok: prisma where filter must be a dict
+        for chunk in _enduser_id_chunks(user_ids):
+            writes.queue_spend_zero(
+                where={"user_id": {"in": chunk}, "spend": {"lte": cap}}
+            )  # mutable-ok: prisma where filter must be a dict
+            writes.queue_spend_decrement(
+                where={"user_id": {"in": chunk}, "spend": {"gt": cap}}, amount=cap
+            )  # mutable-ok: prisma where filter must be a dict
     plain: Final = [
         uid for bid, uid in tiered if bid is None or bid not in cascade.rollover_caps
     ]  # mutable-ok: prisma "in" filter takes a list
-    if plain:
-        writes.queue_spend_zero(where={"user_id": {"in": plain}})  # mutable-ok: prisma where filter must be a dict
+    for user_ids in _enduser_id_chunks(plain):
+        writes.queue_spend_zero(where={"user_id": {"in": user_ids}})  # mutable-ok: prisma where filter must be a dict
 
 
 @dataclass(frozen=True, slots=True)
