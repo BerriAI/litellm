@@ -22,8 +22,7 @@ impl OcrAdapter for AzureMistralAdapter {
     type ProviderResponse = MistralOcrResponse;
     const PROVIDER: OcrProvider = OcrProvider::AzureAi;
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    async fn transform_ocr_request(
+    async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
