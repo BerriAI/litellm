@@ -1,4 +1,4 @@
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
 use super::OcrClient;
@@ -6,10 +6,18 @@ use super::error::{OcrError, OcrRequestError};
 use super::hooks::OcrDuringCallRequest;
 use super::types::LiteLLMOcrRequest;
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct ParsedProviderParams<T> {
+    #[serde(flatten)]
+    pub known: T,
+    #[serde(default, flatten)]
+    pub extra_params: Map<String, Value>,
+}
+
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) fn _prepare_ocr_request<T: DeserializeOwned>(
     request: &LiteLLMOcrRequest,
-) -> Result<T, OcrRequestError> {
+) -> Result<ParsedProviderParams<T>, OcrRequestError> {
     super::wire::decode_request_value(
         Value::Object(request.optional_params.clone()),
         "optional_params",
@@ -98,4 +106,37 @@ impl<B: Serialize + DeserializeOwned> OcrWireBody<B> {
 
 pub(crate) fn credential_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct KnownParams {
+        pages: Option<Vec<i64>>,
+    }
+
+    #[test]
+    fn parsed_provider_params_separates_known_and_extra_params() {
+        let parsed: ParsedProviderParams<KnownParams> = super::super::wire::decode_request_value(
+            json!({
+                "pages": [0, 2],
+                "future_ocr_option": true,
+                "extra_body": {"provider_option": "value"}
+            }),
+            "optional_params",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.known.pages, Some(vec![0, 2]));
+        assert_eq!(parsed.extra_params["future_ocr_option"], true);
+        assert_eq!(
+            parsed.extra_params["extra_body"],
+            json!({"provider_option": "value"})
+        );
+        assert_eq!(parsed.extra_params.len(), 2);
+    }
 }
