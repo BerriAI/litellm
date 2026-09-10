@@ -10,7 +10,6 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-
 from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -21,11 +20,11 @@ from litellm.proxy.management_endpoints.auto_router_endpoints import (
     preview_auto_router_routing,
 )
 from litellm.router import Router
-from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarksResponse,
     AutoRouterRoutingTestRequest,
 )
+from litellm.types.utils import Choices, Message, ModelResponse
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
 
@@ -489,6 +488,7 @@ class TestAutoRouterBenchmarks:
         monkeypatch: pytest.MonkeyPatch,
         rows: Sequence[Mapping[str, object]],
         model_list: Sequence[object],
+        api_key: str | None = None,
     ) -> AutoRouterBenchmarksResponse:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
@@ -503,6 +503,7 @@ class TestAutoRouterBenchmarks:
             user_api_key_dict=ADMIN,
             start_date="2026-07-01",
             end_date="2026-08-01",
+            api_key=api_key,
         )
 
     ROW = _SessionAggRow(
@@ -527,6 +528,8 @@ class TestAutoRouterBenchmarks:
         total_tokens=4000,
         spend=10.0,
         saved_spend=30.0,
+        classifier_cost=0.4,
+        classifier_cost_recorded_turns=40,
         session_seconds=400.0,
     )
 
@@ -565,6 +568,7 @@ class TestAutoRouterBenchmarks:
         totals = _benchmark_totals(losing)
         assert totals.baseline_spend == 5.0
         assert totals.saved_pct == -100.0
+        assert totals.classifier_cost == 0.4
 
     def test_an_empty_window_folds_to_zeros(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
@@ -577,6 +581,7 @@ class TestAutoRouterBenchmarks:
         assert totals.turns == 0
         assert totals.saved_pct == 0.0
         assert totals.cache.hit_rate_pct == 0.0
+        assert totals.classifier_cost == 0.0
 
     def test_totals_sum_counters_across_groups_before_deriving_ratios(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
@@ -652,11 +657,44 @@ class TestAutoRouterBenchmarks:
             user_api_key_dict=ADMIN,
             start_date="2026-07-01",
             end_date="2026-08-01",
+            api_key="key-hash",
         )
-        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00")
+        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash")
         assert response.routers_in_scope == 1
         assert response.groups[0].router_name == "live-auto"
         assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
+        assert response.groups[0].classifier_cost == response.totals.classifier_cost == 0.4
+        assert response.totals.spend - response.totals.classifier_cost == pytest.approx(9.6)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("recorded_turns", [0, 3, 10])
+    async def test_classifier_subtotals_require_every_included_turn_to_be_recorded(
+        self, recorded_turns: int, monkeypatch: pytest.MonkeyPatch
+    ):
+        other: Final = self.ROW.model_copy(
+            update={
+                "router_name": "other-auto",
+                "sessions": 1,
+                "turns": 10,
+                "spend": 2.0,
+                "saved_spend": -0.5,
+                "classifier_cost": recorded_turns * 0.02,
+                "classifier_cost_recorded_turns": recorded_turns,
+            }
+        )
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[self.ROW.model_dump(), other.model_dump()], model_list=[]
+        )
+        wire: Final = response.model_dump()
+        assert wire["groups"][0]["classifier_cost"] == 0.4
+        assert wire["groups"][1]["classifier_cost"] == (pytest.approx(0.2) if recorded_turns == 10 else None)
+        assert wire["totals"]["classifier_cost"] == (pytest.approx(0.6) if recorded_turns == 10 else None)
+        assert response.totals.turns == 50
+        assert response.totals.spend == 12.0
+        assert response.totals.saved_spend == 29.5
+        assert response.totals.baseline_spend == 41.5
+        assert response.totals.saved_pct == 71.1
+        assert response.totals.saved_per_session == 5.9
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -720,6 +758,7 @@ class TestAutoRouterBenchmarks:
             assert (idle.cache.hit_rate_pct, idle.cache.coverage_pct) == (0.0, 0.0)
             assert idle.cache.same_model.turns == idle.cache.return_to_tier.hits == 0
             assert idle.tier_turns == {}
+            assert idle.classifier_cost == 0.0
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -795,7 +834,6 @@ class TestAutoRouterBenchmarks:
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
-
 
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,
@@ -1131,7 +1169,9 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     assert (
         len(
             {
-                frozenset((k, tuple(v) if isinstance(v, list) else v) for k, v in row.items() if k not in ("target_id", "id"))
+                frozenset(
+                    (k, tuple(v) if isinstance(v, list) else v) for k, v in row.items() if k not in ("target_id", "id")
+                )
                 for row in rows
             }
         )
@@ -1258,8 +1298,8 @@ async def test_start_shadow_eval_accepts_an_sdk_judge_when_anthropic_secret_look
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import litellm
-    from litellm.integrations.custom_secret_manager import CustomSecretManager
     import litellm.proxy.proxy_server as proxy_server
+    from litellm.integrations.custom_secret_manager import CustomSecretManager
     from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
     class AnthropicSecretManager(CustomSecretManager):
@@ -1821,8 +1861,9 @@ async def test_list_shadow_eval_jobs_rejects_a_lone_filter_half(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_start_shadow_eval_concurrent_unique_violation_is_a_409(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
     from prisma.errors import UniqueViolationError
+
+    import litellm.proxy.proxy_server as proxy_server
 
     _configure_anthropic_sdk_judge(monkeypatch)
     prisma = _shadow_prisma()

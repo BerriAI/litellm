@@ -1301,6 +1301,33 @@ def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
     assert "cache" in response_data
 
 
+@pytest.mark.parametrize(
+    "general_settings, expected_warning",
+    [
+        ({}, True),
+        ({"disable_env_credential_login": True}, False),
+    ],
+)
+def test_health_readiness_details_reports_env_credential_login_warning(monkeypatch, general_settings, expected_warning):
+    """
+    The Admin UI banner is driven by this flag: it must be True while
+    env-credential login is possible and False once
+    `disable_env_credential_login` turns that login path off.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    response = client.get("/health/readiness/details")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["show_env_credential_login_warning"] is expected_warning
+
+
 def test_health_readiness_allows_explicit_legacy_public_details(monkeypatch):
     """
     Operators can explicitly preserve the legacy public readiness payload.

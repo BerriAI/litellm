@@ -2020,3 +2020,108 @@ class TestFlattenToolSchemaCombinatorsWiring:
 
         assert result["tools"][0] is opaque_tool
         assert "anyOf" not in result["tools"][1]["parameters"]
+
+
+class TestReasoningFollowsModelSupport:
+    """Responses API clients like Codex send `reasoning` on every request, and OpenAI 400s it
+    on non-reasoning models like gpt-4o. drop_params must strip it there, the same way the
+    chat completions surface already strips reasoning_effort for those models.
+    """
+
+    @pytest.mark.parametrize(
+        "model, reasoning_survives",
+        [
+            ("gpt-4o", False),
+            ("gpt-4.1", False),
+            ("gpt-4o-mini", False),
+            ("ft:gpt-4o-2024-08-06:my-org::abc123", False),
+            ("chat-latest", True),
+            ("gpt-5.6", True),
+            ("o3", True),
+            ("o3-deep-research", True),
+            ("o4-mini-deep-research", True),
+            ("codex-mini-latest", True),
+            ("ft:o4-mini-2025-04-16:my-org::abc123", True),
+            ("computer-use-preview", True),
+        ],
+    )
+    def test_drop_params_strips_reasoning_by_model(self, local_model_cost_map, model, reasoning_survives):
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "auto"}},
+            model=model,
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is reasoning_survives
+
+    @pytest.mark.parametrize(
+        "model, reasoning_survives",
+        [
+            ("gpt-4o", False),
+            ("chat-latest", True),
+            ("o3", True),
+            ("o3-deep-research", True),
+        ],
+    )
+    def test_a_cost_map_older_than_this_release_never_strips_a_known_reasoning_model(
+        self, local_model_cost_map, monkeypatch, model, reasoning_survives
+    ):
+        lagging = {
+            name: {field: value for field, value in entry.items() if field != "supports_reasoning"}
+            for name, entry in litellm.model_cost.items()
+        }
+        monkeypatch.setattr(litellm, "model_cost", lagging)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model=model,
+            drop_params=True,
+        )
+        assert ("reasoning" in mapped) is reasoning_survives
+
+    def test_without_drop_params_the_error_is_litellms_400(self, local_model_cost_map, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+            OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium"}},
+                model="gpt-4o",
+                drop_params=False,
+            )
+        assert excinfo.value.status_code == 400
+        assert "reasoning.effort" in str(excinfo.value)
+        assert "cost map" in str(excinfo.value)
+
+    @pytest.mark.parametrize("drop_params", [True, False])
+    @pytest.mark.parametrize(
+        "reasoning",
+        [{"summary": "auto"}, {"effort": None, "summary": "auto"}, {}],
+    )
+    def test_reasoning_without_an_effort_passes_through_on_non_reasoning_models(
+        self, local_model_cost_map, monkeypatch, drop_params, reasoning
+    ):
+        monkeypatch.setattr(litellm, "drop_params", drop_params)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": dict(reasoning)},
+            model="gpt-4o",
+            drop_params=drop_params,
+        )
+        assert mapped["reasoning"] == reasoning
+
+    def test_an_explicit_supports_reasoning_false_beats_the_bundled_floor(self, local_model_cost_map, monkeypatch):
+        overridden = {
+            name: ({**entry, "supports_reasoning": False} if name == "o3" else entry)
+            for name, entry in litellm.model_cost.items()
+        }
+        monkeypatch.setattr(litellm, "model_cost", overridden)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model="o3",
+            drop_params=True,
+        )
+        assert "reasoning" not in mapped
+
+    def test_azure_deployments_keep_reasoning_even_on_a_non_reasoning_model_name(self, local_model_cost_map):
+        mapped = AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model="gpt-4o",
+            drop_params=True,
+        )
+        assert mapped["reasoning"] == {"effort": "medium"}

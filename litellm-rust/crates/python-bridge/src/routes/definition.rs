@@ -486,10 +486,11 @@ asyncio.run(exercise())
             let code = CString::new(
                 r#"
 result = routes.echo("traced")
-assert result == {
-    "response": "traced",
-    "trace": [{"function": "execute_echo", "depth": 0}],
-}
+assert result["response"] == "traced", result
+assert [event["function"] for event in result["trace"]] == ["execute_echo"], result
+failure = routes.echo("error")
+assert failure["error"] == "invalid request: synthetic error", failure
+assert [event["function"] for event in failure["trace"]] == ["execute_echo"], failure
 "#,
             )
             .expect("Python source should not contain null bytes");
