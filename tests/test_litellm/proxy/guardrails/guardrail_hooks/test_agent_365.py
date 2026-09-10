@@ -1,9 +1,8 @@
+import time
 from types import SimpleNamespace
 from typing import Any, Final
 
 import httpx
-import time
-
 import pytest
 from fastapi import HTTPException
 
@@ -595,7 +594,9 @@ class TestMalformedResponses:
 
     @pytest.mark.asyncio
     async def test_bad_expires_in_still_allows(self):
-        handler: Final = FakeHandler([_response(200, {"access_token": "tok-1", "expires_in": "soon"}), _allow_response()])
+        handler: Final = FakeHandler(
+            [_response(200, {"access_token": "tok-1", "expires_in": "soon"}), _allow_response()]
+        )
         guardrail: Final = _make_guardrail(handler)
         data: Final = _mcp_data()
         result: Final = await _run(guardrail, data)
@@ -625,7 +626,9 @@ class TestDeltaHardening:
 
     @pytest.mark.asyncio
     async def test_numeric_string_expires_in_honored(self):
-        handler: Final = FakeHandler([_response(200, {"access_token": "tok-9", "expires_in": "120"}), _allow_response()])
+        handler: Final = FakeHandler(
+            [_response(200, {"access_token": "tok-9", "expires_in": "120"}), _allow_response()]
+        )
         guardrail: Final = _make_guardrail(handler)
         await _run(guardrail, _mcp_data())
         entries: Final = list(guardrail._obo_token_cache.values())
