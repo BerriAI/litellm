@@ -4024,6 +4024,22 @@ class TestBridgedOutputItemIdPrefixes:
         assert not suffix.startswith("-")
 
     def test_reasoning_item_summary_is_empty_list_not_null(self):
+        """Regression: reasoning output items must have summary as an empty array, not null.
+
+        OpenAI Responses API spec requires reasoning items to have a 'summary'
+        field as an array. A null summary causes strict SDK clients to crash.
+        See issue #40519.
+        """
+        items = self._reasoning_items()
+        assert len(items) == 1
+        # summary must be an empty list, never None/null
+        summary = getattr(items[0], "summary", "MISSING")
+        assert summary is not "MISSING", "summary attribute should be present"
+        assert summary is not None, "summary should not be None"
+        assert isinstance(summary, list), f"summary should be a list, got {type(summary)}"
+        assert summary == [], f"summary should be an empty list, got {summary}"
+
+    def test_reasoning_item_summary_is_empty_list_not_null(self):
         """Regression: reasoning output items must have summary as a list, not null.
 
         OpenAI Responses API spec requires reasoning items to have a 'summary'
