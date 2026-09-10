@@ -1113,17 +1113,34 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert len(kwargs["user"]) == 64
 
-    def test_metadata_user_id_mapped_to_prompt_cache_key(self):
-        req = _make_request(metadata={"user_id": "user-42"})
+    def test_metadata_claude_code_session_id_mapped_to_prompt_cache_key(self):
+        user_id = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-42"})
+        req = _make_request(metadata={"user_id": user_id})
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["prompt_cache_key"] == "user-42"
+        assert kwargs["user"] == user_id[:64]
+        assert kwargs["prompt_cache_key"] == "session-42"
 
-    def test_metadata_user_id_prompt_cache_key_truncated_to_first_64_chars(self):
-        long_id = "".join(str(i % 10) for i in range(100))
-        req = _make_request(metadata={"user_id": long_id})
+    def test_metadata_claude_code_sessions_get_distinct_prompt_cache_keys(self):
+        """BerriAI/litellm#39145: the first 64 chars of Claude Code's user_id are the per-install device_id."""
+        keys = tuple(
+            _ADAPTER.translate_request(
+                _make_request(
+                    metadata={"user_id": json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": sid})}
+                )
+            )["prompt_cache_key"]
+            for sid in ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+        )
+        assert keys == ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+
+    @pytest.mark.parametrize(
+        "user_id",
+        ["user-42", "".join(str(i % 10) for i in range(100)), json.dumps({"device_id": "d" * 64}), "{not json"],
+    )
+    def test_metadata_plain_user_id_sets_no_prompt_cache_key(self, user_id: str):
+        req = _make_request(metadata={"user_id": user_id})
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["prompt_cache_key"] == long_id[:64]
-        assert len(kwargs["prompt_cache_key"]) == 64
+        assert kwargs["user"] == user_id[:64]
+        assert "prompt_cache_key" not in kwargs
 
     def test_metadata_empty_user_id_sets_no_prompt_cache_key(self):
         req = _make_request(metadata={"user_id": ""})
