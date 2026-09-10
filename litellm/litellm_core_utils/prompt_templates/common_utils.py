@@ -2360,6 +2360,30 @@ def parse_tool_call_arguments(
             )
             return repaired
 
+        # Some providers emit several JSON objects concatenated into a single
+        # arguments string, which ``json.loads`` reports as "Extra data" and
+        # ``_attempt_json_repair`` cannot fix because nothing is truncated.
+        # This is the same provider behaviour already repaired on the Bedrock
+        # request path (see ``_convert_to_bedrock_tool_call_invoke``), so the
+        # helper is reused here rather than dropping the call: returning ``{}``
+        # is indistinguishable from the model asking for nothing.
+        concatenated: Final = split_concatenated_json_objects(arguments)
+        if concatenated:
+            verbose_logger.warning(
+                "Recovered %d concatenated JSON object(s) from tool call arguments for tool '%s' (%s); "
+                "using the first and discarding %d. Original (%d chars): %.200s%s",
+                len(concatenated),
+                tool_name or "<unknown>",
+                context or "unknown context",
+                len(concatenated) - 1,
+                len(arguments),
+                arguments,
+                "..." if len(arguments) > 200 else "",
+            )
+            # Mirrors factory.py, where the first parsed object keeps the
+            # original tool call id.
+            return concatenated[0]
+
         error_parts: Final = ["Failed to parse tool call arguments"]
 
         if tool_name:
