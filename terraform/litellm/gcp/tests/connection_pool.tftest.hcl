@@ -1,22 +1,28 @@
-# Plan-only coverage for the in-container PgBouncer knobs on the gateway task.
-# `mock_provider` keeps this offline: no AWS credentials, no API calls, no
-# resources. Run from terraform/litellm/aws with `terraform test`.
+# Plan-only coverage for the in-container PgBouncer knobs on the gateway
+# service. `mock_provider` keeps this offline: no GCP credentials, no API
+# calls, no resources. Run from terraform/litellm/gcp with `terraform test`.
 
-mock_provider "aws" {
-  mock_data "aws_iam_policy_document" {
+mock_provider "google" {
+  mock_resource "google_redis_instance" {
     defaults = {
-      json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
+      host = "10.0.0.4"
+      port = 6379
+      server_ca_certs = [{
+        cert = "-----BEGIN CERTIFICATE-----\nmock\n-----END CERTIFICATE-----"
+      }]
     }
   }
 }
+
+mock_provider "google-beta" {}
 mock_provider "random" {}
 
 variables {
-  region              = "us-east-1"
-  tenant              = "acme"
-  env                 = "test"
-  azs                 = ["us-east-1a", "us-east-1b"]
-  allow_plaintext_alb = true
+  project_id         = "test-project"
+  tenant             = "tenant"
+  env                = "test"
+  allow_plaintext_lb = true
+  image_registry     = "us-central1-docker.pkg.dev/test-project/litellm"
 }
 
 run "pool_off_by_default" {
@@ -26,14 +32,19 @@ run "pool_off_by_default" {
     condition     = length(local.gateway_pool_env) == 0
     error_message = "The gateway must get no LITELLM_PGBOUNCER_* env unless gateway_connection_pool_enabled is set."
   }
+
+  assert {
+    condition = !anytrue([
+      for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : startswith(e.name, "LITELLM_PGBOUNCER_")
+    ])
+    error_message = "The gateway service must carry no LITELLM_PGBOUNCER_* env by default."
+  }
 }
 
 run "pool_enabled_renders_the_three_vars_with_configured_sizes" {
   command = plan
 
   variables {
-    create_database                 = false
-    database_url                    = "postgresql://litellm:pw@db.internal:5432/litellm"
     gateway_num_workers             = 4
     gateway_connection_pool_enabled = true
     gateway_pool_max_db_connections = 8
@@ -49,14 +60,29 @@ run "pool_enabled_renders_the_three_vars_with_configured_sizes" {
     ])
     error_message = "The pool env must carry the enabled flag and the configured sizes as strings."
   }
+
+  assert {
+    condition = alltrue([
+      contains([for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : e.name], "LITELLM_PGBOUNCER_ENABLED"),
+      contains([for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : e.name], "LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS"),
+      contains([for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : e.name], "LITELLM_PGBOUNCER_MAX_CLIENT_CONN"),
+    ])
+    error_message = "The gateway service must receive all three LITELLM_PGBOUNCER_* env vars."
+  }
+
+  assert {
+    condition = !anytrue(concat(
+      [for e in google_cloud_run_v2_service.backend[0].template[0].containers[0].env : startswith(e.name, "LITELLM_PGBOUNCER_")],
+      [for e in google_cloud_run_v2_job.migrations[0].template[0].template[0].containers[0].env : startswith(e.name, "LITELLM_PGBOUNCER_")],
+    ))
+    error_message = "The backend service and the migrations job must keep their direct database connection."
+  }
 }
 
 run "pool_enabled_uses_the_module_default_sizes" {
   command = plan
 
   variables {
-    create_database                 = false
-    database_url                    = "postgresql://litellm:pw@db.internal:5432/litellm"
     gateway_connection_pool_enabled = true
   }
 
@@ -82,42 +108,28 @@ run "gateway_starts_through_the_pool_aware_launcher" {
       strcontains(local.gateway_launch_cmd, "exec python -m gateway.launch --host 0.0.0.0 --port 4000 --workers 4"),
       strcontains(local.gateway_launch_cmd, "exec ddtrace-run python -m gateway.launch --host 0.0.0.0 --port 4000 --workers 4"),
       !strcontains(local.gateway_launch_cmd, "uvicorn gateway.main:app"),
-      local.gateway_proxy_overrides.command[0] == local.gateway_launch_cmd,
+      endswith(google_cloud_run_v2_service.gateway[0].template[0].containers[0].args[0], local.gateway_launch_cmd),
     ])
     error_message = "The gateway must start through gateway.launch (with and without ddtrace) so the pooler starts once before uvicorn forks the workers."
   }
-}
-
-run "pool_with_module_created_iam_aurora_fails_at_plan" {
-  command = plan
-
-  variables {
-    gateway_connection_pool_enabled = true
-  }
-
-  expect_failures = [
-    aws_ecs_task_definition.gateway,
-  ]
-}
-
-run "pool_without_any_database_fails_at_plan" {
-  command = plan
-
-  variables {
-    create_database                 = false
-    gateway_connection_pool_enabled = true
-  }
-
-  expect_failures = [
-    aws_ecs_task_definition.gateway,
-  ]
-}
-
-run "module_created_iam_aurora_without_the_pool_still_plans" {
-  command = plan
 
   assert {
-    condition     = contains(local.managed_db_env, { name = "IAM_TOKEN_DB_AUTH", value = "true" })
-    error_message = "Without the pool the module-created Aurora must keep IAM token auth."
+    condition     = strcontains(local.backend_launch_cmd, "uvicorn backend.main:app")
+    error_message = "The backend has no workers to share a pooler and keeps starting uvicorn directly."
   }
+}
+
+run "pool_sizes_below_one_fail_at_plan" {
+  command = plan
+
+  variables {
+    gateway_connection_pool_enabled = true
+    gateway_pool_max_db_connections = 0
+    gateway_pool_max_client_conn    = 0
+  }
+
+  expect_failures = [
+    var.gateway_pool_max_db_connections,
+    var.gateway_pool_max_client_conn,
+  ]
 }

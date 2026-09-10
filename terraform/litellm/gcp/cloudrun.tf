@@ -138,10 +138,16 @@ locals {
     "export DATABASE_URL_READ_REPLICA=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST_READ_REPLICA}:$${DATABASE_PORT_READ_REPLICA}/$${DATABASE_NAME}\"",
   ]
 
+  gateway_pool_env = var.gateway_connection_pool_enabled ? [
+    { name = "LITELLM_PGBOUNCER_ENABLED", value = "true" },
+    { name = "LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS", value = tostring(var.gateway_pool_max_db_connections) },
+    { name = "LITELLM_PGBOUNCER_MAX_CLIENT_CONN", value = tostring(var.gateway_pool_max_client_conn) },
+  ] : []
+
   gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
   backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
 
-  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args};; *) exec uvicorn gateway.main:app ${local.gateway_uvicorn_args};; esac"
+  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run python -m gateway.launch ${local.gateway_uvicorn_args};; *) exec python -m gateway.launch ${local.gateway_uvicorn_args};; esac"
   backend_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args};; *) exec uvicorn backend.main:app ${local.backend_uvicorn_args};; esac"
 
   gateway_args = join(" && ", concat(
@@ -213,7 +219,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env, local.gateway_pool_env)
         content {
           name  = env.value.name
           value = env.value.value

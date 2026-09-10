@@ -38,12 +38,16 @@ _STUB_TEMPLATE = """#!/bin/sh
 _ENTRYPOINT_RE = re.compile(r"^ENTRYPOINT\s+(\[.*\])\s*$", re.MULTILINE)
 _CMD_RE = re.compile(r"^CMD\s+(\[.*\])\s*$", re.MULTILINE)
 _COPY_RE = re.compile(r"^COPY\s+(?!--from)(\S+)\s+(\S+)\s*$", re.MULTILINE)
-_APP_TARGET_RE = re.compile(r"(?:gateway|backend)\.main:app")
+_APP_TARGET_RE = re.compile(r"(?:gateway|backend)\.main:app|gateway\.launch")
 _TF_STRING_LOCAL_RE = re.compile(r'^\s*(\w+)\s*=\s*"((?:[^"\\]|\\.)*)"\s*$', re.MULTILINE)
 _TF_INTERPOLATION_RE = re.compile(r"\$\{(local|var)\.(\w+)\}")
 
 TERRAFORM_LAUNCH_SITES = {TERRAFORM_ECS: 2, TERRAFORM_CLOUDRUN: 2}
 TERRAFORM_VAR_STUBS = {"gateway_num_workers": "2"}
+COMPONENT_LAUNCHERS = {
+    "gateway": ("python", "-m", "gateway.launch"),
+    "backend": ("uvicorn", "backend.main:app"),
+}
 _MAX_INTERPOLATION_PASSES = 5
 
 
@@ -63,7 +67,7 @@ def _run_entrypoint(
     """Run `script` with stubbed executables on PATH and return the recorded lines."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True)
-    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn", "litellm"))
+    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn", "python", "litellm"))
     record = tmp_path / "record.txt"
 
     env = {
@@ -408,17 +412,18 @@ def test_terraform_launch_command_matches_the_script_contract(
     implementations under the same environment and asserts they agree on which binary is exec'd
     and on whether the openai integration is disabled.
     """
-    app_target = f"{component}.main:app"
+    launcher = COMPONENT_LAUNCHERS[component]
+    app_target = " ".join(launcher[1:])
     command = _resolve_tf_local(terraform_file, f"{component}_launch_cmd")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True)
-    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn"))
+    _write_stubs(bin_dir, ("ddtrace-run", "uvicorn", "python"))
     from_terraform = _run_shell_command(command, bin_dir, tmp_path / "terraform.txt", use_ddtrace)
 
     from_script = _run_entrypoint(
         COMPONENT_ENTRYPOINT,
-        ("uvicorn", app_target),
+        launcher,
         use_ddtrace=use_ddtrace,
         tmp_path=tmp_path / "script",
     )
@@ -428,12 +433,14 @@ def test_terraform_launch_command_matches_the_script_contract(
     )
     assert from_terraform[2] == from_script[2], f"{terraform_file} disagrees with the script on the openai integration"
     assert app_target in from_terraform[1]
+    assert "gateway.main:app" not in from_terraform[1], f"{terraform_file} bypasses the gateway.launch supervisor"
 
     if use_ddtrace in TRUTHY_USE_DDTRACE:
         assert from_terraform[0] == "exec=ddtrace-run"
+        assert from_terraform[1].startswith(f"args={launcher[0]} ")
         assert from_terraform[2] == "DD_TRACE_OPENAI_ENABLED=False"
     else:
-        assert from_terraform[0] == "exec=uvicorn"
+        assert from_terraform[0] == f"exec={launcher[0]}"
         assert from_terraform[2] == "DD_TRACE_OPENAI_ENABLED=<unset>"
 
 

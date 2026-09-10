@@ -67,7 +67,8 @@ def _query(url: str) -> dict[str, str]:
 @pytest.fixture
 def password_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     for var in ("DATABASE_URL", "IAM_TOKEN_DB_AUTH", "AZURE_POSTGRESQL_AUTH", "DATABASE_HOST_READ_REPLICA"):
-        monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(var, "")
+        monkeypatch.delenv(var)
     for var, value in DB_ENV.items():
         monkeypatch.setenv(var, value)
     return dict(DB_ENV)
