@@ -475,7 +475,7 @@ async def _handle_stream_message(
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
                 agent_extra_headers=agent_extra_headers,
-		agent_card_params=agent_card_params,
+                agent_card_params=agent_card_params,
             )
 
             if (
