@@ -533,7 +533,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-playground-example"
+name = "litellm-playground-error-type"
+version = "0.1.0"
+dependencies = [
+ "litellm-core",
+]
+
+[[package]]
+name = "litellm-playground-proc-macro"
 version = "0.1.0"
 dependencies = [
  "litellm-core",

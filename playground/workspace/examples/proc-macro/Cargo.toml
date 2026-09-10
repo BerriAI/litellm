@@ -1,0 +1,10 @@
+[package]
+name = "litellm-playground-proc-macro"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+litellm-core = { path = "../../../../litellm-rust/crates/core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

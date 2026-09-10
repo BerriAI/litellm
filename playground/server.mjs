@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,8 +10,7 @@ import { WebSocketServer } from 'ws';
 const playgroundDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryDirectory = path.resolve(playgroundDirectory, '..');
 const workspaceDirectory = path.join(playgroundDirectory, 'workspace');
-const sourcePaths = ['src/main.rs', 'src/proof.rs'];
-const cargoManifestPath = path.join(workspaceDirectory, 'Cargo.toml');
+const examplesDirectory = path.join(workspaceDirectory, 'examples');
 const port = Number(process.env.PORT ?? 5173);
 
 const readRequestBody = request =>
@@ -57,6 +56,54 @@ const gitRevision = async () => {
   return result.success ? result.output.trim() : 'unknown';
 };
 
+const listRustFiles = async (directory, relativeDirectory = 'src') => {
+  const entries = await readdir(path.join(directory, relativeDirectory), { withFileTypes: true });
+  const files = await Promise.all(entries.map(async entry => {
+    const relativePath = path.posix.join(relativeDirectory, entry.name);
+    if (entry.isDirectory()) {
+      return listRustFiles(directory, relativePath);
+    }
+    return entry.isFile() && entry.name.endsWith('.rs') ? [relativePath] : [];
+  }));
+  return files.flat().sort();
+};
+
+const titleFromId = id => id
+  .split('-')
+  .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+  .join(' ');
+
+const readExamples = async () => {
+  const entries = await readdir(examplesDirectory, { withFileTypes: true });
+  const directories = entries.filter(entry => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name));
+  return Promise.all(directories.map(async entry => {
+    const id = entry.name;
+    const directory = path.join(examplesDirectory, id);
+    const sourcePaths = ['Cargo.toml', ...await listRustFiles(directory)];
+    const [guideSource, files] = await Promise.all([
+      readFile(path.join(directory, 'GUIDE.md'), 'utf8'),
+      Promise.all(sourcePaths.map(async filePath => ({
+        languageId: filePath.endsWith('.rs') ? 'rust' : 'toml',
+        path: filePath,
+        source: await readFile(path.join(directory, filePath), 'utf8'),
+        target: path.posix.join('examples', id, filePath),
+        uri: pathToFileURL(path.join(directory, filePath)).href,
+      }))),
+    ]);
+    return {
+      directory,
+      files,
+      guide: {
+        path: 'GUIDE.md',
+        source: guideSource,
+        target: path.posix.join('examples', id, 'GUIDE.md'),
+      },
+      id,
+      title: titleFromId(id),
+    };
+  }));
+};
+
 const vite = await createViteServer({
   root: playgroundDirectory,
   server: { middlewareMode: true },
@@ -65,17 +112,10 @@ const vite = await createViteServer({
 
 const server = http.createServer(async (request, response) => {
   if (request.method === 'GET' && request.url === '/api/info') {
-    const [sources, revision] = await Promise.all([
-      Promise.all(sourcePaths.map(async filePath => ({
-        path: filePath,
-        uri: pathToFileURL(path.join(workspaceDirectory, filePath)).href,
-        source: await readFile(path.join(workspaceDirectory, filePath), 'utf8'),
-      }))),
-      gitRevision(),
-    ]);
+    const [examples, revision] = await Promise.all([readExamples(), gitRevision()]);
     sendJson(response, 200, {
       revision,
-      files: sources,
+      examples: examples.map(({ directory: _directory, ...example }) => example),
       rootUri: pathToFileURL(workspaceDirectory).href,
     });
     return;
@@ -84,19 +124,21 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'POST' && request.url === '/api/run') {
     try {
       const body = JSON.parse(await readRequestBody(request));
-      const filesAreValid = body.files && sourcePaths.every(
-        filePath => typeof body.files[filePath] === 'string',
+      const examples = await readExamples();
+      const example = examples.find(candidate => candidate.id === body.exampleId);
+      const filesAreValid = example && body.files && example.files.every(
+        file => typeof body.files[file.path] === 'string',
       );
-      if (!filesAreValid) {
-        sendJson(response, 400, { success: false, output: 'Both Rust source files are required' });
+      if (!example || !filesAreValid) {
+        sendJson(response, 400, { success: false, output: 'A valid example and all of its files are required' });
         return;
       }
-      await Promise.all(sourcePaths.map(
-        filePath => writeFile(path.join(workspaceDirectory, filePath), body.files[filePath], 'utf8'),
+      await Promise.all(example.files.map(
+        file => writeFile(path.join(example.directory, file.path), body.files[file.path], 'utf8'),
       ));
       const result = await runCommand(
         'cargo',
-        ['run', '--quiet', '--locked', '--manifest-path', cargoManifestPath],
+        ['run', '--quiet', '--manifest-path', path.join(example.directory, 'Cargo.toml')],
         { cwd: workspaceDirectory, stdio: ['ignore', 'pipe', 'pipe'] },
       );
       sendJson(response, 200, result);

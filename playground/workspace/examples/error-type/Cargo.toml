@@ -1,0 +1,8 @@
+[package]
+name = "litellm-playground-error-type"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+litellm-core = { path = "../../../../litellm-rust/crates/core" }

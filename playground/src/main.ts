@@ -16,31 +16,30 @@ import { EditorView, basicSetup } from 'codemirror';
 import './style.css';
 
 const STORAGE_KEY = 'litellm-rust-playground-files';
-const GUIDE_PATH = 'GUIDE.md';
-const DEFAULT_GUIDE = `# Prove the connection
-
-Click [the \`build_proof\` definition](playground://src/proof.rs#L9), or Cmd-click \`build_proof\` in \`src/main.rs\`.
-
-Hover \`litellm_core::Error\` for dependency type information.
-
-## What this uses
-
-- **Editor:** CodeMirror 6
-- **Language server:** rust-analyzer over WebSocket
-- **Dependency:** in-repo \`litellm-core\` path dependency
-- **Proc macro:** Serde \`Serialize\` and \`Deserialize\` derives
-
-> This Markdown and the Rust source are saved in this browser. Reset restores the example.
-`;
 
 type PlaygroundFile = {
+  languageId: 'rust' | 'toml';
   path: string;
-  uri: string;
   source: string;
+  target: string;
+  uri: string;
+};
+
+type PlaygroundGuide = {
+  path: string;
+  source: string;
+  target: string;
+};
+
+type PlaygroundExample = {
+  files: PlaygroundFile[];
+  guide: PlaygroundGuide;
+  id: string;
+  title: string;
 };
 
 type PlaygroundInfo = {
-  files: PlaygroundFile[];
+  examples: PlaygroundExample[];
   rootUri: string;
   revision: string;
 };
@@ -127,8 +126,10 @@ const runStatus = requireElement<HTMLSpanElement>('run-status');
 const output = requireElement<HTMLPreElement>('output');
 const editorsParent = requireElement<HTMLDivElement>('editors');
 const markdownEditorParent = requireElement<HTMLDivElement>('markdown-editor');
+const exampleNav = requireElement<HTMLElement>('example-nav');
 const fileNav = requireElement<HTMLElement>('file-nav');
 const activePath = requireElement<HTMLSpanElement>('active-path');
+const guidePath = requireElement<HTMLSpanElement>('guide-path');
 
 const commandClickDefinition = EditorView.domEventHandlers({
   mousedown(event, view) {
@@ -149,7 +150,7 @@ const commandClickDefinition = EditorView.domEventHandlers({
 });
 
 const playgroundLinkMatcher = new MatchDecorator({
-  regexp: /\[[^\]\n]+\]\(playground:\/\/[^)\s]+\)/g,
+  regexp: /\[[^\]\n]+\]\([a-z][a-z0-9+.-]*:\/\/[^)\s]+\)/gi,
   decoration: Decoration.mark({ class: 'cm-playground-link' }),
 });
 
@@ -180,7 +181,7 @@ const markdownFileNavigation = (openTarget: (target: string) => boolean) =>
       }
       const line = view.state.doc.lineAt(position);
       const offset = position - line.from;
-      const matches = line.text.matchAll(/\[([^\]\n]+)\]\((playground:\/\/[^)\s]+)\)/g);
+      const matches = line.text.matchAll(/\[([^\]\n]+)\]\(([a-z][a-z0-9+.-]*:\/\/[^)\s]+)\)/gi);
       for (const match of matches) {
         const start = match.index;
         if (offset >= start && offset <= start + match[0].length && openTarget(match[2])) {
@@ -228,11 +229,11 @@ const loadInfo = async (): Promise<PlaygroundInfo> => {
   return response.json() as Promise<PlaygroundInfo>;
 };
 
-const runCode = async (files: StoredFiles): Promise<RunResult> => {
+const runCode = async (exampleId: string, files: StoredFiles): Promise<RunResult> => {
   const response = await fetch('/api/run', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ files }),
+    body: JSON.stringify({ exampleId, files }),
   });
   return response.json() as Promise<RunResult>;
 };
@@ -252,37 +253,112 @@ const saveStoredFile = (path: string, source: string) => {
 
 const main = async () => {
   const info = await loadInfo();
+  const initialExample = info.examples[0];
+  if (!initialExample) {
+    throw new Error('No runnable examples found');
+  }
+
   const storedFiles = loadStoredFiles();
+  const allFiles = info.examples.flatMap(example => example.files.map(file => ({ example, file })));
+  const fileByUri = new Map(allFiles.map(entry => [entry.file.uri, entry]));
   const views = new Map<string, EditorView>();
   const containers = new Map<string, HTMLDivElement>();
-  const buttons = new Map<string, HTMLButtonElement>();
-  let activeUri = info.files[0]?.uri ?? '';
+  const markdownViews = new Map<string, EditorView>();
+  const markdownContainers = new Map<string, HTMLDivElement>();
+  const exampleButtons = new Map<string, HTMLButtonElement>();
+  const fileButtons = new Map<string, HTMLButtonElement>();
+  let activeExampleId = initialExample.id;
+  let activeUri = '';
+
+  const renderFileTree = (example: PlaygroundExample) => {
+    fileNav.replaceChildren();
+    fileButtons.clear();
+
+    const root = document.createElement('div');
+    root.className = 'tree-folder tree-root';
+    root.textContent = `${example.id}://`;
+    fileNav.append(root);
+
+    const rootFiles = example.files.filter(file => !file.path.includes('/'));
+    const sourceFiles = example.files.filter(file => file.path.startsWith('src/'));
+
+    const addFileButton = (file: PlaygroundFile, depth: 'root' | 'child') => {
+      const button = document.createElement('button');
+      button.className = 'file-tree-item';
+      button.dataset.active = String(file.uri === activeUri);
+      button.dataset.depth = depth;
+      button.dataset.kind = file.languageId === 'rust' ? 'rs' : 'toml';
+      button.type = 'button';
+      button.textContent = depth === 'child' ? file.path.replace('src/', '') : file.path;
+      button.addEventListener('click', () => showFile(file.uri));
+      fileNav.append(button);
+      fileButtons.set(file.uri, button);
+    };
+
+    rootFiles.forEach(file => addFileButton(file, 'root'));
+    if (sourceFiles.length > 0) {
+      const sourceFolder = document.createElement('div');
+      sourceFolder.className = 'tree-folder tree-child-folder';
+      sourceFolder.textContent = 'src';
+      fileNav.append(sourceFolder);
+      sourceFiles.forEach(file => addFileButton(file, 'child'));
+    }
+  };
+
+  const selectExample = (exampleId: string, selectDefaultFile = true) => {
+    const example = info.examples.find(candidate => candidate.id === exampleId);
+    if (!example) {
+      return false;
+    }
+    activeExampleId = example.id;
+    exampleButtons.forEach((button, candidate) => {
+      button.dataset.active = String(candidate === example.id);
+    });
+    markdownContainers.forEach((container, candidate) => {
+      container.hidden = candidate !== example.id;
+    });
+    guidePath.textContent = `${example.id}://${example.guide.path}`;
+    renderFileTree(example);
+    if (selectDefaultFile) {
+      const current = fileByUri.get(activeUri);
+      const file = current?.example.id === example.id ? current.file : example.files.find(candidate => candidate.path === 'src/main.rs');
+      if (file) {
+        showFile(file.uri);
+      }
+    }
+    return true;
+  };
 
   const showFile = (uri: string) => {
+    const entry = fileByUri.get(uri);
     const view = views.get(uri);
-    if (!view) {
+    if (!entry || !view) {
       return null;
+    }
+    if (entry.example.id !== activeExampleId) {
+      selectExample(entry.example.id, false);
     }
     activeUri = uri;
     containers.forEach((container, candidate) => {
       container.hidden = candidate !== uri;
     });
-    buttons.forEach((button, candidate) => {
+    fileButtons.forEach((button, candidate) => {
       button.dataset.active = String(candidate === uri);
     });
-    activePath.textContent = info.files.find(file => file.uri === uri)?.path ?? uri;
+    activePath.textContent = `${entry.example.id}://${entry.file.path}`;
     view.focus();
     return view;
   };
 
   const openFileTarget = (target: string) => {
-    const match = /^playground:\/\/(.+?)(?:#L(\d+))?$/.exec(target);
-    const file = match ? info.files.find(candidate => candidate.path === match[1]) : undefined;
+    const match = /^([a-z][a-z0-9+.-]*):\/\/(.+?)(?:#L(\d+))?$/i.exec(target);
+    const example = match ? info.examples.find(candidate => candidate.id === match[1]) : undefined;
+    const file = example?.files.find(candidate => candidate.path === match?.[2]);
     const view = file ? showFile(file.uri) : null;
     if (!view) {
       return false;
     }
-    const requestedLine = Number(match?.[2] ?? 1);
+    const requestedLine = Number(match?.[3] ?? 1);
     const line = view.state.doc.line(Math.min(Math.max(requestedLine, 1), view.state.doc.lines));
     view.dispatch({
       selection: { anchor: line.from },
@@ -290,6 +366,17 @@ const main = async () => {
     });
     return true;
   };
+
+  info.examples.forEach(example => {
+    const button = document.createElement('button');
+    button.className = 'example-item';
+    button.dataset.active = String(example.id === activeExampleId);
+    button.type = 'button';
+    button.textContent = example.title;
+    button.addEventListener('click', () => selectExample(example.id));
+    exampleNav.append(button);
+    exampleButtons.set(example.id, button);
+  });
 
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const transport = await connectTransport(`${protocol}//${location.host}/lsp`);
@@ -311,35 +398,27 @@ const main = async () => {
 
   await client.initializing;
 
-  info.files.forEach(file => {
-    const button = document.createElement('button');
-    button.className = 'file-tree-item';
-    button.type = 'button';
-    button.textContent = file.path.replace('src/', '');
-    button.addEventListener('click', () => showFile(file.uri));
-    fileNav.append(button);
-    buttons.set(file.uri, button);
-
+  allFiles.forEach(({ file }) => {
     const container = document.createElement('div');
     container.className = 'editor-container';
-    container.hidden = file.uri !== activeUri;
+    container.hidden = true;
     editorsParent.append(container);
     containers.set(file.uri, container);
 
+    const languageExtensions = file.languageId === 'rust'
+      ? [rust(), client.plugin(file.uri, 'rust'), commandClickDefinition]
+      : [];
     const view = new EditorView({
-      doc: storedFiles[file.path] ?? file.source,
+      doc: storedFiles[file.target] ?? file.source,
       extensions: [
         basicSetup,
-        rust(),
         oneDark,
-        client.plugin(file.uri, 'rust'),
-        commandClickDefinition,
+        languageExtensions,
         EditorView.lineWrapping,
         EditorView.updateListener.of(update => {
-          if (!update.docChanged) {
-            return;
+          if (update.docChanged) {
+            saveStoredFile(file.target, update.state.doc.toString());
           }
-          saveStoredFile(file.path, update.state.doc.toString());
         }),
       ],
       parent: container,
@@ -347,41 +426,55 @@ const main = async () => {
     views.set(file.uri, view);
   });
 
-  const markdownView = new EditorView({
-    doc: storedFiles[GUIDE_PATH] ?? DEFAULT_GUIDE,
-    extensions: [
-      basicSetup,
-      markdown(),
-      oneDark,
-      playgroundLinkDecorations,
-      markdownFileNavigation(openFileTarget),
-      EditorView.lineWrapping,
-      EditorView.updateListener.of(update => {
-        if (update.docChanged) {
-          saveStoredFile(GUIDE_PATH, update.state.doc.toString());
-        }
-      }),
-    ],
-    parent: markdownEditorParent,
+  info.examples.forEach(example => {
+    const container = document.createElement('div');
+    container.className = 'markdown-container';
+    container.hidden = example.id !== activeExampleId;
+    markdownEditorParent.append(container);
+    markdownContainers.set(example.id, container);
+
+    const view = new EditorView({
+      doc: storedFiles[example.guide.target] ?? example.guide.source,
+      extensions: [
+        basicSetup,
+        markdown(),
+        oneDark,
+        playgroundLinkDecorations,
+        markdownFileNavigation(openFileTarget),
+        EditorView.lineWrapping,
+        EditorView.updateListener.of(update => {
+          if (update.docChanged) {
+            saveStoredFile(example.guide.target, update.state.doc.toString());
+          }
+        }),
+      ],
+      parent: container,
+    });
+    markdownViews.set(example.id, view);
   });
 
-  showFile(activeUri);
+  selectExample(activeExampleId);
   lspStatus.textContent = 'rust-analyzer connected';
   lspStatus.dataset.state = 'ready';
   if (diagnosticStatus.textContent === 'Diagnostics pending') {
-    diagnosticStatus.textContent = `${info.files.length} files open in LSP`;
+    const rustFileCount = allFiles.filter(entry => entry.file.languageId === 'rust').length;
+    diagnosticStatus.textContent = `${rustFileCount} Rust files open in LSP`;
     diagnosticStatus.dataset.state = 'ready';
   }
   revision.textContent = info.revision.slice(0, 8);
 
   runButton.addEventListener('click', async () => {
+    const example = info.examples.find(candidate => candidate.id === activeExampleId);
+    if (!example) {
+      return;
+    }
     runButton.disabled = true;
-    runStatus.textContent = 'Compiling';
+    runStatus.textContent = `Running ${example.title}`;
     output.textContent = '';
     const files = Object.fromEntries(
-      info.files.map(file => [file.path, views.get(file.uri)?.state.doc.toString() ?? file.source]),
+      example.files.map(file => [file.path, views.get(file.uri)?.state.doc.toString() ?? file.source]),
     );
-    const result = await runCode(files);
+    const result = await runCode(example.id, files);
     output.textContent = result.output;
     runStatus.textContent = result.success ? 'Finished' : 'Failed';
     runStatus.dataset.state = result.success ? 'ready' : 'error';
@@ -389,13 +482,17 @@ const main = async () => {
   });
 
   resetButton.addEventListener('click', () => {
-    localStorage.removeItem(STORAGE_KEY);
-    info.files.forEach(file => {
+    const example = info.examples.find(candidate => candidate.id === activeExampleId);
+    if (!example) {
+      return;
+    }
+    example.files.forEach(file => {
       const view = views.get(file.uri);
       view?.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: file.source } });
     });
-    markdownView.dispatch({
-      changes: { from: 0, to: markdownView.state.doc.length, insert: DEFAULT_GUIDE },
+    const markdownView = markdownViews.get(example.id);
+    markdownView?.dispatch({
+      changes: { from: 0, to: markdownView.state.doc.length, insert: example.guide.source },
     });
   });
 };
