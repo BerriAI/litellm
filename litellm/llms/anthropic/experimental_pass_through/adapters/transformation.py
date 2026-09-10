@@ -1489,8 +1489,9 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_content.insert(0, polyfill_result.compaction_block)
 
         ## extract finish reason
+        openai_finish_reason: Final = response.choices[0].finish_reason if response.choices else "stop"
         translated_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
-            openai_finish_reason=response.choices[0].finish_reason
+            openai_finish_reason=openai_finish_reason
         )
         anthropic_finish_reason: Final = (
             "refusal"

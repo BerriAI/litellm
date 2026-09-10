@@ -26,6 +26,18 @@ def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool
     return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
 
 
+def get_request_team_id(request_kwargs: Mapping[str, object] | None) -> str | None:
+    """The caller's team id, from whichever metadata bucket this surface writes to."""
+    if request_kwargs is None:
+        return None
+    for bucket_name in ("metadata", "litellm_metadata"):
+        bucket = request_kwargs.get(bucket_name)
+        team_id = bucket.get("user_api_key_team_id") if isinstance(bucket, Mapping) else None
+        if isinstance(team_id, str) and team_id:
+            return team_id
+    return None
+
+
 def resolve_model_group_alias(model_group_alias: object, model: str) -> str | None:
     """
     Resolve ``model`` through a ``model_group_alias`` map.
@@ -110,7 +122,7 @@ def filter_team_based_models(
 
     metadata: Final = request_kwargs.get("metadata") or {}
     litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
-    request_team_id: Final = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
+    request_team_id: Final = get_request_team_id(request_kwargs)
     if request_team_id is None and _is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
         requested_model: Final = (
             request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")

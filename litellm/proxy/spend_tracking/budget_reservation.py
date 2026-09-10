@@ -173,6 +173,29 @@ def _raise_counter_budget_exceeded(
     )
 
 
+_UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
+    {
+        "/models",
+        "/v1/models",
+        "/utils/token_counter",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
+    }
+)
+_TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
+_TOKEN_COUNTING_ACTION: Final = "countTokens"
+
+
+def _is_token_counting_route(route: str) -> bool:
+    resource, _, action = route.rsplit("/", 1)[-1].partition(":")
+    return resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
+
+
+def _is_unbilled_route(route: str) -> bool:
+    return route in _UNBILLED_ROUTES or _is_token_counting_route(route)
+
+
 async def reserve_budget_for_request(
     request_body: dict,
     route: str,
@@ -190,14 +213,7 @@ async def reserve_budget_for_request(
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
-    if route in {
-        "/models",
-        "/v1/models",
-        "/utils/token_counter",
-        "/responses/input_tokens",
-        "/v1/responses/input_tokens",
-        "/openai/v1/responses/input_tokens",
-    }:
+    if _is_unbilled_route(route):
         return None
     if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None

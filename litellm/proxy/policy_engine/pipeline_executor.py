@@ -78,6 +78,10 @@ def _rewrote(sent: tuple[object, ...] | None, returned: tuple[object, ...] | Non
     return sent is not None and returned is not None and returned != sent
 
 
+def _changed_count(sent: tuple[object, ...] | None, returned: tuple[object, ...] | None) -> bool:
+    return sent is not None and returned is not None and len(returned) != len(sent)
+
+
 _GuardrailMethodT = TypeVar("_GuardrailMethodT", bound=Callable[..., object])
 
 
@@ -89,10 +93,11 @@ def _logged_by_inner_guardrail(method: _GuardrailMethodT) -> _GuardrailMethodT:
 class _StreamRewriteObserver(CustomGuardrail):
     """Stand-in handed to the endpoint translation in place of a streaming pipeline step's
     guardrail. It records whether the guardrail returned different output than it was given,
-    which for guardrails like Bedrock's ANONYMIZED action is only known at runtime. Text
-    rewrites are deliverable on translations that write them back across the buffered chunks
-    (``delivers_ended_stream_text_rewrites``); tool-call rewrites and text rewrites on any
-    other translation are discarded by the executor, which releases the original chunks.
+    which for guardrails like Bedrock's ANONYMIZED action is only known at runtime. Text and
+    tool-call rewrites are deliverable on translations that write them back across the
+    buffered chunks (``delivers_ended_stream_rewrites``); rewrites on any other translation,
+    and a rewrite that drops or adds a tool call on any translation, are discarded by the
+    executor, which releases the original chunks.
     The inner guardrail's ``apply_guardrail`` already records the guardrail information
     and span, so the observer's stays out of ``log_guardrail_information``."""
 
@@ -101,6 +106,7 @@ class _StreamRewriteObserver(CustomGuardrail):
         self.inner: Final = inner
         self.rewrote_texts = False
         self.rewrote_tool_calls = False
+        self.changed_tool_call_count = False
 
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
@@ -118,9 +124,11 @@ class _StreamRewriteObserver(CustomGuardrail):
         outputs: Final = await self.inner.apply_guardrail(
             inputs=inputs, request_data=request_data, input_type=input_type, logging_obj=logging_obj
         )
+        returned_tool_shapes: Final = _tool_call_shapes(outputs.get("tool_calls"))
         self.rewrote_texts = self.rewrote_texts or _rewrote(sent_texts, _text_snapshot(outputs.get("texts")))
-        self.rewrote_tool_calls = self.rewrote_tool_calls or _rewrote(
-            sent_tool_shapes, _tool_call_shapes(outputs.get("tool_calls"))
+        self.rewrote_tool_calls = self.rewrote_tool_calls or _rewrote(sent_tool_shapes, returned_tool_shapes)
+        self.changed_tool_call_count = self.changed_tool_call_count or _changed_count(
+            sent_tool_shapes, returned_tool_shapes
         )
         return outputs
 
@@ -296,13 +304,13 @@ class PipelineExecutor:
         litellm_logging_obj: "LiteLLMLoggingObj | None",
     ) -> None:
         """Run one streaming post_call step through the endpoint translation, delivering
-        text rewrites on translations that support ended-stream write-back. A rewrite that
-        cannot reach the client yet (a tool-call rewrite, a text rewrite on a translation
-        without write-back, or one the translation refused with
-        ``UndeliverableStreamRewrite``) is discarded: the buffered chunks go back to the
-        originals and the step passes, so the client gets the stream the merge base sent."""
+        text and tool-call rewrites on translations that support ended-stream write-back. A
+        rewrite that cannot reach the client yet (one on a translation without write-back, or
+        one the translation refused with ``UndeliverableStreamRewrite``) is discarded: the
+        buffered chunks go back to the originals and the step passes, so the client gets the
+        stream the merge base sent."""
         observer: Final = _StreamRewriteObserver(callback)
-        deliver_rewrites: Final = type(endpoint_translation).delivers_ended_stream_text_rewrites
+        deliver_rewrites: Final = type(endpoint_translation).delivers_ended_stream_rewrites
         originals: Final = copy.deepcopy(streaming_chunks)
         try:
             if deliver_rewrites:
@@ -325,7 +333,9 @@ class PipelineExecutor:
         except UndeliverableStreamRewrite:
             _release_original_chunks(step.guardrail, streaming_chunks, originals)
         else:
-            if observer.rewrote_tool_calls or (observer.rewrote_texts and not deliver_rewrites):
+            if observer.changed_tool_call_count or (
+                not deliver_rewrites and (observer.rewrote_texts or observer.rewrote_tool_calls)
+            ):
                 _release_original_chunks(step.guardrail, streaming_chunks, originals)
         if not callback.records_own_guardrail_information:
             add_guardrail_to_applied_guardrails_header(request_data=hook_input, guardrail_name=step.guardrail)

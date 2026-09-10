@@ -16,6 +16,7 @@ from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler
 )
 
 MESSAGES = [{"role": "user", "content": "hello"}]
+CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
 
 RESPONSES_SSE_BODY = (
     b"event: response.created\n"
@@ -30,7 +31,19 @@ RESPONSES_SSE_BODY = (
 )
 
 
-def test_build_responses_kwargs_derives_prompt_cache_key_from_user_id():
+def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():
+    responses_kwargs = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        metadata={"user_id": CLAUDE_CODE_USER_ID},
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+    assert responses_kwargs["user"] == CLAUDE_CODE_USER_ID[:64]
+    assert responses_kwargs["prompt_cache_key"] == "session-abc"
+
+
+def test_build_responses_kwargs_sets_no_prompt_cache_key_for_plain_user_id():
     responses_kwargs = _build_responses_kwargs(
         max_tokens=1024,
         messages=MESSAGES,
@@ -39,7 +52,7 @@ def test_build_responses_kwargs_derives_prompt_cache_key_from_user_id():
         extra_kwargs={"custom_llm_provider": "openai"},
     )
     assert responses_kwargs["user"] == "session-abc"
-    assert responses_kwargs["prompt_cache_key"] == "session-abc"
+    assert "prompt_cache_key" not in responses_kwargs
 
 
 def test_build_responses_kwargs_prefers_explicit_prompt_cache_key_over_derived():
@@ -47,10 +60,10 @@ def test_build_responses_kwargs_prefers_explicit_prompt_cache_key_over_derived()
         max_tokens=1024,
         messages=MESSAGES,
         model="openai/gpt-5.6-luna",
-        metadata={"user_id": "session-abc"},
+        metadata={"user_id": CLAUDE_CODE_USER_ID},
         extra_kwargs={"custom_llm_provider": "openai", "prompt_cache_key": "explicit-key"},
     )
-    assert responses_kwargs["user"] == "session-abc"
+    assert responses_kwargs["user"] == CLAUDE_CODE_USER_ID[:64]
     assert responses_kwargs["prompt_cache_key"] == "explicit-key"
 
 

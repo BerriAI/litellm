@@ -2,7 +2,9 @@
 
 import contextvars
 import time
+from base64 import b64encode
 from collections.abc import Mapping
+from functools import reduce
 from types import MappingProxyType
 
 import pytest
@@ -49,8 +51,11 @@ from litellm.integrations.otel.presets.destinations import (
     destination_for,
 )
 from litellm.integrations.otel.presets.langfuse import langfuse_preset
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations
+from litellm.proxy._types import AddTeamCallback, UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import (
+    convert_key_logging_metadata_to_callback,
+    resolve_tenant_otel_destinations,
+)
 from litellm.types.utils import StandardCallbackDynamicParams
 
 LANGFUSE_DEST = OtelDestination(
@@ -1821,6 +1826,26 @@ class TestTenantConfigAgreement:
         destinations = resolve_tenant_otel_destinations(auth)
 
         assert [d.endpoint for d in destinations] == ["http://key.local/api/public/otel"]
+
+    def test_a_failure_entry_still_wins_the_merge_next_to_a_success_entry(self):
+        entries = [
+            {**self._entry("http://team.local"), "callback_type": "success"},
+            {
+                **self._entry("http://key.local", langfuse_public_key="pk-failure", langfuse_secret_key="sk-failure"),
+                "callback_type": "failure",
+            },
+        ]
+        runtime = reduce(
+            lambda merged, entry: convert_key_logging_metadata_to_callback(AddTeamCallback(**entry), merged),
+            entries,
+            None,
+        )
+
+        destinations = resolve_tenant_otel_destinations(UserAPIKeyAuth(team_metadata={"logging": entries}))
+
+        assert runtime.callback_vars["langfuse_host"] == "http://key.local"
+        assert [d.endpoint for d in destinations] == ["http://key.local/api/public/otel"]
+        assert destinations[0].headers["Authorization"] == f"Basic {b64encode(b'pk-failure:sk-failure').decode()}"
 
     @pytest.fixture
     def premium(self, monkeypatch):

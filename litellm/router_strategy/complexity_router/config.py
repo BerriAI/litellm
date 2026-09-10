@@ -29,6 +29,7 @@ from .tier_predictor import TrainedTierArtifact
 class ComplexityTier(str, Enum):
     """Complexity tiers for routing decisions."""
 
+    NON_REASONING = "NON_REASONING"
     SIMPLE = "SIMPLE"
     MEDIUM = "MEDIUM"
     COMPLEX = "COMPLEX"
@@ -61,6 +62,16 @@ TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.COMPLEX,
     ComplexityTier.REASONING,
 )
+
+NON_REASONING_TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
+    ComplexityTier.NON_REASONING,
+    *TIER_SEVERITY_ORDER,
+)
+
+
+def tier_severity_order(non_reasoning_enabled: bool) -> tuple[ComplexityTier, ...]:
+    return NON_REASONING_TIER_SEVERITY_ORDER if non_reasoning_enabled else TIER_SEVERITY_ORDER
+
 
 DEFAULT_TIER_DISTANCE_PENALTY: Final[float] = 0.5
 
@@ -142,6 +153,9 @@ def normalize_classification_examples(value: str | None) -> str | None:
     return _normalize_operator_section(value, "classification_examples", MAX_CLASSIFICATION_EXAMPLES_CHARS)
 
 
+_BUILT_IN_TIER_NAMES: Final[str] = ", ".join(ComplexityTier.__members__)
+
+
 class TierDefinition(BaseModel):
     """An operator-defined tier: the name the LLM classifier must return and its rubric description."""
 
@@ -152,7 +166,7 @@ class TierDefinition(BaseModel):
         default=None,
         description=(
             "What belongs in this tier; rendered as this tier's bullet in the classifier rubric. "
-            "Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which "
+            f"Required unless the name is a built-in tier ({_BUILT_IN_TIER_NAMES}), which "
             "inherits the built-in criteria when omitted"
         ),
     )
@@ -174,7 +188,7 @@ class TierDefinition(BaseModel):
         if description is None and name.upper() not in ComplexityTier.__members__:
             raise ValueError(
                 f"tier_definitions entry {name!r} must have a description: only the built-in tiers "
-                "(SIMPLE, MEDIUM, COMPLEX, REASONING) carry one the rubric can inherit"
+                f"({_BUILT_IN_TIER_NAMES}) carry one the rubric can inherit"
             )
         rendered_on_one_line: Final = (name, description or "")
         if any("\n" in part or "\r" in part for part in rendered_on_one_line):
@@ -709,6 +723,20 @@ class ComplexityRouterConfig(BaseModel):
     )
     tier_model_configs: Mapping[str, tuple[ComplexityTierModel, ...]] = Field(
         default_factory=dict,
+    )
+
+    enable_non_reasoning_tier: bool = Field(
+        default=False,
+        description=(
+            "Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic "
+            "that relays or reformats information rather than reasoning about it. Off by default: "
+            "turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's "
+            "rubric, and a value the classifier may return, all of which move tier decisions and "
+            "spend on an already-deployed router. Requires an LLM classifier or a custom classifier "
+            "plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` "
+            "under the NON_REASONING key. Escalation still walks up from it, and it is never the "
+            "savings baseline or a `heuristic_v2` prediction."
+        ),
     )
 
     tier_definitions: tuple[TierDefinition, ...] | None = Field(
@@ -1514,11 +1542,15 @@ class ComplexityRouterConfig(BaseModel):
         which still makes it a dependency on every one of those requests."""
         return self.classifier_type in LLM_CLASSIFIER_TYPES
 
+    def active_tier_severity_order(self) -> tuple[ComplexityTier, ...]:
+        """This router's built-in ladder, ascending; not meaningful for a custom tier set."""
+        return tier_severity_order(self.enable_non_reasoning_tier)
+
     def tier_names(self) -> tuple[str, ...]:
         """The active tier names: the defined names, or the built-in set in severity order."""
         if self.tier_definitions is not None:
             return tuple(definition.name for definition in self.tier_definitions)
-        return tuple(tier.value for tier in TIER_SEVERITY_ORDER)
+        return tuple(tier.value for tier in self.active_tier_severity_order())
 
     def classifier_wire_labels(self) -> tuple[str, ...]:
         """The tier names the classifier is told to emit: defined names, or the display labels."""
@@ -1611,6 +1643,36 @@ class ComplexityRouterConfig(BaseModel):
         )
 
     @model_validator(mode="after")
+    def _validate_non_reasoning_tier(self) -> "ComplexityRouterConfig":
+        """Require a classifier that can emit the opt-in tier and a model to route it to."""
+        non_reasoning_key: Final = ComplexityTier.NON_REASONING.value
+        if not self.enable_non_reasoning_tier:
+            if not self.has_custom_tiers and non_reasoning_key in self.tiers:
+                raise ValueError(
+                    f"tiers names {non_reasoning_key} but enable_non_reasoning_tier is False, so no request "
+                    "can route there; set enable_non_reasoning_tier: true or drop the tier"
+                )
+            return self
+        if self.has_custom_tiers:
+            raise ValueError(
+                "enable_non_reasoning_tier cannot be combined with tier_definitions: a custom tier set "
+                f"replaces the built-in ladder, so name a tier {non_reasoning_key} in tier_definitions instead"
+            )
+        if self.classifier_type not in ("llm", "custom"):
+            raise ValueError(
+                f"enable_non_reasoning_tier requires classifier_type 'llm' or 'custom', got "
+                f"{self.classifier_type!r}: the heuristic scorers only produce the four tiers from SIMPLE up, "
+                f"so nothing would ever classify as {non_reasoning_key}"
+            )
+        if not self.tiers.get(non_reasoning_key):
+            raise ValueError(
+                f"enable_non_reasoning_tier requires tiers to map {non_reasoning_key} to at least one model: "
+                "the tier exists to send operational traffic somewhere cheaper, and an unconfigured tier "
+                "would fall through to the default model"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_tier_definitions(self) -> "ComplexityRouterConfig":
         if self.tier_definitions is None:
             if self.fallback_tier is not None:
@@ -1632,7 +1694,7 @@ class ComplexityRouterConfig(BaseModel):
         if self.classifier_type in ("heuristic", "heuristic_v2", "heuristic_first", "hybrid"):
             raise ValueError(
                 "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
-                "produces the four built-in tiers, as does heuristic_v2"
+                "produces the built-in tiers from SIMPLE up, as does heuristic_v2"
             )
         conflicts: Final = self._tier_definition_conflicts()
         if conflicts:
@@ -1786,7 +1848,7 @@ class ComplexityRouterConfig(BaseModel):
 
     def labeled_tiers(self) -> tuple[tuple[ComplexityTier, str], ...]:
         """Every tier paired with its display name, in ascending severity order."""
-        return tuple((tier, self.tier_label(tier)) for tier in TIER_SEVERITY_ORDER)
+        return tuple((tier, self.tier_label(tier)) for tier in self.active_tier_severity_order())
 
     def tier_for_label(self, label: str) -> ComplexityTier | None:
         """Resolve a display name back to its tier, case-insensitively, then canonical names."""
@@ -1794,7 +1856,7 @@ class ComplexityRouterConfig(BaseModel):
         labeled: Final = self.labeled_tiers()
         return next(
             (tier for tier, tier_label in labeled if tier_label.casefold() == folded),
-            next((tier for tier in TIER_SEVERITY_ORDER if tier.value.casefold() == folded), None),
+            next((tier for tier, _ in labeled if tier.value.casefold() == folded), None),
         )
 
 
