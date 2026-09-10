@@ -5049,6 +5049,41 @@ def test_get_deployment_model_info_base_model_merge_priority():
     print("✓ Base model merge priority test passed!")
 
 
+@pytest.mark.parametrize(
+    "model, litellm_params, endpoint, expected",
+    [
+        (
+            "gpt",
+            {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://my-resource.services.ai.azure.com", "api_key": "key"},
+            "gpt/openai/deployments/gpt-5.4-mini/chat/completions",
+            "gpt-5.4-mini/openai/deployments/gpt-5.4-mini/chat/completions",
+        ),
+        (
+            "aws/anthropic/bedrock-claude",
+            {"model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"},
+            "/model/aws/anthropic/bedrock-claude/invoke",
+            "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
+        ),
+        (
+            "my-gemini",
+            {"model": "gemini/gemini-3.1-pro-preview", "api_key": "key"},
+            "v1beta/models/my-gemini:streamGenerateContent",
+            "v1beta/models/gemini-3.1-pro-preview:streamGenerateContent",
+        ),
+    ],
+)
+def test_add_deployment_model_to_endpoint_rewrites_the_model_group_only_as_whole_path_segments(
+    model, litellm_params, endpoint, expected
+):
+    router = litellm.Router(model_list=[{"model_name": model, "litellm_params": litellm_params}])
+
+    result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
+        kwargs={"endpoint": endpoint}, model=model, model_name=litellm_params["model"]
+    )
+
+    assert result["endpoint"] == expected
+
+
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
     """
     Test that _add_deployment_model_to_endpoint_for_llm_passthrough_route correctly strips bedrock provider prefix
@@ -14135,6 +14170,49 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
             await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
     assert upstream.call_count == expected_upstream_calls
+
+
+@pytest.mark.asyncio
+async def test_generic_call_keeps_the_deployment_name_of_an_azure_ai_model_on_an_azure_openai_host(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "aoai-gpt",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": "https://my-resource.openai.azure.com",
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream = respx_mock.post(host="my-resource.openai.azure.com", path__regex=r"^/openai/.*responses$").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "resp_1",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": "gpt-5.4-mini",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_1",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                        }
+                    ],
+                },
+            )
+        )
+        await router.aresponses(model="aoai-gpt", input="hi")
+
+    assert json.loads(upstream.calls.last.request.content)["model"] == "gpt-5.4-mini"
 
 
 @pytest.mark.asyncio

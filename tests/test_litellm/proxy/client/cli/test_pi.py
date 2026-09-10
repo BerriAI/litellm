@@ -13,6 +13,7 @@ from litellm.proxy.client.cli.commands.pi import (
     PiSyncError,
     fetch_model_ids,
     fetch_model_limits,
+    fetch_model_listing,
     models_json_path,
     provider_block,
     sync_models_json,
@@ -49,6 +50,43 @@ class TestFetchModelIds:
         assert fetch_model_ids("http://localhost:4000/", "sk-key", get=fake_get) == ("m-b", "m-a")
         assert captured["url"] == "http://localhost:4000/v1/models"
         assert captured["headers"] == {"Authorization": "Bearer sk-key"}
+
+    def test_returns_rows_with_optional_source_model_and_dedups_identical_rows(self):
+        result = fetch_model_listing(
+            "http://localhost:4000",
+            "sk-key",
+            get=lambda *a, **k: _FakeResponse(
+                200,
+                {"data": [{"id": "emitted", "source_model": "source"}, {"id": "emitted", "source_model": "source"}]},
+            ),
+        )
+        assert not isinstance(result, PiSyncError)
+        assert tuple((model.id, model.source_model) for model in result) == (("emitted", "source"),)
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"id": ""},
+            {"id": "emitted", "source_model": ""},
+            {"id": "emitted", "source_model": 1},
+        ],
+    )
+    def test_rejects_invalid_model_identity(self, entry):
+        result = fetch_model_listing(
+            "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(200, {"data": [entry]})
+        )
+        assert isinstance(result, PiSyncError) and result.kind is ListingFailure.BAD_BODY
+
+    def test_rejects_conflicting_emitted_id_mappings(self):
+        result = fetch_model_listing(
+            "http://localhost:4000",
+            "sk-key",
+            get=lambda *a, **k: _FakeResponse(
+                200,
+                {"data": [{"id": "emitted", "source_model": "one"}, {"id": "emitted", "source_model": "two"}]},
+            ),
+        )
+        assert isinstance(result, PiSyncError) and result.kind is ListingFailure.BAD_BODY
 
     def test_network_error_is_a_value(self):
         def boom(*a, **k):
