@@ -5,16 +5,18 @@ This module provides guardrail translation support for OpenAI's text completion 
 The handler processes the 'prompt' parameter for guardrails.
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation, StreamTransformSink
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
+from litellm.types.utils import GenericGuardrailAPIInputs, TextChoices, TextCompletionResponse
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import TextCompletionResponse
+    from litellm.proxy._types import UserAPIKeyAuth
 
 
 class OpenAITextCompletionHandler(BaseTranslation):
@@ -29,6 +31,9 @@ class OpenAITextCompletionHandler(BaseTranslation):
     - A single string
     - A list of strings (for batch completions)
     """
+
+    delivers_ended_stream_rewrites = True
+    assembles_streamed_response = True
 
     async def process_input_messages(
         self,
@@ -193,3 +198,80 @@ class OpenAITextCompletionHandler(BaseTranslation):
                     )
 
         return response
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far: list[TextCompletionResponse],  # mutable-ok: rewrites the caller's buffered chunks in place
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
+        request_data: dict | None = None,
+        stream_transform_sink: StreamTransformSink | None = None,
+        deliver_ended_stream_rewrites: bool = False,
+    ) -> list[TextCompletionResponse]:
+        if not self._check_streaming_has_ended(responses_so_far):
+            return responses_so_far
+        assembled: Final = self._assemble_ended_stream(responses_so_far)
+        pre_guardrail_texts: Final = tuple(choice.text for choice in assembled.choices)
+        await self.process_output_response(
+            response=assembled,
+            guardrail_to_apply=guardrail_to_apply,
+            litellm_logging_obj=litellm_logging_obj,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        )
+        if not deliver_ended_stream_rewrites:
+            return responses_so_far
+        for choice, pre_guardrail_text in zip(assembled.choices, pre_guardrail_texts):
+            if choice.text != pre_guardrail_text:
+                self._write_choice_text(responses_so_far, choice.index, choice.text)
+        return responses_so_far
+
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
+        return any(
+            stream_item_field(choice, "finish_reason") is not None
+            for item in responses_so_far
+            for choice in stream_item_items(item, "choices")
+        )
+
+    @staticmethod
+    def _assemble_ended_stream(responses_so_far: Sequence[TextCompletionResponse]) -> TextCompletionResponse:
+        first: Final = responses_so_far[0]
+        streamed_choices: Final = tuple(choice for item in responses_so_far for choice in item.choices)
+        choice_indices: Final = tuple(dict.fromkeys(choice.index for choice in streamed_choices))
+        assembled_choices: Final = [  # mutable-ok: TextCompletionResponse only accepts a list of choices
+            TextChoices(
+                index=index,
+                text="".join(
+                    choice.text for choice in streamed_choices if choice.index == index and isinstance(choice.text, str)
+                ),
+                finish_reason=next(
+                    (
+                        choice.finish_reason
+                        for choice in reversed(streamed_choices)
+                        if choice.index == index and choice.finish_reason is not None
+                    ),
+                    None,
+                ),
+            )
+            for index in choice_indices
+        ]
+        return TextCompletionResponse(
+            id=first.id,
+            created=first.created,
+            model=first.model,
+            object="text_completion",
+            choices=assembled_choices,
+            usage=next((item.usage for item in reversed(responses_so_far) if item.usage is not None), None),
+        )
+
+    @staticmethod
+    def _write_choice_text(responses_so_far: Sequence[TextCompletionResponse], choice_index: int, text: str) -> None:
+        carriers: Final = tuple(
+            choice
+            for item in responses_so_far
+            for choice in item.choices
+            if choice.index == choice_index and isinstance(choice.text, str)
+        )
+        for position, carrier in enumerate(carriers):
+            carrier.text = text if position == 0 else ""
