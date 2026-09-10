@@ -3,9 +3,15 @@ from types import SimpleNamespace
 import pytest
 
 from litellm.exceptions import BadRequestError
+from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
     VertexSearchAPIVectorStoreConfig,
 )
+
+
+def test_vector_store_httpx_client_params():
+    assert VertexSearchAPIVectorStoreConfig().get_httpx_client_params() == {"http2": True}
+    assert BaseVectorStoreConfig().get_httpx_client_params() == {}
 
 
 def test_should_encode_vertex_search_vector_store_id_in_complete_url():

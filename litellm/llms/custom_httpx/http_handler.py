@@ -566,17 +566,20 @@ class AsyncHTTPHandler:
         client_alias: str | None = None,  # name for client in logs
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
+        http2: bool = False,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
         self.ssl_verify = ssl_verify
         self.shared_session = shared_session
+        self.http2 = http2
         self._owns_client = True
         self._client = self.create_client(
             timeout=timeout,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
             shared_session=shared_session,
+            http2=http2,
         )
         self.client_alias = client_alias
 
@@ -588,6 +591,7 @@ class AsyncHTTPHandler:
                 event_hooks=self.event_hooks,
                 ssl_verify=self.ssl_verify,
                 shared_session=self.shared_session,
+                http2=self.http2,
             )
         return self._client
 
@@ -602,6 +606,7 @@ class AsyncHTTPHandler:
         event_hooks: Mapping[str, list[Callable[..., object]]] | None,
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
+        http2: bool = False,
     ) -> httpx.AsyncClient:
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration(ssl_verify)
@@ -614,10 +619,19 @@ class AsyncHTTPHandler:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
 
-        transport: Final = AsyncHTTPHandler._create_async_transport(
-            ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
-            ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
-            shared_session=shared_session,
+        transport: Final = (
+            httpx.AsyncHTTPTransport(
+                http2=True,
+                verify=ssl_config,
+                cert=cert,
+                local_address=_IPV4_LOCAL_ADDRESS if litellm.force_ipv4 else None,
+            )
+            if http2
+            else AsyncHTTPHandler._create_async_transport(
+                ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
+                ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+                shared_session=shared_session,
+            )
         )
 
         # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
@@ -625,7 +639,7 @@ class AsyncHTTPHandler:
 
         return httpx.AsyncClient(
             transport=transport,
-            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert),
+            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert, http2=http2),
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
@@ -1229,11 +1243,12 @@ class AsyncHTTPHandler:
         transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | None,
         verify: VerifyTypes,
         cert: CertTypes | None,
+        http2: bool = False,
     ) -> Mapping[str, AsyncHTTPTransport | None] | None:
         if not isinstance(transport, AsyncHTTPTransport):
             return None
         return _environment_proxy_mounts(
-            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert)
+            lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2)
         )
 
 
@@ -1246,10 +1261,12 @@ class HTTPHandler:
         ssl_verify: bool | str | None = None,
         disable_default_headers: bool
         | None = False,  # arize phoenix returns different API responses when user agent header in request
+        http2: bool = False,
     ):
         self.timeout = timeout
         self.ssl_verify = ssl_verify
         self.disable_default_headers = disable_default_headers
+        self.http2 = http2
         self._owns_client = client is None
         self._heal_lock = threading.Lock()
         self._client = self.create_client() if client is None else client
@@ -1269,6 +1286,7 @@ class HTTPHandler:
         return httpx.Client(
             transport=self._create_sync_transport(),
             mounts=self._create_sync_proxy_mounts(verify=ssl_config, cert=cert),
+            http2=self.http2,
             timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
             verify=ssl_config,
             cert=cert,
@@ -1549,7 +1567,7 @@ class HTTPHandler:
         Some users have seen httpx ConnectionError when using ipv6 - forcing ipv4 resolves the issue for them
         """
         if litellm.force_ipv4:
-            return HTTPTransport(local_address=_IPV4_LOCAL_ADDRESS)
+            return HTTPTransport(http2=self.http2, local_address=_IPV4_LOCAL_ADDRESS)
         else:
             return getattr(litellm, "sync_transport", None)
 

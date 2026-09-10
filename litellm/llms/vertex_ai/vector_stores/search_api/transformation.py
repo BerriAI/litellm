@@ -1,4 +1,6 @@
+import importlib.util
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
@@ -50,6 +52,8 @@ VERTEX_SEARCH_TARGET_SELECTING_FIELDS: Final = frozenset(
 VERTEX_SEARCH_DATASTORE_EXTRA_BODY_FIELDS: Final = frozenset(VertexSearchDataStoreExtraBody.__annotations__)
 
 VERTEX_SEARCH_ENGINE_EXTRA_BODY_FIELDS: Final = frozenset(VertexSearchEngineExtraBody.__annotations__)
+
+_H2_AVAILABLE: Final = importlib.util.find_spec("h2") is not None
 
 
 class VertexSearchSnippet(TypedDict, total=False):
@@ -107,6 +111,11 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
     def __init__(self):
         super().__init__()
+
+    def get_httpx_client_params(self) -> Mapping[str, object]:
+        if _H2_AVAILABLE:
+            return MappingProxyType({"http2": True})
+        return MappingProxyType({})
 
     @staticmethod
     def get_supported_extra_body_fields(is_engine: bool = False) -> frozenset[str]:
