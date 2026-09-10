@@ -155,7 +155,6 @@ class CheckBatchCost:
         metadata: Dict[str, Any] = {
             "user_api_key_user_id": job.created_by,
             "user_api_key": api_key,
-            "user_api_key_hash": api_key,
             "user_api_key_team_id": team_id,
             **(await self._get_user_info(batch_id, job.created_by)),
         }

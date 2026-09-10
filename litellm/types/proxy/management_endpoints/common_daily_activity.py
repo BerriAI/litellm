@@ -43,7 +43,6 @@ class KeyMetadata(BaseModel):
 
     key_alias: str | None = None
     team_id: str | None = None
-    user_email: str | None = None
 
 
 class KeyMetricWithMetadata(MetricBase):
