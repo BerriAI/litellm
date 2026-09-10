@@ -1318,6 +1318,7 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
                         mock_user_api_key_dict = MagicMock()
                         mock_user_api_key_dict.api_key = "test-api-key"
                         mock_user_api_key_dict.key_alias = "test-alias"
+                        mock_user_api_key_dict.is_session_token = False
                         mock_user_api_key_dict.user_email = "test@example.com"
                         mock_user_api_key_dict.user_id = "test-user-id"
                         mock_user_api_key_dict.team_id = "test-team-id"
