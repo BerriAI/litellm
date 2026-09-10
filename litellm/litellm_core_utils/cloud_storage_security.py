@@ -24,8 +24,12 @@ _MAPPING_PROXY_TYPE: Final[type] = type(MappingProxyType({}))
 MAX_FILE_ID_DECODE_PASSES: Final = 8
 
 
+def _unquote_once(current: str, _: str) -> str:
+    return unquote(current)
+
+
 def _decodings(value: str) -> tuple[str, ...]:
-    return tuple(accumulate(repeat(value, MAX_FILE_ID_DECODE_PASSES + 2), lambda current, _: unquote(current)))
+    return tuple(accumulate(repeat(value, MAX_FILE_ID_DECODE_PASSES + 2), _unquote_once))
 
 
 def is_managed_cloud_storage_uri(file_id: str) -> bool:
