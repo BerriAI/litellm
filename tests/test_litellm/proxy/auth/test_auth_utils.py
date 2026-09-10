@@ -31,6 +31,20 @@ from litellm.proxy.auth.auth_utils import (
 )
 
 
+def test_document_intelligence_rejects_request_endpoint_without_credentials() -> None:
+    with pytest.raises(ValueError, match="api_base is not allowed in request body"):
+        is_request_body_safe(
+            request_body={
+                "model": "azure_ai/doc-intelligence/prebuilt-layout",
+                "api_base": "https://attacker.example.com",
+                "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
+            },
+            general_settings={},
+            llm_router=None,
+            model="azure_ai/doc-intelligence/prebuilt-layout",
+        )
+
+
 class TestCustomAuthCommonChecksWarning:
     """custom_auth_common_checks_warning only warns when custom auth is configured
     and the common-checks opt-in is off, since that is the only state where

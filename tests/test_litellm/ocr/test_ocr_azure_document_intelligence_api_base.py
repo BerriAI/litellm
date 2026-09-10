@@ -1,12 +1,5 @@
-"""
-Regression tests for Azure Document Intelligence connection resolution in OCR.
-
-`azure_ai` exposes two OCR services on one provider; the `doc-intelligence`
-sub-route must resolve to `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`, not to the
-generic `AZURE_AI_API_BASE` fallback that `get_llm_provider` injects. These tests
-pin that routing and guard the backwards-compatibility contract that an explicitly
-supplied connection parameters are always honoured.
-"""
+from inspect import isawaitable
+from typing import Final
 
 import pytest
 
@@ -14,7 +7,7 @@ from litellm.llms.azure_ai.ocr.common_utils import (
     is_azure_document_intelligence_model,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.ocr.main import _prepare_ocr_request, _rust_bridge_api_base
+from litellm.ocr.main import _prepare_ocr_request, _PreparedOCRRequest, _rust_bridge_api_base
 
 _DOC = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
 _DOC_INTELLIGENCE_ENDPOINT = "https://di.cognitiveservices.azure.com"
@@ -38,7 +31,7 @@ def _resolve_secret(name: str) -> str | None:
     }.get(name)
 
 
-def _prepare(model: str, api_base: str | None, api_key: str | None = "test-key"):
+def _prepare(model: str, api_base: str | None = None, *, api_key: str | None = None) -> _PreparedOCRRequest:
     return _prepare_ocr_request(
         model=model,
         document=dict(_DOC),
@@ -64,8 +57,6 @@ class TestIsAzureDocumentIntelligenceModel:
 
 class TestDocIntelligenceApiBaseResolution:
     def test_generic_azure_ai_base_does_not_hijack_doc_intelligence(self, monkeypatch):
-        """Without an explicit api_base, the AZURE_AI_API_BASE fallback must not
-        overwrite the endpoint, so it resolves to the Document Intelligence one."""
         monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
         monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", raising=False)
 
@@ -75,7 +66,6 @@ class TestDocIntelligenceApiBaseResolution:
         assert _rust_bridge_api_base(prepared, _resolve_secret) == _DOC_INTELLIGENCE_ENDPOINT
 
     def test_explicit_api_base_is_honoured_for_doc_intelligence(self, monkeypatch):
-        """A caller-supplied api_base must always win, even for doc-intelligence."""
         monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
 
         custom = "https://my-di.cognitiveservices.azure.com"
@@ -85,7 +75,6 @@ class TestDocIntelligenceApiBaseResolution:
         assert _rust_bridge_api_base(prepared, _resolve_secret) == custom
 
     def test_generic_azure_ai_base_still_applies_to_mistral_ocr(self, monkeypatch):
-        """Non doc-intelligence azure_ai models keep using AZURE_AI_API_BASE."""
         monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
 
         prepared = _prepare("azure_ai/mistral-document-ai-2505", None)
@@ -94,43 +83,6 @@ class TestDocIntelligenceApiBaseResolution:
 
 
 class TestDocIntelligenceApiKeyResolution:
-    def test_dedicated_key_wins_over_generic_azure_ai_fallback(self, monkeypatch):
-        monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
-        monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", _DOC_INTELLIGENCE_API_KEY)
-        monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", _DOC_INTELLIGENCE_ENDPOINT)
-
-        prepared = _prepare("azure_ai/doc-intelligence/prebuilt-layout", None, api_key=None)
-        headers = prepared.provider_config.validate_environment(
-            headers={},
-            model=prepared.model,
-            api_key=prepared.api_key,
-            api_base=prepared.api_base,
-            litellm_params=prepared.litellm_params,
-        )
-
-        assert headers["Ocp-Apim-Subscription-Key"] == _DOC_INTELLIGENCE_API_KEY
-
-    def test_explicit_key_is_honoured_for_doc_intelligence(self, monkeypatch):
-        monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
-        monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", _DOC_INTELLIGENCE_API_KEY)
-
-        prepared = _prepare("azure_ai/doc-intelligence/prebuilt-layout", None, api_key="explicit-key")
-
-        assert prepared.api_key == "explicit-key"
-
-    def test_explicit_secret_references_are_preserved(self, monkeypatch):
-        monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
-        monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
-
-        prepared = _prepare(
-            "azure_ai/doc-intelligence/prebuilt-layout",
-            "os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT",
-            api_key="os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY",
-        )
-
-        assert prepared.api_key == "os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
-        assert prepared.api_base == "os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"
-
     def test_generic_azure_credentials_are_not_forwarded_to_doc_intelligence(self, monkeypatch):
         monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
         monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
@@ -150,32 +102,41 @@ class TestDocIntelligenceApiKeyResolution:
         assert prepared.api_key == _AZURE_AI_API_KEY
 
 
+@pytest.mark.parametrize("use_async", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize(
+    "api_key, api_base, expected_key, expected_endpoint",
+    (
+        pytest.param(None, None, _DOC_INTELLIGENCE_API_KEY, _DOC_INTELLIGENCE_ENDPOINT, id="environment"),
+        pytest.param(
+            "explicit-key",
+            "https://explicit.example.com",
+            "explicit-key",
+            "https://explicit.example.com",
+            id="explicit",
+        ),
+    ),
+)
 @pytest.mark.asyncio
-async def test_sync_and_async_request_headers_use_document_intelligence_key(monkeypatch):
+async def test_document_intelligence_request_uses_its_own_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    use_async: bool,
+    api_key: str | None,
+    api_base: str | None,
+    expected_key: str,
+    expected_endpoint: str,
+) -> None:
     monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
     monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
     monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", _DOC_INTELLIGENCE_API_KEY)
     monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", _DOC_INTELLIGENCE_ENDPOINT)
-    prepared = _prepare("azure_ai/doc-intelligence/prebuilt-layout", None, api_key=None)
-    logging = _FakeLogging()
-    handler = BaseLLMHTTPHandler()
-
-    sync_headers, _, _, _ = handler._prepare_ocr_request(
+    prepared: Final = _prepare("azure_ai/doc-intelligence/prebuilt-layout", api_base, api_key=api_key)
+    handler: Final = BaseLLMHTTPHandler()
+    prepare_request: Final = handler._async_prepare_ocr_request if use_async else handler._prepare_ocr_request
+    result: Final = prepare_request(
         model=prepared.model,
         document=prepared.document,
         optional_params=prepared.optional_params,
-        logging_obj=logging,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        headers=None,
-        provider_config=prepared.provider_config,
-        litellm_params=prepared.litellm_params,
-    )
-    async_headers, _, _, _ = await handler._async_prepare_ocr_request(
-        model=prepared.model,
-        document=prepared.document,
-        optional_params=prepared.optional_params,
-        logging_obj=logging,
+        logging_obj=_FakeLogging(),
         api_key=prepared.api_key,
         api_base=prepared.api_base,
         headers=None,
@@ -183,5 +144,21 @@ async def test_sync_and_async_request_headers_use_document_intelligence_key(monk
         litellm_params=prepared.litellm_params,
     )
 
-    assert sync_headers["Ocp-Apim-Subscription-Key"] == _DOC_INTELLIGENCE_API_KEY
-    assert async_headers["Ocp-Apim-Subscription-Key"] == _DOC_INTELLIGENCE_API_KEY
+    headers, url, _, _ = await result if isawaitable(result) else result
+
+    assert headers["Ocp-Apim-Subscription-Key"] == expected_key
+    assert url.startswith(f"{expected_endpoint}/documentintelligence/documentModels/prebuilt-layout:analyze?")
+
+
+def test_explicit_secret_references_are_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
+    monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
+
+    prepared: Final = _prepare(
+        "azure_ai/doc-intelligence/prebuilt-layout",
+        "os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT",
+        api_key="os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY",
+    )
+
+    assert prepared.api_key == "os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
+    assert prepared.api_base == "os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"

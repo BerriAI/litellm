@@ -100,10 +100,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         dynamic_api_key: str | None,
         dynamic_api_base: str | None,
     ) -> tuple[str | None, str | None]:
-        return (
-            (dynamic_api_key or api_key) if api_key is not None else None,
-            (dynamic_api_base or api_base) if api_base is not None else None,
-        )
+        explicit_api_key: Final = None if api_key is None else dynamic_api_key or api_key
+        explicit_api_base: Final = None if api_base is None else dynamic_api_base or api_base
+        return explicit_api_key, explicit_api_base
 
     def get_supported_ocr_params(self, model: str) -> list:
         """
