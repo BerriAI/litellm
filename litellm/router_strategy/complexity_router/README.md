@@ -446,7 +446,11 @@ Reasoning markers in the system prompt do **not** trigger the reasoning override
 
 Agent harnesses inject their own context into the conversation as ordinary message text. That text is plumbing, not something a human asked for, so the router strips complete reminder blocks before classifying and picking a tier. A turn that is nothing but a reminder block strips to empty and is skipped, and the router falls back to the last real ask instead
 
-By default a block is anything between `<system-reminder>` and `</system-reminder>`. `reminder_markers` replaces that with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
+By default the router strips complete `<system-reminder>`, `<environment_context>`, `<recommended_plugins>`, `<user_instructions>`, and `<environments_instructions>` blocks. It also strips Codex repository instructions from the fixed heading prefix `# AGENTS.md instructions for ` through `</INSTRUCTIONS>`, regardless of the repository path
+
+The Codex `Message Type: NEW_TASK` wrapper and its delegated-task payload remain available for classification. Cleanup applies to the current ask and quoted prior turns; the routed request retains its original content
+
+`reminder_markers` replaces these defaults with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
 
 ```yaml
 model_list:
@@ -461,7 +465,7 @@ model_list:
             close: "[[SUBAGENT_CONTEXT_END]]"
 ```
 
-Setting `reminder_markers` replaces the built-in `<system-reminder>` pair rather than adding to it, so list that pair too if your harness also emits it. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
+Setting `reminder_markers` replaces all built-in pairs, including the Codex heading pair, so include every default your harness still needs. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
 
 ### Code Detection
 
