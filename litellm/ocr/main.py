@@ -262,12 +262,25 @@ def _rust_bridge_optional_params(
     }
 
 
+def _rust_bridge_api_base(
+    request: _PreparedOCRRequest | rust_ocr_bridge.LiteLLMOcrRequest,
+    resolve_secret: Callable[[str], str | None],
+) -> str | None:
+    if request.api_base is not None:
+        return request.api_base
+    if request.custom_llm_provider == "azure_ai":
+        if is_azure_document_intelligence_model(request.model):
+            return resolve_secret("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
+        return resolve_secret("AZURE_AI_API_BASE")
+    return None
+
+
 def _marshal_rust_ocr_request(
     request: rust_ocr_bridge.LiteLLMOcrRequest,
     resolve_secret: Callable[[str], str | None],
 ) -> rust_ocr_bridge.LiteLLMOcrRequest:
     if not isinstance(request.document, dict):
-        raise ValueError(f"document must be a dict with 'type' and URL/file field, got {type(request.document)}")
+        raise TypeError(f"document must be a dict with 'type' and URL/file field, got {type(request.document)}")
     document: Final = (
         convert_file_document_to_url_document(request.document)
         if request.document.get("type") == "file"
@@ -297,7 +310,7 @@ def _marshal_rust_ocr_request(
         model=request.model,
         document=document,
         api_key=api_key,
-        api_base=request.api_base,
+        api_base=_rust_bridge_api_base(request, resolve_secret),
         timeout=request.timeout if request.timeout is not None else request_timeout,
         custom_llm_provider=request.custom_llm_provider,
         extra_headers=request.extra_headers,
