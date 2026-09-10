@@ -634,6 +634,7 @@ async def _store_per_user_token_server_side(
         server_id=server.server_id,
         access_token=access_token,
         ttl=ttl,
+        identity_binding_proof=identity_binding_proof,
     )
 
 
