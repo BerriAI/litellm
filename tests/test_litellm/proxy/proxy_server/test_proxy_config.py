@@ -2206,15 +2206,7 @@ def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch)
 def test_ProxyConfig_get_model_info_with_id_populates_audit_fields_regardless_of_license(
     monkeypatch, premium_user
 ):
-    """Regression test for https://github.com/BerriAI/litellm/issues/40548
-
-    `created_at` / `updated_at` / `created_by` / `updated_by` come straight
-    off the DB row and must be surfaced on `model_info` whether or not the
-    instance has an Enterprise license. Previously they were only copied
-    over `if premium_user is True`, so on non-premium proxies the Model
-    Management > All Models table always showed "Unknown" / "Unknown date"
-    for every model.
-    """
+    """Audit fields must be surfaced on `model_info` regardless of license. See #40548"""
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
     pc = ProxyConfig()
     model = SimpleNamespace(
@@ -2223,15 +2215,15 @@ def test_ProxyConfig_get_model_info_with_id_populates_audit_fields_regardless_of
         blocked=False,
         created_at="2026-01-01T00:00:00Z",
         updated_at="2026-01-02T00:00:00Z",
-        created_by="malay@example.com",
-        updated_by="malay@example.com",
+        created_by="test-user@example.com",
+        updated_by="test-user@example.com",
     )
     out = pc.get_model_info_with_id(model=model, db_model=True)
     dumped = out.model_dump()
     assert dumped.get("created_at") == "2026-01-01T00:00:00Z"
     assert dumped.get("updated_at") == "2026-01-02T00:00:00Z"
-    assert dumped.get("created_by") == "malay@example.com"
-    assert dumped.get("updated_by") == "malay@example.com"
+    assert dumped.get("created_by") == "test-user@example.com"
+    assert dumped.get("updated_by") == "test-user@example.com"
 
 
 # ---------------------------------------------------------------------------

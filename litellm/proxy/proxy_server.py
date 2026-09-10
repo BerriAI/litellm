@@ -6241,13 +6241,7 @@ class ProxyConfig:
             model.model_info["db_model"] = True
             model.model_info["blocked"] = bool(getattr(model, "blocked", False))
 
-        # NOTE: previously gated behind `premium_user`, which meant that on
-        # any proxy instance without an Enterprise license these fields were
-        # never populated -- the Model Management > All Models UI always
-        # rendered "Unknown" / "Unknown date" for every DB-backed model,
-        # regardless of who created it. This metadata already lives on the
-        # DB row itself (it isn't derived/enterprise-only), so always copy
-        # it over. See https://github.com/BerriAI/litellm/issues/40548
+        # Always copy from the DB row, not gated behind premium_user. See #40548
         model.model_info["created_at"] = getattr(model, "created_at", None)
         model.model_info["updated_at"] = getattr(model, "updated_at", None)
         model.model_info["created_by"] = getattr(model, "created_by", None)
@@ -14262,6 +14256,17 @@ async def model_info_v2(
 
     # Translate `model_name` to the public name for team-scoped rows.
     all_models = [_translate_model_name_for_response(m) for m in all_models]
+
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        all_models = [
+            {**m, "model_info": {**m["model_info"], "created_by": None, "updated_by": None}}
+            if isinstance(m, dict) and isinstance(m.get("model_info"), dict)
+            else m
+            for m in all_models
+        ]
 
     return _paginate_models_response(
         all_models=all_models,
