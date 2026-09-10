@@ -1,6 +1,7 @@
 import { rust } from '@codemirror/lang-rust';
 import {
   languageServerExtensions,
+  jumpToDefinition,
   LSPClient,
   LSPPlugin,
   Workspace,
@@ -108,6 +109,24 @@ const runStatus = requireElement<HTMLSpanElement>('run-status');
 const output = requireElement<HTMLPreElement>('output');
 const editorsParent = requireElement<HTMLDivElement>('editors');
 const fileNav = requireElement<HTMLElement>('file-nav');
+
+const commandClickDefinition = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    if ((!event.metaKey && !event.ctrlKey) || event.button !== 0) {
+      return false;
+    }
+    const position = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (position === null) {
+      return false;
+    }
+    view.dispatch({ selection: { anchor: position } });
+    const handled = jumpToDefinition(view);
+    if (handled) {
+      event.preventDefault();
+    }
+    return handled;
+  },
+});
 
 const connectTransport = (url: string): Promise<Transport> =>
   new Promise((resolve, reject) => {
@@ -229,6 +248,7 @@ const main = async () => {
         rust(),
         oneDark,
         client.plugin(file.uri, 'rust'),
+        commandClickDefinition,
         EditorView.lineWrapping,
         EditorView.updateListener.of(update => {
           if (!update.docChanged) {
