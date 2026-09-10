@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Final
 
 from httpx import URL, QueryParams
 from pydantic import TypeAdapter
-from websockets.exceptions import ConnectionClosed
 
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.openai.realtime.handler import OpenAIRealtime
@@ -114,6 +113,8 @@ class ChatGPTRealtime(OpenAIRealtime):
         )
 
     async def close_call(self, connection: "ClientConnection", model: str, api_base: str) -> None:
+        from websockets.exceptions import ConnectionClosed
+
         if realtime_endpoint(model) == "live":
             try:
                 await connection.send('{"type":"session.close"}')
@@ -124,7 +125,8 @@ class ChatGPTRealtime(OpenAIRealtime):
         await self.hangup_call(api_base)
 
     async def hangup_call(self, api_base: str) -> None:
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.utils import LlmProviders
 
         base: Final = URL(api_base)
         url: Final = base.copy_with(
@@ -132,12 +134,9 @@ class ChatGPTRealtime(OpenAIRealtime):
             path=f"{base.path.rstrip('/')}/realtime/calls/{self._call_id}/hangup",
             params=tuple((key, value) for key, value in self._extra_query.items() if key not in ("model", "call_id")),
         )
-        client: Final = AsyncHTTPHandler()
-        try:
-            response: Final = await client.post(str(url), headers=self._profile_headers, data=b"", timeout=10)
-            response.raise_for_status()
-        finally:
-            await client.close()
+        client: Final = get_async_httpx_client(llm_provider=LlmProviders.CHATGPT)
+        response: Final = await client.post(str(url), headers=self._profile_headers, data=b"", timeout=10)
+        response.raise_for_status()
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:
@@ -182,7 +181,9 @@ class ChatGPTRealtime(OpenAIRealtime):
             base.copy_with(
                 scheme="wss" if base.scheme in ("https", "wss") else "ws",
                 path=f"{base.path.rstrip('/')}/{endpoint}",
-                params=query_params,
+                params=QueryParams(TypeAdapter(Mapping[str, str | None]).validate_python(query_params)).merge(
+                    tuple((key, value) for key, value in self._extra_query.items() if key not in ("model", "call_id"))
+                ),
             )
         )
 

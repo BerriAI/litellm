@@ -120,12 +120,19 @@ class CallSupervisor:
             try:
                 if not self._terminal:
                     deadline: Final = asyncio.get_running_loop().time() + self._termination_timeout
+                    primary_deadline: Final = (
+                        deadline - self._termination_timeout / 2
+                        if self._terminal_usage_required and self._force_close_call is not None
+                        else deadline
+                    )
                     try:
-                        await asyncio.wait_for(self._close_call(), timeout=self._termination_timeout)
+                        await asyncio.wait_for(
+                            self._close_call(), timeout=max(0.0, primary_deadline - asyncio.get_running_loop().time())
+                        )
                         self._close_confirmed = True
                     except Exception:  # noqa: BLE001  # provider exceptions can contain credentials
                         verbose_proxy_logger.error("Realtime observer could not terminate upstream call")
-                    await self._drain(reader, timeout=max(0.0, deadline - asyncio.get_running_loop().time()))
+                    await self._drain(reader, timeout=max(0.0, primary_deadline - asyncio.get_running_loop().time()))
                     if self._terminal_usage_required and not self._terminal and self._force_close_call is not None:
                         remaining: Final = max(0.0, deadline - asyncio.get_running_loop().time())
                         try:

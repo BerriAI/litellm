@@ -6330,6 +6330,9 @@ class BaseLLMHTTPHandler:
         Uses provider_config (BaseRealtimeHTTPConfig) for URL construction and
         header auth when available; falls back to the legacy OpenAI-style defaults.
         """
+        from litellm.llms.chatgpt.common_utils import without_oauth_identity_headers
+        from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
+
         if client is None or not isinstance(client, AsyncHTTPHandler):
             async_httpx_client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.OPENAI,
@@ -6355,7 +6358,11 @@ class BaseLLMHTTPHandler:
             }
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(
+                without_oauth_identity_headers(extra_headers)
+                if isinstance(provider_config, ChatGPTRealtimeHTTPConfig)
+                else extra_headers
+            )
 
         logging_obj.pre_call(
             input=request_data,

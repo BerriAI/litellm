@@ -1,4 +1,5 @@
 import json
+import sys
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -14,13 +15,14 @@ from litellm.types.router import GenericLiteLLMParams
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["closed", "network"])
-@pytest.mark.parametrize(
-    "hangup_status, expectation", [(200, nullcontext()), (503, pytest.raises(httpx.HTTPStatusError))]
-)
-async def test_live_closed_observer_uses_independent_hangup(failure, hangup_status, expectation, chatgpt_tokens):
+@pytest.mark.parametrize("hangup_status", [200, 503])
+async def test_live_closed_observer_uses_independent_hangup(failure, hangup_status, chatgpt_tokens, monkeypatch):
     from websockets.exceptions import ConnectionClosedOK
     from websockets.frames import Close
 
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     handler = ChatGPTRealtime(
         GenericLiteLLMParams(
             chatgpt_realtime_call_id="rtc_live_closed",
@@ -46,15 +48,21 @@ async def test_live_closed_observer_uses_independent_hangup(failure, hangup_stat
         return httpx.Response(hangup_status)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
-    with patch("httpx.AsyncClient", return_value=client):
-        with expectation:
-            await handler.close_call(connection, "gpt-live-1-codex", "https://gateway.example/v1")
-    assert len(requests) == 1
+    try:
+        with patch("httpx.AsyncClient", return_value=client) as create_client:
+            for _ in range(2):
+                with pytest.raises(httpx.HTTPStatusError) if hangup_status == 503 else nullcontext():
+                    await handler.close_call(connection, "gpt-live-1-codex", "https://gateway.example/v1")
+                assert not client.is_closed
+            create_client.assert_called_once()
+    finally:
+        await client.aclose()
+    assert len(requests) == 2
     assert requests[0].method == "POST"
     assert str(requests[0].url) == "https://gateway.example/v1/realtime/calls/rtc_live_closed/hangup?gateway=tenant"
     assert requests[0].headers["x-gateway-token"] == "test-only"
     assert requests[0].headers["Authorization"] == "Bearer test-token-default"
-    assert client.is_closed
+    assert requests[0].extensions["timeout"]["read"] == 10
 
 
 @pytest.mark.asyncio
@@ -303,6 +311,63 @@ def test_realtime_uses_platform_endpoint_with_oauth_headers(model, endpoint, cha
     assert headers["Authorization"] == "Bearer test-token-default"
     assert "authorization" not in headers
     assert headers["openai-alpha"] == "quicksilver=v2"
+
+
+@pytest.mark.parametrize("endpoint", ["live", "realtime"])
+def test_new_realtime_session_preserves_gateway_query(endpoint, chatgpt_tokens, local_model_cost_map):
+    model = "gpt-live-1-codex" if endpoint == "live" else "gpt-realtime-1.5"
+    handler = ChatGPTRealtime(
+        GenericLiteLLMParams(
+            chatgpt_token_dir=chatgpt_tokens,
+            chatgpt_realtime_client_query={"intent": "conversation", "architecture": "client-architecture"},
+            extra_query={
+                "gateway_token": "opaque +/& value",
+                "intent": "gateway-intent",
+                "architecture": "gateway-architecture",
+                "model": "other-model",
+                "call_id": "rtc_other",
+            },
+        ),
+        {},
+    )
+    url = httpx.URL(handler._construct_url("https://gateway.example/v1", {"model": model, "intent": "query-intent"}))
+    assert url.path == f"/v1/{endpoint}"
+    assert dict(url.params) == {
+        "model": model,
+        "gateway_token": "opaque +/& value",
+        "intent": "gateway-intent",
+        "architecture": "gateway-architecture",
+    }
+
+
+@pytest.mark.asyncio
+async def test_openai_http_call_does_not_require_websockets(monkeypatch):
+    monkeypatch.delitem(sys.modules, "litellm.llms.chatgpt.realtime", raising=False)
+    for name in tuple(sys.modules):
+        if name == "websockets" or name.startswith("websockets."):
+            monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setitem(sys.modules, "websockets", None)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(201, text="v=0\r\n")
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        response = await litellm.arealtime_calls(
+            model="openai/gpt-realtime-1.5",
+            openai_ephemeral_key="test-only",
+            sdp_body=b"v=0\r\n",
+            api_key="test-only",
+            client=client,
+        )
+        assert response.status_code == 201
+        assert len(requests) == 1
+        assert requests[0].url.path == "/v1/realtime/calls"
+    finally:
+        await client.client.aclose()
 
 
 @pytest.mark.parametrize("endpoint", ["live", "realtime"])

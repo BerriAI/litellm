@@ -31,6 +31,47 @@ class Socket:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stalled_step", ["close", "drain"])
+async def test_live_initial_close_reserves_time_for_independent_hangup(stalled_step):
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    close_cancelled = asyncio.Event()
+
+    async def close():
+        if stalled_step == "close":
+            try:
+                await asyncio.Event().wait()
+            finally:
+                close_cancelled.set()
+
+    async def force_close():
+        await socket.messages.put({"type": "session.closed", "usage": {"audio_duration_ms": 1000}})
+
+    force = AsyncMock(side_effect=force_close)
+    sink = Sink(logger)
+    supervisor = CallSupervisor(
+        socket,
+        sink,
+        logger,
+        UserAPIKeyAuth(),
+        close,
+        force_close_call=force,
+        drain_timeout=1,
+        termination_timeout=0.08,
+    )
+    await socket.messages.put({"type": "session.started"})
+    await supervisor.start()
+    await asyncio.wait_for(supervisor.close(), timeout=0.5)
+    force.assert_awaited_once()
+    assert close_cancelled.is_set() == (stalled_step == "close")
+    assert any(event["type"] == "session.closed" for event in sink.events)
+    assert not logger.model_call_details.get("realtime_usage_incomplete")
+    assert sink.logs == 1
+    assert socket.closed
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fallback", ["terminal", "no_terminal", "timeout"])
 async def test_live_unacknowledged_close_uses_bounded_independent_hangup(monkeypatch, fallback):
     from litellm.proxy.realtime_endpoints import call_supervision
