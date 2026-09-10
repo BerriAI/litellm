@@ -289,7 +289,9 @@ def _marshal_rust_ocr_request(
     provider: Final = _rust_ocr_provider(request)
     api_key: Final = request.api_key or resolve_secret("MISTRAL_API_KEY") if provider == "mistral" else request.api_key
     optional_params: Final = _rust_bridge_optional_params(request, resolve_secret)
-    logging_obj: Final = cast(LiteLLMLoggingObj, request.kwargs["litellm_logging_obj"])
+    logging_obj: Final = cast(  # cast-ok: bridge kwargs carry the prepared logging object
+        LiteLLMLoggingObj, request.kwargs["litellm_logging_obj"]
+    )
     logging_obj.update_from_kwargs(
         kwargs=dict(request.kwargs),
         model=request.model,
@@ -333,10 +335,14 @@ def _map_rust_ocr_error(
     )
     if provider_config is None:
         return error
-    error_args: Final = cast(tuple[object, ...], error.args)
+    error_args: Final = cast(  # cast-ok: Python exceptions expose positional args as a tuple
+        tuple[object, ...], error.args
+    )
     status: Final = error_args[0] if error_args and isinstance(error_args[0], int) else 500
     message: Final = str(error_args[1]) if len(error_args) > 1 else str(error)
-    error_factory: Final = cast(Callable[..., Exception], provider_config.get_error_class)
+    error_factory: Final = cast(  # cast-ok: provider configs expose heterogeneous exception factories
+        Callable[..., Exception], provider_config.get_error_class
+    )
     return error_factory(error_message=message, status_code=status or 500, headers={})
 
 
