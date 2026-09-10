@@ -76,6 +76,21 @@ async fn facade_executes_direct_mistral_once() {
 }
 
 #[tokio::test]
+async fn facade_rejects_unsupported_native_response_before_dispatch() {
+    let error = perform_ocr(wire_request(
+        "mistral/model",
+        "http://127.0.0.1:1",
+        json!({"req_format":"native"}),
+    ))
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(error, crate::Error::InvalidRequest(message) if message.contains("req_format=native"))
+    );
+}
+
+#[tokio::test]
 async fn facade_uses_the_injected_http_client() {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
     let mut default_headers = reqwest::header::HeaderMap::new();

@@ -34,7 +34,7 @@ pub enum OcrDocument {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum OcrRequestFormat {
+pub enum OcrResponseFormat {
     #[default]
     Litellm,
     Native,
@@ -89,7 +89,9 @@ impl LiteLLMOcrRequest {
         })
     }
 
-    pub(crate) fn request_format(&self) -> Result<OcrRequestFormat, super::error::OcrRequestError> {
+    pub(crate) fn response_format(
+        &self,
+    ) -> Result<OcrResponseFormat, super::error::OcrRequestError> {
         self.optional_params
             .get("req_format")
             .map(|value| {

@@ -5,7 +5,7 @@ use serde::de::DeserializeOwned;
 use super::OcrClient;
 use super::error::{OcrError, OcrResponseError};
 use super::registry::OcrProvider;
-use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
+use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrResponseFormat};
 use super::wire::DecodedOcrResponse;
 
 mod mistral;
@@ -18,6 +18,7 @@ pub(crate) trait OcrAdapter: Send + Sync + Sized + 'static {
     type ProviderResponse: DeserializeOwned + Send;
 
     const PROVIDER: OcrProvider;
+    const SUPPORTS_NATIVE_RESPONSE: bool = false;
 
     /// Python: `transform_ocr_request`, including its preceding auth and URL preparation.
     /// `request` contains the model, document, connection, and unmapped caller options.
@@ -48,10 +49,13 @@ pub(crate) trait OcrAdapter: Send + Sync + Sized + 'static {
         response: reqwest::Response,
         _url: &str,
         _headers: &[(String, String)],
-        _request: &LiteLLMOcrRequest,
+        request: &LiteLLMOcrRequest,
     ) -> impl Future<Output = Result<DecodedOcrResponse<Self::ProviderResponse>, OcrError>> + Send
     {
-        super::client::read_json_response(response, false)
+        let retain_native = request
+            .response_format()
+            .map(|format| format == OcrResponseFormat::Native);
+        async move { super::client::read_json_response(response, retain_native?).await }
     }
 }
 

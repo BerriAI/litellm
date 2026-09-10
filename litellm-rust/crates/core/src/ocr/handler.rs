@@ -2,7 +2,7 @@ use super::OcrClient;
 use super::adapters::OcrAdapter;
 use super::hooks::OcrLifecycleHooks;
 use super::registry::OcrAdapterKind;
-use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
+use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrResponseFormat};
 use crate::Error;
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
 
@@ -41,6 +41,9 @@ async fn execute_ocr_provider_call<A: OcrAdapter>(
     adapter: &A,
     request: LiteLLMOcrRequest,
 ) -> Result<LiteLLMOcrResponse, Error> {
+    if request.response_format()? == OcrResponseFormat::Native && !A::SUPPORTS_NATIVE_RESPONSE {
+        return Err(super::error::OcrRequestError::NativeUnsupported(A::PROVIDER.as_str()).into());
+    }
     let provider_request = adapter.transform_ocr_request(&request, client).await?;
     let url = provider_request.url().to_string();
     let headers = provider_request
