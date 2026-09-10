@@ -365,10 +365,6 @@ class _ProxyDBLogger(CustomLogger):
                 skippable_non_model_call = sl_object is None and (
                     not kwargs.get("model") or kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime")
                 )
-                completed_call = kwargs.get("stream") is not True or (
-                    kwargs.get("stream") is True
-                    and ("complete_streaming_response" in kwargs or "async_complete_streaming_response" in kwargs)
-                )
                 if skippable_non_model_call:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
                     verbose_proxy_logger.warning(
@@ -376,34 +372,14 @@ class _ProxyDBLogger(CustomLogger):
                         kwargs.get("call_type", "unknown"),
                     )
                     return
-                if completed_call:
+                if _is_completed_proxy_cost_call(kwargs):
                     # Releasing to $0 treats the call as free. Leaving the hold
                     # open is also wrong: the next priced request only
                     # reconciles its own reservation, so this one would keep
                     # blocking shared counters until TTL. Settle at the
-                    # admission estimate instead. No spend-log row — there is
+                    # admission estimate instead. No spend-log row. There is
                     # no real cost to write.
-                    reserved_cost = float(budget_reservation.get("reserved_cost") or 0.0) if budget_reservation else 0.0
-                    try:
-                        await _reconcile_budget_reservation(
-                            budget_reservation=budget_reservation,
-                            actual_cost=reserved_cost,
-                        )
-                    except Exception:  # noqa: BLE001  # settle can fail on cache/redis; still raise cost-tracking after invalidating
-                        verbose_proxy_logger.exception(
-                            "Failed to settle budget reservation after unpriced successful call"
-                        )
-                        try:
-                            await _invalidate_budget_reservation_counters(
-                                budget_reservation=budget_reservation,
-                            )
-                        except Exception:  # noqa: BLE001  # invalidate is best-effort so the outer cost-tracking error still surfaces
-                            verbose_proxy_logger.exception(
-                                "Failed to invalidate budget reservation counters after settle failed"
-                            )
-                        finally:
-                            if budget_reservation is not None:
-                                budget_reservation["finalized"] = True
+                    await _settle_unpriced_success_reservation(budget_reservation=budget_reservation)
                     if sl_object is not None:
                         cost_tracking_failure_debug_info: dict | str = (
                             sl_object["response_cost_failure_debug_info"]
@@ -681,6 +657,33 @@ async def _update_database_and_spend_counters(
                 budget_reservation["finalized"] = True
         raise
     return True
+
+
+def _is_completed_proxy_cost_call(kwargs: dict) -> bool:
+    return kwargs.get("stream") is not True or (
+        kwargs.get("stream") is True
+        and ("complete_streaming_response" in kwargs or "async_complete_streaming_response" in kwargs)
+    )
+
+
+async def _settle_unpriced_success_reservation(budget_reservation: dict | None) -> None:
+    reserved_cost = float(budget_reservation.get("reserved_cost") or 0.0) if budget_reservation else 0.0
+    try:
+        await _reconcile_budget_reservation(
+            budget_reservation=budget_reservation,
+            actual_cost=reserved_cost,
+        )
+    except Exception:  # noqa: BLE001  # settle can fail on cache/redis; still raise cost-tracking after invalidating
+        verbose_proxy_logger.exception("Failed to settle budget reservation after unpriced successful call")
+        try:
+            await _invalidate_budget_reservation_counters(
+                budget_reservation=budget_reservation,
+            )
+        except Exception:  # noqa: BLE001  # invalidate is best-effort so the outer cost-tracking error still surfaces
+            verbose_proxy_logger.exception("Failed to invalidate budget reservation counters after settle failed")
+        finally:
+            if budget_reservation is not None:
+                budget_reservation["finalized"] = True
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:
