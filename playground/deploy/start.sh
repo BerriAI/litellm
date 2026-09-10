@@ -48,6 +48,7 @@ runuser -u playground -- env -i \
   NODE_ENV=production \
   HOST=0.0.0.0 \
   PORT=8080 \
+  PLAYGROUND_USERNAME="${OPENCODE_SERVER_USERNAME:-opencode}" \
   PLAYGROUND_PASSWORD="${OPENCODE_SERVER_PASSWORD}" \
   PLAYGROUND_REPOSITORY_DIR="${repository_directory}" \
   PLAYGROUND_WORKSPACE_DIR="${workspace_directory}" \

@@ -1,6 +1,6 @@
-import { persistFile } from './api';
-
-export const createFileSaver = (onError: (target: string) => void) => {
+export const createFileSaver = (
+  persist: (target: string, source: string) => Promise<unknown>,
+) => {
   const timers = new Map<string, number>();
 
   return (target: string, source: string) => {
@@ -8,13 +8,9 @@ export const createFileSaver = (onError: (target: string) => void) => {
     if (pendingTimer !== undefined) {
       window.clearTimeout(pendingTimer);
     }
-    timers.set(target, window.setTimeout(async () => {
+    timers.set(target, window.setTimeout(() => {
       timers.delete(target);
-      try {
-        await persistFile(target, source);
-      } catch {
-        onError(target);
-      }
+      void persist(target, source).catch(() => undefined);
     }, 350));
   };
 };

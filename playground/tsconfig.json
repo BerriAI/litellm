@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "lib": ["DOM", "ES2023"],
+    "jsx": "react-jsx",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "noEmit": true,

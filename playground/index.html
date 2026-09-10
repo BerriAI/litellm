@@ -7,54 +7,7 @@
     <title>LiteLLM Rust Playground</title>
   </head>
   <body>
-    <main class="shell">
-      <header class="topbar">
-        <div>
-          <span class="eyebrow">LOCAL PROOF</span>
-          <h1>LiteLLM Rust Playground</h1>
-        </div>
-        <div class="status-row">
-          <span id="lsp-status" class="status" data-state="loading">Connecting to rust-analyzer</span>
-          <span id="diagnostic-status" class="status">Diagnostics pending</span>
-          <button id="reset-button" class="button secondary" type="button">Reset</button>
-          <button id="run-button" class="button primary" type="button">Run</button>
-        </div>
-      </header>
-
-      <section class="workspace">
-        <aside class="docs" aria-label="Markdown document">
-          <div class="docbar">
-            <span id="guide-path">GUIDE.md</span>
-            <span class="document-language">Markdown</span>
-          </div>
-          <div id="markdown-editor"></div>
-        </aside>
-
-        <section class="editor-panel" aria-label="Rust editor">
-          <div class="filebar">
-            <span id="active-path">src/main.rs</span>
-            <span id="revision" class="revision"></span>
-          </div>
-          <div class="editor-body">
-            <div id="editors"></div>
-            <aside class="file-tree" aria-label="Project files">
-              <p class="tree-title">EXAMPLES</p>
-              <nav id="example-nav" class="example-nav" aria-label="Examples"></nav>
-              <p id="file-tree-title" class="tree-title files-title">FILES</p>
-              <nav id="file-nav" class="file-nav"></nav>
-            </aside>
-          </div>
-        </section>
-
-        <section class="output-panel" aria-live="polite">
-          <div class="output-header">
-            <span>OUTPUT</span>
-            <span id="run-status"></span>
-          </div>
-          <pre id="output">Press Run to compile against the cloned LiteLLM repository.</pre>
-        </section>
-      </section>
-    </main>
-    <script type="module" src="/src/main.ts"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

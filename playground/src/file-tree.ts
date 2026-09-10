@@ -8,14 +8,12 @@ export class ExampleFileTree {
 
   public constructor(
     private readonly container: HTMLElement,
-    private readonly title: HTMLElement,
     private readonly openFile: (uri: string) => void,
   ) {}
 
   public render(example: PlaygroundExample, selectedPath?: string) {
     this.tree?.cleanUp();
     this.container.replaceChildren();
-    this.title.textContent = `FILES · ${example.id}://`;
     this.container.setAttribute('aria-label', `${example.title} files`);
 
     const directories = new Set<string>();
@@ -56,5 +54,10 @@ export class ExampleFileTree {
     this.tree?.getItem(path)?.select();
     this.tree?.scrollToPath(path, { focus: false, offset: 'nearest' });
     this.syncingSelection = false;
+  }
+
+  public cleanUp() {
+    this.tree?.cleanUp();
+    this.tree = null;
   }
 }

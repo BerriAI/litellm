@@ -17,14 +17,16 @@ const host = process.env.HOST ?? '127.0.0.1';
 const isProduction = process.env.NODE_ENV === 'production';
 const staticDirectory = path.join(playgroundDirectory, 'dist');
 const playgroundPassword = process.env.PLAYGROUND_PASSWORD;
+const playgroundUsername = process.env.PLAYGROUND_USERNAME ?? 'opencode';
 const commandEnvironment = { ...process.env };
 delete commandEnvironment.PLAYGROUND_PASSWORD;
+delete commandEnvironment.PLAYGROUND_USERNAME;
 
 const isAuthorized = request => {
   if (!playgroundPassword) {
     return true;
   }
-  const expected = Buffer.from(`opencode:${playgroundPassword}`);
+  const expected = Buffer.from(`${playgroundUsername}:${playgroundPassword}`);
   const authorization = request.headers.authorization ?? '';
   const actual = authorization.startsWith('Basic ')
     ? Buffer.from(authorization.slice('Basic '.length), 'base64')
