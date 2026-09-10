@@ -94,6 +94,7 @@ def _prepare_ocr_request(
     if doc_type not in ["document_url", "image_url"]:
         raise ValueError(f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'")
 
+    caller_supplied_api_key: Final = api_key is not None
     caller_supplied_api_base: Final = api_base is not None
 
     (
@@ -113,7 +114,12 @@ def _prepare_ocr_request(
         and custom_llm_provider == "azure_ai"
         and is_azure_document_intelligence_model(model)
     )
-    if dynamic_api_key:
+    suppress_dynamic_api_key: Final = (
+        not caller_supplied_api_key
+        and custom_llm_provider == "azure_ai"
+        and is_azure_document_intelligence_model(model)
+    )
+    if dynamic_api_key and not suppress_dynamic_api_key:
         api_key = dynamic_api_key
     if dynamic_api_base and not suppress_dynamic_api_base:
         api_base = dynamic_api_base

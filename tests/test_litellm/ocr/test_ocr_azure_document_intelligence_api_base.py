@@ -16,6 +16,8 @@ from litellm.ocr.main import _prepare_ocr_request, _rust_bridge_api_base
 _DOC = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
 _DOC_INTELLIGENCE_ENDPOINT = "https://di.cognitiveservices.azure.com"
 _AZURE_AI_API_BASE = "https://generic-azure-ai.example.com"
+_DOC_INTELLIGENCE_API_KEY = "document-intelligence-key"
+_AZURE_AI_API_KEY = "generic-azure-ai-key"
 
 
 class _FakeLogging:
@@ -30,11 +32,11 @@ def _resolve_secret(name: str) -> str | None:
     }.get(name)
 
 
-def _prepare(model: str, api_base: str | None):
+def _prepare(model: str, api_base: str | None, api_key: str | None = "test-key"):
     return _prepare_ocr_request(
         model=model,
         document=dict(_DOC),
-        api_key="test-key",
+        api_key=api_key,
         api_base=api_base,
         timeout=None,
         custom_llm_provider=None,
@@ -83,3 +85,36 @@ class TestDocIntelligenceApiBaseResolution:
         prepared = _prepare("azure_ai/mistral-document-ai-2505", None)
 
         assert prepared.api_base == _AZURE_AI_API_BASE
+
+
+class TestDocIntelligenceApiKeyResolution:
+    def test_dedicated_key_wins_over_generic_azure_ai_fallback(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
+        monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", _DOC_INTELLIGENCE_API_KEY)
+        monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", _DOC_INTELLIGENCE_ENDPOINT)
+
+        prepared = _prepare("azure_ai/doc-intelligence/prebuilt-layout", None, api_key=None)
+        headers = prepared.provider_config.validate_environment(
+            headers={},
+            model=prepared.model,
+            api_key=prepared.api_key,
+            api_base=prepared.api_base,
+            litellm_params=prepared.litellm_params,
+        )
+
+        assert headers["Ocp-Apim-Subscription-Key"] == _DOC_INTELLIGENCE_API_KEY
+
+    def test_explicit_key_is_honoured_for_doc_intelligence(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
+        monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", _DOC_INTELLIGENCE_API_KEY)
+
+        prepared = _prepare("azure_ai/doc-intelligence/prebuilt-layout", None, api_key="explicit-key")
+
+        assert prepared.api_key == "explicit-key"
+
+    def test_generic_azure_ai_key_still_applies_to_mistral_ocr(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
+
+        prepared = _prepare("azure_ai/mistral-document-ai-2505", None, api_key=None)
+
+        assert prepared.api_key == _AZURE_AI_API_KEY
