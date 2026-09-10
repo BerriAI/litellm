@@ -37,7 +37,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -53,6 +53,7 @@ PGBOUNCER_ENV_PREFIX: Final = "LITELLM_PGBOUNCER_"
 PGBOUNCER_LISTEN_ADDR: Final = "127.0.0.1"
 PGBOUNCER_INI_NAME: Final = "pgbouncer.ini"
 PGBOUNCER_USERLIST_NAME: Final = "userlist.txt"
+PGBOUNCER_CA_NAME: Final = "server-ca.pem"
 PGBOUNCER_RESTART_DELAY_SECONDS: Final = 1.0
 PGBOUNCER_READY_TIMEOUT_SECONDS: Final = 15.0
 PGBOUNCER_STOP_GRACE_SECONDS: Final = 10.0
@@ -98,6 +99,7 @@ class PgBouncerPlan:
     ini: str
     userlist: str
     pooled_url: str
+    ca_source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,7 +148,9 @@ def _connect_query(options: str) -> str | PgBouncerError:
     )
 
 
-def _server_tls_settings(sslmode: str, sslcert: str, sslaccept: str) -> tuple[str, ...] | PgBouncerError:
+def _server_tls_settings(sslmode: str, sslcert: str, sslaccept: str, ca_path: Path) -> tuple[str, ...] | PgBouncerError:
+    """``server_tls_*`` lines naming ``ca_path``, the runtime-dir copy of the bundle: the original (or the
+    0600 root pinned by ``pin_bundle_root``) is often unreadable for the user PgBouncer drops to."""
     if sslmode not in PGBOUNCER_SSLMODES:
         return PgBouncerError(f"unsupported sslmode {sslmode!r} on DATABASE_URL")
     verify: Final = sslmode in ("verify-ca", "verify-full") or (sslmode == "require" and sslaccept == "strict")
@@ -156,7 +160,7 @@ def _server_tls_settings(sslmode: str, sslcert: str, sslaccept: str) -> tuple[st
             "add sslcert=<ca.pem> (or sslrootcert=) so the in-container PgBouncer can verify Postgres"
         )
     mode: Final = "verify-full" if verify else sslmode
-    return (f"server_tls_sslmode = {mode}", *((f"server_tls_ca_file = {sslcert}",) if sslcert else ()))
+    return (f"server_tls_sslmode = {mode}", *((f"server_tls_ca_file = {ca_path}",) if sslcert else ()))
 
 
 def plan_pgbouncer(
@@ -192,7 +196,10 @@ def plan_pgbouncer(
     if "sslidentity" in params:
         return PgBouncerError("client certificates (sslidentity) are not supported with the in-container PgBouncer")
     tls: Final = _server_tls_settings(
-        params.get("sslmode", "prefer"), params.get("sslcert", ""), params.get("sslaccept", "")
+        params.get("sslmode", "prefer"),
+        params.get("sslcert", ""),
+        params.get("sslaccept", ""),
+        runtime_dir / PGBOUNCER_CA_NAME,
     )
     if isinstance(tls, PgBouncerError):
         return tls
@@ -239,23 +246,29 @@ def plan_pgbouncer(
     pooled_url: Final = urllib.parse.urlunsplit(
         parsed._replace(netloc=f"{credentials}@{PGBOUNCER_LISTEN_ADDR}:{settings.port}", query=pooled_query)
     )
-    return PgBouncerPlan(ini=ini, userlist=userlist, pooled_url=pooled_url)
+    return PgBouncerPlan(ini=ini, userlist=userlist, pooled_url=pooled_url, ca_source=params.get("sslcert") or None)
 
 
-def write_pgbouncer_files(plan: PgBouncerPlan, runtime_dir: Path, run_as_user: str | None) -> Path:
-    """Write the ini and userlist (both hold the password, so mode 0600) and return the ini path.
+def write_pgbouncer_files(plan: PgBouncerPlan, runtime_dir: Path, run_as_user: str | None) -> Path | PgBouncerError:
+    """Write the ini, userlist (both hold the password, so mode 0600) and CA copy, and return the ini path.
 
     ``run_as_user`` is the user PgBouncer drops to when started as root; it has
     to own the files it re-reads on reload and the socket directory.
     """
     ini_path: Final = runtime_dir / PGBOUNCER_INI_NAME
     userlist_path: Final = runtime_dir / PGBOUNCER_USERLIST_NAME
+    ca_path: Final = runtime_dir / PGBOUNCER_CA_NAME
+    if plan.ca_source is not None:
+        try:
+            shutil.copyfile(plan.ca_source, ca_path)
+        except OSError as error:
+            return PgBouncerError(f"cannot read the CA bundle {plan.ca_source!r} named by sslcert: {error}")
     for path, content in ((userlist_path, plan.userlist), (ini_path, plan.ini)):
         path.touch(mode=0o600)
         path.write_text(content, encoding="utf-8")
     if run_as_user is not None:
         runtime_dir.chmod(0o700)
-        for path in (runtime_dir, ini_path, userlist_path):
+        for path in (runtime_dir, ini_path, userlist_path, *((ca_path,) if plan.ca_source is not None else ())):
             shutil.chown(path, user=run_as_user)
     return ini_path
 
@@ -448,14 +461,30 @@ class PgBouncerProcess:
             _end(process)
 
 
+def _only_in_this_process(action: Callable[[], None]) -> Callable[[], None]:
+    """An exit hook that does nothing in a forked child, which inherits the parent's ``atexit`` table."""
+    owner_pid: Final = os.getpid()
+
+    def run() -> None:
+        if os.getpid() == owner_pid:
+            action()
+
+    return run
+
+
 def start_in_container_pgbouncer(
-    settings: PgBouncerSettings, upstream_url: str, token_auth_enabled: bool = False
+    settings: PgBouncerSettings,
+    upstream_url: str,
+    token_auth_enabled: bool = False,
+    register_exit_hook: Callable[[Callable[[], None]], object] = atexit.register,
 ) -> str | PgBouncerError:
     """Start the pooler for ``upstream_url`` and return the loopback URL the workers must use.
 
-    The pooler lives as long as this process: it is stopped from ``atexit``
-    once the worker manager has returned. PgBouncer refuses to run as root, so
-    a root proxy (the default image) has it drop to ``nobody``.
+    The pooler lives as long as this process: it is stopped from the exit hooks
+    once the worker manager has returned, and only by the process that started
+    it (gunicorn forks its workers, so they carry the hooks too). PgBouncer
+    refuses to run as root, so a root proxy (the default image) has it drop to
+    ``nobody``.
     """
     if token_auth_enabled:
         return PgBouncerError(PGBOUNCER_TOKEN_AUTH_CONFLICT)
@@ -469,12 +498,14 @@ def start_in_container_pgbouncer(
             "or newer is required"
         )
     runtime_dir: Final = Path(tempfile.mkdtemp(prefix="litellm-pgbouncer-"))
-    atexit.register(shutil.rmtree, runtime_dir, ignore_errors=True)
+    register_exit_hook(_only_in_this_process(lambda: shutil.rmtree(runtime_dir, ignore_errors=True)))
     run_as_user: Final = PGBOUNCER_UNPRIVILEGED_USER if os.geteuid() == 0 else None
     plan: Final = plan_pgbouncer(upstream_url, settings, runtime_dir, run_as_user)
     if isinstance(plan, PgBouncerError):
         return plan
     ini_path: Final = write_pgbouncer_files(plan, runtime_dir, run_as_user)
+    if isinstance(ini_path, PgBouncerError):
+        return ini_path
     pooler: Final = PgBouncerProcess(
         argv=(settings.binary, str(ini_path)),
         port=settings.port,
@@ -483,7 +514,7 @@ def start_in_container_pgbouncer(
     failed: Final = pooler.start()
     if failed is not None:
         return failed
-    atexit.register(pooler.stop)
+    register_exit_hook(_only_in_this_process(pooler.stop))
     verbose_proxy_logger.info(
         "In-container pgbouncer (pid %s) listening on %s:%s; capping this pod at %s upstream database connections.",
         pooler.pid,

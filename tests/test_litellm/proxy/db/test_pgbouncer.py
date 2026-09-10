@@ -5,6 +5,7 @@ import signal
 import socket
 import stat
 import sys
+import tempfile
 import textwrap
 import time
 import urllib.parse
@@ -98,15 +99,19 @@ class TestPlanPgBouncer:
             "pgbouncer": "true",
         }
 
-    def test_verified_tls_becomes_server_side_verify_full_with_the_ca_bundle(self):
-        pgb: Final = _ini(_plan())["pgbouncer"]
+    def test_verified_tls_becomes_server_side_verify_full_with_a_ca_copy_in_the_runtime_dir(self):
+        plan: Final = _plan()
+        pgb: Final = _ini(plan)["pgbouncer"]
         assert pgb["server_tls_sslmode"] == "verify-full"
-        assert pgb["server_tls_ca_file"] == "/certs/ca.pem"
+        assert pgb["server_tls_ca_file"] == "/run/pgb/server-ca.pem"
+        assert plan.ca_source == "/certs/ca.pem"
 
     def test_unverified_require_stays_require_without_a_ca_file(self):
-        pgb: Final = _ini(_plan("postgresql://app:pw@db/litellm?sslmode=require"))["pgbouncer"]
+        plan: Final = _plan("postgresql://app:pw@db/litellm?sslmode=require")
+        pgb: Final = _ini(plan)["pgbouncer"]
         assert pgb["server_tls_sslmode"] == "require"
         assert "server_tls_ca_file" not in pgb
+        assert plan.ca_source is None
 
     def test_no_tls_params_default_to_prefer(self):
         assert _ini(_plan("postgresql://app:pw@db/litellm"))["pgbouncer"]["server_tls_sslmode"] == "prefer"
@@ -156,12 +161,43 @@ class TestPlanPgBouncer:
 
 class TestWritePgBouncerFiles:
     def test_files_hold_the_plan_and_are_private_to_the_owner(self, tmp_path: Path):
-        ini_path: Final = write_pgbouncer_files(_plan(), tmp_path, None)
+        plan: Final = _plan("postgresql://app:pw@db/litellm")
+        ini_path: Final = write_pgbouncer_files(plan, tmp_path, None)
+        assert isinstance(ini_path, Path), ini_path
         assert ini_path == tmp_path / "pgbouncer.ini"
-        assert ini_path.read_text() == _plan().ini
-        assert (tmp_path / "userlist.txt").read_text() == _plan().userlist
+        assert ini_path.read_text() == plan.ini
+        assert (tmp_path / "userlist.txt").read_text() == plan.userlist
         for path in (ini_path, tmp_path / "userlist.txt"):
             assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert not (tmp_path / "server-ca.pem").exists()
+
+    def test_the_ca_bundle_is_copied_next_to_the_ini_pgbouncer_reads(self, tmp_path: Path):
+        bundle: Final = tmp_path / "rds-root.pem"
+        bundle.write_text("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+        runtime_dir: Final = tmp_path / "run"
+        runtime_dir.mkdir()
+        plan: Final = plan_pgbouncer(
+            f"postgresql://app:pw@db/litellm?sslmode=verify-full&sslcert={bundle}", SETTINGS, runtime_dir, None
+        )
+        assert isinstance(plan, PgBouncerPlan), plan
+        ini_path: Final = write_pgbouncer_files(plan, runtime_dir, None)
+        assert isinstance(ini_path, Path), ini_path
+        ca_file: Final = Path(_ini(plan)["pgbouncer"]["server_tls_ca_file"])
+        assert ca_file.parent == runtime_dir
+        assert ca_file.read_text() == bundle.read_text()
+
+    def test_an_unreadable_ca_bundle_is_reported(self, tmp_path: Path):
+        plan: Final = plan_pgbouncer(
+            f"postgresql://app:pw@db/litellm?sslmode=verify-full&sslcert={tmp_path / 'missing.pem'}",
+            SETTINGS,
+            tmp_path,
+            None,
+        )
+        assert isinstance(plan, PgBouncerPlan), plan
+        outcome: Final = write_pgbouncer_files(plan, tmp_path, None)
+        assert isinstance(outcome, PgBouncerError)
+        assert "missing.pem" in outcome.reason
+        assert not (tmp_path / "pgbouncer.ini").exists()
 
 
 def _bound_port(sock: socket.socket) -> int:
@@ -470,6 +506,16 @@ class TestPgBouncerProcess:
             os.kill(pid, 0)
 
 
+def _runtime_dir_listening_on(port: int) -> Path:
+    matches: Final = tuple(
+        ini.parent
+        for ini in Path(tempfile.gettempdir()).glob("litellm-pgbouncer-*/pgbouncer.ini")
+        if f"listen_port = {port}\n" in ini.read_text()
+    )
+    assert len(matches) == 1, matches
+    return matches[0]
+
+
 class TestStartInContainerPgBouncer:
     def test_returns_the_loopback_url_once_the_pooler_listens(self, tmp_path: Path):
         port: Final = _free_port()
@@ -477,6 +523,35 @@ class TestStartInContainerPgBouncer:
         pooled: Final = start_in_container_pgbouncer(settings, "postgresql://app:pw@db/litellm?connection_limit=5")
         assert pooled == f"postgresql://app:pw@127.0.0.1:{port}/litellm?connection_limit=5&pgbouncer=true"
         assert _listening(port)
+
+    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
+    def test_a_forked_worker_exiting_leaves_the_pooler_and_its_files_to_the_parent(self, tmp_path: Path):
+        port: Final = _free_port()
+        settings: Final = PgBouncerSettings(enabled=True, port=port, binary=str(_fake_pooler(tmp_path, port)))
+        exit_hooks: Final[list[Callable[[], None]]] = []
+        pooled: Final = start_in_container_pgbouncer(
+            settings, "postgresql://app:pw@db/litellm", register_exit_hook=exit_hooks.append
+        )
+        assert isinstance(pooled, str), pooled
+        runtime_dir: Final = _runtime_dir_listening_on(port)
+
+        worker: Final = os.fork()
+        if worker == 0:
+            try:
+                for hook in exit_hooks:
+                    hook()
+            finally:
+                os._exit(0)
+        if not _wait_until(lambda: os.waitpid(worker, os.WNOHANG) != (0, 0)):
+            os.kill(worker, signal.SIGKILL)
+            pytest.fail("the forked worker did not exit: an exit hook blocked on state inherited from the parent")
+        assert _listening(port)
+        assert (runtime_dir / "pgbouncer.ini").exists()
+
+        for hook in exit_hooks:
+            hook()
+        assert _wait_until(lambda: not _listening(port))
+        assert not runtime_dir.exists()
 
     def test_a_bad_upstream_url_is_reported_without_starting_anything(self, tmp_path: Path):
         port: Final = _free_port()
