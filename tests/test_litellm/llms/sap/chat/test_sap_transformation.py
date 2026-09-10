@@ -712,3 +712,75 @@ class TestNormalizeReasoningContent:
         out = self._normalize(raw)
         assert out["choices"][0]["message"]["reasoning_content"] == "thought A"
         assert out["choices"][1]["message"]["reasoning_content"] == "thought B"
+
+
+    def test_null_content_in_block_uses_empty_string(self):
+        """Explicit null content value must not leak None into thinking field."""
+        raw = {
+            "choices": [{
+                "message": {
+                    "reasoning_content": [{"content": None, "signature": "s"}],
+                }
+            }]
+        }
+        out = self._normalize(raw)
+        block = out["choices"][0]["message"]["thinking_blocks"][0]
+        assert block["thinking"] == ""
+        assert out["choices"][0]["message"]["reasoning_content"] is None
+
+    def test_transform_response_normalizes_list_reasoning_content(self):
+        """Production path: transform_response must produce a ModelResponse
+        with thinking_blocks populated when the raw payload carries a
+        list-shaped reasoning_content.
+        """
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+        config = GenAIHubOrchestrationConfig()
+
+        final_result = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gemini-test",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The answer is 42.",
+                    "reasoning_content": [
+                        {"content": "Let me think.", "signature": "sig1"},
+                        {"content": "Yes, 42.", "signature": "sig2"},
+                    ],
+                },
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+        raw_response = MagicMock()
+        raw_response.text = json.dumps({"final_result": final_result})
+        raw_response.json.return_value = {"final_result": final_result}
+
+        response = config.transform_response(
+            model="gemini-test",
+            raw_response=raw_response,
+            model_response=MagicMock(),
+            logging_obj=MagicMock(),
+            api_key="test",
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        choice = response.choices[0]
+        assert hasattr(choice.message, "thinking_blocks"), "thinking_blocks missing from message"
+        assert choice.message.thinking_blocks == [
+            {"type": "thinking", "thinking": "Let me think.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "Yes, 42.", "signature": "sig2"},
+        ]
+        assert choice.message.reasoning_content == "Let me think.\nYes, 42."

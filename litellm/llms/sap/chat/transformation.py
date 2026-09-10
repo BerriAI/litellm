@@ -419,25 +419,31 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         (already typed for this shape) and set reasoning_content to the concatenated
         text so callers that read the string field still get something useful.
         """
+        new_choices = []
         for choice in raw.get("choices", []):  # mutable-ok: sentinel default, never mutated
-            msg = choice.get("message", {})  # mutable-ok: sentinel default, never mutated
+            msg = choice.get("message", {})
             rc = msg.get("reasoning_content")
             if not isinstance(rc, list):
+                new_choices.append(choice)
                 continue
             thinking_blocks = [  # mutable-ok: local accumulator built once and assigned
                 {  # mutable-ok: each block dict constructed fresh per item
                     "type": "thinking",
-                    "thinking": item.get("content", ""),
+                    "thinking": item.get("content") or "",
                     "signature": item.get("signature"),
                 }
                 for item in rc
                 if isinstance(item, dict)
             ]
-            msg["thinking_blocks"] = thinking_blocks
-            msg["reasoning_content"] = (
-                "\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None
-            )
-        return raw
+            new_msg = {
+                **msg,
+                "thinking_blocks": thinking_blocks,
+                "reasoning_content": (
+                    "\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None
+                ),
+            }
+            new_choices.append({**choice, "message": new_msg})
+        return {**raw, "choices": new_choices}
 
     def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
         """Strip markdown code block wrapper from JSON content if present.
