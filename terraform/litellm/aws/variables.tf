@@ -200,6 +200,45 @@ variable "gateway_num_workers" {
   }
 }
 
+variable "gateway_connection_pool_enabled" {
+  description = <<-EOT
+    Run an in-container PgBouncer (transaction mode, loopback) in each gateway
+    task, shared by every uvicorn worker. Without it each of the
+    `gateway_num_workers` workers opens its own Prisma pool straight to
+    Postgres, so a task's footprint against the database connection ceiling is
+    workers x connection_limit and grows with every task. Sets
+    LITELLM_PGBOUNCER_ENABLED / LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS /
+    LITELLM_PGBOUNCER_MAX_CLIENT_CONN on the gateway container only. Requires
+    an existing database via `database_url`: the module-created Aurora
+    authenticates with IAM tokens, which the pooler cannot follow because it
+    holds one static password for the life of the task.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gateway_pool_max_db_connections" {
+  description = "Upstream Postgres connections one gateway task may hold when gateway_connection_pool_enabled is set, regardless of gateway_num_workers. 20 suits 4 workers; a 5000-connection database then fits roughly 200 tasks."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.gateway_pool_max_db_connections >= 1
+    error_message = "gateway_pool_max_db_connections must be >= 1."
+  }
+}
+
+variable "gateway_pool_max_client_conn" {
+  description = "Client connections the in-container PgBouncer accepts from the gateway workers when gateway_connection_pool_enabled is set."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.gateway_pool_max_client_conn >= 1
+    error_message = "gateway_pool_max_client_conn must be >= 1."
+  }
+}
+
 variable "backend_cpu" {
   description = "Fargate CPU units for the backend task (1024 = 1 vCPU)."
   type        = number
@@ -270,6 +309,47 @@ variable "gateway_memory_target" {
   description = "Target average memory utilization (%) for the gateway autoscaling policy. Set 0 to skip the memory policy and scale on CPU only."
   type        = number
   default     = 80
+}
+
+variable "gateway_target_requests_per_second" {
+  description = <<-EOT
+    Requests per second one gateway task should serve. Adds an
+    ALBRequestCountPerTarget target-tracking policy next to the CPU/memory
+    ones (Application Auto Scaling follows whichever asks for more tasks).
+    CloudWatch publishes that metric as a 1-minute count, so the policy
+    targets 60x this value and ECS reacts on a ~1 minute cadence. 0 skips
+    the policy.
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "gateway_target_tokens_per_second" {
+  description = <<-EOT
+    Tokens per second one gateway task should serve. Adds a target-tracking
+    policy on gateway_tokens_metric summed over each 60s period, divided by
+    60 and by the service's Container Insights RunningTaskCount. Tokens are
+    counted when a response completes, so the signal trails long streams.
+    0 skips the policy.
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "gateway_tokens_metric" {
+  description = <<-EOT
+    CloudWatch metric carrying the gateway's litellm_total_tokens_metric_total
+    counter, as published by the CloudWatch agent's Prometheus scraper (it
+    emits the delta between scrapes, so Sum over a period is the tokens
+    served in it). Required when gateway_target_tokens_per_second > 0.
+    dimensions must match the metric_declaration the agent publishes with.
+  EOT
+  type = object({
+    namespace  = string
+    name       = optional(string, "litellm_total_tokens_metric_total")
+    dimensions = optional(map(string), {})
+  })
+  default = null
 }
 
 variable "backend_autoscaling_enabled" {
