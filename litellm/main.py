@@ -841,7 +841,11 @@ def admission_input_tokens(kwargs: Mapping[str, object]) -> int | None:
         for key in ("litellm_metadata", "metadata")
     )
     return next(
-        (reservation.input_tokens for reservation in reservations if reservation and reservation.input_tokens),
+        (
+            reservation.input_tokens
+            for reservation in reservations
+            if reservation and reservation.input_tokens is not None
+        ),
         None,
     )
 

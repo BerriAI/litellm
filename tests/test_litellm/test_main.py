@@ -2395,17 +2395,18 @@ def test_image_edit_merges_headers_and_extra_headers():
 
 
 @pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
-def test_mock_completion_usage_reports_admission_input_tokens(metadata_key: str):
+@pytest.mark.parametrize("input_tokens", (51234, 0))
+def test_mock_completion_usage_reports_admission_input_tokens(metadata_key: str, input_tokens: int):
     response = litellm.completion(
         model="anthropic/claude-sonnet-5",
         messages=[{"role": "user", "content": "hello"}],
         mock_response="ok",
         api_key="mock",
-        **{metadata_key: {"user_api_key_budget_reservation": {"reserved_cost": 1.0, "input_tokens": 51234}}},
+        **{metadata_key: {"user_api_key_budget_reservation": {"reserved_cost": 1.0, "input_tokens": input_tokens}}},
     )
 
-    assert response.usage.prompt_tokens == 51234
-    assert response.usage.total_tokens == 51234 + response.usage.completion_tokens
+    assert response.usage.prompt_tokens == input_tokens
+    assert response.usage.total_tokens == input_tokens + response.usage.completion_tokens
 
 
 def test_mock_completion_usage_falls_back_to_default_without_admission_count():
