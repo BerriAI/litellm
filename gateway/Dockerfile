@@ -77,6 +77,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra bedrock-realtime \
         --python python3.13
 
+# PYTHONPATH=/app makes the source tree shadow the installed package, so the
+# compiled Rust extension must live next to the source or it is never imported.
+RUN cp "$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"/litellm/rust_bridge/_native*.so litellm/rust_bridge/
+
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
     prisma generate --schema=./schema.prisma
@@ -111,7 +115,8 @@ COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     find /app/.venv -type d -path "*/tornado/test" -delete && \
     chmod -R a+rX /opt/prisma && \
-    python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths"
+    python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths" && \
+    python -c "import litellm; from litellm.rust_bridge.loader import native_bridge_available; assert litellm.__file__ == '/app/litellm/__init__.py', litellm.__file__; assert native_bridge_available()"
 
 USER nonroot
 
