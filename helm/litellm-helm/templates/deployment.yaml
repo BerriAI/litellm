@@ -57,6 +57,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             {{- include "litellm.proxyEnv" . | nindent 12 }}
+            {{- include "litellm.proxyMetricsEnv" . | nindent 12 }}
             {{- if .Values.collector.enabled }}
             {{- include "litellm.collectorEnv" . | nindent 12 }}
             {{- end }}
@@ -187,6 +188,8 @@ spec:
               mountPath: /tmp
             - name: cache
               mountPath: /.cache
+            - name: npm
+              mountPath: /.npm
           {{- end }}
           {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}

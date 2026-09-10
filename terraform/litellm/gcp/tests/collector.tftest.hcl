@@ -118,6 +118,20 @@ run "coexists_with_the_metrics_sidecars" {
   }
 }
 
+run "sidecars_must_not_share_a_loopback_port" {
+  command = plan
+
+  variables {
+    collector_enabled    = true
+    collector_port       = 4001
+    gateway_metrics_port = 4001
+  }
+
+  expect_failures = [
+    google_cloud_run_v2_service.gateway,
+  ]
+}
+
 run "proxy_config_is_mounted_into_the_sidecar_too" {
   command = plan
 

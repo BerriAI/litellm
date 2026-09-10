@@ -231,6 +231,13 @@ resource "google_cloud_run_v2_service" "gateway" {
   labels              = local.labels
   deletion_protection = false
 
+  lifecycle {
+    precondition {
+      condition     = !var.collector_enabled || var.gateway_metrics_port == null || var.collector_port != var.gateway_metrics_port
+      error_message = "collector_port and gateway_metrics_port must differ: both sidecars bind loopback in the same instance."
+    }
+  }
+
   template {
     service_account                  = google_service_account.runtime.email
     max_instance_request_concurrency = var.gateway_max_instance_request_concurrency

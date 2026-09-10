@@ -8,14 +8,16 @@ event follows ``LITELLM_COLLECTOR_ON_UNAVAILABLE``: ``fallback`` runs the existi
 the worker, ``drop`` counts it and moves on. Transitions are logged with the counters, so a sidecar
 outage is visible without scraping anything.
 
-Delivery is at-most-once: a sidecar crash loses the events already handed to its socket. A sidecar
-that stops gracefully half-closes each connection first (EOF towards the producer) and keeps reading
-until the producer hangs up, so the producer switches to the unavailable policy without losing the
-events in flight. When the gateway itself stops with the writer stuck mid-send, only an event whose
-bytes are still in the producer's write buffer follows the unavailable policy; the connection is
-aborted first so the sidecar discards the truncated line instead of also counting it. Events from one
-uvicorn worker are handled in the order it produced them; events from different workers interleave,
-exactly like the in-process callbacks do today.
+Delivery is at-most-once: a sidecar crash loses the events the kernel already took from its socket.
+A sidecar that stops gracefully half-closes each connection first (EOF towards the producer) and
+keeps reading until the producer hangs up, so the producer switches to the unavailable policy without
+losing the events in flight. A write that fails part-way follows the unavailable policy without double
+counting: ``drain()`` only fails while part of the line is still buffered in this process, so the
+sidecar can at most have read a truncated line, which it discards. When the gateway itself stops with
+the writer stuck mid-send, only an event whose bytes are still in the producer's write buffer follows
+the unavailable policy; the connection is aborted first so the sidecar discards the truncated line
+instead of also counting it. Events from one uvicorn worker are handled in the order it produced them;
+events from different workers interleave, exactly like the in-process callbacks do today.
 """
 
 import asyncio

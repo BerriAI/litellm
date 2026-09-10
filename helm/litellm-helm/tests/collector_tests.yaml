@@ -183,6 +183,64 @@ tests:
             name: collector-socket
           any: true
 
+  - it: should keep metrics and billing env on the proxy container only
+    template: deployment.yaml
+    set:
+      collector.enabled: true
+      metricsServer.enabled: true
+      metricsServer.port: 9090
+      billingMetrics.enabled: true
+      billingMetrics.endpoint: https://metering.example.com
+      billingMetrics.secretName: billing-mtls
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROMETHEUS_METRICS_PORT
+            value: "9090"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://metering.example.com
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: PROMETHEUS_METRICS_PORT
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: billing-metrics-mtls
+          any: true
+
+  - it: should give the sidecar the same scratch mounts as the proxy on a read-only root
+    template: deployment.yaml
+    set:
+      collector.enabled: true
+      securityContext.readOnlyRootFilesystem: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: npm
+            mountPath: /.npm
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: cache
+            mountPath: /.cache
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+
   - it: should keep the pod-wide cpu metric unless asked to scale on the proxy container
     template: hpa.yaml
     set:

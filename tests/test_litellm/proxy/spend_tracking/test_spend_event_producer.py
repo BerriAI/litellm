@@ -22,16 +22,17 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
 class _Sidecar:
     """A unix-socket server that records every line it receives, standing in for the collector."""
 
-    def __init__(self, path: Path, reads: bool = True) -> None:
+    def __init__(self, path: Path, reads: bool = True, limit: int = 2**16) -> None:
         self.path = path
         self.reads = reads
+        self.limit = limit
         self.lines: list[bytes] = []  # mutable-ok: test double records what the producer sent
         self._server: asyncio.Server | None = None
         self._stopped = asyncio.Event()
         self._connections: list[asyncio.StreamWriter] = []  # mutable-ok: test double tracks peers to hang up on
 
     async def __aenter__(self) -> "_Sidecar":
-        self._server = await asyncio.start_unix_server(self._on_connection, path=str(self.path))
+        self._server = await asyncio.start_unix_server(self._on_connection, path=str(self.path), limit=self.limit)
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -55,6 +56,20 @@ class _Sidecar:
         while line := await reader.readline():
             self.lines.append(line)
         writer.close()
+
+
+class _CrashingSidecar(_Sidecar):
+    """Bills a few lines, then dies mid-stream with the producer's backlog still queued behind them."""
+
+    def __init__(self, path: Path, lines_before_crash: int) -> None:
+        super().__init__(path, limit=2**20)
+        self._lines_before_crash = lines_before_crash
+
+    async def _on_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._connections.append(writer)
+        for _ in range(self._lines_before_crash):
+            self.lines.append(await reader.readline())
+        writer.transport.abort()
 
 
 class _Fallback:
@@ -217,6 +232,37 @@ def test_sidecar_hang_up_falls_back_instead_of_losing_events(
     assert sidecar_lines == [b"event-1\n"]
     assert fallback_lines == [b"event-2\n"]
     assert counts == (1, 1, 0)
+
+
+@pytest.mark.parametrize("loop_factory", [asyncio.new_event_loop, uvloop.new_event_loop], ids=["asyncio", "uvloop"])
+def test_mid_stream_crash_never_bills_an_event_on_both_sides(
+    tmp_path: Path, loop_factory: Callable[[], asyncio.AbstractEventLoop]
+):
+    """Events large enough to straddle the kernel buffer, a sidecar that reads some and then drops the socket: a
+    failed write may only fall back when the sidecar cannot have read the whole line."""
+    events: Final = tuple(f"event-{i:03d}-".encode() + b"x" * 65536 + b"\n" for i in range(64))
+
+    async def scenario() -> tuple[list[bytes], list[bytes], tuple[int, int, int]]:
+        fallback: Final = _Fallback()
+        sidecar: Final = _CrashingSidecar(tmp_path / "spend.sock", lines_before_crash=3)
+        async with sidecar:
+            producer: Final = _producer(sidecar.path, fallback)
+            for event in events:
+                assert await producer.publish(event) == "queued"
+            await asyncio.sleep(0.2)
+            await producer.close(drain_timeout=5.0)
+        stats: Final = producer.stats()
+        return sidecar.lines, fallback.lines, (stats.sent, stats.fallback, stats.dropped)
+
+    with asyncio.Runner(loop_factory=loop_factory) as runner:
+        sidecar_lines, fallback_lines, counts = runner.run(scenario())
+
+    assert sidecar_lines == list(events[:3])
+    assert set(sidecar_lines).isdisjoint(fallback_lines)
+    assert len(fallback_lines) == len(set(fallback_lines))
+    assert fallback_lines[-1] == events[-1]
+    assert counts[0] + counts[1] == len(events) and counts[2] == 0
+    assert counts[0] >= len(sidecar_lines)
 
 
 @pytest.mark.asyncio

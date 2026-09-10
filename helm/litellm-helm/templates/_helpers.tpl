@@ -270,16 +270,6 @@ and the same spend transaction buffer.
 {{- with .Values.extraEnvVars }}
 {{ toYaml . }}
 {{- end }}
-{{- if .Values.billingMetrics.enabled }}
-{{ include "litellm.billingMetricsEnv" . }}
-{{- end }}
-{{- if .Values.metricsServer.enabled }}
-{{- if eq (int .Values.metricsServer.port) (int .Values.service.port) }}
-{{- fail "metricsServer.port must differ from service.port" }}
-{{- end }}
-- name: PROMETHEUS_METRICS_PORT
-  value: {{ .Values.metricsServer.port | quote }}
-{{- end }}
 {{- if .Values.migrationJob.enabled }}
 # Schema updates are owned by the dedicated migrations Job; skip
 # the proxy's startup `prisma db push` so N replicas don't race
@@ -289,6 +279,23 @@ and the same spend transaction buffer.
 # semantics — same pattern the migrations Job uses.
 - name: DISABLE_SCHEMA_UPDATE
   value: "true"
+{{- end }}
+{{- end -}}
+
+{{/*
+Proxy-only metering and metrics env. The collector sidecar serves no HTTP
+traffic, so it gets neither.
+*/}}
+{{- define "litellm.proxyMetricsEnv" -}}
+{{- if .Values.billingMetrics.enabled }}
+{{ include "litellm.billingMetricsEnv" . }}
+{{- end }}
+{{- if .Values.metricsServer.enabled }}
+{{- if eq (int .Values.metricsServer.port) (int .Values.service.port) }}
+{{- fail "metricsServer.port must differ from service.port" }}
+{{- end }}
+- name: PROMETHEUS_METRICS_PORT
+  value: {{ .Values.metricsServer.port | quote }}
 {{- end }}
 {{- end -}}
 

@@ -370,6 +370,11 @@ resource "aws_ecs_task_definition" "gateway" {
       condition     = !var.collector_enabled || (var.collector_cpu < var.gateway_cpu && var.collector_memory < var.gateway_memory)
       error_message = "collector_cpu and collector_memory are carved out of gateway_cpu / gateway_memory and must leave room for the gateway container."
     }
+
+    precondition {
+      condition     = !var.collector_enabled || var.gateway_metrics_port == null || var.collector_port != var.gateway_metrics_port
+      error_message = "collector_port and gateway_metrics_port must differ: both sidecars bind loopback in the same task."
+    }
   }
 
   family                   = "${local.name}-gateway"

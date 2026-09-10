@@ -128,3 +128,17 @@ run "sidecar_must_leave_room_for_the_gateway" {
     aws_ecs_task_definition.gateway,
   ]
 }
+
+run "sidecars_must_not_share_a_loopback_port" {
+  command = plan
+
+  variables {
+    collector_enabled    = true
+    collector_port       = 4001
+    gateway_metrics_port = 4001
+  }
+
+  expect_failures = [
+    aws_ecs_task_definition.gateway,
+  ]
+}
