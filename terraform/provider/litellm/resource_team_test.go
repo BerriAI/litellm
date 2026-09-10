@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
@@ -82,6 +83,87 @@ func TestTeamCreateSendsSoftBudgetTagsAndAlertEmails(t *testing.T) {
 	}
 	if got := captured["metadata"]; !reflect.DeepEqual(got, wantMetadata) {
 		t.Fatalf("payload metadata = %v, want %v", got, wantMetadata)
+	}
+}
+
+func TestTeamCreateSendsConfiguredTeamID(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"platform-team","team_info":{"team_id":"platform-team","team_alias":"platform"},"keys":[],"team_memberships":[]}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{
+		"team_id":    "platform-team",
+		"team_alias": "platform",
+	})
+
+	if err := resourceLiteLLMTeamCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if got := captured["team_id"]; got != "platform-team" {
+		t.Fatalf("payload team_id = %v, want platform-team", got)
+	}
+	if got := d.Id(); got != "platform-team" {
+		t.Fatalf("resource id = %q, want platform-team", got)
+	}
+	if got := d.Get("team_id"); got != "platform-team" {
+		t.Fatalf("state team_id = %v, want platform-team", got)
+	}
+}
+
+func TestTeamCreateGeneratesTeamIDWhenUnset(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"x","team_info":{"team_alias":"eng"},"keys":[],"team_memberships":[]}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{"team_alias": "eng"})
+
+	if err := resourceLiteLLMTeamCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	sent, _ := captured["team_id"].(string)
+	if _, err := uuid.Parse(sent); err != nil {
+		t.Fatalf("payload team_id = %q, want a generated UUID: %v", sent, err)
+	}
+	if d.Id() != sent || d.Get("team_id") != sent {
+		t.Fatalf("id = %q, state team_id = %v, want both to equal the sent id %q", d.Id(), d.Get("team_id"), sent)
+	}
+}
+
+func TestTeamReadSetsTeamIDFromResourceID(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_id":"imported-team","team_info":{"team_id":"imported-team","team_alias":"imported"},"keys":[],"team_memberships":[]}`)
+	defer srv.Close()
+
+	d := newTeamResourceData(t, map[string]interface{}{})
+	d.SetId("imported-team")
+
+	if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if got := d.Get("team_id"); got != "imported-team" {
+		t.Fatalf("team_id = %v, want imported-team", got)
+	}
+}
+
+func TestTeamIDChangeForcesReplacement(t *testing.T) {
+	res := ResourceLiteLLMTeam()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, map[string]interface{}{
+		"team_id":    "old-team",
+		"team_alias": "eng",
+	})
+	priorData.SetId("old-team")
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"team_id":    "new-team",
+		"team_alias": "eng",
+	})
+	diff, err := res.Diff(context.Background(), priorData.State(), config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if diff == nil || !diff.RequiresNew() {
+		t.Fatalf("changing team_id must force replacement, diff = %+v", diff)
 	}
 }
 
