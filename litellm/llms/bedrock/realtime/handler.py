@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeE
 from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
 
-from ..base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM, run_aws_signing
 from ..common_utils import BedrockError
 from .transformation import BedrockRealtimeConfig
 
@@ -149,7 +149,7 @@ class BedrockRealtime(BaseAWSLLM):
 
         verbose_proxy_logger.debug("Bedrock Realtime: Connecting to %s with model %s", endpoint_uri, model)
 
-        credentials: Final = await asyncio.to_thread(
+        credentials: Final = await run_aws_signing(
             self.get_credentials,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
@@ -170,7 +170,7 @@ class BedrockRealtime(BaseAWSLLM):
                     "or configure credentials in the environment"
                 ),
             )
-        frozen_credentials: Final = await asyncio.to_thread(credentials.get_frozen_credentials)
+        frozen_credentials: Final = await run_aws_signing(credentials.get_frozen_credentials)
 
         # Initialize Bedrock client with aws_sdk_bedrock_runtime
         config: Final = Config(

@@ -2,7 +2,6 @@
 Handles embedding calls to Bedrock's `/invoke` endpoint
 """
 
-import asyncio
 import copy
 import json
 import urllib.parse
@@ -27,7 +26,7 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 
-from ..base_aws_llm import AWSPreparedRequest, BaseAWSLLM, Credentials, bedrock_bearer_token
+from ..base_aws_llm import AWSPreparedRequest, BaseAWSLLM, Credentials, bedrock_bearer_token, run_aws_signing
 from ..common_utils import BedrockError
 from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
@@ -357,7 +356,7 @@ class BedrockEmbedding(BaseAWSLLM):
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
 
-            prepped = await asyncio.to_thread(
+            prepped = await run_aws_signing(
                 self.get_request_headers,
                 credentials=credentials,
                 aws_region_name=aws_region_name,
@@ -638,7 +637,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 credentials=credentials, url=status_url, headers=headers, aws_region_name=aws_region_name
             )
 
-        prepped: Final = await asyncio.to_thread(sign_status_request)
+        prepped: Final = await run_aws_signing(sign_status_request)
 
         # LOGGING
         if logging_obj is not None:
