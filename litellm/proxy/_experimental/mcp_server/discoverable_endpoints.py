@@ -2312,8 +2312,7 @@ async def _build_oauth_protected_resource_response(
     it. Only the legacy ``is_oauth_passthrough`` opt-in rewrites ``resource`` to
     the gateway's own URL so clients present the bearer token back to the gateway.
 
-    An explicitly named gateway-managed oauth2 server (interactive with
-    gateway-vaulted per-user tokens, or M2M) advertises the gateway's own
+    An explicitly named server with gateway-owned sign-in advertises the gateway's own
     authorization server (``{base}/mcp``): a keyless DCR client that configured the
     per-server URL completes the same sign-in flow the aggregate ``/mcp`` endpoint
     supports and is admitted with a gateway session bearer. The per-server relay
@@ -2403,17 +2402,15 @@ async def _build_oauth_protected_resource_response(
     if obo_response is not None:
         return obo_response
 
-    # An OBO server with no configured issuer falls through to the gateway default so discovery still
-    # returns metadata; every other non-oauth2 named server 404s to avoid enumeration.
-    if mcp_server is None or mcp_server.auth_type != MCPAuth.oauth2_token_exchange:
-        _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
-
     if explicitly_named and mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
             "authorization_servers": [f"{request_base_url}/mcp"],
             "resource": resource_url,
             "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
         }
+
+    if mcp_server is None or mcp_server.auth_type != MCPAuth.oauth2_token_exchange:
+        _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
 
     return {
         "authorization_servers": [

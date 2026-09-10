@@ -35,6 +35,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_logging_from_dynamic_params
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
 )
@@ -7908,4 +7909,37 @@ async def test_client_supplied_omit_marker_never_reaches_the_spend_log(
         updated[metadata_key]["session_id"]
         if general_settings.get("missing_session_id") == "generate"
         else "per-call-random-trace-id"
+    )
+
+
+def test_default_team_settings_bool_turn_off_message_logging_redacts():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    pc = ProxyConfig()
+    pc.config = {
+        "litellm_settings": {
+            "default_team_settings": [
+                {
+                    "team_id": "team-redact",
+                    "success_callback": ["gcs_bucket"],
+                    "failure_callback": ["gcs_bucket"],
+                    "turn_off_message_logging": True,
+                }
+            ]
+        }
+    }
+
+    callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+        team_id="team-redact",
+        proxy_config=pc,
+    )
+
+    assert callback_metadata is not None
+    assert callback_metadata.success_callback == ["gcs_bucket"]
+    assert callback_metadata.callback_vars == {"turn_off_message_logging": "True"}
+    assert (
+        _get_turn_off_message_logging_from_dynamic_params(
+            {"standard_callback_dynamic_params": dict(callback_metadata.callback_vars)}
+        )
+        is True
     )

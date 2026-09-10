@@ -101,6 +101,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -197,6 +198,7 @@ if TYPE_CHECKING:
     from prisma.types import HttpConfig
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
@@ -459,7 +461,7 @@ def _pipeline_step_guardrail_names(pipelines: Sequence[tuple[str, "GuardrailPipe
     return frozenset(step.guardrail for _policy_name, pipeline in pipelines for step in pipeline.steps)
 
 
-def _pipeline_managed_guardrail_names(
+def pipeline_managed_guardrail_names(
     data: Mapping[str, object], mode: Literal["pre_call", "post_call"]
 ) -> frozenset[str]:
     return _pipeline_step_guardrail_names(
@@ -522,9 +524,17 @@ def _merge_pipeline_metadata_writes(
         _merge_pipeline_metadata_bucket(data, bucket_key, modified_data.get(bucket_key))
 
 
-def _pipeline_step_supports_unified_streaming(guardrail_name: str) -> bool:
+def _pipeline_step_supports_streaming(guardrail_name: str, translation: "BaseTranslation | None") -> bool:
     callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
-    return callback is not None and PipelineExecutor.supports_unified_execution(callback)
+    if callback is None:
+        return False
+    if PipelineExecutor.supports_unified_execution(callback):
+        return True
+    return (
+        translation is not None
+        and type(translation).assembles_streamed_response
+        and PipelineExecutor.supports_streaming_execution(callback)
+    )
 
 
 def _post_call_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
@@ -581,7 +591,7 @@ def _withdraw_deferred_claims(
     outside_by_policy: Final = MappingProxyType(
         {policy_name: _guardrails_outside_pipeline(policy_name, pipeline) for policy_name, pipeline in deferred}
     )
-    running_elsewhere: Final = _pipeline_managed_guardrail_names(data, "pre_call").union(
+    running_elsewhere: Final = pipeline_managed_guardrail_names(data, "pre_call").union(
         _guardrails_run_standalone_pre_call(data), *outside_by_policy.values()
     )
     withdrawn_policies: Final = frozenset(name for name, outside in outside_by_policy.items() if not outside)
@@ -656,37 +666,51 @@ def _body_selected_deferrals(
     return tuple(policy_name for policy_name, _pipeline in deferred if policy_name not in attributed)
 
 
-def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> bool:
-    unsupported: Final = tuple(
+def _pipeline_unsupported_streaming_guardrails(
+    pipeline: "GuardrailPipeline", translation: "BaseTranslation | None"
+) -> tuple[str, ...]:
+    return tuple(
         dict.fromkeys(
-            step.guardrail for step in pipeline.steps if not _pipeline_step_supports_unified_streaming(step.guardrail)
+            step.guardrail
+            for step in pipeline.steps
+            if not _pipeline_step_supports_streaming(step.guardrail, translation)
         )
     )
+
+
+def _pipeline_is_streamable(
+    policy_name: str, pipeline: "GuardrailPipeline", translation: "BaseTranslation | None"
+) -> bool:
+    unsupported: Final = _pipeline_unsupported_streaming_guardrails(pipeline, translation)
     if not unsupported:
         return True
     verbose_proxy_logger.warning(
-        "Policy '%s' has post_call pipeline guardrails without the unified apply_guardrail interface, "
-        "which streaming pipelines need; the stream skips the pipeline and its guardrails run on their own: %s",
+        "Policy '%s' has post_call pipeline guardrails a streaming pipeline cannot run on this route yet; they "
+        "need the unified apply_guardrail interface, or a post-call hook without a streaming iterator hook on a "
+        "route whose translation assembles the streamed response. The stream skips the pipeline and its "
+        "guardrails run on their own: %s",
         policy_name,
         ", ".join(unsupported),
     )
     return False
 
 
-def _route_supports_streaming_pipelines(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    return not user_api_key_dict.request_route or resolve_endpoint_translation(user_api_key_dict, None) is not None
+def _streaming_pipeline_translation(user_api_key_dict: UserAPIKeyAuth) -> "BaseTranslation | None":
+    resolved: Final = resolve_endpoint_translation(user_api_key_dict, None)
+    return None if resolved is None else resolved[1]
 
 
-def _stream_gated_guardrail_names(
+def stream_gated_guardrail_names(
     request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
 ) -> frozenset[str]:
-    if not _route_supports_streaming_pipelines(user_api_key_dict):
+    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
+    if translation is None:
         return frozenset()
     return _pipeline_step_guardrail_names(
         tuple(
             (policy_name, pipeline)
             for policy_name, pipeline in _post_call_pipelines(request_data)
-            if all(_pipeline_step_supports_unified_streaming(step.guardrail) for step in pipeline.steps)
+            if not _pipeline_unsupported_streaming_guardrails(pipeline, translation)
         )
     )
 
@@ -698,16 +722,19 @@ def _streamable_post_call_pipelines(
     The post_call pipelines a streaming response can be gated through.
 
     Streaming pipelines scan the buffered stream through the endpoint guardrail
-    translation of the request route, so every step's guardrail needs the
-    unified apply_guardrail interface and the route needs a translation. A
-    pipeline that cannot be run that way yet is left out and its guardrails
-    run on the stream on their own, the way they did before pipelines ran on
-    streams at all, with a warning naming the pipeline.
+    translation of the request route, so every step's guardrail needs either the
+    unified apply_guardrail interface or, on a route whose translation assembles
+    the streamed response, a post-call hook that is its only streaming path, and
+    the route needs a translation. A pipeline that
+    cannot be run that way yet is left out and its guardrails run on the stream
+    on their own, the way they did before pipelines ran on streams at all, with
+    a warning naming the pipeline.
     """
     post_call_pipelines: Final = _post_call_pipelines(request_data)
     if not post_call_pipelines:
         return ()
-    if not _route_supports_streaming_pipelines(user_api_key_dict):
+    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
+    if translation is None:
         verbose_proxy_logger.warning(
             "Policies with post_call guardrail pipelines cannot scan streaming responses on route %s yet "
             "(no endpoint guardrail translation); the stream skips the pipelines and their guardrails run "
@@ -719,7 +746,7 @@ def _streamable_post_call_pipelines(
     return tuple(
         (policy_name, pipeline)
         for policy_name, pipeline in post_call_pipelines
-        if _pipeline_is_streamable(policy_name, pipeline)
+        if _pipeline_is_streamable(policy_name, pipeline, translation)
     )
 
 
@@ -2109,7 +2136,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "pre_call")
+            pipeline_managed: Final = pipeline_managed_guardrail_names(data, "pre_call")
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -2874,7 +2901,7 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        request_data.update(_failure_fields_to_lift(request_data))
+        request_data.update(await offload_token_count(_failure_fields_to_lift)(request_data))
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
@@ -3113,7 +3140,7 @@ class ProxyLogging:
         if pipeline_response is not None:
             response = pipeline_response  # rebind-ok: adopt the pipeline's replacement response, same contract as the callback loops below
 
-        pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "post_call")
+        pipeline_managed: Final = pipeline_managed_guardrail_names(data, "post_call")
         guardrail_callbacks, other_callbacks = _partition_post_call_callbacks()
         try:
             # Merge model-level guardrails before checking which guardrails to run
@@ -3429,7 +3456,7 @@ class ProxyLogging:
             _cached_guardrail_data: dict | None = None
             _guardrail_data_computed = False
             pipeline_gated: Final = (
-                _stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_guardrail else frozenset()
+                stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_guardrail else frozenset()
             )
 
             for callback in litellm.callbacks:
@@ -3564,12 +3591,16 @@ class ProxyLogging:
                     ),
                 )
 
-        if post_call_pipelines:
+        pipeline_translation: Final = (
+            resolve_endpoint_translation(user_api_key_dict, None) if post_call_pipelines else None
+        )
+        if pipeline_translation is not None:
             current_response = self._pipeline_gated_stream(
                 response=current_response,
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
                 pipelines=post_call_pipelines,
+                translation=pipeline_translation,
             )
 
         try:
@@ -3593,6 +3624,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
+        translation: "tuple[str, BaseTranslation]",
     ) -> "AsyncGenerator[Any, None]":
         """
         Execute post_call policy pipelines against a streamed response.
@@ -3602,14 +3634,13 @@ class ProxyLogging:
         assembled output through the endpoint guardrail translation, the same
         machinery flat post_call guardrails use at end of stream. An allow
         releases the buffered chunks: verbatim when no guardrail rewrote the
-        output, rewritten in place when one rewrote text and the translation
-        delivers ended-stream rewrites (later steps then re-scan the rewritten
-        chunks, so rewrites chain). A rewrite the translation cannot deliver
-        yet (a tool-call rewrite, or a text rewrite on a route without
-        write-back) is discarded by the executor and the original chunks are
-        released, as is a buffered shape no translation resolves; a block or
-        modify_response terminates with the translation's block chunks or the
-        raised error.
+        output, rewritten in place when one rewrote text or a tool call and the
+        translation delivers ended-stream rewrites (later steps then re-scan the
+        rewritten chunks, so rewrites chain). A rewrite the translation cannot
+        deliver yet (one on a route without write-back, or a shape the route
+        refuses) is discarded by the executor and the original chunks are
+        released; a block or modify_response terminates with the translation's
+        block chunks or the raised error.
         """
         buffered: Final[list[object]] = []  # mutable-ok: accumulates the stream before the pipeline verdict
         async for item in response:
@@ -3617,17 +3648,7 @@ class ProxyLogging:
         if not buffered:
             return
 
-        resolved: Final = resolve_endpoint_translation(user_api_key_dict, buffered[0])
-        if resolved is None:
-            verbose_proxy_logger.warning(
-                "Policies with post_call guardrail pipelines cannot scan this streaming response shape yet; "
-                "the stream is released ungoverned by them: %s",
-                ", ".join(policy_name for policy_name, _pipeline in pipelines),
-            )
-            for buffered_item in buffered:
-                yield buffered_item
-            return
-        call_type, endpoint_translation = resolved
+        call_type, endpoint_translation = translation
 
         for policy_name, pipeline in pipelines:
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
