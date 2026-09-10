@@ -325,26 +325,39 @@ if MCP_AVAILABLE:
             )
         # MCP_TOOL_CALL_TOOL_NAME: run the same pre-call pipeline as the normal path so the tool
         # execution is spend-logged and guardrail-checked.
-        (_, virtual_logging_obj) = await ProxyBaseLLMRequestProcessing(data=data).common_processing_pre_call_logic(
-            request=request,
-            user_api_key_dict=user_api_key_dict,
-            proxy_config=proxy_config,
-            route_type=CallTypes.call_mcp_tool.value,
-            proxy_logging_obj=proxy_logging_obj,
-            general_settings=general_settings,
-        )
-        _tool_start_time: Final = datetime.now()
-        result: Final = await handle_mcp_tool_call(
-            tool_name=tool_arguments.get("tool_name", ""),
-            arguments=tool_arguments.get("arguments") or {},
-            user_api_key_dict=user_api_key_dict,
-            client_ip=rest_client_ip,
-            mcp_auth_header=virtual_mcp_auth_header,
-            mcp_server_auth_headers=virtual_mcp_server_auth_headers,
-            oauth2_headers=virtual_oauth2_headers,
-            raw_headers=virtual_raw_headers,
-            litellm_logging_obj=virtual_logging_obj,
-        )
+        virtual_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+        _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
+        try:
+            (_, virtual_logging_obj) = await virtual_processor.common_processing_pre_call_logic(
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+                proxy_config=proxy_config,
+                route_type=CallTypes.call_mcp_tool.value,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings=general_settings,
+            )
+            _tool_start_time: Final = datetime.now()
+            result: Final = await handle_mcp_tool_call(
+                tool_name=tool_arguments.get("tool_name", ""),
+                arguments=tool_arguments.get("arguments") or {},
+                user_api_key_dict=user_api_key_dict,
+                client_ip=rest_client_ip,
+                mcp_auth_header=virtual_mcp_auth_header,
+                mcp_server_auth_headers=virtual_mcp_server_auth_headers,
+                oauth2_headers=virtual_oauth2_headers,
+                raw_headers=virtual_raw_headers,
+                litellm_logging_obj=virtual_logging_obj,
+            )
+        except Exception as e:
+            virtual_request_data: Final = virtual_processor.data
+            await _safe_fire_mcp_tool_call_failure_logging(
+                virtual_request_data.get("litellm_logging_obj"),
+                e,
+                _request_start_time,
+                user_api_key_dict,
+                virtual_request_data,
+            )
+            raise
         return await _safe_fire_mcp_tool_call_logging(
             virtual_logging_obj,
             result,
@@ -1094,7 +1107,7 @@ if MCP_AVAILABLE:
                 )
 
             proxy_base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-            _tool_start_time: Final = datetime.now()
+            _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
             try:
                 (
                     data,
@@ -1141,6 +1154,7 @@ if MCP_AVAILABLE:
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
 
                 # Call execute_mcp_tool directly (permission checks already done)
+                _tool_start_time: Final = datetime.now()
                 result: Final = await execute_mcp_tool(
                     name=tool_name,
                     arguments=tool_arguments,
@@ -1157,7 +1171,7 @@ if MCP_AVAILABLE:
             except Exception as e:
                 request_data: Final = proxy_base_llm_response_processor.data
                 await _safe_fire_mcp_tool_call_failure_logging(
-                    request_data.get("litellm_logging_obj"), e, _tool_start_time, user_api_key_dict, request_data
+                    request_data.get("litellm_logging_obj"), e, _request_start_time, user_api_key_dict, request_data
                 )
                 raise
             return await _safe_fire_mcp_tool_call_logging(
