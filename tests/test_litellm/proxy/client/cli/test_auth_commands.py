@@ -1477,6 +1477,21 @@ class TestLoginConfigClaude:
         assert "Run `lite down` first" in result.output
         assert not default_settings_path.exists()
 
+    def test_flag_refuses_while_lite_up_holds_the_default_file_reached_through_a_symlinked_config_dir(self, tmp_path):
+        default_config_dir = tmp_path / "default-home" / ".claude"
+        default_config_dir.mkdir(parents=True)
+        alias = tmp_path / "claude-alias"
+        alias.symlink_to(default_config_dir, target_is_directory=True)
+        (tmp_path / "claude_settings_backup.json").write_text("{}")
+
+        result, _settings_path, _backup_path = self._run_login(
+            tmp_path, ["--config-claude"], config_dir_env={"CLAUDE_CONFIG_DIR": str(alias)}
+        )
+
+        assert result.exit_code != 0
+        assert "`lite up` is currently managing" in result.output
+        assert not (default_config_dir / "settings.json").exists()
+
     def test_flag_writes_an_alternate_config_dir_even_while_lite_up_holds_the_default_file(self, tmp_path):
         (tmp_path / "claude_settings_backup.json").write_text("{}")
 

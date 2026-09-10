@@ -66,7 +66,7 @@ def claude_settings_path(environ: Mapping[str, str]) -> Path:
 
 def settings_file_owners(settings_path: Path) -> tuple[SettingsFileOwner, ...]:
     """The commands whose backups guard settings_path: `lite up` and `lite autoroute up` only ever manage the default file."""
-    return SETTINGS_FILE_OWNERS if settings_path == CLAUDE_SETTINGS_PATH else ()
+    return SETTINGS_FILE_OWNERS if settings_path.resolve() == CLAUDE_SETTINGS_PATH.resolve() else ()
 
 
 def load_json_or_empty(path: Path) -> dict[str, JsonValue]:
