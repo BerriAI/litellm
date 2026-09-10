@@ -3108,7 +3108,10 @@ def register_model(
                 existing_model = cast(dict, builtin_model_info)
                 model_cost_key = existing_model["key"]
             else:
-                existing_model = {}
+                # An exact entry ends the lookup ladder before the capability rules are
+                # consulted, so seed from them: otherwise registering an unmapped model
+                # shadows the very defaults it would have resolved to unregistered.
+                existing_model = dict(match_capability_generalizations(_key_str) or {})  # mutable-ok: merge target
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
                 if builtin_entry is not None:
