@@ -1881,9 +1881,15 @@ async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
     }
 
     with (
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: same function-body import, no injection seam
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
+        patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as mock_increment,
+        patch(  # test-quality-ok: same function-body import, no injection seam
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
+        patch(  # test-quality-ok: same function-body import, no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
@@ -2210,8 +2216,12 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     logger = _ProxyDBLogger(producer)
 
     with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as counters,
+        patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: same function-body import, no injection seam
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as counters,
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         await logger.async_log_success_event(_offload_kwargs(), _offload_response(), datetime.now(), datetime.now())
@@ -2242,7 +2252,11 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
     logger = _ProxyDBLogger(producer)
     kwargs = _batch_retrieve_kwargs(CallTypes.aretrieve_batch.value)
 
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+    with (
+        patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging
+    ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         await logger.async_log_success_event(
             kwargs, _retrieved_batch("in_progress", output_file_id=None), datetime.now(), datetime.now()
@@ -2253,9 +2267,15 @@ async def test_async_log_success_event_keeps_batch_retrieves_in_process():
 
 async def _spend_row_written_by(run) -> tuple[SpendLogsPayload, dict, tuple[str, ...]]:
     with (
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as counters,
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
+        patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: same function-body import, no injection seam
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as counters,
+        patch(  # test-quality-ok: same function-body import, no injection seam
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
@@ -2310,8 +2330,12 @@ async def test_sidecar_writes_the_same_spend_row_and_counters_as_the_in_process_
 
 
 @pytest.mark.asyncio
-async def test_sidecar_ignores_an_undecodable_event():
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+async def test_sidecar_ignores_an_undecodable_event():  # test-quality-ok: a discarded event has no observable output other than the DB writer never being reached
+    with (
+        patch(  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging
+    ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         await run_spend_event(b"garbage\n")
     mock_proxy_logging.db_spend_update_writer.update_database.assert_not_awaited()

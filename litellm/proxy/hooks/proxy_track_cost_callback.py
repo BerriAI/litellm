@@ -28,6 +28,7 @@ from litellm.proxy.db.db_spend_update_writer import (
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_event import (
+    ObjectMapping,
     SpendEventBuildError,
     SpendEventDecodeError,
     build_spend_event,
@@ -85,7 +86,9 @@ class _ProxyDBLogger(CustomLogger):
         super().__init__()
         self.spend_event_producer = spend_event_producer
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return
