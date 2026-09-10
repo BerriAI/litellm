@@ -443,9 +443,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     resolved_model: Final = (
         standard_logging_payload.get("model") if standard_logging_payload is not None else None
     ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
-    failed_with_prompt_shaped_model: Final = _get_status_for_spend_log(
-        metadata=metadata
-    ) == "failure" and not _looks_like_model_name(resolved_model)
+    failed_with_prompt_shaped_model: Final = (
+        _get_status_for_spend_log(metadata=metadata) == "failure"
+        and not _model_group
+        and not _looks_like_model_name(resolved_model)
+    )
     model_name: Final = (
         UNKNOWN_MODEL_SPEND_LOG_MODEL
         if rejected_as_unknown_model or failed_with_prompt_shaped_model
