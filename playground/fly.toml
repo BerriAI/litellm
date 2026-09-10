@@ -2,7 +2,7 @@ app = "litellm-rust-playground"
 primary_region = "sjc"
 
 [build]
-  dockerfile = "playground/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [env]
   PLAYGROUND_VOLUME_ROOT = "/data"
