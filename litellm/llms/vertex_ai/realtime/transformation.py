@@ -88,19 +88,6 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         return headers
 
     # ------------------------------------------------------------------
-    # Audio MIME type — Vertex AI needs the sample rate in the MIME string
-    # ------------------------------------------------------------------
-
-    def get_audio_mime_type(self, input_audio_format: str = "pcm16") -> str:
-        mime_types: Final = {
-            # Gemini Live native audio (OpenAI GA realtime default) is 24kHz PCM.
-            "pcm16": "audio/pcm;rate=24000",
-            "g711_ulaw": "audio/pcmu",
-            "g711_alaw": "audio/pcma",
-        }
-        return mime_types.get(input_audio_format, "application/octet-stream")
-
-    # ------------------------------------------------------------------
     # Session setup message
     # ------------------------------------------------------------------
 
