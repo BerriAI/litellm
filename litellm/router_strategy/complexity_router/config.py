@@ -1292,8 +1292,9 @@ class ComplexityRouterConfig(BaseModel):
             "Override the delimiter pairs used to recognize and strip harness-injected reminder "
             "blocks before classification. A harness that wraps injected context differently per "
             "agent type (main, subagent, cron) lists every pair it emits. Replaces, rather than "
-            "adds to, the built-in system-reminder and Codex envelope pairs, so list every "
-            "built-in pair your harness also emits. Matching is case-insensitive."
+            "adds to, the built-in system-reminder pair and the Codex envelope pairs enabled "
+            "for Codex user agents, so list every built-in pair your harness also emits. "
+            "Matching is case-insensitive."
         ),
     )
 
