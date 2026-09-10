@@ -13,6 +13,13 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { PROMPT_CACHE_CREATION_TOOLTIP, PROMPT_CACHE_READ_TOOLTIP } from "@/utils/promptCacheUsage";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
 import EvalViewer from "../EvalViewer/EvalViewer";
+import {
+  getBatchIdFromRequestId,
+  getBatchModels,
+  getBatchRequestCounts,
+  getReasoningTokens,
+  isBatchCallType,
+} from "../batchLogUtils";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -149,6 +156,9 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
           </CardContent>
         </Card>
       </div>
+
+      {/* Batch Results */}
+      {isBatchCallType(logEntry.call_type) && <BatchResultsSection logEntry={logEntry} metadata={metadata} />}
 
       {/* Routing */}
       <RoutingDecisionCard decision={metadata?.routing_decision as RoutingDecision | undefined} />
@@ -374,6 +384,53 @@ function MetricLabel({ label, tooltip, docsUrl }: { label: string; tooltip: stri
   );
 }
 
+/**
+ * Aggregate per-request outcomes for a batch cost row: batch id, success/failure counts
+ * from the parsed output and error files, and the models the batch actually ran on.
+ */
+function BatchResultsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, unknown> }) {
+  const counts = getBatchRequestCounts(metadata);
+  const batchId = getBatchIdFromRequestId(logEntry.request_id);
+  const batchModels = getBatchModels(metadata);
+  if (!counts && !batchId && !batchModels) return null;
+
+  return (
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+      <Card size="sm" style={{ marginBottom: 0 }}>
+        <CardHeader>
+          <CardTitle>Batch Results</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DescriptionList>
+            {batchId && (
+              <DescriptionItem label="Batch ID">
+                <TruncatedValue value={batchId} />
+              </DescriptionItem>
+            )}
+            {counts && (
+              <>
+                <DescriptionItem label="Successful Requests">
+                  {formatNumberWithCommas(counts.successful)}
+                </DescriptionItem>
+                <DescriptionItem label="Failed Requests">
+                  {counts.failed > 0 ? (
+                    <Badge variant="secondary" className="bg-destructive/15 text-destructive">
+                      {formatNumberWithCommas(counts.failed)}
+                    </Badge>
+                  ) : (
+                    formatNumberWithCommas(counts.failed)
+                  )}
+                </DescriptionItem>
+              </>
+            )}
+            {batchModels && <DescriptionItem label="Models">{batchModels.join(", ")}</DescriptionItem>}
+          </DescriptionList>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: Record<string, any> }) {
   const completionStartTime = logEntry.completionStartTime;
   const ttftMs =
@@ -391,6 +448,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
   const uncachedInputTokens = getUncachedInputTextTokens(metadata);
   const showAnthropicMessagesInputOutput =
     logEntry.call_type === "anthropic_messages" && uncachedInputTokens !== undefined;
+  const reasoningTokens = getReasoningTokens(metadata);
 
   return (
     <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
@@ -415,6 +473,9 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                   total={logEntry.total_tokens}
                 />
               </DescriptionItem>
+            )}
+            {reasoningTokens !== undefined && reasoningTokens > 0 && (
+              <DescriptionItem label="Reasoning Tokens">{formatNumberWithCommas(reasoningTokens)}</DescriptionItem>
             )}
             <DescriptionItem label="Cost">${formatNumberWithCommas(logEntry.spend || 0, 8)}</DescriptionItem>
             <DescriptionItem label="Duration">
@@ -635,11 +696,24 @@ function RequestResponseSection({
   );
 }
 
+const GUARDRAIL_JUMP_LINK_STYLE = {
+  passed: { className: "border border-success/20 bg-success/10 text-success", glyph: "\u2713" },
+  flagged: { className: "border border-warning/20 bg-warning/10 text-warning", glyph: "\u26A0" },
+  failed: { className: "border border-destructive/20 bg-destructive/10 text-destructive", glyph: "\u2717" },
+} as const;
+
+const isPassedStatus = (status: unknown) => status === "pass" || status === "passed" || status === "success";
+const isFlaggedStatus = (status: unknown) => status === "flagged" || status === "guardrail_flagged";
+
+const guardrailJumpLinkOutcome = (statuses: unknown[]): keyof typeof GUARDRAIL_JUMP_LINK_STYLE => {
+  if (statuses.every(isPassedStatus)) return "passed";
+  if (statuses.every((s) => isPassedStatus(s) || isFlaggedStatus(s))) return "flagged";
+  return "failed";
+};
+
 export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
-  const allPassed = guardrailEntries.every((e) => {
-    const status = e?.guardrail_status || e?.status;
-    return status === "pass" || status === "passed" || status === "success";
-  });
+  const outcome = guardrailJumpLinkOutcome(guardrailEntries.map((e) => e?.guardrail_status || e?.status));
+  const { className, glyph } = GUARDRAIL_JUMP_LINK_STYLE[outcome];
 
   const handleClick = () => {
     const el = document.getElementById("guardrail-section");
@@ -650,11 +724,7 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
     <div style={{ textAlign: "left", marginBottom: 12 }}>
       <div
         onClick={handleClick}
-        className={
-          allPassed
-            ? "border border-success/20 bg-success/10 text-success"
-            : "border border-destructive/20 bg-destructive/10 text-destructive"
-        }
+        className={className}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -666,8 +736,8 @@ export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[
           fontWeight: 500,
         }}
       >
-        {allPassed ? "\u2713" : "\u2717"} {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""}{" "}
-        evaluated
+        {glyph} {guardrailEntries.length} guardrail
+        {guardrailEntries.length !== 1 ? "s" : ""} evaluated
         <span style={{ fontSize: 11, opacity: 0.7 }}>{"\u2193"}</span>
       </div>
     </div>

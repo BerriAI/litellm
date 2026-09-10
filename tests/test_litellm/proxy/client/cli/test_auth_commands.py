@@ -59,6 +59,7 @@ def _mock_cli_sso_start_response(
     login_id: str = "cli-session-uuid-456",
     poll_secret: str = "poll-secret",
     user_code: str = "ABCD-EFGH",
+    **extra_fields: object,
 ) -> Mock:
     mock_response = Mock()
     mock_response.status_code = 200
@@ -66,6 +67,7 @@ def _mock_cli_sso_start_response(
         "login_id": login_id,
         "poll_secret": poll_secret,
         "user_code": user_code,
+        **extra_fields,
     }
     mock_response.raise_for_status = Mock()
     return mock_response
@@ -333,7 +335,9 @@ class TestLoginCommand:
             call_args = mock_browser.call_args[0][0]
             assert "https://test.example.com/sso/key/generate" in call_args
             assert "cli-test-uuid-123" in call_args
+            assert "user_code" not in call_args
             assert "Verification code: ABCD-EFGH" in result.output
+            assert "pre-filled in the browser" not in result.output
             mock_post.assert_called_once()
             mock_get.assert_called()
             assert mock_get.call_args.kwargs["headers"] == {"x-litellm-cli-poll-secret": "poll-secret"}
@@ -346,6 +350,72 @@ class TestLoginCommand:
 
             # Verify commands were shown
             mock_show_commands.assert_called_once()
+
+    def test_login_prefills_the_code_in_the_browser_when_the_proxy_advertises_it(
+        self, isolated_home, secret_vault_factory
+    ) -> None:
+        vault = secret_vault_factory()
+        poll_response = Mock()
+        poll_response.status_code = 200
+        poll_response.json.return_value = {
+            "status": "ready",
+            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt",
+            "user_id": "test-user-123",
+            "team_id": "team-1",
+            "teams": ["team-1"],
+        }
+        start_response = _mock_cli_sso_start_response(
+            login_id="cli-test-uuid-123",
+            verification_uri_complete=(
+                "https://internal-hostname.example.com/sso/key/generate"
+                "?source=litellm-cli&key=cli-test-uuid-123&user_code=ABCD-EFGH"
+            ),
+        )
+
+        with (
+            patch("webbrowser.open") as mock_browser,
+            patch("requests.post", return_value=start_response),
+            patch("requests.get", return_value=poll_response),
+        ):
+            result = self.runner.invoke(login, obj={"base_url": "https://test.example.com", "secret_vault": vault})
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(vault.blob)["key"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
+        assert json.loads((isolated_home / ".litellm" / "token.json").read_text())["user_id"] == "test-user-123"
+        opened_url = mock_browser.call_args[0][0]
+        assert opened_url.startswith("https://test.example.com/sso/key/generate?")
+        assert "internal-hostname" not in opened_url
+        assert "key=cli-test-uuid-123" in opened_url
+        assert "user_code=ABCD-EFGH" in opened_url
+        assert "Verification code: ABCD-EFGH (pre-filled in the browser, check it matches)" in result.output
+
+    def test_login_keeps_the_code_out_of_the_url_when_the_proxy_sends_a_non_url_verification_uri(
+        self, secret_vault_factory
+    ) -> None:
+        poll_response = Mock()
+        poll_response.status_code = 200
+        poll_response.json.return_value = {
+            "status": "ready",
+            "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt",
+            "user_id": "test-user-123",
+            "team_id": "team-1",
+            "teams": ["team-1"],
+        }
+        for advertised in (None, True):
+            start_response = _mock_cli_sso_start_response(verification_uri_complete=advertised)
+
+            with (
+                patch("webbrowser.open") as mock_browser,
+                patch("requests.post", return_value=start_response),
+                patch("requests.get", return_value=poll_response),
+            ):
+                result = self.runner.invoke(
+                    login, obj={"base_url": "https://test.example.com", "secret_vault": secret_vault_factory()}
+                )
+
+            assert result.exit_code == 0, result.output
+            assert "user_code" not in mock_browser.call_args[0][0]
+            assert "pre-filled in the browser" not in result.output
 
     def test_login_timeout(self):
         """Test login timeout scenario"""

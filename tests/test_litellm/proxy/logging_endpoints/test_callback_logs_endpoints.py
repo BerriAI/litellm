@@ -61,6 +61,7 @@ def test_build_logging_obj_seeds_model_call_details():
     # Metadata is mapped to the keys the cost-tracking callback reads.
     md = details["litellm_params"]["metadata"]
     assert md["user_api_key"] == "rust-gateway-test-key"
+    assert md["user_api_key_hash"] == "rust-gateway-test-key"
     assert md["user_api_key_user_id"] == "user-cb-logs-test"
     assert md["user_api_key_team_id"] == "team-cb-logs-test"
 

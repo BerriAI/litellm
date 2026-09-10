@@ -5,7 +5,9 @@ This hook is called before making an LLM request when a vector store is configur
 It searches the vector store for relevant context and appends it to the messages.
 """
 
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
 import litellm.vector_stores
@@ -23,8 +25,33 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy.utils import PrismaClient
+    from litellm.router import Router
 else:
     LiteLLMLoggingObj = Any
+
+
+class ProxyRuntime(Protocol):
+    def llm_router(self) -> "Router | None": ...
+
+    def prisma_client(self) -> "PrismaClient | None": ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyServerRuntime:
+    def llm_router(self) -> "Router | None":
+        try:
+            from litellm.proxy.proxy_server import llm_router
+        except ImportError:
+            return None
+        return llm_router
+
+    def prisma_client(self) -> "PrismaClient | None":
+        try:
+            from litellm.proxy.proxy_server import prisma_client
+        except ImportError:
+            return None
+        return prisma_client
 
 
 class VectorStorePreCallHook(CustomLogger):
@@ -38,8 +65,9 @@ class VectorStorePreCallHook(CustomLogger):
     3. Appends the search results as context to the messages
     """
 
-    def __init__(self):
+    def __init__(self, proxy_runtime: ProxyRuntime | None = None):
         super().__init__()
+        self.proxy_runtime: Final[ProxyRuntime] = proxy_runtime or ProxyServerRuntime()
 
     async def async_get_chat_completion_prompt(
         self,
@@ -78,14 +106,8 @@ class VectorStorePreCallHook(CustomLogger):
             if litellm.vector_store_registry is None:
                 return model, messages, non_default_params
 
-            # Get prisma_client for database fallback
-            prisma_client = None
-            try:
-                from litellm.proxy.proxy_server import prisma_client as _prisma_client
-
-                prisma_client = _prisma_client
-            except ImportError:
-                pass
+            prisma_client: Final = self.proxy_runtime.prisma_client()
+            llm_router: Final = self.proxy_runtime.llm_router()
 
             # Use database fallback to ensure synchronization across instances
             vector_stores_to_run: list[
@@ -114,15 +136,37 @@ class VectorStorePreCallHook(CustomLogger):
                 vector_store_id = vector_store_to_run.get("vector_store_id", "")
                 custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
                 litellm_params_for_vector_store = vector_store_to_run.get("litellm_params", {}) or {}
-                # Call litellm.vector_stores.search() with the required parameters
-                search_response = await litellm.vector_stores.asearch(
-                    **{
-                        "vector_store_id": vector_store_id,
-                        "query": query,
-                        "custom_llm_provider": custom_llm_provider,
-                        **litellm_params_for_vector_store,
-                    },
+                request_litellm_params = litellm_logging_obj.model_call_details.get("litellm_params", {})
+                request_metadata = (
+                    request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
                 )
+                if llm_router is not None:
+                    search_function = cast(  # cast-ok: normalize router search callable
+                        Callable[..., Awaitable[VectorStoreSearchResponse]],
+                        llm_router.avector_store_search,
+                    )
+                else:
+                    search_function = cast(  # cast-ok: normalize SDK search callable
+                        Callable[..., Awaitable[VectorStoreSearchResponse]],
+                        litellm.vector_stores.asearch,
+                    )
+                try:
+                    search_response = await search_function(
+                        **{
+                            "vector_store_id": vector_store_id,
+                            "query": query,
+                            "custom_llm_provider": custom_llm_provider,
+                            "metadata": request_metadata,
+                            **litellm_params_for_vector_store,
+                        },
+                    )
+                except Exception as search_error:
+                    verbose_logger.warning(
+                        "Vector store search failed for vector_store_id=%s, continuing without its context: %s",
+                        vector_store_id,
+                        search_error,
+                    )
+                    continue
 
                 verbose_logger.debug("search_response: %s", search_response)
 
@@ -131,7 +175,7 @@ class VectorStorePreCallHook(CustomLogger):
 
                 # Process search results and append as context
                 modified_messages = self._append_search_results_to_messages(
-                    messages=messages, search_response=search_response
+                    messages=modified_messages, search_response=search_response
                 )
 
                 # Get the number of results for logging

@@ -5,12 +5,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { fetchMCPServers, fetchMCPToolsets } from "../networking";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import { mcpAllowedToolsFor, mcpServersForIdentifier } from "../mcp_server_management/effectiveMcpServers";
+import { InheritedGrant, inheritedGrantTooltip } from "./inheritedGrants";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
   mcpAccessGroups?: string[];
   mcpToolPermissions?: Record<string, string[]>;
   mcpToolsets?: string[];
+  inheritedMcpServers?: InheritedGrant[];
   accessToken?: string | null;
 }
 
@@ -19,6 +22,7 @@ export function MCPServerPermissions({
   mcpAccessGroups = [],
   mcpToolPermissions = {},
   mcpToolsets = [],
+  inheritedMcpServers = [],
   accessToken,
 }: MCPServerPermissionsProps) {
   const [mcpServerDetails, setMCPServerDetails] = useState<MCPServer[]>([]);
@@ -50,10 +54,16 @@ export function MCPServerPermissions({
     });
   };
 
+  const directServerIds = mcpServers.filter(
+    (server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL,
+  );
+  const inheritedOnlyServers = inheritedMcpServers.filter((grant) => !mcpServers.includes(grant.id));
+  const serverIdCount = directServerIds.length + inheritedOnlyServers.length;
+
   // Fetch MCP server details when component mounts
   useEffect(() => {
     const fetchMCPServerDetails = async () => {
-      if (accessToken && mcpServers.length > 0) {
+      if (accessToken && serverIdCount > 0) {
         try {
           const response = await fetchMCPServers(accessToken);
           if (response && Array.isArray(response)) {
@@ -67,7 +77,7 @@ export function MCPServerPermissions({
       }
     };
     fetchMCPServerDetails();
-  }, [accessToken, mcpServers.length]);
+  }, [accessToken, serverIdCount]);
 
   // Fetch toolset details
   useEffect(() => {
@@ -85,25 +95,39 @@ export function MCPServerPermissions({
     fetchToolsets();
   }, [accessToken, mcpToolsets.length]);
 
-  // Function to get display name for MCP server
-  const getMCPServerDisplayName = (serverId: string) => {
-    const serverDetail = mcpServerDetails.find((server) => server.server_id === serverId);
+  // A grant may name a server by id, name or alias, resolved the way the backend resolves it.
+  const getMCPServerDisplayName = (serverIdentifier: string) => {
+    const [serverDetail] = mcpServersForIdentifier(mcpServerDetails, serverIdentifier);
     if (serverDetail) {
+      const label = serverDetail.alias || serverDetail.server_name || serverDetail.server_id;
+      const serverId = serverDetail.server_id;
       const truncatedId = serverId.length > 7 ? `${serverId.slice(0, 3)}...${serverId.slice(-4)}` : serverId;
-      return `${serverDetail.alias || serverDetail.server_name || serverId} (${truncatedId})`;
+      return `${label} (${truncatedId})`;
     }
-    return serverId;
+    return serverIdentifier;
+  };
+
+  // The allowlist may be keyed by a different identifier than the grant names the server by, and
+  // several equivalent keys may each carry part of it; the backend enforces their union.
+  const getToolPermissionsFor = (serverIdentifier: string): readonly string[] | undefined => {
+    const [serverDetail] = mcpServersForIdentifier(mcpServerDetails, serverIdentifier);
+    if (!serverDetail) {
+      return mcpToolPermissions[serverIdentifier];
+    }
+    return mcpAllowedToolsFor(serverDetail, mcpToolPermissions, mcpServerDetails);
   };
 
   const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
   const grantsAllProxyMcpServers = mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
 
-  // Merge servers and access groups into one list
   const mergedItems = [
-    ...mcpServers
-      .filter((server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL)
-      .map((server) => ({ type: "server", value: server })),
-    ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
+    ...directServerIds.map((server) => ({ type: "server", value: server, tooltip: `Full ID: ${server}` })),
+    ...inheritedOnlyServers.map((grant) => ({
+      type: "server",
+      value: grant.id,
+      tooltip: inheritedGrantTooltip(grant),
+    })),
+    ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group, tooltip: "" })),
   ];
   const totalCount = mergedItems.length + mcpToolsets.length;
 
@@ -132,7 +156,7 @@ export function MCPServerPermissions({
       ) : totalCount > 0 ? (
         <div className="max-h-[400px] overflow-y-auto space-y-2 pr-1">
           {mergedItems.map((item, index) => {
-            const toolsForServer = item.type === "server" ? mcpToolPermissions[item.value] : undefined;
+            const toolsForServer = item.type === "server" ? getToolPermissionsFor(item.value) : undefined;
             const hasToolRestrictions = toolsForServer && toolsForServer.length > 0;
             const isExpanded = expandedServers.has(item.value);
 
@@ -153,7 +177,7 @@ export function MCPServerPermissions({
                             {getMCPServerDisplayName(item.value)}
                           </span>
                         </TooltipTrigger>
-                        <TooltipContent>{`Full ID: ${item.value}`}</TooltipContent>
+                        <TooltipContent>{item.tooltip}</TooltipContent>
                       </Tooltip>
                     ) : (
                       <div className="inline-flex items-center gap-2 min-w-0">
