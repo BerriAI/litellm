@@ -1093,19 +1093,47 @@ class TestAgentCommands:
             in result.output
         )
 
-    def _invoke_claude_with_settings(self, tmp_path, settings, obj):
-        settings_path = tmp_path / "settings.json"
+    def _invoke_claude_with_settings(self, tmp_path, settings, obj, *, default_settings=None):
+        config_dir = tmp_path / "claude-config"
+        config_dir.mkdir()
         if settings is not None:
-            settings_path.write_text(json.dumps(settings))
+            (config_dir / "settings.json").write_text(json.dumps(settings))
+        default_path = tmp_path / "home-claude" / "settings.json"
+        default_path.parent.mkdir()
+        if default_settings is not None:
+            default_path.write_text(json.dumps(default_settings))
         captured = {}
         with (
-            patch(f"{AGENTS_MODULE}.CLAUDE_SETTINGS_PATH", settings_path),
+            patch(f"{CLAUDE_SETTINGS_MODULE}.CLAUDE_SETTINGS_PATH", default_path),
             patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value="/usr/local/bin/lite"),
             patch(f"{AGENTS_MODULE}.run_agent", side_effect=lambda b, k, c, **kw: captured.update(kw)),
         ):
-            result = self.runner.invoke(_agent_command("claude"), [], obj=obj)
+            result = self.runner.invoke(
+                _agent_command("claude"), [], obj=obj, env={"CLAUDE_CONFIG_DIR": str(config_dir)}
+            )
         assert result.exit_code == 0, result.output
         return captured, result.output
+
+    def test_helper_is_read_from_the_config_dir_claude_code_uses(self, tmp_path):
+        captured, output = self._invoke_claude_with_settings(
+            tmp_path,
+            {"apiKeyHelper": "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"},
+            {"base_url": "http://localhost:4000", "api_key": "sk-key", "api_key_from_token_file": True},
+        )
+
+        assert captured["export_anthropic_token"] is False
+        assert str(tmp_path / "claude-config" / "settings.json") in output
+
+    def test_helper_only_in_the_default_file_keeps_the_env_token_when_config_dir_points_elsewhere(self, tmp_path):
+        captured, output = self._invoke_claude_with_settings(
+            tmp_path,
+            None,
+            {"base_url": "http://localhost:4000", "api_key": "sk-key", "api_key_from_token_file": True},
+            default_settings={"apiKeyHelper": "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"},
+        )
+
+        assert captured["export_anthropic_token"] is True
+        assert "apiKeyHelper" not in output
 
     def test_stored_login_with_a_matching_helper_leaves_the_token_to_the_helper(self, tmp_path):
         captured, output = self._invoke_claude_with_settings(
@@ -1145,11 +1173,9 @@ class TestAgentCommands:
 
         assert captured["export_anthropic_token"] is True
 
-    def test_codex_never_consults_claude_settings(self, tmp_path):
-        settings_path = tmp_path / "settings.json"
+    def test_codex_never_consults_claude_settings(self):
         captured = {}
         with (
-            patch(f"{AGENTS_MODULE}.CLAUDE_SETTINGS_PATH", settings_path),
             patch(f"{AGENTS_MODULE}.lite_api_key_helper_configured", side_effect=AssertionError("consulted")),
             patch(f"{AGENTS_MODULE}.run_agent", side_effect=lambda b, k, c, **kw: captured.update(kw)),
         ):

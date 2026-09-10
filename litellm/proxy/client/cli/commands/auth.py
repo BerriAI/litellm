@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import webbrowser
@@ -40,9 +41,9 @@ from litellm.litellm_core_utils.cli_token_utils import (
 )
 
 from .claude_settings import (
-    CLAUDE_SETTINGS_PATH,
     SETTINGS_FILE_OWNERS,
     ClaudeSettingsError,
+    claude_settings_path,
     write_claude_settings,
 )
 from .pkce_login import (
@@ -778,12 +779,13 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
 
 
 def _configure_claude_code(base_url: str) -> None:
-    """Point Claude Code at base_url by patching ~/.claude/settings.json."""
+    """Point Claude Code at base_url by patching the settings.json it reads."""
+    settings_path: Final = claude_settings_path(os.environ)
     try:
-        write_claude_settings(base_url, CLAUDE_SETTINGS_PATH, SETTINGS_FILE_OWNERS)
+        write_claude_settings(base_url, settings_path, SETTINGS_FILE_OWNERS)
     except ClaudeSettingsError as e:
         raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
-    click.echo(f"\nConfigured Claude Code: {CLAUDE_SETTINGS_PATH} now routes through {base_url.rstrip('/')}.")
+    click.echo(f"\nConfigured Claude Code: {settings_path} now routes through {base_url.rstrip('/')}.")
     click.echo("Your other Claude Code settings were left untouched. Restart Claude Code to pick this up.")
 
 

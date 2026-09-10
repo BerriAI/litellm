@@ -2,6 +2,7 @@ import json
 import shlex
 import stat
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -12,9 +13,11 @@ from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.claude_settings import (
     AUTOROUTE_BACKUP_PATH,
     BACKUP_PATH,
+    CLAUDE_SETTINGS_PATH,
     SETTINGS_FILE_OWNERS,
     ClaudeSettingsError,
     SettingsFileOwner,
+    claude_settings_path,
     lite_api_key_helper_configured,
     resolve_api_key_helper,
     write_claude_settings,
@@ -358,6 +361,20 @@ class TestDoesNotDestroyUserOwnedStructure:
             write_claude_settings("https://proxy.example.com", settings_path, _owners(backup_path))
 
         assert json.loads(settings_path.read_text())["env"] == "not-an-object"
+
+
+class TestClaudeSettingsPath:
+    def test_defaults_to_the_home_settings_file(self):
+        assert claude_settings_path({}) == CLAUDE_SETTINGS_PATH
+        assert claude_settings_path({"CLAUDE_CONFIG_DIR": ""}) == CLAUDE_SETTINGS_PATH
+
+    def test_follows_claude_config_dir_like_claude_code_does(self, tmp_path):
+        assert claude_settings_path({"CLAUDE_CONFIG_DIR": str(tmp_path)}) == tmp_path / "settings.json"
+
+    def test_expands_a_tilde_in_claude_config_dir(self):
+        assert claude_settings_path({"CLAUDE_CONFIG_DIR": "~/.claude-work"}) == (
+            Path.home() / ".claude-work" / "settings.json"
+        )
 
 
 class TestLiteApiKeyHelperConfigured:
