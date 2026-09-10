@@ -367,6 +367,9 @@ local scoring shortcut in `heuristic_first` and `hybrid` modes. The configured c
 a native OpenAI or Azure OpenAI Responses deployment with access to the encrypted content. The
 provider handles the encrypted task, and the classifier still chooses the tier dynamically
 
+Compatibility is checked after normal deployment selection. A paused incompatible member of the
+classifier group does not prevent an eligible compatible deployment from classifying the task
+
 Unsupported classifier deployments and provider decryption errors use the existing
 `classifier_fallback` policy. No fixed tier is introduced for encrypted tasks. Plaintext asks and
 requests carrying only historical encrypted reasoning retain the existing classifier path
