@@ -29,6 +29,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     add_internal_model_credentials,
     apply_team_provider_credentials,
+    authorize_model_for_key,
     batch_cost_poller_is_active,
     decode_model_from_file_id,
     encode_batch_response_ids,
@@ -286,6 +287,7 @@ async def create_batch(
                     detail={"error": f"Expected 1 model, got {len(target_model_names)}"},
                 )
             model: Final = target_model_names[0]
+            await authorize_model_for_key(model_id=model, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
             _create_batch_data["model"] = model
 
             resolved_storage_url: Final = await _resolve_managed_input_file_storage_url(input_file_id)
@@ -582,10 +584,17 @@ async def retrieve_batch(
                 )
 
             if unified_batch_id:
+                unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id)
+                if unified_model_id is not None:
+                    await authorize_model_for_key(
+                        model_id=llm_router.resolve_model_name_from_model_id(unified_model_id) or unified_model_id,
+                        llm_router=llm_router,
+                        user_api_key_dict=user_api_key_dict,
+                    )
                 add_internal_model_credentials(
                     data=data,
                     llm_router=llm_router,
-                    model_id=get_model_id_from_unified_batch_id(unified_batch_id),
+                    model_id=unified_model_id,
                 )
 
             response = await llm_router.aretrieve_batch(**data)
@@ -998,6 +1007,11 @@ async def cancel_batch(
                     status_code=400,
                     detail={"error": "Invalid LiteLLM managed batch ID. Missing model_id."},
                 )
+            await authorize_model_for_key(
+                model_id=llm_router.resolve_model_name_from_model_id(model_id_from_batch) or model_id_from_batch,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
             data["model"] = model_id_from_batch
             data["batch_id"] = get_batch_id_from_unified_batch_id(unified_batch_id)
             response = await llm_router.acancel_batch(**data)
