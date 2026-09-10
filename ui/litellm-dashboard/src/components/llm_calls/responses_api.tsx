@@ -4,6 +4,7 @@ import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+import { parseUsageCost } from "./usage_cost";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -311,8 +312,9 @@ export async function makeOpenAIResponsesRequest(
               usageData.reasoningTokens = reasoningTokens;
             }
 
-            if (usage.cost !== undefined && usage.cost !== null) {
-              usageData.cost = Number(usage.cost);
+            const parsedCost = parseUsageCost(usage.cost);
+            if (parsedCost !== undefined) {
+              usageData.cost = parsedCost;
             }
 
             onUsageData(usageData, mcpToolUsed);

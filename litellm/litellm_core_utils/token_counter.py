@@ -3,11 +3,15 @@
 import base64
 import io
 import struct
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
 
+import anyio
+import anyio.lowlevel
 import httpx
 import tiktoken
+from tokenizers import Tokenizer
+from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
@@ -21,7 +25,10 @@ from litellm.constants import (
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
+    TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+    TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
@@ -317,6 +324,32 @@ TokenCounterFunction = Callable[[str], int]
 Type for a function that counts tokens in a string.
 """
 
+EXTRAPOLATION_SAMPLES: Final = 16
+T_ParamSpec: Final = ParamSpec("T_ParamSpec")
+T_Retval = TypeVar("T_Retval")
+_COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
+
+
+def _count_offload_limiter_for_this_loop() -> anyio.CapacityLimiter:
+    existing: Final = _COUNT_OFFLOAD_LIMITER.get(None)
+    if existing is not None:
+        return existing
+    created: Final = anyio.CapacityLimiter(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+    _COUNT_OFFLOAD_LIMITER.set(created)
+    return created
+
+
+def offload_token_count(
+    function: Callable[T_ParamSpec, T_Retval],
+) -> Callable[T_ParamSpec, Awaitable[T_Retval]]:
+    async def offloaded(
+        *args: T_ParamSpec.args,
+        **kwargs: T_ParamSpec.kwargs,  # kwargs-ok: ParamSpec keeps the wrapped function's own keyword contract
+    ) -> T_Retval:
+        return await asyncify(function, limiter=_count_offload_limiter_for_this_loop())(*args, **kwargs)
+
+    return offloaded
+
 
 def _get_tiktoken_count_function(
     encode_length: Callable[[str], int],
@@ -538,7 +571,38 @@ def _count_extra(
     return num_tokens
 
 
+def _get_extrapolating_count_function(
+    count_exactly: TokenCounterFunction,
+    max_exact_chars: int = TOKEN_COUNTER_MAX_EXACT_CHARS,
+) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        if len(text) <= max_exact_chars:
+            return count_exactly(text)
+        samples: Final = _evenly_spaced_samples(text, max_exact_chars)
+        sampled_chars: Final = sum(len(sample) for sample in samples)
+        return round(sum(count_exactly(sample) for sample in samples) * len(text) / sampled_chars)
+
+    return count_tokens
+
+
+def _evenly_spaced_samples(text: str, total_chars: int) -> tuple[str, ...]:
+    sample_count: Final = min(EXTRAPOLATION_SAMPLES, total_chars)
+    sample_chars: Final = total_chars // sample_count
+    last_start: Final = len(text) - sample_chars
+    return tuple(
+        text[start : start + sample_chars]
+        for start in (last_start * index // max(sample_count - 1, 1) for index in range(sample_count))
+    )
+
+
 def _get_count_function(
+    model: str | None,
+    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
+) -> TokenCounterFunction:
+    return _get_extrapolating_count_function(_get_exact_count_function(model, custom_tokenizer))
+
+
+def _get_exact_count_function(
     model: str | None,
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
 ) -> TokenCounterFunction:
@@ -549,10 +613,10 @@ def _get_count_function(
     if model is not None or custom_tokenizer is not None:
         tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
+            tokenizer: Final[Tokenizer] = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
-                enc: Final = tokenizer_json["tokenizer"].encode(text)
-                return len(enc.ids)
+                return len(tokenizer.encode_batch_fast([text])[0])
 
             return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":

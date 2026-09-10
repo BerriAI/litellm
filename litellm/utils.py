@@ -2293,15 +2293,7 @@ def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: st
     dict: A dictionary with the tokenizer and its type.
     """
 
-    try:
-        tokenizer = Tokenizer.from_pretrained(
-            identifier,
-            revision=revision,
-            auth_token=auth_token,
-        )
-    except Exception as e:
-        verbose_logger.error("Error creating pretrained tokenizer: %s. Defaulting to version without 'auth_token'.", e)
-        tokenizer = Tokenizer.from_pretrained(identifier, revision=revision)
+    tokenizer: Final = Tokenizer.from_pretrained(identifier, revision=revision, token=auth_token)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -3412,7 +3404,7 @@ def get_optional_params_image_gen(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model or "",
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=litellm.drop_params is True or drop_params is True,
         )
     elif (
         custom_llm_provider == "openai"
