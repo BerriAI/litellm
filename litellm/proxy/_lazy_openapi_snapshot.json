@@ -10878,6 +10878,30 @@
               "description": "Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.",
               "title": "Agent Id"
             },
+            "agent_identity_client_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client id of the Entra agent identity created from the blueprint. Required when auth_mode is 'agent_identity'. Falls back to the AGENT365_AGENT_IDENTITY_CLIENT_ID environment variable.",
+              "title": "Agent Identity Client Id"
+            },
+            "agent_user_upn": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "User principal name of the agent user account parented by the agent identity; Defender evaluates and audits as this account. Required when auth_mode is 'agent_identity'. Falls back to the AGENT365_AGENT_USER_UPN environment variable.",
+              "title": "Agent User Upn"
+            },
             "akto_account_id": {
               "anyOf": [
                 {
@@ -11065,6 +11089,22 @@
               ],
               "description": "Set to True to request asynchronous analysis (sets `plr_async` header). Defaults to provider behaviour when omitted.",
               "title": "Async Mode"
+            },
+            "auth_mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "on_behalf_of",
+                    "agent_identity"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How the guardrail authenticates to Agent 365. 'on_behalf_of' (default) exchanges the caller's incoming Entra bearer token, so every MCP caller must present one. 'agent_identity' uses a Microsoft Entra Agent ID: client_id/client_secret are the agent identity blueprint's, and the guardrail mints the agent user's token itself, so callers need no Entra token.",
+              "title": "Auth Mode"
             },
             "auth_token": {
               "anyOf": [
@@ -11389,7 +11429,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Client id of the gateway's Entra app registration (a confidential client). Falls back to the AGENT365_CLIENT_ID environment variable.",
+              "description": "Client id of the gateway's Entra app registration (a confidential client), or of the agent identity blueprint when auth_mode is 'agent_identity'. Falls back to the AGENT365_CLIENT_ID environment variable.",
               "title": "Client Id"
             },
             "client_secret": {
@@ -11401,7 +11441,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.",
+              "description": "Client secret of the gateway's Entra app registration (or of the agent identity blueprint), used to perform the token exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.",
               "title": "Client Secret"
             },
             "confidence_threshold": {

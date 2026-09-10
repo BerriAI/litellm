@@ -30548,6 +30548,16 @@ export interface components {
              */
             agent_id?: string | null;
             /**
+             * Agent Identity Client Id
+             * @description Client id of the Entra agent identity created from the blueprint. Required when auth_mode is 'agent_identity'. Falls back to the AGENT365_AGENT_IDENTITY_CLIENT_ID environment variable.
+             */
+            agent_identity_client_id?: string | null;
+            /**
+             * Agent User Upn
+             * @description User principal name of the agent user account parented by the agent identity; Defender evaluates and audits as this account. Required when auth_mode is 'agent_identity'. Falls back to the AGENT365_AGENT_USER_UPN environment variable.
+             */
+            agent_user_upn?: string | null;
+            /**
              * Akto Account Id
              * @description Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.
              */
@@ -30625,6 +30635,11 @@ export interface components {
              * @description Set to True to request asynchronous analysis (sets `plr_async` header). Defaults to provider behaviour when omitted.
              */
             async_mode?: boolean | null;
+            /**
+             * Auth Mode
+             * @description How the guardrail authenticates to Agent 365. 'on_behalf_of' (default) exchanges the caller's incoming Entra bearer token, so every MCP caller must present one. 'agent_identity' uses a Microsoft Entra Agent ID: client_id/client_secret are the agent identity blueprint's, and the guardrail mints the agent user's token itself, so callers need no Entra token.
+             */
+            auth_mode?: ("on_behalf_of" | "agent_identity") | null;
             /**
              * Auth Token
              * @description Authorization bearer token for IBM Guardrails API. Reads from IBM_GUARDRAILS_AUTH_TOKEN env var if None.
@@ -30750,12 +30765,12 @@ export interface components {
             chunk_budget_chars: number;
             /**
              * Client Id
-             * @description Client id of the gateway's Entra app registration (a confidential client). Falls back to the AGENT365_CLIENT_ID environment variable.
+             * @description Client id of the gateway's Entra app registration (a confidential client), or of the agent identity blueprint when auth_mode is 'agent_identity'. Falls back to the AGENT365_CLIENT_ID environment variable.
              */
             client_id?: string | null;
             /**
              * Client Secret
-             * @description Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.
+             * @description Client secret of the gateway's Entra app registration (or of the agent identity blueprint), used to perform the token exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.
              */
             client_secret?: string | null;
             /**
