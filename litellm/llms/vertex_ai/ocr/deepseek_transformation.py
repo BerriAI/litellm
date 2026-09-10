@@ -3,7 +3,6 @@ Vertex AI DeepSeek OCR transformation implementation.
 """
 
 import json
-from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -16,9 +15,7 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRRequestData,
     OCRResponse,
     OCRUsageInfo,
-    RustOCRConfig,
 )
-from litellm.llms.vertex_ai.ocr.transformation import vertex_rust_ocr_config
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 VERTEX_AI_DEEPSEEK_OCR_API_KEY_ENV_VAR: Final = "VERTEX_AI_API_KEY"
@@ -36,11 +33,6 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
     This transformation converts standard LiteLLM OCR requests to the
     Vertex AI DeepSeek OCR OpenAPI endpoint shape and normalizes the response.
     """
-
-    def get_rust_ocr_config(
-        self, kwargs: Mapping[str, object], resolve_secret: Callable[[str], str | None]
-    ) -> RustOCRConfig | None:
-        return vertex_rust_ocr_config(kwargs, resolve_secret)
 
     def __init__(self) -> None:
         super().__init__()

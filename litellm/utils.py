@@ -973,7 +973,7 @@ def function_setup(
         if kwargs.get("failure_callback", None) is not None and isinstance(kwargs["failure_callback"], list):
             dynamic_failure_callbacks = kwargs.pop("failure_callback")
 
-        if add_breadcrumb and original_function not in ("ocr", "aocr"):
+        if add_breadcrumb:
             try:
                 from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
@@ -7532,18 +7532,6 @@ def get_valid_models(
 
 def print_args_passed_to_litellm(original_function, args, kwargs):
     if not _is_debugging_on():
-        return
-    if original_function.__name__ in ("ocr", "aocr"):
-        from litellm.litellm_core_utils.ocr_logging import OCRRequestMetadata
-
-        metadata: Final = OCRRequestMetadata.from_request(
-            args[0] if args else kwargs.get("model", ""),
-            kwargs.get("custom_llm_provider"),
-            kwargs.get("litellm_call_id"),
-            args[1] if len(args) > 1 else kwargs.get("document"),
-            kwargs.get("timeout"),
-        )
-        verbose_logger.debug("OCR request: %s", metadata.as_dict())
         return
     try:
         # we've already printed this for acompletion, don't print for completion

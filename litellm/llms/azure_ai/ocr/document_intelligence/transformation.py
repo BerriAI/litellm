@@ -11,7 +11,7 @@ The operation location must be polled until the analysis completes.
 import asyncio
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
@@ -27,7 +27,6 @@ from litellm.constants import (
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin, encode_url_path_segment
 from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
-from litellm.llms.azure_ai.ocr.common_utils import azure_rust_ocr_config
 from litellm.llms.base_llm.ocr.transformation import (
     OCR_REQUEST_FORMAT_PARAM,
     BaseOCRConfig,
@@ -38,7 +37,6 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRRequestFormat,
     OCRResponse,
     OCRUsageInfo,
-    RustOCRConfig,
     parse_ocr_request_format,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -87,11 +85,6 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     Reference: https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/
     """
-
-    def get_rust_ocr_config(
-        self, kwargs: Mapping[str, object], resolve_secret: Callable[[str], str | None]
-    ) -> RustOCRConfig | None:
-        return azure_rust_ocr_config(kwargs)
 
     def __init__(self) -> None:
         super().__init__()
@@ -553,7 +546,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         client: Final = _get_httpx_client()
         start_time: Final = time.time()
 
-        verbose_logger.debug("Polling Azure DI operation")
+        verbose_logger.debug("Polling Azure DI operation: %s", operation_url)
 
         while True:
             self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)
@@ -594,7 +587,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE_AI)
         start_time: Final = time.time()
 
-        verbose_logger.debug("Polling Azure DI operation (async)")
+        verbose_logger.debug("Polling Azure DI operation (async): %s", operation_url)
 
         while True:
             self._check_timeout(start_time=start_time, timeout_secs=timeout_secs)

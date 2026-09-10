@@ -91,7 +91,6 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
-from litellm.litellm_core_utils.ocr_logging import OCRRequestMetadata, ocr_error_for_logging, ocr_logging_context
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -506,9 +505,7 @@ class Logging(LiteLLMLoggingBaseClass):
         log_raw_request_response: bool = False,
         supports_correlation_logging: bool = True,
     ):
-        _input: Final[str | None] = (
-            "OCR document processing" if call_type in ("ocr", "aocr") else messages
-        )  # save original value of messages
+        _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
             if isinstance(messages, str):
                 messages = [
@@ -530,18 +527,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
-        initial_kwargs: Final = kwargs if kwargs is not None else MappingProxyType({})
-        self.ocr_request_metadata: OCRRequestMetadata | None = (
-            OCRRequestMetadata.from_request(
-                model,
-                initial_kwargs.get("custom_llm_provider"),
-                litellm_call_id,
-                initial_kwargs.get("document"),
-                initial_kwargs.get("timeout"),
-            )
-            if call_type in ("ocr", "aocr")
-            else None
-        )
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
 
@@ -610,11 +595,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # INITIAL LITELLM_PARAMS
         litellm_params = {}
         if kwargs is not None:
-            litellm_params = (
-                {**self.ocr_request_metadata.as_dict(), **ocr_logging_context(kwargs)}
-                if self.ocr_request_metadata
-                else get_litellm_params(**kwargs)
-            )
+            litellm_params = get_litellm_params(**kwargs)
             litellm_params = scrub_sensitive_keys_in_metadata(litellm_params)
 
         self.litellm_params = litellm_params
@@ -823,20 +804,13 @@ class Logging(LiteLLMLoggingBaseClass):
         user: str | None = None,
         **additional_params,
     ):
-        ocr_metadata: Final = getattr(self, "ocr_request_metadata", None)
-        logged_params: Final = (
-            {**ocr_metadata.as_dict(), **ocr_logging_context(litellm_params)}
-            if ocr_metadata is not None
-            else litellm_params
-        )
-        logged_additional: Final = ocr_metadata.as_dict() if ocr_metadata is not None else additional_params
-        self.optional_params = {} if ocr_metadata is not None else optional_params
+        self.optional_params = optional_params
         if model is not None:
             self.model = model
         self.user = user
         self.litellm_params = {
             **self.litellm_params,
-            **scrub_sensitive_keys_in_metadata(logged_params),
+            **scrub_sensitive_keys_in_metadata(litellm_params),
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
@@ -857,7 +831,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "completion_start_time": self.completion_start_time,
                 "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
                 **self.optional_params,
-                **logged_additional,
+                **additional_params,
             }
         )
 
@@ -873,12 +847,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def update_from_kwargs(
         self,
-        kwargs: Mapping[str, object],
+        kwargs: dict,
         litellm_params: dict | None = None,
-        optional_params: Mapping[str, object] | None = None,
+        optional_params: dict | None = None,
         model: str | None = None,
         user: str | None = None,
-        ocr_request_metadata: OCRRequestMetadata | None = None,
         **additional_params,
     ):
         """
@@ -886,20 +859,6 @@ class Logging(LiteLLMLoggingBaseClass):
         automatically extracts metadata/litellm_metadata from kwargs,
         so callers don't need to manually plumb them into litellm_params.
         """
-        if ocr_request_metadata is not None:
-            self.ocr_request_metadata = ocr_request_metadata
-        metadata: Final = getattr(self, "ocr_request_metadata", None)
-        if metadata is not None:
-            self.update_environment_variables(
-                litellm_params=ocr_logging_context(kwargs),
-                optional_params={},
-                model=metadata.model,
-                user=user,
-                custom_llm_provider=metadata.custom_llm_provider,
-                ocr_request_metadata=metadata.as_dict(),
-            )
-            return
-
         base_litellm_params: Final[dict[str, Any]] = {}
 
         if isinstance(kwargs.get("metadata"), dict):
@@ -924,7 +883,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         self.update_environment_variables(
             litellm_params=base_litellm_params,
-            optional_params=dict(optional_params) if optional_params is not None else {},
+            optional_params=optional_params or {},
             model=model,
             user=user,
             **additional_params,
@@ -1277,24 +1236,7 @@ class Logging(LiteLLMLoggingBaseClass):
             additional_args.get("api_base", "")
         )
 
-    def pre_call(
-        self,
-        input: object,
-        api_key: str | None,
-        model: str | None = None,
-        additional_args: Mapping[str, object] | None = None,
-    ) -> None:
-        metadata: Final = getattr(self, "ocr_request_metadata", None)
-        if metadata is not None:
-            return self._pre_call_impl(
-                input="OCR document processing",
-                api_key=None,
-                model=model,
-                additional_args={"ocr_request_metadata": metadata.as_dict()},
-            )
-        self._pre_call_impl(input=input, api_key=api_key, model=model, additional_args=additional_args or {})
-
-    def _pre_call_impl(self, input, api_key, model=None, additional_args={}):
+    def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         try:
             self._pre_call(
@@ -1311,9 +1253,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 additional_args=additional_args,
             )
             # log raw request to provider (like LangFuse) -- if opted in.
-            if (self.log_raw_request_response is True or log_raw_request_response is True) and getattr(
-                self, "ocr_request_metadata", None
-            ) is None:
+            if self.log_raw_request_response is True or log_raw_request_response is True:
                 _litellm_params: Final = self.model_call_details.get("litellm_params", {})
                 _metadata: Final = _litellm_params.get("metadata", {}) or {}
                 try:
@@ -1440,10 +1380,6 @@ class Logging(LiteLLMLoggingBaseClass):
 
         Prints the RAW curl command sent from LiteLLM
         """
-        metadata: Final = getattr(self, "ocr_request_metadata", None)
-        if metadata is not None:
-            verbose_logger.debug("OCR request: %s", metadata.as_dict())
-            return
         if _is_debugging_on() or self.litellm_request_debug:
             if json_logs:
                 masked_headers: Final = self._get_masked_headers(headers)
@@ -1506,24 +1442,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         return _get_masked_values(headers, ignore_sensitive_values=ignore_sensitive_headers)
 
-    def post_call(
-        self,
-        original_response: object,
-        input: object = None,
-        api_key: str | None = None,
-        additional_args: Mapping[str, object] | None = None,
-    ) -> None:
-        metadata: Final = getattr(self, "ocr_request_metadata", None)
-        if metadata is not None:
-            return self._post_call_impl(
-                original_response=original_response,
-                input="OCR document processing",
-                api_key=None,
-                additional_args={"ocr_request_metadata": metadata.as_dict()},
-            )
-        self._post_call_impl(original_response, input=input, api_key=api_key, additional_args=additional_args or {})
-
-    def _post_call_impl(self, original_response, input=None, api_key=None, additional_args={}):
+    def post_call(self, original_response, input=None, api_key=None, additional_args={}):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         if isinstance(original_response, dict):
             original_response = json.dumps(original_response, default=str)
@@ -3433,13 +3352,10 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
-        metadata: Final = getattr(self, "ocr_request_metadata", None)
-        logged_exception: Final = ocr_error_for_logging(exception) if metadata is not None else exception
-        logged_traceback: Final = "" if metadata is not None else traceback_exception
         try:
             return self._failure_handler_body(
-                exception=logged_exception,
-                traceback_exception=logged_traceback,
+                exception=exception,
+                traceback_exception=traceback_exception,
                 start_time=start_time,
                 end_time=end_time,
             )
@@ -3630,13 +3546,10 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own failure
         logging (including any nested calls its callbacks trigger) is fully done."""
-        metadata: Final = getattr(self, "ocr_request_metadata", None)
-        logged_exception: Final = ocr_error_for_logging(exception) if metadata is not None else exception
-        logged_traceback: Final = "" if metadata is not None else traceback_exception
         try:
             return await self._async_failure_handler_body(
-                exception=logged_exception,
-                traceback_exception=logged_traceback,
+                exception=exception,
+                traceback_exception=traceback_exception,
                 start_time=start_time,
                 end_time=end_time,
             )

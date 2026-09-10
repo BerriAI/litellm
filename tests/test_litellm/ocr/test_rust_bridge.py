@@ -1,13 +1,12 @@
 """Tests for the optional Rust-backed OCR path."""
 
-import asyncio
 import builtins
 import importlib
 import types
+from typing import Any
 
 import httpx
 import pytest
-import pytest_asyncio
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -145,9 +144,6 @@ class RecordingLogging:
     def __init__(self) -> None:
         self.pre_call_kwargs: dict[str, object] | None = None
 
-    def update_from_kwargs(self, **kwargs: object) -> None:
-        self.update_kwargs = kwargs
-
     def pre_call(
         self,
         *,
@@ -162,49 +158,77 @@ class RecordingLogging:
         }
 
 
-def build_request(
+class FakeOCRConfig:
+    """A stand-in ``BaseOCRConfig`` that echoes the request it would build."""
+
+    def __init__(self, api_key_env_var: str = "MISTRAL_API_KEY") -> None:
+        self.api_key_env_var = api_key_env_var
+
+    def get_api_key_env_var(self) -> str:
+        return self.api_key_env_var
+
+    def validate_environment(
+        self,
+        *,
+        headers: dict[str, object],
+        model: str,
+        api_key: str | None,
+        api_base: str | None,
+        litellm_params: dict[str, object],
+    ) -> dict[str, object]:
+        return {"Authorization": f"Bearer {api_key}", **headers}
+
+    def get_complete_url(
+        self,
+        *,
+        api_base: str | None,
+        model: str,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+    ) -> str:
+        return f"{api_base or 'https://api.mistral.ai/v1'}/ocr"
+
+    def get_error_class(self, error_message: str, status_code: int, headers: dict[str, str]) -> BaseLLMException:
+        return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
+
+
+def build_prepared_request(
     *,
     logging_obj: RecordingLogging | None = None,
+    provider_config: FakeOCRConfig | None = None,
     model: str = "mistral-ocr-latest",
     document: dict[str, object] = DOCUMENT,
     api_key: str | None = "sk-test",
     api_base: str | None = None,
-    custom_llm_provider: str | None = "mistral",
+    custom_llm_provider: str = "mistral",
     extra_headers: dict[str, object] | None = None,
     optional_params: dict[str, object] | None = None,
     litellm_params: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = 12.5,
-) -> rust_bridge.LiteLLMOcrRequest:
-    return rust_bridge.LiteLLMOcrRequest(
+) -> Any:
+    return ocr_main._PreparedOCRRequest(
         model=model,
         document=document,
         api_key=api_key,
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
-        timeout=timeout,
-        kwargs={
-            **(optional_params or {}),
-            **(litellm_params or {}),
-            "litellm_logging_obj": logging_obj or RecordingLogging(),
-        },
+        provider_config=provider_config or FakeOCRConfig(),
+        optional_params=optional_params or {},
+        litellm_params=litellm_params or {},
+        effective_timeout=timeout,
+        litellm_logging_obj=logging_obj or RecordingLogging(),
     )
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _reset_rust_flag():
+@pytest.fixture(autouse=True)
+def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
     rust_bridge._OCR.reset()
     rust_bridge._AOCR.reset()
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-    await asyncio.sleep(0)
-    GLOBAL_LOGGING_WORKER.start()
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
-    await GLOBAL_LOGGING_WORKER.stop()
     rust_bridge._OCR.reset()
     rust_bridge._AOCR.reset()
     configuration.reset_rust_configuration()
@@ -443,7 +467,7 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
     rust_bridge._OCR.override(bridge)
 
     response = ocr_main._run_rust_ocr(
-        request=build_request(
+        prepared_request=build_prepared_request(
             logging_obj=logging_obj,
             api_base="https://proxy.internal",
             extra_headers={"x-trace-id": "trace-1"},
@@ -462,6 +486,7 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
         "api_base": "https://proxy.internal",
         "custom_llm_provider": "mistral",
         "extra_headers": {
+            "Authorization": "Bearer sk-test",
             "x-trace-id": "trace-1",
         },
         "optional_params": {"include_image_base64": True},
@@ -474,7 +499,7 @@ def test_rust_upstream_error_uses_ocr_provider_error_mapping():
 
     mapped = ocr_main._map_rust_ocr_error(
         error,
-        build_request(),
+        build_prepared_request(),
         (RuntimeError, RustUpstreamError),
     )
 
@@ -489,7 +514,7 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
     rust_bridge._OCR.override(bridge)
 
     ocr_main._run_rust_ocr(
-        request=build_request(api_key=None, timeout=None),
+        prepared_request=build_prepared_request(api_key=None, timeout=None),
         resolve_api_key=lambda name: "sk-from-vault" if name == "MISTRAL_API_KEY" else None,
     )
 
@@ -505,7 +530,7 @@ def test_run_rust_ocr_prefers_explicit_key_over_resolver():
         raise AssertionError(f"resolver should not be called for {name}")
 
     ocr_main._run_rust_ocr(
-        request=build_request(
+        prepared_request=build_prepared_request(
             api_key="sk-explicit",
             timeout=None,
         ),
@@ -515,7 +540,7 @@ def test_run_rust_ocr_prefers_explicit_key_over_resolver():
     assert bridge.calls[0]["api_key"] == "sk-explicit"
 
 
-def test_run_rust_ocr_uses_mistral_secret_manager_without_provider_config():
+def test_run_rust_ocr_uses_provider_api_key_env_var():
     bridge = RecordingBridge()
     resolver_calls = []
     litellm.rust(True)
@@ -526,15 +551,16 @@ def test_run_rust_ocr_uses_mistral_secret_manager_without_provider_config():
         return "sk-provider-env"
 
     ocr_main._run_rust_ocr(
-        request=build_request(
-            model="mistral-ocr-latest",
+        prepared_request=build_prepared_request(
+            provider_config=FakeOCRConfig(api_key_env_var="PROVIDER_OCR_API_KEY"),
+            model="provider-ocr-model",
             api_key=None,
             timeout=None,
         ),
         resolve_api_key=_resolver,
     )
 
-    assert resolver_calls == ["MISTRAL_API_KEY"]
+    assert resolver_calls == ["PROVIDER_OCR_API_KEY"]
     assert bridge.calls[0]["api_key"] == "sk-provider-env"
 
 
@@ -544,7 +570,7 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
     rust_bridge._OCR.override(bridge)
 
     ocr_main._run_rust_ocr(
-        request=build_request(
+        prepared_request=build_prepared_request(
             custom_llm_provider="vertex_ai",
             model="mistral-ocr-maas",
             litellm_params={
@@ -562,7 +588,6 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
         "include_image_base64": True,
         "vertex_project": "project-1",
         "vertex_location": "us-central1",
-        "vertex_credentials": "redacted",
     }
 
 
@@ -578,7 +603,7 @@ def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_mana
         }.get(name)
 
     ocr_main._run_rust_ocr(
-        request=build_request(
+        prepared_request=build_prepared_request(
             custom_llm_provider="vertex_ai",
             model="mistral-ocr-maas",
             timeout=None,
@@ -590,121 +615,42 @@ def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_mana
     assert bridge.calls[0]["optional_params"]["vertex_location"] == "us-east5"
 
 
-def test_prepare_rust_ocr_call_defers_azure_environment_resolution_to_rust():
+def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
     bridge = RecordingBridge()
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
     ocr_main._run_rust_ocr(
-        request=build_request(
+        prepared_request=build_prepared_request(
             custom_llm_provider="azure_ai",
             model="pixtral-12b-2409",
-            api_key=None,
             api_base=None,
             timeout=None,
         ),
-        resolve_api_key=lambda name: pytest.fail(f"Python resolved Azure secret {name}"),
+        resolve_api_key=lambda name: "https://azure.example.com" if name == "AZURE_AI_API_BASE" else None,
     )
 
-    assert bridge.calls[0]["api_base"] is None
-    assert bridge.calls[0]["api_key"] is None
-    assert bridge.calls[0]["extra_headers"] is None
+    assert bridge.calls[0]["api_base"] == "https://azure.example.com"
 
 
-def test_prepare_rust_ocr_call_defers_document_intelligence_environment_to_rust():
+def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
     bridge = RecordingBridge()
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
     ocr_main._run_rust_ocr(
-        request=build_request(
+        prepared_request=build_prepared_request(
             custom_llm_provider="azure_ai",
             model="doc-intelligence/prebuilt-layout",
             api_base=None,
             timeout=None,
         ),
-        resolve_api_key=lambda name: pytest.fail(f"Python resolved Azure secret {name}"),
-    )
-
-    assert bridge.calls[0]["api_base"] is None
-
-
-def test_prepare_rust_ocr_call_forwards_raw_azure_auth_inputs():
-    bridge = RecordingBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-
-    ocr_main._run_rust_ocr(
-        request=build_request(
-            custom_llm_provider="azure_ai",
-            model="pixtral-12b-2409",
-            api_key=None,
-            api_base="https://azure.example.com",
-            extra_headers={"x-trace-id": "trace-1"},
-            litellm_params={
-                "azure_ad_token": "entra-token",
-                "tenant_id": "tenant",
-                "client_id": "client",
-                "client_secret": "secret",
-                "azure_scope": "scope",
-                "azure_authority_host": "https://login.example.com",
-                "azure_credential": "ClientSecretCredential",
-                "azure_federated_token_file": "/token",
-            },
-            timeout=None,
+        resolve_api_key=lambda name: (
+            "https://document-intelligence.example.com" if name == "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT" else None
         ),
-        resolve_api_key=lambda name: pytest.fail(f"Python resolved Azure secret {name}"),
     )
 
-    call = bridge.calls[0]
-    assert call["api_key"] is None
-    assert call["api_base"] == "https://azure.example.com"
-    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
-    assert call["optional_params"] == {
-        "azure_ad_token": "entra-token",
-        "tenant_id": "tenant",
-        "client_id": "client",
-        "client_secret": "secret",
-        "azure_scope": "scope",
-        "azure_authority_host": "https://login.example.com",
-        "azure_credential": "ClientSecretCredential",
-        "azure_federated_token_file": "/token",
-    }
-
-
-def test_rust_eligibility_rejects_python_only_azure_auth_modes():
-    for params in (
-        {"azure_ad_token_provider": lambda: "token"},
-        {"azure_username": "user"},
-        {"azure_password": "password"},
-    ):
-        assert not ocr_main._rust_ocr_supported(
-            build_request(
-                custom_llm_provider="azure_ai",
-                model="pixtral-12b-2409",
-                litellm_params=params,
-            )
-        )
-
-
-def test_prepare_rust_ocr_call_forwards_global_azure_refresh(monkeypatch: pytest.MonkeyPatch):
-    bridge = RecordingBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", True)
-
-    ocr_main._run_rust_ocr(
-        request=build_request(
-            custom_llm_provider="azure_ai",
-            model="pixtral-12b-2409",
-            api_key=None,
-            api_base="https://azure.example.com",
-            timeout=None,
-        ),
-        resolve_api_key=lambda _name: None,
-    )
-
-    assert bridge.calls[0]["optional_params"] == {"enable_azure_ad_token_refresh": True}
+    assert bridge.calls[0]["api_base"] == "https://document-intelligence.example.com"
 
 
 def test_run_rust_ocr_runs_pre_call_logging():
@@ -714,7 +660,7 @@ def test_run_rust_ocr_runs_pre_call_logging():
     rust_bridge._OCR.override(bridge)
 
     ocr_main._run_rust_ocr(
-        request=build_request(
+        prepared_request=build_prepared_request(
             logging_obj=logging_obj,
             api_base="https://api.mistral.ai/v1",
             extra_headers={"x-trace-id": "trace-1"},
@@ -727,18 +673,14 @@ def test_run_rust_ocr_runs_pre_call_logging():
     assert logging_obj.pre_call_kwargs is not None
     assert logging_obj.pre_call_kwargs["input"] == "OCR document processing"
     additional_args = logging_obj.pre_call_kwargs["additional_args"]
-    assert logging_obj.pre_call_kwargs["api_key"] is None
-    assert additional_args == {
-        "ocr_request_metadata": {
-            "model": "mistral-ocr-latest",
-            "custom_llm_provider": "mistral",
-            "litellm_call_id": None,
-            "document_type": "document_url",
-            "timeout": ocr_main.request_timeout,
-        }
+    complete_input = additional_args["complete_input_dict"]
+    assert complete_input["document"] == DOCUMENT
+    assert complete_input["include_image_base64"] is True
+    assert additional_args["api_base"] == "https://api.mistral.ai/v1/ocr"
+    assert additional_args["headers"] == {
+        "Authorization": "Bearer sk-test",
+        "x-trace-id": "trace-1",
     }
-    assert logging_obj.update_kwargs["optional_params"] == {}
-    assert bridge.calls[0]["optional_params"] == {"include_image_base64": True}
 
 
 def test_ocr_routes_to_rust_when_enabled(fake_bridge):
@@ -754,11 +696,12 @@ def test_ocr_routes_to_rust_when_enabled(fake_bridge):
     assert response.pages[0].markdown == "hello world"
     assert len(fake_bridge.calls) == 1
     call = fake_bridge.calls[0]
-    assert call["model"] == MODEL
+    assert call["model"] == "mistral-ocr-latest"
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
-    assert call["custom_llm_provider"] is None
+    assert call["custom_llm_provider"] == "mistral"
     assert call["extra_headers"] == {
+        "Authorization": "Bearer sk-test",
         "x-trace-id": "trace-1",
     }
     assert call["optional_params"].get("include_image_base64") is True
@@ -774,29 +717,8 @@ def test_ocr_routes_azure_ai_to_rust_when_enabled(fake_bridge):
 
     assert isinstance(response, OCRResponse)
     assert len(fake_bridge.calls) == 1
-    assert fake_bridge.calls[0]["model"] == "azure_ai/pixtral-12b-2409"
-    assert fake_bridge.calls[0]["custom_llm_provider"] is None
-    assert fake_bridge.calls[0]["extra_headers"] is None
-
-
-def test_ocr_routes_azure_entra_inputs_to_rust_without_python_auth(fake_bridge):
-    response = litellm.ocr(
-        model="azure_ai/pixtral-12b-2409",
-        document=DOCUMENT,
-        api_base="https://example.services.ai.azure.com",
-        azure_ad_token="entra-token",
-        tenant_id="tenant",
-        client_id="client",
-    )
-
-    assert isinstance(response, OCRResponse)
-    assert fake_bridge.calls[0]["api_key"] is None
-    assert fake_bridge.calls[0]["extra_headers"] is None
-    assert fake_bridge.calls[0]["optional_params"] == {
-        "azure_ad_token": "entra-token",
-        "tenant_id": "tenant",
-        "client_id": "client",
-    }
+    assert fake_bridge.calls[0]["model"] == "pixtral-12b-2409"
+    assert fake_bridge.calls[0]["custom_llm_provider"] == "azure_ai"
 
 
 def test_ocr_rust_path_converts_file_document_before_bridge(fake_bridge):
@@ -846,11 +768,12 @@ async def test_aocr_routes_to_async_rust_when_enabled(fake_async_bridge):
     assert response.pages[0].markdown == "hello world"
     assert len(fake_async_bridge.calls) == 1
     call = fake_async_bridge.calls[0]
-    assert call["model"] == MODEL
+    assert call["model"] == "mistral-ocr-latest"
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
-    assert call["custom_llm_provider"] is None
+    assert call["custom_llm_provider"] == "mistral"
     assert call["extra_headers"] == {
+        "Authorization": "Bearer sk-test",
         "x-trace-id": "trace-1",
     }
     assert call["optional_params"].get("include_image_base64") is True
@@ -941,326 +864,3 @@ def test_ocr_provider_configs_expose_api_key_env_vars():
     assert AzureDocumentIntelligenceOCRConfig().get_api_key_env_var() == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
     assert VertexAIOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
     assert VertexAIDeepSeekOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
-
-
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.asyncio
-async def test_rust_receives_unmapped_azure_options(asynchronous, fake_bridge, fake_async_bridge):
-    from typing import Final
-
-    arguments: Final = {
-        "model": "azure_ai/doc-intelligence/prebuilt-layout",
-        "document": DOCUMENT,
-        "api_key": "test-key",
-        "pages": [0, 2],
-        "features": ["languages", "style"],
-        "provider_extension": {"enabled": True},
-    }
-    if asynchronous:
-        await litellm.aocr(**arguments)
-    else:
-        litellm.ocr(**arguments)
-    call: Final = (fake_async_bridge if asynchronous else fake_bridge).calls[0]
-    assert call["model"] == arguments["model"]
-    assert call["custom_llm_provider"] is None
-    assert call["extra_headers"] is None
-    assert call["optional_params"] == {
-        "pages": [0, 2],
-        "features": ["languages", "style"],
-        "provider_extension": {"enabled": True},
-    }
-
-
-@pytest.mark.parametrize("enabled", [False, True])
-@pytest.mark.asyncio
-async def test_python_fallback_maps_original_options_once(enabled, monkeypatch):
-    from io import BytesIO
-    from typing import Final
-
-    class PythonHandler:
-        def __init__(self):
-            self.calls = []
-
-        def ocr(self, **kwargs):
-            self.calls.append(kwargs)
-            return OCRResponse(pages=[], model=kwargs["model"])
-
-    handler: Final = PythonHandler()
-    monkeypatch.setattr(ocr_main, "base_llm_http_handler", handler)
-    litellm.rust(enabled)
-    rust_bridge._OCR.override(None)
-    rust_bridge._AOCR.override(None)
-    for asynchronous in (False, True):
-        file: Final = BytesIO(b"test document")
-        arguments: Final = {
-            "model": "azure_ai/doc-intelligence/prebuilt-layout",
-            "document": {"type": "file", "file": file},
-            "api_key": "test-key",
-            "pages": [0, 2],
-        }
-        if asynchronous:
-            await litellm.aocr(**arguments)
-        else:
-            litellm.ocr(**arguments)
-        assert handler.calls[-1]["optional_params"]["pages"] == "1,3"
-        assert handler.calls[-1]["document"]["document_url"].endswith("dGVzdCBkb2N1bWVudA==")
-    assert len(handler.calls) == 2
-
-
-@pytest.mark.parametrize("provider", ["azure_ai", "vertex_ai"])
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.asyncio
-async def test_ocr_credentials_reach_execution_but_never_logging(provider, asynchronous, caplog):
-    import copy
-    import datetime
-    import logging
-
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
-    from litellm.integrations.custom_logger import CustomLogger
-    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    snapshots = []
-
-    class Capture(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            snapshots.append(copy.deepcopy(kwargs))
-
-        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-            snapshots.append(copy.deepcopy(kwargs))
-
-        def log_success_event(self, kwargs, response_obj, start_time, end_time):
-            snapshots.append(copy.deepcopy(kwargs))
-
-        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-            snapshots.append(copy.deepcopy(kwargs))
-
-    secrets = {
-        "client_secret": "sentinel-client-secret",
-        "azure_ad_token": "sentinel-azure-token",
-        "vertex_credentials": {"private_key": "sentinel-private-key", "nested": {"token": "sentinel-nested-token"}},
-        "unrecognized_future_option": "sentinel-future-option",
-    }
-    model = f"{provider}/mistral-ocr-latest"
-    document = {"type": "document_url", "document_url": "https://example.com/sentinel-document?sig=sentinel-signature"}
-    headers = {"Authorization": "Bearer sentinel-authorization", "x-custom": "sentinel-header"}
-    logger = Logging(
-        model=model,
-        messages=[],
-        stream=False,
-        call_type="aocr" if asynchronous else "ocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="review-call",
-        function_id="review",
-        kwargs={**secrets, "document": document, "api_key": "sentinel-api-key", "extra_headers": headers},
-        dynamic_input_callbacks=[Capture()],
-        dynamic_success_callbacks=[Capture()],
-        dynamic_failure_callbacks=[Capture()],
-        log_raw_request_response=True,
-    )
-    bridge = RecordingAsyncBridge() if asynchronous else RecordingBridge()
-    litellm.rust(True)
-    (rust_bridge._AOCR if asynchronous else rust_bridge._OCR).override(bridge)
-    request = build_request(
-        logging_obj=logger,
-        model=model,
-        custom_llm_provider=provider,
-        document=document,
-        api_key="sentinel-api-key",
-        extra_headers=headers,
-        optional_params=secrets,
-    )
-    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
-        response = (
-            await ocr_main._run_rust_aocr(request, lambda _: None)
-            if asynchronous
-            else ocr_main._run_rust_ocr(request, lambda _: None)
-        )
-        logger.post_call(
-            original_response='{"pages":[]}',
-            api_key="sentinel-api-key",
-            input=document,
-            additional_args={"complete_input_dict": secrets, "headers": headers},
-        )
-        logger.success_handler(response)
-        snapshots.append(copy.deepcopy(logger.model_call_details))
-        logger.failure_handler(RuntimeError("sentinel-provider-error"), "sentinel-request-in-traceback")
-        snapshots.append(copy.deepcopy(logger.model_call_details))
-    assert bridge.calls[0]["document"] == document
-    assert bridge.calls[0]["extra_headers"] == headers
-    assert bridge.calls[0]["api_key"] == "sentinel-api-key"
-    auth_field = "client_secret" if provider == "azure_ai" else "vertex_credentials"
-    assert bridge.calls[0]["optional_params"][auth_field] == secrets[auth_field]
-    assert bridge.calls[0]["optional_params"]["unrecognized_future_option"] == "sentinel-future-option"
-    assert snapshots
-    assert "sentinel-" not in repr(snapshots)
-    assert "sentinel-" not in caplog.text
-    assert "sentinel-" not in repr(request)
-    assert all("raw_request_typed_dict" not in snapshot for snapshot in snapshots)
-    assert all("complete_input_dict" not in snapshot.get("additional_args", {}) for snapshot in snapshots)
-
-    exporter = InMemorySpanExporter()
-    tracer_provider = TracerProvider()
-    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
-    otel = OpenTelemetry(config=OpenTelemetryConfig(), tracer_provider=tracer_provider)
-    with tracer_provider.get_tracer("ocr-review").start_as_current_span("ocr") as span:
-        for snapshot in snapshots:
-            otel.set_raw_request_attributes(span, snapshot, None)
-    assert "sentinel-" not in repr(exporter.get_finished_spans()[0].attributes)
-    tracer_provider.shutdown()
-
-
-@pytest.mark.parametrize("enabled", [False, True])
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.asyncio
-async def test_python_ocr_request_logging_uses_metadata(enabled, asynchronous, caplog, ocr_logging_server):
-    import datetime
-    import logging
-
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    base, calls = ocr_logging_server
-
-    logger = Logging(
-        model=MODEL,
-        messages=[],
-        stream=False,
-        call_type="aocr" if asynchronous else "ocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="review-call",
-        function_id="review",
-        kwargs={"client_secret": "sentinel-initial-secret"},
-        log_raw_request_response=True,
-    )
-    litellm.rust(enabled)
-    rust_bridge._OCR.override(None)
-    rust_bridge._AOCR.override(None)
-    rust_bridge_loader._cached_bridge = None
-    arguments = {
-        "model": MODEL,
-        "document": {"type": "document_url", "document_url": "https://example.com/sentinel-document"},
-        "api_key": "sentinel-api-key",
-        "api_base": base,
-        "litellm_logging_obj": logger,
-        "extra_headers": {"x-custom": "sentinel-header"},
-        "document_annotation_prompt": "sentinel-prompt",
-        "vertex_credentials": "sentinel-credentials",
-    }
-    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
-        response = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
-        if asynchronous:
-            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-            await asyncio.sleep(0)
-            GLOBAL_LOGGING_WORKER.start()
-            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
-
-    assert response.pages[0].markdown == "hello world"
-    assert len(calls) == 1
-    assert calls[0][0]["authorization"] == "Bearer sentinel-api-key"
-    assert "sentinel-prompt" in calls[0][1]
-    assert "sentinel-" not in repr(logger.model_call_details)
-    assert "sentinel-" not in caplog.text
-    assert "raw_request_typed_dict" not in logger.model_call_details
-
-
-@pytest.fixture
-def ocr_logging_server():
-    import json
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from threading import Thread
-
-    calls = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            calls.append(
-                (
-                    {name.lower(): value for name, value in self.headers.items()},
-                    self.rfile.read(int(self.headers["Content-Length"])).decode(),
-                )
-            )
-            body = json.dumps(FAKE_OCR_RESPONSE).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *_args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}", calls
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=3)
-
-
-@pytest.mark.parametrize(
-    "model, provider",
-    [
-        ("mistral-ocr-latest", None),
-        ("mistral/mistral-ocr-latest", None),
-        ("custom-deployment", "mistral"),
-    ],
-)
-def test_rust_ocr_provider_resolution_preserves_model_forms(model, provider, fake_bridge):
-    response = litellm.ocr(model=model, custom_llm_provider=provider, document=DOCUMENT, api_key="test-key")
-    assert response.pages[0].markdown == "hello world"
-    assert len(fake_bridge.calls) == 1
-    assert fake_bridge.calls[0]["model"] == model
-
-
-def test_ocr_logging_preserves_billing_identity_without_arbitrary_metadata():
-    import datetime
-
-    from litellm.litellm_core_utils.litellm_logging import Logging
-
-    identity = {"user_api_key_hash": "key-hash", "user_api_key_team_id": "team-id", "user_api_key_user_id": "user-id"}
-    logger = Logging(
-        model=MODEL,
-        messages=[],
-        stream=False,
-        call_type="ocr",
-        start_time=datetime.datetime.now(),
-        litellm_call_id="review-call",
-        function_id="review",
-        kwargs={
-            "metadata": {
-                **identity,
-                "model_info": {"id": "deployment-id", "unknown": "sentinel-secret"},
-                "untrusted": "sentinel-secret",
-            },
-            "ocr_cost_per_page": 0.125,
-        },
-    )
-    ocr_main._marshal_rust_ocr_request(build_request(logging_obj=logger), lambda _: None)
-    assert logger.litellm_params["metadata"] == {**identity, "model_info": {"id": "deployment-id"}}
-    assert logger.get_router_model_id() == "deployment-id"
-    assert logger.litellm_params["ocr_cost_per_page"] == 0.125
-    assert "sentinel-secret" not in repr(logger.model_call_details)
-
-
-def test_rust_ocr_excludes_host_context_from_provider_options(fake_bridge):
-    response = litellm.ocr(
-        model=MODEL,
-        document=DOCUMENT,
-        api_key="test-key",
-        metadata={"user_api_key_auth": object()},
-        litellm_metadata={"user_api_key_auth": object()},
-        unrecognized_future_option={"value": "preserved"},
-    )
-    assert response.pages[0].markdown == "hello world"
-    assert len(fake_bridge.calls) == 1
-    options = fake_bridge.calls[0]["optional_params"]
-    assert "metadata" not in options
-    assert "litellm_metadata" not in options
-    assert options["unrecognized_future_option"] == {"value": "preserved"}

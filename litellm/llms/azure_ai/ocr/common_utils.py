@@ -5,12 +5,9 @@ This module provides routing logic to determine which OCR configuration to use
 based on the model name.
 """
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional
 
-import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.base_llm.ocr.transformation import RustOCRConfig
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
@@ -72,29 +69,3 @@ def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
     # Default to Mistral-based OCR for other azure_ai models
     verbose_logger.debug("Routing %s to Azure AI (Mistral) OCR config", model)
     return AzureAIOCRConfig()
-
-
-def azure_rust_ocr_config(kwargs: Mapping[str, object]) -> RustOCRConfig | None:
-    if (
-        callable(kwargs.get("azure_ad_token_provider"))
-        or kwargs.get("azure_username") is not None
-        or kwargs.get("azure_password") is not None
-    ):
-        return None
-    return RustOCRConfig(
-        config_fields=frozenset(
-            {
-                "azure_ad_token",
-                "tenant_id",
-                "client_id",
-                "client_secret",
-                "azure_scope",
-                "azure_authority_host",
-                "azure_credential",
-                "azure_federated_token_file",
-            }
-        ),
-        extra_params=(("enable_azure_ad_token_refresh", True),)
-        if litellm.enable_azure_ad_token_refresh is True
-        else (),
-    )

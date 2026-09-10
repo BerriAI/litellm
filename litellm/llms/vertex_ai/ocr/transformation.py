@@ -2,54 +2,19 @@
 Vertex AI Mistral OCR transformation implementation.
 """
 
-from collections.abc import Callable, Mapping
 from typing import Final
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
-from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData, RustOCRConfig
+from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 VERTEX_AI_OCR_API_KEY_ENV_VAR: Final = "VERTEX_AI_API_KEY"
-
-
-def vertex_rust_ocr_config(kwargs: Mapping[str, object], resolve_secret: Callable[[str], str | None]) -> RustOCRConfig:
-    project: Final = (
-        kwargs.get("vertex_project")
-        or kwargs.get("vertex_ai_project")
-        or litellm.vertex_project
-        or resolve_secret("VERTEXAI_PROJECT")
-    )
-    location: Final = (
-        kwargs.get("vertex_location")
-        or kwargs.get("vertex_ai_location")
-        or litellm.vertex_location
-        or resolve_secret("VERTEXAI_LOCATION")
-        or resolve_secret("VERTEX_LOCATION")
-    )
-    return RustOCRConfig(
-        config_fields=frozenset(
-            {
-                "vertex_credentials",
-                "vertex_ai_credentials",
-                "vertex_project",
-                "vertex_ai_project",
-                "vertex_location",
-                "vertex_ai_location",
-            }
-        ),
-        extra_params=tuple(
-            (key, value)
-            for key, value in (("vertex_project", project), ("vertex_location", location))
-            if value is not None
-        ),
-    )
 
 
 class VertexAIOCRConfig(MistralOCRConfig):
@@ -64,11 +29,6 @@ class VertexAIOCRConfig(MistralOCRConfig):
     Important: Vertex AI OCR only supports base64 data URIs (data:image/..., data:application/pdf;base64,...).
     Regular URLs are not supported.
     """
-
-    def get_rust_ocr_config(
-        self, kwargs: Mapping[str, object], resolve_secret: Callable[[str], str | None]
-    ) -> RustOCRConfig | None:
-        return vertex_rust_ocr_config(kwargs, resolve_secret)
 
     def __init__(self) -> None:
         super().__init__()
@@ -180,7 +140,7 @@ class VertexAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug("Vertex AI OCR: Converting URL to base64 data URI (sync)")
+        verbose_logger.debug("Vertex AI OCR: Converting URL to base64 data URI (sync): %s", url)
 
         # Fetch and convert to base64 data URI
         # convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
@@ -203,7 +163,7 @@ class VertexAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug("Vertex AI OCR: Converting URL to base64 data URI (async)")
+        verbose_logger.debug("Vertex AI OCR: Converting URL to base64 data URI (async): %s", url)
 
         # Fetch and convert to base64 data URI asynchronously
         # async_convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
