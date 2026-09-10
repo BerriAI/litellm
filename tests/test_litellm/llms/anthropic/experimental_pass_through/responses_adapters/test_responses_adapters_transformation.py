@@ -19,6 +19,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -566,6 +567,66 @@ class TestTranslateMessagesToResponsesInput:
         result = _translate_messages(messages)
         assert "id" not in result[0]
 
+    def test_thinking_block_with_encrypted_signature_replays_the_encrypted_content(self):
+        """Regression for https://github.com/BerriAI/litellm/issues/40288 (inbound fault site)."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Private reasoning.",
+                        "signature": encrypted_reasoning_signature("gAAAA_turn_one"),
+                    }
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Private reasoning."}],
+                "encrypted_content": "gAAAA_turn_one",
+            }
+        ]
+
+    def test_redacted_thinking_with_encrypted_data_replays_the_encrypted_content(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_turn_one")}],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [{"type": "reasoning", "summary": [], "encrypted_content": "gAAAA_turn_one"}]
+
+    def test_each_encrypted_thinking_block_stays_its_own_reasoning_item(self):
+        """Two upstream items must not be merged into one, or the encrypted content of one is lost."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "First.", "signature": encrypted_reasoning_signature("gAAAA_1")},
+                    {"type": "thinking", "thinking": "Second.", "signature": encrypted_reasoning_signature("gAAAA_2")},
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert [item["encrypted_content"] for item in result] == ["gAAAA_1", "gAAAA_2"]
+
+    def test_anthropic_signed_thinking_block_replays_as_a_summary_only_item(self):
+        """A real Anthropic signature is opaque here, so it never masquerades as encrypted content."""
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "Private reasoning.", "signature": "ErcBCkgIValid"}],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result == [
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Private reasoning."}]}
+        ]
+
     def test_consecutive_thinking_blocks_become_one_reasoning_item(self):
         """Summary parts of one upstream reasoning item are regrouped into that item."""
         messages = [
@@ -1102,6 +1163,23 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert "reasoning" not in kwargs
 
+    def test_thinking_asks_for_the_encrypted_reasoning(self):
+        """The documented way to get reasoning that survives store=false is to ask for it."""
+        req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["include"] == ["reasoning.encrypted_content"]
+
+    def test_encrypted_reasoning_is_asked_for_without_a_thinking_block(self):
+        """A reasoning model reasons whether or not the client sent `thinking`, so the replay needs it either way."""
+        kwargs = _ADAPTER.translate_request(_make_request())
+        assert kwargs["include"] == ["reasoning.encrypted_content"]
+
+    def test_encrypted_reasoning_is_not_asked_for_when_the_provider_rejects_include(self):
+        req = _make_request(thinking={"type": "enabled", "budget_tokens": 12000})
+        kwargs = _ADAPTER.translate_request(req, include_encrypted_reasoning=False)
+        assert kwargs["reasoning"] == {"effort": "high"}
+        assert "include" not in kwargs
+
     def test_metadata_user_id_mapped_to_user(self):
         req = _make_request(metadata={"user_id": "user-42"})
         kwargs = _ADAPTER.translate_request(req)
@@ -1246,7 +1324,9 @@ def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMo
     return item
 
 
-def _make_reasoning_item(summaries: List[str], item_id: str = "rs_test_1") -> MagicMock:
+def _make_reasoning_item(
+    summaries: List[str], item_id: str = "rs_test_1", encrypted_content: str | None = None
+) -> MagicMock:
     """Build a mock ResponseReasoningItem."""
     from openai.types.responses import ResponseReasoningItem  # type: ignore[import]
 
@@ -1259,7 +1339,11 @@ def _make_reasoning_item(summaries: List[str], item_id: str = "rs_test_1") -> Ma
     item = MagicMock(spec=ResponseReasoningItem)
     item.id = item_id
     item.summary = summary_mocks
+    item.encrypted_content = encrypted_content
     return item
+
+
+_ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"
 
 
 class TestTranslateResponse:
@@ -1386,7 +1470,81 @@ class TestTranslateResponse:
         reasoning = _make_reasoning_item(["Part one.", "Part two."], item_id="rs_abc123")
         response = _make_mock_response(output=[reasoning])
         result: Any = _ADAPTER.translate_response(response)
-        assert [block["signature"] for block in result["content"]] == [None, None]
+        assert [block["signature"] for block in result["content"]] == [None]
+        assert "rs_abc123" not in json.dumps(result["content"])
+
+    def test_summary_parts_join_into_one_thinking_block(self):
+        """One reasoning item is one block, so its signature is echoed back exactly once."""
+        reasoning = _make_reasoning_item(["Part one.", "Part two."])
+        response = _make_mock_response(output=[reasoning])
+        result: Any = _ADAPTER.translate_response(response)
+        assert [block["thinking"] for block in result["content"]] == ["Part one.\n\nPart two."]
+
+    def test_encrypted_content_rides_the_thinking_signature(self):
+        """Regression for https://github.com/BerriAI/litellm/issues/40288 (outbound fault site)."""
+        reasoning = _make_reasoning_item(["Part one."], item_id="rs_abc123", encrypted_content=_ENCRYPTED_REASONING)
+        response = _make_mock_response(output=[reasoning])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"] == [
+            {
+                "type": "thinking",
+                "thinking": "Part one.",
+                "signature": encrypted_reasoning_signature(_ENCRYPTED_REASONING),
+            }
+        ]
+
+    def test_reasoning_without_summary_becomes_redacted_thinking(self):
+        """With summaries off the encrypted reasoning still has to reach the client to be replayed."""
+        reasoning = _make_reasoning_item([], encrypted_content=_ENCRYPTED_REASONING)
+        response = _make_mock_response(output=[reasoning])
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"] == [
+            {"type": "redacted_thinking", "data": encrypted_reasoning_signature(_ENCRYPTED_REASONING)}
+        ]
+
+    def test_dict_reasoning_item_carries_its_encrypted_content(self):
+        response = _make_mock_response(
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_dict_1",
+                    "encrypted_content": _ENCRYPTED_REASONING,
+                    "summary": [{"type": "summary_text", "text": "Weighing the options."}],
+                }
+            ]
+        )
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["content"][0]["signature"] == encrypted_reasoning_signature(_ENCRYPTED_REASONING)
+
+    def test_reasoning_item_round_trip_is_byte_stable(self):
+        """Regression for https://github.com/BerriAI/litellm/issues/40288.
+
+        The reasoning item the next turn replays must be the one OpenAI produced, with its
+        encrypted reasoning intact, and identical on every later turn so the prompt cache
+        prefix keeps matching.
+        """
+        reasoning = _make_reasoning_item(["Part one.", "Part two."], encrypted_content=_ENCRYPTED_REASONING)
+        turn: Any = _ADAPTER.translate_response(_make_mock_response(output=[reasoning]))
+        history = [{"role": "assistant", "content": turn["content"]}]
+
+        replayed_items = [_translate_messages(history) for _ in range(2)]
+
+        assert replayed_items[0] == replayed_items[1]
+        assert replayed_items[0] == [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Part one.\n\nPart two."}],
+                "encrypted_content": _ENCRYPTED_REASONING,
+            }
+        ]
+
+    def test_redacted_reasoning_round_trip_replays_the_encrypted_content(self):
+        reasoning = _make_reasoning_item([], encrypted_content=_ENCRYPTED_REASONING)
+        turn: Any = _ADAPTER.translate_response(_make_mock_response(output=[reasoning]))
+
+        replayed = _translate_messages([{"role": "assistant", "content": turn["content"]}])
+
+        assert replayed == [{"type": "reasoning", "summary": [], "encrypted_content": _ENCRYPTED_REASONING}]
 
     def test_dict_reasoning_item_becomes_thinking_block(self):
         """A reasoning item arriving as a plain dict is kept, not dropped."""
@@ -1402,14 +1560,26 @@ class TestTranslateResponse:
         result: Any = _ADAPTER.translate_response(response)
         assert result["content"] == [{"type": "thinking", "thinking": "Weighing the options.", "signature": None}]
 
-    def test_thinking_blocks_are_dropped_when_replayed_to_anthropic(self):
+    @pytest.mark.parametrize(
+        ("summaries", "encrypted_content"),
+        [
+            (["Part one."], None),
+            (["Part one."], _ENCRYPTED_REASONING),
+            ([], _ENCRYPTED_REASONING),
+        ],
+        ids=["unsigned_thinking", "encrypted_thinking", "encrypted_redacted_thinking"],
+    )
+    def test_thinking_blocks_are_dropped_when_replayed_to_anthropic(self, summaries, encrypted_content):
         """Replaying this turn to an Anthropic model must not send a signature it cannot verify."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
             _drop_unsignable_thinking_blocks,
         )
 
-        response = _make_mock_response(output=[_make_reasoning_item(["Part one."], item_id="rs_abc123")])
+        response = _make_mock_response(
+            output=[_make_reasoning_item(summaries, item_id="rs_abc123", encrypted_content=encrypted_content)]
+        )
         result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
         assert _drop_unsignable_thinking_blocks(result["content"]) == []
 
     def test_usage_mapped_correctly(self):
