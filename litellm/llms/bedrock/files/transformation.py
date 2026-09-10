@@ -11,13 +11,13 @@ from datetime import datetime
 from functools import cache
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypedDict
+from typing import Any, Final, Literal, TypeAlias, TypedDict
 from urllib.parse import quote, unquote, urlencode
 
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
@@ -65,15 +65,14 @@ from litellm.utils import get_llm_provider
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError, merge_bedrock_aws_request_params, resolve_s3_encryption_key_id
 
-# litellm_params key used to hand SigV4-signed request headers from the
-# content, delete, and list request transforms to `validate_environment` (the
-# only hook the shared files HTTP handler exposes for setting request headers).
-# Same pattern as the `upload_url` handoff in `transform_create_file_request`.
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
 
-DELETED_FILE_ID_PARAM: Final = "_s3_deleted_file_id"
-
 LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
+
+
+class _S3DeleteContext(BaseModel):
+    file_id: str = Field(min_length=1)
+
 
 # litellm_params key carrying the size of the body uploaded to S3, handed from
 # `transform_create_file_request` to `transform_create_file_response`.
@@ -1317,20 +1316,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         optional_params: Mapping[str, object],
         litellm_params: MutableMapping[str, object],
     ) -> tuple[str, dict[str, str]]:
-        if not file_id:
-            raise ValueError("file_id is required for Bedrock file deletion")
-        bucket_name, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
-        target: Final = self._s3_request_target(optional_params=optional_params, litellm_params=litellm_params)
-        url: Final = f"{target.endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
-        signed_headers: Final = self._sign_s3_empty_body_request(
-            method="DELETE",
-            api_base=url,
-            aws_region_name=target.aws_region_name,
-            request_params=target.request_params,
+        return self._transform_s3_file_request(
+            file_id=file_id, method="DELETE", optional_params=optional_params, litellm_params=litellm_params
         )
-        litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
-        litellm_params[DELETED_FILE_ID_PARAM] = file_id  # rebind-ok: S3 DeleteObject answers with an empty body
-        return url, {}  # mutable-ok: the base files contract returns the query as a dict
 
     def transform_delete_file_response(
         self,
@@ -1338,14 +1326,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
     ) -> FileDeleted:
-        if raw_response.status_code >= 400:
+        if raw_response.status_code != 204:
             raise BedrockError(
-                status_code=raw_response.status_code,
-                message=raw_response.text,
+                status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
+                message=raw_response.text or f"S3 file deletion returned HTTP {raw_response.status_code}",
                 headers=raw_response.headers,
-                response=raw_response,
             )
-        return FileDeleted(id=str(litellm_params.get(DELETED_FILE_ID_PARAM, "")), deleted=True, object="file")
+        context: Final = _S3DeleteContext.model_validate(logging_obj.model_call_details.get("additional_args"))
+        return FileDeleted(id=context.file_id, deleted=True, object="file")
 
     def transform_list_files_request(
         self,
@@ -1388,7 +1376,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         query: Final[dict[str, str]] = dict(  # mutable-ok: the base files contract returns the query as a dict
             listing_query + continuation_query
         )
-        signed_headers: Final = self._sign_s3_empty_body_request(
+        signed_headers: Final = self._sign_s3_request_without_body(
             method="GET",
             api_base=f"{url}?{urlencode(query, quote_via=quote, safe='')}",
             aws_region_name=target.aws_region_name,
@@ -1444,18 +1432,29 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if not file_id:
             raise ValueError("file_id is required for Bedrock file content retrieval")
 
+        return self._transform_s3_file_request(
+            file_id=file_id, method="GET", optional_params=optional_params, litellm_params=litellm_params
+        )
+
+    def _transform_s3_file_request(
+        self,
+        *,
+        file_id: str,
+        method: Literal["GET", "DELETE"],
+        optional_params: Mapping[str, object],
+        litellm_params: MutableMapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
         bucket_name, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
         target: Final = self._s3_request_target(optional_params=optional_params, litellm_params=litellm_params)
         url: Final = f"{target.endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
-
-        signed_headers: Final = self._sign_s3_empty_body_request(
-            method="GET",
+        signed_headers: Final = self._sign_s3_request_without_body(
+            method=method,
             api_base=url,
             aws_region_name=target.aws_region_name,
             request_params=target.request_params,
         )
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = signed_headers  # rebind-ok: handed to validate_environment
-        return url, {}
+        return url, {}  # mutable-ok: the base files contract returns the query as a dict
 
     def _s3_request_target(
         self,
@@ -1482,9 +1481,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             endpoint_url=endpoint_url, aws_region_name=aws_region_name, request_params=request_params
         )
 
-    def _sign_s3_empty_body_request(
+    def _sign_s3_request_without_body(
         self,
-        method: str,
+        method: Literal["GET", "DELETE"],
         api_base: str,
         aws_region_name: str,
         request_params: _BedrockS3RequestParams,

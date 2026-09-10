@@ -282,6 +282,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         verbose_logger.debug(f"LiteLLM Managed File object with id={file_id} stored in db: {result}")
 
+    async def _resolve_creator_org_id(self, user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+        if user_api_key_dict.org_id:
+            return user_api_key_dict.org_id
+        if not user_api_key_dict.team_id:
+            return None
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+        try:
+            team: Final = await get_team_object(
+                team_id=user_api_key_dict.team_id,
+                prisma_client=self.prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            return team.organization_id
+        except Exception as e:
+            verbose_logger.warning(f"could not resolve org for managed object attribution: {e}")
+            return None
+
     async def store_unified_object_id(
         self,
         unified_object_id: str,
@@ -354,6 +375,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "file_purpose": file_purpose,
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,
+                    "org_id": await self._resolve_creator_org_id(user_api_key_dict),
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                     **attribution_columns,
@@ -1781,12 +1803,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             filtered_data = {k: v for k, v in data.items() if k not in ("model", "file_id")}
             for model_id, model_file_id in specific_model_file_id_mapping.items():
                 credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
-                router_kwargs = (
-                    {**filtered_data, "_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
-                    if credentials is not None
-                    else filtered_data
-                )
-                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **router_kwargs)
+                delete_data = {
+                    **{k: v for k, v in filtered_data.items() if k != "_litellm_internal_model_credentials"},
+                    **(
+                        {"_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
+                        if credentials is not None
+                        else {}
+                    ),
+                }
+                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **delete_data)
 
         await self.delete_unified_file_id(file_id, litellm_parent_otel_span)
 

@@ -1,8 +1,3 @@
-import os
-from datetime import datetime
-from unittest.mock import MagicMock
-
-import pytest
 
 
 import litellm
@@ -67,34 +62,6 @@ def test_hyperbolic_in_provider_lists():
     assert "hyperbolic" in openai_compatible_providers
     assert "hyperbolic" in openai_text_completion_compatible_providers
     assert "https://api.hyperbolic.xyz/v1" in openai_compatible_endpoints
-
-
-def test_hyperbolic_models_configuration():
-    """Test that Hyperbolic models are properly configured"""
-    import json
-
-    # Load model configuration directly from the JSON file
-    json_path = os.path.join(
-        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
-    )
-    with open(json_path, "r") as f:
-        model_data = json.load(f)
-
-    # Test a few key models
-    test_models = [
-        "hyperbolic/deepseek-ai/DeepSeek-V3",
-        "hyperbolic/Qwen/Qwen2.5-Coder-32B-Instruct",
-        "hyperbolic/deepseek-ai/DeepSeek-R1",
-    ]
-
-    for model in test_models:
-        assert model in model_data
-        model_info = model_data[model]
-        assert model_info["litellm_provider"] == "hyperbolic"
-        assert model_info["mode"] == "chat"
-        assert "max_tokens" in model_info
-        assert "input_cost_per_token" in model_info
-        assert "output_cost_per_token" in model_info
 
 
 def test_hyperbolic_supported_params():

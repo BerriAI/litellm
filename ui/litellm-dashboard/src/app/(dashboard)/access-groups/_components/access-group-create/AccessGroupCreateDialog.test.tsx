@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 vi.mock("@/components/ModelSelect/ModelSelect", () => ({
   ModelSelect: ({ onChange }: { onChange: (values: string[]) => void }) => (
@@ -32,7 +32,7 @@ const Harness = ({ createAccessGroup }: { createAccessGroup: (body: unknown) => 
   );
 };
 
-const renderDialog = (overrides?: { createAccessGroup?: ReturnType<typeof vi.fn> }) => {
+const renderDialog = (overrides?: { createAccessGroup?: Mock }) => {
   const createAccessGroup = overrides?.createAccessGroup ?? vi.fn().mockResolvedValue({});
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
