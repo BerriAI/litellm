@@ -461,10 +461,11 @@ def _conversation_payload(turns, choices=1, **overrides):
     )
 
 
-def _conversation_span(mapper_names, payload):
+def _conversation_span(mapper_names, payload, legacy_compat=False):
     """The exported LLM-call span for ``payload`` with content capture on."""
     cfg = OpenTelemetryV2Config(
         exporter="in_memory",
+        legacy_compat=legacy_compat,
         mapper_names=list(mapper_names),
         capture_message_content="span_only",
     )
@@ -541,13 +542,13 @@ def test_message_cap_is_shared_across_input_and_output():
     ) == (MAX_MESSAGE_ATTRS_PER_SPAN // 2)
 
 
-def test_fully_populated_arize_span_stays_within_the_attribute_limit():
+def test_fully_populated_span_with_every_vocabulary_stays_within_the_attribute_limit():
     """Every capped family maxed at once still leaves the whole core intact.
 
-    The Arize / Phoenix composition (``genai`` + ``openinference`` + ``legacy``)
-    with every request parameter, every cost component, a hundred-plus tools, a
-    two-hundred-turn prompt and twenty choices is the worst case the two
-    span-wide ceilings have to absorb together.
+    Every vocabulary in the registry plus ``legacy``, every request parameter,
+    every cost component, a hundred-plus tools, a two-hundred-turn prompt and
+    twenty choices is the worst case the two span-wide ceilings have to absorb
+    together.
     """
     payload = _conversation_payload(
         200,
@@ -579,7 +580,7 @@ def test_fully_populated_arize_span_stays_within_the_attribute_limit():
             )
         },
     )
-    span = _conversation_span(["genai", "openinference"], payload)
+    span = _conversation_span(["genai", "openinference", "langfuse", "weave", "langtrace"], payload, legacy_compat=True)
     a = span.attributes
 
     assert span.dropped_attributes == 0
