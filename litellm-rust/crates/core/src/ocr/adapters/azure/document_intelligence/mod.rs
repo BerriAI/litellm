@@ -9,9 +9,7 @@ use crate::ocr::codecs::document_intelligence::{
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::prepare::{credential_env, transform_request_body};
 use crate::ocr::registry::OcrProvider;
-use crate::ocr::types::{
-    LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrResponseFormat,
-};
+use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection, OcrResponseFormat};
 use crate::ocr::wire::DecodedOcrResponse;
 use crate::url_utils::ApiUrl;
 

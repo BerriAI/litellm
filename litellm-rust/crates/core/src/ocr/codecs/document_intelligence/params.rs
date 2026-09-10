@@ -38,7 +38,6 @@ pub(crate) fn map_ocr_params(
             .map(normalize_features)
             .transpose()?
             .flatten(),
-        response_format: params.req_format.unwrap_or_default(),
     })
 }
 

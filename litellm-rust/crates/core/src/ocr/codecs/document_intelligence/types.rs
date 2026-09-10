@@ -1,8 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-use crate::ocr::types::OcrResponseFormat;
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum PagesInput {
@@ -22,15 +20,12 @@ pub(crate) enum FeaturesInput {
 pub(crate) struct DocumentIntelligenceInputParams {
     pub pages: Option<PagesInput>,
     pub features: Option<FeaturesInput>,
-    pub req_format: Option<OcrResponseFormat>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct DocumentIntelligenceParams {
     pub pages: Option<String>,
     pub features: Option<String>,
-    #[serde(rename = "req_format")]
-    pub response_format: OcrResponseFormat,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
