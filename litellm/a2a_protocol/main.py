@@ -798,11 +798,13 @@ async def create_a2a_client(
     agent_card: AgentCard | None = None
 
     if agent_card_params:
-        from a2a.compat.v0_3.types import AgentCard as _AgentCard
+        from a2a.compat.v0_3 import conversions as _conversions
+        from a2a.compat.v0_3.types import AgentCard as _CompatAgentCard
         from pydantic import ValidationError as _ValidationError
 
         try:
-            agent_card = normalize_agent_card_interfaces(_AgentCard.model_validate(agent_card_params))
+            compat_card = _CompatAgentCard.model_validate(agent_card_params)
+            agent_card = normalize_agent_card_interfaces(_conversions.to_core_agent_card(compat_card))
             verbose_logger.info("Using pre-registered agent card for %s (skipping well-known discovery)", base_url)
         except _ValidationError as e:
             verbose_logger.warning(
