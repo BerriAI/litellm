@@ -1435,6 +1435,9 @@ class TestToolChoiceTransformation:
             ("required", "required"),
             ("none", "none"),
             (None, "auto"),
+            ("any", "auto"),
+            ("run_command", "auto"),
+            ({"name": "run_command"}, "auto"),
         ],
     )
     def test_transform_tool_choice_for_responses_api_response(
@@ -1477,6 +1480,29 @@ class TestToolChoiceTransformation:
         )
 
         assert responses_api_response.tool_choice == {"type": "function", "name": "run_command"}
+
+    def test_non_streamed_response_with_unrecognized_tool_choice_echoes_auto(self) -> None:
+        chat_completion_response: Final = ModelResponse(
+            id="chatcmpl-unrecognized-tool-choice",
+            created=1748575031,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="/Users/dev"),
+                )
+            ],
+        )
+
+        responses_api_response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Run the command pwd.",
+            responses_api_request={"tool_choice": "any"},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.tool_choice == "auto"
 
 
 class TestContentTypeTransformation:
