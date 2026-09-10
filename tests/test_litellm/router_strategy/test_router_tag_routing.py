@@ -3166,7 +3166,7 @@ async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merg
 # configured (GitHub issue #39901) ---
 
 
-def _untagged_single_deployment_router(tag_routing_prefix: str = "route:"):
+def _untagged_single_deployment_router(tag_routing_prefix: str = "route:") -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
