@@ -6,6 +6,7 @@ extension, and AWS credential resolution is stubbed so nothing reaches STS.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -16,6 +17,7 @@ from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import chat_completions as bridge
 from litellm.types.utils import ModelResponse
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 RUST_RESPONSE = {
     "created": 1_700_000_000,
@@ -308,7 +310,9 @@ CONVERSE_RESPONSE = {
 }
 
 
-async def _drive_async_completion(*, skip_pre_call_logging: bool, logging_obj):
+async def _drive_async_completion(
+    *, skip_pre_call_logging: bool, logging_obj, credentials: Credentials = RESOLVED_CREDENTIALS
+):
     """Run the real `async_completion` with a stubbed transport."""
     import httpx as _httpx
 
@@ -335,7 +339,7 @@ async def _drive_async_completion(*, skip_pre_call_logging: bool, logging_obj):
         stream=None,
         optional_params={"maxTokens": 16},
         litellm_params={"aws_region_name": "us-west-2"},
-        credentials=RESOLVED_CREDENTIALS,
+        credentials=credentials,
         headers={},
         client=client,
         skip_pre_call_logging=skip_pre_call_logging,
@@ -355,6 +359,23 @@ async def test_async_completion_logs_pre_call_by_default():
     logging_obj = MagicMock()
     await _drive_async_completion(skip_pre_call_logging=False, logging_obj=logging_obj)
     assert logging_obj.pre_call.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_completion_signs_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: botocore refreshes expiring credentials inside SigV4 signing with a
+    blocking HTTP call, so `async_completion` must sign on a worker thread to keep the loop serving."""
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    probe = EventLoopProbe()
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+
+    response = await _drive_async_completion(
+        skip_pre_call_logging=False, logging_obj=MagicMock(), credentials=probe.credentials()
+    )
+    await release
+
+    assert response.choices[0].message.content == "hi"
+    assert probe.served_during_refresh is True
 
 
 def _sync_client_returning_converse_response():
