@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
+from dataclasses import dataclass
 from typing import Final, Protocol, cast  # noqa: TID251  # native extension exposes dynamically typed callables
 
 import httpx
 
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
+
+
+@dataclass(frozen=True, slots=True)
+class LiteLLMOcrRequest:
+    model: str
+    document: Mapping[str, object]
+    api_key: str | None
+    api_base: str | None
+    timeout: float | httpx.Timeout | None
+    custom_llm_provider: str | None
+    extra_headers: dict[str, object] | None
+    kwargs: Mapping[str, object]
 
 
 class RustOcr(Protocol):

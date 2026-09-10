@@ -1634,6 +1634,7 @@ dependencies = [
  "litellm-token-counter",
  "pyo3",
  "pyo3-async-runtimes",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
