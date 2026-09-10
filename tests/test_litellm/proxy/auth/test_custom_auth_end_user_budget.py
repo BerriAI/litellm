@@ -222,7 +222,8 @@ async def test_custom_auth_token_budget_still_loads_and_caches_unrestricted_end_
     assert await cache.async_get_cache(key=end_user_cache_key("customer-1")) is not None
 
 
-def test_update_valid_token_does_not_override_custom_auth_values_with_none():
+@pytest.mark.asyncio
+async def test_update_valid_token_does_not_override_custom_auth_values_with_none():
     """
     Greptile feedback: if custom auth sets end_user_model_max_budget on the token,
     but the DB end_user has no model_max_budget in their budget table, the DB lookup
@@ -244,7 +245,7 @@ def test_update_valid_token_does_not_override_custom_auth_values_with_none():
         # No tpm_limit, rpm_limit, or model_max_budget from DB
     }
 
-    result = update_valid_token_with_end_user_params(valid_token, end_user_params)
+    result = await update_valid_token_with_end_user_params(valid_token, end_user_params)
 
     # Custom-auth-provided values should be preserved, not cleared to None
     assert result.end_user_tpm_limit == 100
@@ -253,7 +254,8 @@ def test_update_valid_token_does_not_override_custom_auth_values_with_none():
     assert result.end_user_id == "user_1"
 
 
-def test_update_valid_token_db_values_override_custom_auth_when_set():
+@pytest.mark.asyncio
+async def test_update_valid_token_db_values_override_custom_auth_when_set():
     """
     When the DB budget table has explicit values, they should override
     whatever the custom auth function set (DB is source of truth).
@@ -272,7 +274,7 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
         "end_user_model_max_budget": db_budget,
     }
 
-    result = update_valid_token_with_end_user_params(valid_token, end_user_params)
+    result = await update_valid_token_with_end_user_params(valid_token, end_user_params)
 
     # DB values should win
     assert result.end_user_tpm_limit == 500

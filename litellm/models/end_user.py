@@ -22,6 +22,7 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     allowed_model_region: Literal["eu", "us"] | None = None
     default_model: str | None = None
     budget_id: str | None = None
+    fallback_end_user_id: str | None = None
     litellm_budget_table: LiteLLM_BudgetTable | None = None
     object_permission_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionTable | None = None

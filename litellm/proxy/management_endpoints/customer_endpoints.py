@@ -89,6 +89,8 @@ if TYPE_CHECKING:
             data: Mapping[str, Mapping[str, object]],
         ) -> _RowT_co: ...
 
+        async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
         async def delete_many(self, where: Mapping[str, object]) -> int: ...
 
 
@@ -120,6 +122,21 @@ async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
 def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
     """The per-id entries plus the registry, which any restriction change can move ids in or out of."""
     return (*(end_user_cache_key(user_id) for user_id in user_ids), end_user_restricted_registry_cache_key())
+
+
+async def _validate_fallback_end_user(
+    user_id: str, fallback_end_user_id: str | None, prisma_client: "PrismaClient"
+) -> None:
+    if fallback_end_user_id is None:
+        return
+    if fallback_end_user_id == user_id:
+        raise HTTPException(status_code=422, detail="fallback_end_user_id must not equal user_id")
+    table: Final = _typed_table(EndUserRepository(prisma_client))
+    target: Final = await table.find_first(where={"user_id": fallback_end_user_id})
+    if target is None:
+        raise HTTPException(status_code=422, detail=f"Fallback customer {fallback_end_user_id} does not exist")
+    if target.fallback_end_user_id is not None:
+        raise HTTPException(status_code=422, detail="Fallback customers must not have another fallback (depth 1 only)")
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -329,6 +346,7 @@ async def new_end_user(
     - blocked: bool - Flag to allow or disallow requests for this end-user. Default is False.
     - max_budget: Optional[float] - The maximum budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
+    - fallback_end_user_id: Optional[str] - Another customer whose budget is charged once this customer's own budget is exhausted. Depth is one: the fallback customer cannot itself have a fallback.
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
@@ -408,6 +426,7 @@ async def new_end_user(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
     try:
+        await _validate_fallback_end_user(data.user_id, data.fallback_end_user_id, prisma_client)
         ## VALIDATION ##
         if data.default_model is not None:
             if llm_router is None:
@@ -572,6 +591,7 @@ async def update_end_user(
     - blocked: bool = False  # allow/disallow requests for this end-user
     - max_budget: Optional[float] = None
     - budget_id: Optional[str] = None  # give either a budget_id or max_budget
+    - fallback_end_user_id: Optional[str] = None  # customer charged once this customer's budget is exhausted; depth one, null clears
     - allowed_model_region: Optional[AllowedModelRegion] = (
         None  # require all user requests to use models in this specific region
     )
@@ -626,7 +646,9 @@ async def update_end_user(
         # get non default values for key
         non_default_values: Final = dict[str, object]()
         for k, v in data_json.items():
-            if v is not None and ((isinstance(v, bool) and k in data.fields_set()) or v not in ([], {}, 0)):
+            if (v is not None or (k == "fallback_end_user_id" and k in data.fields_set())) and (
+                (isinstance(v, bool) and k in data.fields_set()) or v not in ([], {}, 0)
+            ):
                 non_default_values[k] = v
 
         ## Get end user table data ##
@@ -641,6 +663,8 @@ async def update_end_user(
                 code=404,
                 param="user_id",
             )
+
+        await _validate_fallback_end_user(data.user_id, data.fallback_end_user_id, prisma_client)
 
         end_user_table_data_typed: Final = LiteLLM_EndUserTable.model_validate(end_user_table_data.model_dump())
 
@@ -783,6 +807,9 @@ async def delete_end_user(
                     param="user_ids",
                 )
 
+            await _typed_table(EndUserRepository(prisma_client)).update_many(
+                where={"fallback_end_user_id": {"in": data.user_ids}}, data={"fallback_end_user_id": None}
+            )
             # All users exist, proceed with deletion
             response: Final = await _typed_table(EndUserRepository(prisma_client)).delete_many(
                 where={"user_id": {"in": data.user_ids}}

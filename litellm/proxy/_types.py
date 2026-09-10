@@ -1889,6 +1889,7 @@ class BudgetDeleteRequest(LiteLLMPydanticObjectBase):
 
 class CustomerBase(LiteLLMPydanticObjectBase):
     user_id: str
+    fallback_end_user_id: str | None = None
     alias: str | None = None
     spend: float = 0.0
     allowed_model_region: AllowedModelRegion | None = None
@@ -1904,6 +1905,7 @@ class NewCustomerRequest(BudgetNewRequest):
     """
 
     user_id: str
+    fallback_end_user_id: str | None = None
     alias: str | None = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
     budget_id: str | None = None  # give either a budget_id or max_budget
@@ -1930,6 +1932,7 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     """
 
     user_id: str
+    fallback_end_user_id: str | None = None
     alias: str | None = None  # human-friendly alias
     blocked: bool = False  # allow/disallow requests for this end-user
     max_budget: float | None = None
@@ -3063,6 +3066,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "user id."
         ),
     )
+    billing_end_user_id: str | None = Field(default=None, exclude=True)
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
     matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)

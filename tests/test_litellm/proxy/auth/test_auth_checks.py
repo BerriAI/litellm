@@ -5813,6 +5813,7 @@ _RESTRICTED_END_USER_WHERE = {
         {"allowed_model_region": {"not": None}},
         {"default_model": {"not": None}},
         {"object_permission_id": {"not": None}},
+        {"fallback_end_user_id": {"not": None}},
     ]
 }
 
