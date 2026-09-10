@@ -5308,11 +5308,10 @@ def completion(
                 GenericLiteLLMParams(**_supplemental_provider_params) if _supplemental_provider_params else None
             ),
         )
-        custom_llm_provider = resolve_ollama_tool_calling_provider(  # rebind-ok: ollama tools use the chat adapter
-            custom_llm_provider,
-            has_tools=True if tools or functions else False,
-            add_function_to_prompt=litellm.add_function_to_prompt,
-        )
+        if tools or functions:
+            custom_llm_provider = resolve_ollama_tool_calling_provider(  # rebind-ok: ollama tools use the chat adapter
+                custom_llm_provider, add_function_to_prompt=litellm.add_function_to_prompt
+            )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(

@@ -11,14 +11,12 @@ class OllamaError(BaseLLMException):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
-def resolve_ollama_tool_calling_provider(
-    custom_llm_provider: str, has_tools: bool, add_function_to_prompt: bool
-) -> str:
+def resolve_ollama_tool_calling_provider(custom_llm_provider: str, add_function_to_prompt: bool) -> str:
     """
-    /api/generate has no native tool calling, so ollama/ tool requests go through the ollama_chat
-    adapter unless add_function_to_prompt opts back into the legacy JSON prompt emulation
+    For requests with tools: /api/generate has no native tool calling, so ollama/ goes through the
+    ollama_chat adapter unless add_function_to_prompt opts back into the legacy JSON prompt emulation
     """
-    if custom_llm_provider == "ollama" and has_tools and not add_function_to_prompt:
+    if custom_llm_provider == "ollama" and not add_function_to_prompt:
         return "ollama_chat"
     return custom_llm_provider
 
