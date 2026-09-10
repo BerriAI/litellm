@@ -17,10 +17,12 @@ from litellm.constants import (
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
+    UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
@@ -920,6 +922,39 @@ def test_safe_dumps_complex_metadata_like_object():
     parsed = json.loads(result)
     assert parsed["user_api_key"] == "test-key"
     assert parsed["model"] == "gpt-4"
+
+
+_RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+
+
+@pytest.mark.parametrize(
+    ("rejection", "expected_model"),
+    [
+        (
+            ProxyModelNotFoundError(route="acompletion", model_name=_RAW_MODEL_WITH_PROMPT),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+        ),
+        (ValueError("provider timed out"), _RAW_MODEL_WITH_PROMPT),
+    ],
+)
+def test_get_logging_payload_replaces_model_only_when_router_rejected_it_as_unknown(
+    rejection: Exception, expected_model: str
+):
+    kwargs: Final = {
+        "model": _RAW_MODEL_WITH_PROMPT,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "status": "failure"}},
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=rejection,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == expected_model
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
