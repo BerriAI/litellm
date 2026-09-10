@@ -1,4 +1,6 @@
+import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 import os
 import threading
 import time
@@ -22,7 +24,10 @@ from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
     BaseAWSLLM,
     Boto3CredentialsInfo,
+    run_aws_signing,
+    sign_request_off_loop_if_aws,
 )
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Global variable for the base_aws_llm.py file path
 
@@ -3223,3 +3228,53 @@ class TestGetRequestHeadersResign:
             extra_headers={"Authorization": "Bearer foo"},
         )
         assert prepped.headers["Authorization"] == "Bearer foo"
+
+
+@pytest.mark.asyncio
+async def test_sign_request_off_loop_if_aws_keeps_the_loop_serving_while_credentials_refresh():
+    """Regression for issue #40165: an AWS provider's signing (and the botocore credential refresh
+    inside it) must run off the event loop, so other requests keep being served meanwhile."""
+    probe = EventLoopProbe()
+
+    def sign(headers: dict[str, str]) -> dict[str, str]:
+        request = AWSRequest(
+            method="POST", url="https://bedrock-runtime.us-west-2.amazonaws.com/", data="{}", headers=headers
+        )
+        SigV4Auth(probe.credentials(), "bedrock", "us-west-2").add_auth(request)
+        return dict(request.headers)
+
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+    signed = await sign_request_off_loop_if_aws(BaseAWSLLM(), sign, headers={"Content-Type": "application/json"})
+    await release
+
+    assert "Authorization" in signed
+    assert probe.served_during_refresh is True
+
+
+def test_run_aws_signing_leaves_the_default_executor_free_for_other_providers():
+    """A signing parked on botocore's refresh lock must not hold a default-executor thread, since every
+    other provider's async entry point hops through that same executor. The scenario runs on its own loop
+    so the one-thread default executor it pins never leaks into the session loop."""
+
+    async def scenario() -> tuple[str, str]:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        signing_parked = asyncio.Event()
+        refresh_done = threading.Event()
+
+        def sign() -> str:
+            loop.call_soon_threadsafe(signing_parked.set)
+            refresh_done.wait()
+            return threading.current_thread().name
+
+        signing = asyncio.create_task(run_aws_signing(sign))
+        try:
+            await asyncio.wait_for(signing_parked.wait(), timeout=5)
+            other_provider = await asyncio.wait_for(loop.run_in_executor(None, threading.current_thread), timeout=5)
+        finally:
+            refresh_done.set()
+        return other_provider.name, await signing
+
+    other_provider, signing_thread = asyncio.run(scenario())
+    assert other_provider != signing_thread
+    assert signing_thread.startswith("aws-signing")

@@ -9,6 +9,7 @@ import responses
 from click.testing import CliRunner
 
 from litellm.proxy.client.cli import cli
+from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
 from litellm.proxy.client.cli.commands import configure as configure_module
 from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 from litellm.proxy.client.cli.commands.configure import configure_claude, configure_group, interactive_configure
@@ -29,10 +30,12 @@ def _mock_models():
 
 @pytest.fixture
 def paths(monkeypatch, tmp_path):
+    """The default settings file, reached the way Claude Code reaches it: CLAUDE_CONFIG_DIR names its directory."""
     settings_path = tmp_path / "claude" / "settings.json"
     state_path = tmp_path / "litellm" / "claude_configure_state.json"
-    monkeypatch.setattr(configure_module, "CLAUDE_SETTINGS_PATH", settings_path)
-    monkeypatch.setattr(configure_module, "CONFIGURE_STATE_PATH", state_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(settings_path.parent))
+    monkeypatch.setattr(claude_settings_module, "CLAUDE_SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(claude_settings_module, "CONFIGURE_STATE_PATH", state_path)
     return settings_path, state_path
 
 
@@ -58,7 +61,9 @@ def lite_up_backup(monkeypatch, tmp_path):
     """A `lite up` session holding its backup, the local precondition every settings write refuses on."""
     backup = tmp_path / "claude_settings_backup.json"
     backup.write_text("{}")
-    monkeypatch.setattr(configure_module, "SETTINGS_FILE_OWNERS", (SettingsFileOwner(backup, "lite up", "lite down"),))
+    monkeypatch.setattr(
+        claude_settings_module, "SETTINGS_FILE_OWNERS", (SettingsFileOwner(backup, "lite up", "lite down"),)
+    )
     return backup
 
 
@@ -324,6 +329,30 @@ class TestUnconfigureClaude:
     def test_refuses_while_lite_up_holds_a_backup(self, runner, paths, lite_up_backup):
         result = runner.invoke(cli, ["unconfigure", "claude"])
         assert result.exit_code != 0 and "lite down" in result.output
+
+    @responses.activate
+    def test_a_config_dir_is_configured_and_undone_apart_from_the_default_file(
+        self, runner, paths, monkeypatch, tmp_path, lite_up_backup
+    ):
+        _mock_models()
+        default_settings, default_state = paths
+        work_dir = tmp_path / "claude-work"
+        work_dir.mkdir()
+        original = {"theme": "dark"}
+        (work_dir / "settings.json").write_text(json.dumps(original))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(work_dir))
+
+        configured = _configure(runner, "--api-key", VALID_KEY, "--model", "claude-auto")
+        assert configured.exit_code == 0, configured.output
+        assert f"Configured Claude Code: {work_dir / 'settings.json'}" in configured.output
+        assert json.loads((work_dir / "settings.json").read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == VALID_KEY
+        assert not default_settings.exists() and not default_state.exists()
+
+        undone = runner.invoke(cli, ["unconfigure", "claude"])
+        assert undone.exit_code == 0, undone.output
+        assert json.loads((work_dir / "settings.json").read_text()) == original
+        assert not default_settings.exists() and not default_state.exists()
+        assert runner.invoke(cli, ["unconfigure", "claude"]).exit_code != 0, "the receipt is gone with the undo"
 
     def test_without_a_receipt_it_fails_loudly(self, runner, paths):
         result = runner.invoke(cli, ["unconfigure", "claude"])
