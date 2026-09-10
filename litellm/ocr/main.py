@@ -58,8 +58,8 @@ class _PreparedOCRRequest:
 class _PreparedRustOCRCall:
     api_key: str | None
     api_base: str | None
+    body: dict[str, object]
     headers: dict[str, object]
-    optional_params: dict[str, object]
 
 
 _RUST_OCR_PROVIDERS: Final = {
@@ -261,15 +261,16 @@ def _prepare_rust_ocr_call(
     )
     rust_api_base: Final = _rust_bridge_api_base(prepared_request, resolve_api_key)
     rust_optional_params: Final = _rust_bridge_optional_params(prepared_request, resolve_api_key)
+    body: Final[dict[str, object]] = {
+        "model": prepared_request.model,
+        "document": prepared_request.document,
+        **rust_optional_params,
+    }
     prepared_request.litellm_logging_obj.pre_call(
         input="OCR document processing",
         api_key=resolved_api_key,
         additional_args={
-            "complete_input_dict": {
-                "model": prepared_request.model,
-                "document": prepared_request.document,
-                **rust_optional_params,
-            },
+            "complete_input_dict": body,
             "api_base": resolved_complete_url,
             "headers": resolved_headers,
         },
@@ -277,9 +278,27 @@ def _prepare_rust_ocr_call(
     return _PreparedRustOCRCall(
         api_key=resolved_api_key,
         api_base=rust_api_base,
+        body=body,
         headers=cast(dict[str, object], resolved_headers),
-        optional_params=rust_optional_params,
     )
+
+
+def _rust_ocr_model(body: Mapping[str, object]) -> str:
+    model: Final = body.get("model")
+    if not isinstance(model, str):
+        raise TypeError("OCR callback produced a non-string model")
+    return model
+
+
+def _rust_ocr_document(body: Mapping[str, object]) -> dict[str, object]:
+    document: Final = body.get("document")
+    if not isinstance(document, dict):
+        raise TypeError("OCR callback produced a non-dict document")
+    return cast(dict[str, object], document)  # cast-ok: the native bridge validates the retained document fields
+
+
+def _rust_ocr_optional_params(body: Mapping[str, object]) -> dict[str, object]:
+    return {name: value for name, value in body.items() if name not in {"model", "document"}}
 
 
 def _map_rust_ocr_error(
@@ -321,13 +340,13 @@ def _run_rust_ocr(
     )
     try:
         rust_response: Final = rust_ocr_bridge.ocr(
-            model=prepared_request.model,
-            document=prepared_request.document,
+            model=_rust_ocr_model(prepared.body),
+            document=_rust_ocr_document(prepared.body),
             api_key=prepared.api_key,
             api_base=prepared.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
             extra_headers=prepared.headers,
-            optional_params=prepared.optional_params,
+            optional_params=_rust_ocr_optional_params(prepared.body),
             timeout=prepared_request.effective_timeout,
         )
     except Exception as error:
@@ -349,13 +368,13 @@ async def _run_rust_aocr(
     )
     try:
         rust_response: Final = await rust_ocr_bridge.aocr(
-            model=prepared_request.model,
-            document=prepared_request.document,
+            model=_rust_ocr_model(prepared.body),
+            document=_rust_ocr_document(prepared.body),
             api_key=prepared.api_key,
             api_base=prepared.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
             extra_headers=prepared.headers,
-            optional_params=prepared.optional_params,
+            optional_params=_rust_ocr_optional_params(prepared.body),
             timeout=prepared_request.effective_timeout,
         )
     except Exception as error:

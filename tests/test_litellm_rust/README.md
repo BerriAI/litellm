@@ -10,4 +10,4 @@ Run `make test-rust-extension` as the acceptance command. It builds a fresh whee
 
 Collection fails when `LITELLM_RUST=1` is set but the compiled `_native` module cannot be imported. The autouse fixture isolates callback and configuration state but does not select a backend. Native contract tests call `litellm.rust_bridge.ocr` directly, while the strict dispatch test explicitly enables and disables Rust and records which OCR entrypoint runs
 
-The OCR contract modules are non-strict expected failures until the retained callback implementation from #40070 lands. The public dispatch test remains strict. Passing contract cases appear as XPASS so staging coverage stays visible
+The OCR callback contracts and supported request behavior are strict. Five request and guardrail cases remain non-strict expected failures for post-call route attribution, sanitized provider errors, timeout-specific mapping, and native Azure validation

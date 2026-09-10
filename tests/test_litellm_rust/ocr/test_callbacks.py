@@ -10,6 +10,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
@@ -18,7 +19,6 @@ from tests.test_litellm_rust.support.requests import (
     request_body,
     request_headers,
 )
-from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -41,7 +41,7 @@ def test_native_ocr_pre_call_callback_receives_transformed_provider_request(ocr_
     observations: Final = []
 
     class Observe(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             observations.append((model, copy.deepcopy(kwargs["additional_args"])))
 
     call_native_ocr_with_callbacks(ocr_server, [Observe()], pages=[0])
@@ -64,13 +64,13 @@ def test_native_ocr_pre_call_body_edit_reaches_next_callback_and_provider(
     observed: Final = []
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             request_body(kwargs)["include_image_base64"] = True
             if raise_after_edit:
                 raise RuntimeError("pre-call callback failed")
 
     class Observe(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             observed.append(copy.deepcopy(request_body(kwargs)))
 
     call_native_ocr_with_callbacks(ocr_server, [Edit(), Observe()], include_image_base64=False)
@@ -83,11 +83,11 @@ def test_native_ocr_pre_call_header_edit_reaches_next_callback_and_provider(ocr_
     observed: Final = []
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             request_headers(kwargs)["x-audit-tag"] = "reviewed"
 
     class Observe(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             observed.append(dict(request_headers(kwargs)))
 
     call_native_ocr_with_callbacks(ocr_server, [Edit(), Observe()])
@@ -107,12 +107,12 @@ async def test_native_ocr_pre_call_nested_document_edit_updates_caller_callback_
     aliases: Final = []
 
     class Retain(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             aliases.append(request_body(kwargs)["document"] is original)
             retained.append(request_body(kwargs)["document"])
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             original["document_url"] = replacement_url
 
     arguments: Final = {
@@ -143,7 +143,7 @@ def test_native_ocr_pre_call_document_replacement_does_not_mutate_original_docum
     retained: Final = []
 
     class RetainAndReplace(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             body = request_body(kwargs)
             retained.append(body["document"])
             body["document"] = replacement
@@ -165,11 +165,11 @@ def test_native_ocr_pre_call_body_rebinding_is_visible_to_callbacks_but_not_prov
     observed: Final = []
 
     class Rebind(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             kwargs["additional_args"]["complete_input_dict"] = {"replacement": True}
 
     class Observe(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             observed.append(request_body(kwargs))
 
     call_native_ocr_with_callbacks(ocr_server, [Rebind(), Observe()])
@@ -182,11 +182,11 @@ def test_native_ocr_callback_retained_body_observes_later_callback_mutation(ocr_
     queued: Final = []
 
     class QueuePayload(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             queued.append(request_body(kwargs))
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             request_body(kwargs)["queued-edit"] = True
 
     call_native_ocr_with_callbacks(ocr_server, [QueuePayload(), Edit()])
@@ -200,7 +200,7 @@ def test_native_ocr_success_callback_receives_state_added_by_pre_call_callback(o
     finished: Final = threading.Event()
 
     class Stash(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             kwargs["test-token"] = token
 
         def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -280,7 +280,7 @@ async def test_native_aocr_failure_callbacks_receive_state_added_by_pre_call_cal
     observed: Final = []
 
     class TrackInFlightRequest(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             kwargs["request-token"] = token
 
         def log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -364,7 +364,7 @@ async def test_native_azure_ocr_resolves_token_before_pre_call_on_caller_context
             return "caller-token"
 
     class Edit(CustomLogger):
-        def log_pre_api_call(self, model, _messages, kwargs):
+        def log_pre_api_call(self, model, messages, kwargs):
             assert request_headers(kwargs)["Authorization"] == "Bearer caller-token"
             observations.append("pre_call")
             request_headers(kwargs)["Authorization"] = "Bearer edited"
@@ -465,6 +465,7 @@ async def test_native_azure_ocr_releases_token_provider_after_terminal_outcome(
 ) -> None:
     import gc
     import weakref
+
     from tests.test_litellm_rust.support.callback_recorder import drain_logging
     class Provider:
         def __call__(self) -> str:

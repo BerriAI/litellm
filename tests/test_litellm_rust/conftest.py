@@ -30,9 +30,22 @@ CALLBACK_ATTRIBUTES: Final = (
     "_async_failure_callback",
 )
 EXPECTED_FAILURE_REASONS: Final = {
-    "ocr/test_callbacks.py": "requires the OCR callback lifecycle implementation from #40070",
-    "ocr/test_guardrails.py": "requires the OCR guardrail lifecycle implementation from #40070",
-    "ocr/test_requests.py": "requires the OCR request and Azure authentication implementation from #40070",
+    (
+        "ocr/test_guardrails.py",
+        "test_native_aocr_post_call_content_filter_blocks_matching_markdown",
+    ): "requires OCR post-call guardrail route attribution",
+    (
+        "ocr/test_requests.py",
+        "test_native_ocr_maps_provider_400_without_exposing_response_body",
+    ): "requires sanitized native OCR provider errors",
+    (
+        "ocr/test_requests.py",
+        "test_native_ocr_raises_transport_error_when_request_exceeds_timeout",
+    ): "requires timeout-specific native OCR exception mapping",
+    (
+        "ocr/test_requests.py",
+        "test_native_azure_ocr_rejects_unsupported_configuration_before_token_or_callbacks",
+    ): "requires native Azure validation before host authentication",
 }
 
 
@@ -98,7 +111,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if "test_litellm_rust" not in item.path.parts:
             continue
         relative_path: Final = "/".join(item.path.parts[item.path.parts.index("test_litellm_rust") + 1 :])
-        reason: Final = EXPECTED_FAILURE_REASONS.get(relative_path)
+        test_name: Final = item.name.partition("[")[0]
+        reason: Final = EXPECTED_FAILURE_REASONS.get((relative_path, test_name))
         if reason is not None:
             item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
 
