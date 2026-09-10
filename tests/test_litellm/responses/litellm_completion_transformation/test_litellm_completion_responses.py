@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 import pytest
 
@@ -1420,6 +1421,88 @@ class TestToolChoiceTransformation:
             {"type": "function", "name": ""}
         )
         assert result == "required"
+
+    @pytest.mark.parametrize(
+        "request_tool_choice,expected",
+        [
+            ({"type": "function", "name": "run_command"}, {"type": "function", "name": "run_command"}),
+            ({"type": "function", "function": {"name": "run_command"}}, {"type": "function", "name": "run_command"}),
+            ({"type": "custom", "name": "ApplyPatch"}, {"type": "custom", "name": "ApplyPatch"}),
+            ({"type": "custom", "custom": {"name": "ApplyPatch"}}, {"type": "custom", "name": "ApplyPatch"}),
+            ({"type": "function"}, "required"),
+            ({"type": "tool"}, "required"),
+            ({"type": "auto"}, "auto"),
+            ("required", "required"),
+            ("none", "none"),
+            (None, "auto"),
+            ("any", "auto"),
+            ("run_command", "auto"),
+            ({"name": "run_command"}, "auto"),
+        ],
+    )
+    def test_transform_tool_choice_for_responses_api_response(
+        self, request_tool_choice: object, expected: str | dict[str, str]
+    ) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+            request_tool_choice
+        )
+        assert result == expected
+
+    def test_non_streamed_response_echoes_named_tool_choice_in_responses_api_shape(self) -> None:
+        chat_completion_response: Final = ModelResponse(
+            id="chatcmpl-named-tool-choice",
+            created=1748575031,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_pwd",
+                                type="function",
+                                function=Function(name="run_command", arguments='{"command":"pwd"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Run the command pwd.",
+            responses_api_request={"tool_choice": {"type": "function", "name": "run_command"}},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.tool_choice == {"type": "function", "name": "run_command"}
+
+    def test_non_streamed_response_with_unrecognized_tool_choice_echoes_auto(self) -> None:
+        chat_completion_response: Final = ModelResponse(
+            id="chatcmpl-unrecognized-tool-choice",
+            created=1748575031,
+            model="claude-haiku-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content="/Users/dev"),
+                )
+            ],
+        )
+
+        responses_api_response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Run the command pwd.",
+            responses_api_request={"tool_choice": "any"},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.tool_choice == "auto"
 
 
 class TestContentTypeTransformation:
