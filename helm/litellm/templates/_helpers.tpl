@@ -361,12 +361,9 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end -}}
 
 {{/*
-In-container PgBouncer env for the gateway container. Fails at render time under IAM or Entra auth: the pooler holds one static password for the life of the pod.
+In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
 */}}
 {{- define "litellm.connectionPoolEnv" -}}
-{{- if or .Values.database.writer.useIAMAuth .Values.database.writer.useAzureEntraAuth }}
-{{- fail "database.connectionPool.enabled cannot be combined with database.writer.useIAMAuth or database.writer.useAzureEntraAuth: the in-container pgbouncer holds a static database password and cannot follow a rotating token. Disable the pool or use a static database password" }}
-{{- end }}
 {{- with .Values.database.connectionPool -}}
 - name: LITELLM_PGBOUNCER_ENABLED
   value: "true"

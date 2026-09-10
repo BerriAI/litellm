@@ -273,18 +273,17 @@ connections the pooler accepts. The module sets
 and the migration task keep the direct connection.
 
 ```hcl
-create_database                 = false
-database_url                    = "postgresql://litellm:<password>@db.internal:5432/litellm"
 gateway_num_workers             = 4
 gateway_connection_pool_enabled = true
 gateway_pool_max_db_connections = 20
 gateway_pool_max_client_conn    = 1000
 ```
 
-The pool needs a static database password, so it is only valid with an
-existing database via `database_url`. The module-created Aurora authenticates
-with rotating IAM tokens (see [Aurora + IAM auth](#aurora--iam-auth)), which
-the pooler cannot follow, and `terraform plan` rejects that combination.
+The pool works with the module-created Aurora as well as an existing database
+via `database_url`. Against Aurora it authenticates with the same rotating IAM
+tokens the workers used to (see [Aurora + IAM auth](#aurora--iam-auth)): the
+pooler mints a token from the task role, renews it before it expires and hands
+the workers a loopback URL with a static password instead
 
 The componentized `gateway_image` starts through `python -m gateway.launch`,
 which reads these variables, starts the pooler once per task and hands the

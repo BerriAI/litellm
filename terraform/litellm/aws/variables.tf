@@ -208,10 +208,9 @@ variable "gateway_connection_pool_enabled" {
     Postgres, so a task's footprint against the database connection ceiling is
     workers x connection_limit and grows with every task. Sets
     LITELLM_PGBOUNCER_ENABLED / LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS /
-    LITELLM_PGBOUNCER_MAX_CLIENT_CONN on the gateway container only. Requires
-    an existing database via `database_url`: the module-created Aurora
-    authenticates with IAM tokens, which the pooler cannot follow because it
-    holds one static password for the life of the task.
+    LITELLM_PGBOUNCER_MAX_CLIENT_CONN on the gateway container only. Works with
+    the module-created Aurora too: the pooler mints the IAM token itself and
+    renews it before it expires.
   EOT
   type        = bool
   default     = false
