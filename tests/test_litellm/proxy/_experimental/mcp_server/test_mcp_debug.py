@@ -3,11 +3,17 @@ Tests for MCPDebug — MCP OAuth2 debug response headers.
 """
 
 import asyncio
-from unittest.mock import MagicMock
+from typing import Final
+
+import pytest
+from starlette.types import Message
+
+from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
 
 from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCP_DEBUG_REQUEST_HEADER,
     MCPDebug,
+    MCPAuthDiagnostics,
 )
 
 
@@ -166,77 +172,6 @@ class TestBuildDebugHeaders:
         assert set(headers.keys()) == expected_keys
 
 
-class TestResolveAuthResolution:
-    def _make_server(self, **kwargs):
-        server = MagicMock()
-        server.alias = kwargs.get("alias", "test")
-        server.server_name = kwargs.get("server_name", "test")
-        server.has_client_credentials = kwargs.get("has_client_credentials", False)
-        server.authentication_token = kwargs.get("authentication_token", None)
-        server.auth_type = kwargs.get("auth_type", None)
-        return server
-
-    def test_per_request_header(self):
-        server = self._make_server()
-        result = MCPDebug.resolve_auth_resolution(
-            server,
-            mcp_auth_header="Bearer xxx",
-            mcp_server_auth_headers=None,
-            oauth2_headers=None,
-        )
-        assert result == "per-request-header"
-
-    def test_server_specific_header(self):
-        server = self._make_server(alias="atlas")
-        result = MCPDebug.resolve_auth_resolution(
-            server,
-            mcp_auth_header=None,
-            mcp_server_auth_headers={"atlas": {"Authorization": "Bearer xxx"}},
-            oauth2_headers=None,
-        )
-        assert result == "per-request-header"
-
-    def test_m2m(self):
-        server = self._make_server(has_client_credentials=True)
-        result = MCPDebug.resolve_auth_resolution(
-            server,
-            mcp_auth_header=None,
-            mcp_server_auth_headers=None,
-            oauth2_headers=None,
-        )
-        assert result == "m2m-client-credentials"
-
-    def test_static_token(self):
-        server = self._make_server(authentication_token="static-tok")
-        result = MCPDebug.resolve_auth_resolution(
-            server,
-            mcp_auth_header=None,
-            mcp_server_auth_headers=None,
-            oauth2_headers=None,
-        )
-        assert result == "static-token"
-
-    def test_oauth2_passthrough(self):
-        server = self._make_server(auth_type="oauth2")
-        result = MCPDebug.resolve_auth_resolution(
-            server,
-            mcp_auth_header=None,
-            mcp_server_auth_headers=None,
-            oauth2_headers={"Authorization": "Bearer eyJ..."},
-        )
-        assert result == "oauth2-passthrough"
-
-    def test_no_auth(self):
-        server = self._make_server()
-        result = MCPDebug.resolve_auth_resolution(
-            server,
-            mcp_auth_header=None,
-            mcp_server_auth_headers=None,
-            oauth2_headers=None,
-        )
-        assert result == "no-auth"
-
-
 class TestWrapSendWithDebugHeaders:
     def test_injects_headers(self):
         captured = []
@@ -269,3 +204,90 @@ class TestWrapSendWithDebugHeaders:
         asyncio.run(wrapped(body_msg))
 
         assert captured[0] == body_msg
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", tuple(AuthResolution))
+@pytest.mark.parametrize("method", ("GET", "DELETE", "POST"))
+async def test_debug_defers_resolution_until_first_frame_only_for_post(source: AuthResolution, method: str) -> None:
+    captured: Final[list[Message]] = []
+    diagnostics: Final = MCPAuthDiagnostics()
+
+    async def send(message: Message) -> None:
+        captured.append(message)
+
+    wrapped: Final = MCPDebug.wrap_send_with_debug_headers(
+        send, diagnostics.headers(), diagnostics.headers, request_method=method
+    )
+    await wrapped({"type": "http.response.start", "status": 200, "headers": []})
+    assert len(captured) == (0 if method == "POST" else 1)
+    diagnostics.record("s1", source)
+    body: Final[Message] = {"type": "http.response.body", "body": b"data: pong\n\n", "more_body": True}
+    await wrapped(body)
+    assert dict(captured[0]["headers"])[b"x-mcp-debug-auth-resolution"] == (
+        source.value.encode() if method == "POST" else b"unresolved"
+    )
+    assert captured[1] == body
+
+
+@pytest.mark.asyncio
+async def test_early_stream_frame_reports_unresolved_without_waiting() -> None:
+    captured: Final[list[Message]] = []
+    diagnostics: Final = MCPAuthDiagnostics()
+
+    async def send(message: Message) -> None:
+        captured.append(message)
+
+    wrapped: Final = MCPDebug.wrap_send_with_debug_headers(send, {}, diagnostics.headers, request_method="POST")
+    await wrapped({"type": "http.response.start", "status": 200, "headers": []})
+    await wrapped({"type": "http.response.body", "body": b": ping\n\n", "more_body": True})
+    diagnostics.record("s1", AuthResolution.stored_user_token)
+    await wrapped({"type": "http.response.body", "body": b"data: pong\n\n", "more_body": False})
+    assert len(captured) == 3
+    assert dict(captured[0]["headers"])[b"x-mcp-debug-auth-resolution"] == b"unresolved"
+
+
+def test_diagnostics_keep_requests_separate_and_do_not_collapse_multiple_servers() -> None:
+    alice: Final = MCPAuthDiagnostics()
+    bob: Final = MCPAuthDiagnostics()
+    alice.record("s1", AuthResolution.stored_user_token)
+    assert bob.resolution() == "unresolved"
+    alice.record("s1", AuthResolution.token_exchange)
+    assert alice.resolution() == "token-exchange"
+    alice.record("s2", AuthResolution.static_token)
+    assert alice.resolution() == "multiple"
+    assert alice.headers()["x-mcp-debug-auth-resolutions"] == '{"s1":"token-exchange","s2":"static-token"}'
+
+
+@pytest.mark.asyncio
+async def test_concurrent_mcp_messages_record_on_their_own_http_scope() -> None:
+    from unittest.mock import MagicMock
+
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+    from starlette.requests import Request
+
+    from litellm.proxy._experimental.mcp_server.mcp_debug import (
+        MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
+        record_auth_resolution,
+    )
+
+    session: Final = MagicMock()
+    first: Final = MCPAuthDiagnostics()
+    second: Final = MCPAuthDiagnostics()
+
+    async def record(diagnostics: MCPAuthDiagnostics, source: AuthResolution) -> None:
+        context: Final = RequestContext(
+            request_id=1, meta=None, session=session, lifespan_context=None,
+            request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
+        )
+        token: Final = request_ctx.set(context)
+        try:
+            await asyncio.sleep(0)
+            record_auth_resolution("same-server", source)
+        finally:
+            request_ctx.reset(token)
+
+    await asyncio.gather(record(first, AuthResolution.stored_user_token), record(second, AuthResolution.per_request_header))
+    assert first.resolution() == "stored-user-token"
+    assert second.resolution() == "per-request-header"
