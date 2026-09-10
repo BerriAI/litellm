@@ -1,5 +1,6 @@
 """`lite configure claude` and `lite unconfigure claude`: persistent Claude Code wiring, undoable."""
 
+import os
 import re
 import sys
 from collections.abc import Callable, Sequence
@@ -12,9 +13,6 @@ from InquirerPy.base.control import Choice
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key
 from .claude_settings import (
-    CLAUDE_SETTINGS_PATH,
-    CONFIGURE_STATE_PATH,
-    SETTINGS_FILE_OWNERS,
     STARTING_MODEL_ROLE,
     ApiKeyHelper,
     ClaudeCredential,
@@ -24,9 +22,12 @@ from .claude_settings import (
     StaticToken,
     UnconfigureOutcome,
     UnpinModel,
+    claude_settings_path,
     configure_claude_settings,
+    configure_state_path,
     refuse_while_owned,
     resolve_api_key_helper,
+    settings_file_owners,
     unconfigure_claude_settings,
 )
 from .pi import ListingFailure, PiSyncError, fetch_model_ids
@@ -67,8 +68,9 @@ def resolve_credential(ctx: click.Context, api_key: str | None) -> tuple[ClaudeC
 def _start(ctx: click.Context, api_key: str | None) -> tuple[ClaudeCredential, tuple[str, ...]]:
     """Every configure path begins the same way: the local ownership check first, so a `lite up`
     session is refused before any login prompt or request, then the credential, then the listing."""
+    settings_path: Final = claude_settings_path(os.environ)
     try:
-        refuse_while_owned(CLAUDE_SETTINGS_PATH, SETTINGS_FILE_OWNERS)
+        refuse_while_owned(settings_path, settings_file_owners(settings_path))
         credential, key = resolve_credential(ctx, api_key)
     except ClaudeSettingsError as e:
         raise click.ClickException(str(e))
@@ -106,14 +108,20 @@ def _apply_claude(ctx: click.Context, credential: ClaudeCredential, listed: Sequ
         raise click.ClickException(
             f"{model!r} is not served by {base_url} for this key. /v1/models lists: {shown}{more}."
         )
+    settings_path: Final = claude_settings_path(os.environ)
     try:
         configure_claude_settings(
-            base_url, credential, _model_choice(model), CLAUDE_SETTINGS_PATH, CONFIGURE_STATE_PATH, SETTINGS_FILE_OWNERS
+            base_url,
+            credential,
+            _model_choice(model),
+            settings_path,
+            configure_state_path(settings_path),
+            settings_file_owners(settings_path),
         )
     except ClaudeSettingsError as e:
         raise click.ClickException(str(e))
     in_picker: Final = sum(1 for listed_model in listed if _CLAUDE_CODE_PICKER_FILTER.search(listed_model))
-    click.echo(f"Configured Claude Code: {CLAUDE_SETTINGS_PATH} now routes through {base_url}.")
+    click.echo(f"Configured Claude Code: {settings_path} now routes through {base_url}.")
     click.echo(
         "Credential: your virtual key, stored in the file as ANTHROPIC_AUTH_TOKEN."
         if isinstance(credential, StaticToken)
@@ -130,9 +138,9 @@ def _apply_claude(ctx: click.Context, credential: ClaudeCredential, listed: Sequ
         "'claude' or 'anthropic')."
     )
     click.echo("Start `claude` from any terminal. Undo with `lite unconfigure claude`.")
-    if isinstance(credential, StaticToken) and CLAUDE_SETTINGS_PATH.is_symlink():
+    if isinstance(credential, StaticToken) and settings_path.is_symlink():
         click.echo(
-            f"Note: {CLAUDE_SETTINGS_PATH} is a symlink to {CLAUDE_SETTINGS_PATH.resolve()}, so your key now lives in "
+            f"Note: {settings_path} is a symlink to {settings_path.resolve()}, so your key now lives in "
             "that file; keep it out of version control.",
             err=True,
         )
@@ -221,11 +229,13 @@ def unconfigure_claude() -> None:
     Also undoes `lite login --config-claude`. Only keys still holding what configure wrote are
     put back; anything you changed since is left as it is and named in the output.
     """
+    settings_path: Final = claude_settings_path(os.environ)
+    state_path: Final = configure_state_path(settings_path)
     try:
-        outcome: Final = unconfigure_claude_settings(CLAUDE_SETTINGS_PATH, CONFIGURE_STATE_PATH, SETTINGS_FILE_OWNERS)
+        outcome: Final = unconfigure_claude_settings(settings_path, state_path, settings_file_owners(settings_path))
     except ClaudeSettingsError as e:
         raise click.ClickException(str(e))
-    _report_unconfigure(CLAUDE_SETTINGS_PATH, CONFIGURE_STATE_PATH, outcome)
+    _report_unconfigure(settings_path, state_path, outcome)
 
 
 def _report_unconfigure(settings_path: Path, state_path: Path, outcome: UnconfigureOutcome) -> None:
