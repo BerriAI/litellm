@@ -150,6 +150,21 @@ locals {
     [local.gateway_launch_cmd],
   ))
 
+  metrics_enabled       = var.create_runtime && var.gateway_metrics_port != null
+  metrics_multiproc_dir = "/tmp/litellm_prometheus_multiproc"
+  metrics_volume        = "prometheus-multiproc"
+  metrics_env_kv        = local.metrics_enabled ? [{ name = "PROMETHEUS_MULTIPROC_DIR", value = local.metrics_multiproc_dir }] : []
+  metrics_config_volume = "gmp-config"
+
+  metrics_run_monitoring_yaml = local.metrics_enabled ? yamlencode({
+    apiVersion = "monitoring.googleapis.com/v1beta"
+    kind       = "RunMonitoring"
+    metadata   = { name = "${local.name}-gateway" }
+    spec = {
+      endpoints = [{ port = var.gateway_metrics_port, path = "/metrics", interval = "30s" }]
+    }
+  }) : ""
+
   backend_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
@@ -197,6 +212,7 @@ resource "google_cloud_run_v2_service" "gateway" {
     }
 
     containers {
+      name    = "gateway"
       image   = local.gateway_image
       command = ["sh", "-c"]
       args    = [local.gateway_args]
@@ -213,7 +229,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env, local.metrics_env_kv)
         content {
           name  = env.value.name
           value = env.value.value
@@ -241,6 +257,14 @@ resource "google_cloud_run_v2_service" "gateway" {
         }
       }
 
+      dynamic "volume_mounts" {
+        for_each = local.metrics_enabled ? [1] : []
+        content {
+          name       = local.metrics_volume
+          mount_path = local.metrics_multiproc_dir
+        }
+      }
+
       startup_probe {
         http_get {
           path = "/health/readiness"
@@ -262,6 +286,71 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
     }
 
+    dynamic "containers" {
+      for_each = local.metrics_enabled ? [1] : []
+      content {
+        name    = "metrics"
+        image   = local.gateway_image
+        command = ["python", "-m", "litellm.proxy.prometheus_metrics_server"]
+        args    = ["--port", tostring(var.gateway_metrics_port)]
+
+        dynamic "env" {
+          for_each = local.metrics_env_kv
+          content {
+            name  = env.value.name
+            value = env.value.value
+          }
+        }
+
+        volume_mounts {
+          name       = local.metrics_volume
+          mount_path = local.metrics_multiproc_dir
+        }
+
+        startup_probe {
+          http_get {
+            path = "/health"
+            port = var.gateway_metrics_port
+          }
+          period_seconds    = 5
+          timeout_seconds   = 3
+          failure_threshold = 12
+        }
+
+        liveness_probe {
+          http_get {
+            path = "/health"
+            port = var.gateway_metrics_port
+          }
+          period_seconds  = 30
+          timeout_seconds = 5
+        }
+      }
+    }
+
+    dynamic "containers" {
+      for_each = local.metrics_enabled ? [1] : []
+      content {
+        name       = "collector"
+        image      = var.gateway_metrics_collector_image
+        depends_on = ["metrics"]
+
+        volume_mounts {
+          name       = local.metrics_config_volume
+          mount_path = "/etc/rungmp"
+        }
+
+        liveness_probe {
+          http_get {
+            path = "/liveness"
+            port = 13133
+          }
+          period_seconds  = 30
+          timeout_seconds = 30
+        }
+      }
+    }
+
     dynamic "volumes" {
       for_each = local.proxy_config_enabled ? [1] : []
       content {
@@ -269,6 +358,31 @@ resource "google_cloud_run_v2_service" "gateway" {
         gcs {
           bucket    = google_storage_bucket.proxy_config[0].name
           read_only = true
+        }
+      }
+    }
+
+    dynamic "volumes" {
+      for_each = local.metrics_enabled ? [1] : []
+      content {
+        name = local.metrics_volume
+        empty_dir {
+          medium     = "MEMORY"
+          size_limit = "256Mi"
+        }
+      }
+    }
+
+    dynamic "volumes" {
+      for_each = local.metrics_enabled ? [1] : []
+      content {
+        name = local.metrics_config_volume
+        secret {
+          secret = google_secret_manager_secret.metrics_run_monitoring[0].secret_id
+          items {
+            version = "latest"
+            path    = "config.yaml"
+          }
         }
       }
     }
@@ -283,6 +397,8 @@ resource "google_cloud_run_v2_service" "gateway" {
     google_secret_manager_secret_iam_member.billing_metrics_client_cert,
     google_secret_manager_secret_iam_member.billing_metrics_client_key,
     google_secret_manager_secret_iam_member.billing_metrics_ca_cert,
+    google_secret_manager_secret_iam_member.metrics_run_monitoring,
+    google_project_iam_member.runtime_metric_writer,
     google_storage_bucket_iam_member.proxy_config_runtime,
     google_sql_user.app,
     # Don't go live until the schema is migrated; otherwise the proxy boots,
@@ -332,7 +448,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env, local.metrics_env_kv)
         content {
           name  = env.value.name
           value = env.value.value

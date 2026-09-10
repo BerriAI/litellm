@@ -26,7 +26,11 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+from litellm.constants import (
+    EMPTY_MAPPING,
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+)
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
@@ -3131,7 +3135,10 @@ async def _resolve_request_response_payload(
 
     cold_audit: Final = classifier_audit_fields(payload)
     resolved_request: Final = (
-        {**(classifier_input_snapshot(payload.get("proxy_server_request")) or stored_request or {}), **cold_audit}
+        {
+            **(classifier_input_snapshot(payload.get("proxy_server_request")) or stored_request or EMPTY_MAPPING),
+            **cold_audit,
+        }
         if cold_audit
         else payload.get("proxy_server_request")
     )

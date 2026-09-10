@@ -42,6 +42,7 @@ from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    EMPTY_MAPPING,
     PROVIDER_REQUEST_ID_HEADERS,
     SENTRY_DENYLIST,
     SENTRY_PII_DENYLIST,
@@ -1218,7 +1219,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["api_key"] = api_key
         self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
-        if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or {}):
+        if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or EMPTY_MAPPING):
             self.classifier_input = (
                 None
                 if should_redact_message_logging(self.model_call_details)
@@ -6310,13 +6311,15 @@ def get_standard_logging_object_payload(
         payload: Final[StandardLoggingPayload] = StandardLoggingPayload(
             **(
                 classifier_audit_fields(
-                    {
-                        "classifier_input": logging_obj.classifier_input,
-                        "originating_request_masked": proxy_server_request.get("originating_request_masked"),
-                    }
+                    MappingProxyType(
+                        {
+                            "classifier_input": logging_obj.classifier_input,
+                            "originating_request_masked": proxy_server_request.get("originating_request_masked"),
+                        }
+                    )
                 )
                 if is_classifier_call(call_type or "", litellm_params) and not should_redact_message_logging(kwargs)
-                else {}
+                else EMPTY_MAPPING
             ),
             id=str(id),
             litellm_call_id=kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),

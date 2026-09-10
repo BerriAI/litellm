@@ -11,6 +11,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    EMPTY_MAPPING,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
@@ -1248,11 +1249,11 @@ def _get_proxy_server_request_for_spend_logs_payload(
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
-        _proxy_server_request: Final = cast(dict | None, litellm_params.get("proxy_server_request", {}))
+        _proxy_server_request: Final = cast(dict | None, litellm_params.get("proxy_server_request", EMPTY_MAPPING))
         if _proxy_server_request is not None:
-            _request_body = _proxy_server_request.get("body", {}) or {}
+            _request_body = _proxy_server_request.get("body", EMPTY_MAPPING) or EMPTY_MAPPING
 
-            standard_payload: Final = (kwargs or {}).get("standard_logging_object")
+            standard_payload: Final = (kwargs or EMPTY_MAPPING).get("standard_logging_object")
             if isinstance(standard_payload, Mapping):
                 _request_body = {**_request_body, **classifier_audit_fields(standard_payload)}
 
