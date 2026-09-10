@@ -4,6 +4,8 @@ import contextlib
 import os
 import ssl
 import sys
+import threading
+import time
 import typing
 import urllib.request
 from collections.abc import Callable, Generator
@@ -175,6 +177,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
     # asyncio.create_task() result may be garbage-collected before it runs,
     # leaving the recycled session unclosed ("Unclosed client session").
     _background_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs for pending closes
+    # A session finalized from a different running loop must stay alive until
+    # its thread-safe close future completes; the GC cycle is already being finalized.
+    _finalizer_sessions: ClassVar[set[ClientSession]] = set()  # mutable-ok: strong refs for foreign-loop finalizers
+    _FINALIZER_CLOSE_POLL_SECONDS: Final = 0.05
+    _FINALIZER_CLOSE_MAX_WAIT_SECONDS: Final = 5.0
 
     def __init__(
         self,
@@ -218,6 +225,43 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         exc: Final = future.exception()
         if exc is not None:
             verbose_logger.debug("Error closing recycled aiohttp session on its own loop: %s", exc)
+
+    @classmethod
+    def _on_finalizer_session_close_done(
+        cls, session: ClientSession, closing: object, future: "concurrent.futures.Future[None]"
+    ) -> None:
+        try:
+            if future.cancelled():
+                close_coroutine: Final = getattr(closing, "close", None)
+                if callable(close_coroutine):
+                    close_coroutine()
+                cls._mark_connector_closed(session)
+            elif future.exception() is not None:
+                cls._mark_connector_closed(session)
+        except Exception:
+            pass
+        finally:
+            cls._finalizer_sessions.discard(session)
+
+    @classmethod
+    def _watch_finalizer_session_close(
+        cls,
+        session: ClientSession,
+        session_loop: asyncio.AbstractEventLoop,
+        future: "concurrent.futures.Future[None]",
+    ) -> None:
+        deadline: Final = time.monotonic() + cls._FINALIZER_CLOSE_MAX_WAIT_SECONDS
+        while not future.done():
+            try:
+                loop_running = session_loop.is_running()
+            except Exception:
+                loop_running = False
+            if not loop_running or time.monotonic() >= deadline:
+                future.cancel()
+                cls._mark_connector_closed(session)
+                cls._finalizer_sessions.discard(session)
+                return
+            time.sleep(cls._FINALIZER_CLOSE_POLL_SECONDS)
 
     @staticmethod
     def _mark_connector_closed(session: ClientSession) -> None:
@@ -287,6 +331,53 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         cls: Final = type(self)
         cls._background_close_tasks.add(task)
         task.add_done_callback(cls._on_close_task_done)
+
+    def _close_finalized_session(self, session: ClientSession) -> None:
+        """Dispose a session without letting its own finalizer race cleanup."""
+        session_loop: Final[asyncio.AbstractEventLoop | None] = getattr(session, "_loop", None)
+        try:
+            current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if session_loop is not None and session_loop.is_running() and session_loop is not current_loop:
+            cls: Final = type(self)
+            cls._finalizer_sessions.add(session)
+            closing: Final = session.close()
+            try:
+                future: Final = asyncio.run_coroutine_threadsafe(closing, session_loop)
+            except RuntimeError as e:
+                closing.close()
+                cls._finalizer_sessions.discard(session)
+                verbose_logger.debug("Threadsafe finalizer session close failed: %s", e)
+                self._mark_connector_closed(session)
+            else:
+                future.add_done_callback(
+                    lambda completed: cls._on_finalizer_session_close_done(session, closing, completed)
+                )
+                threading.Thread(
+                    target=cls._watch_finalizer_session_close,
+                    args=(session, session_loop, future),
+                    daemon=True,
+                ).start()
+            return
+
+        # The session is on this loop, has no loop, or its loop is stopped or
+        # closed. Async close cannot run reliably during finalization; the
+        # connector's synchronous teardown flips the flags aiohttp checks.
+        self._mark_connector_closed(session)
+
+    def __del__(self) -> None:
+        """Best-effort cleanup for transports finalized outside an explicit close."""
+        try:
+            if not getattr(self, "_owns_session", False):
+                return
+            session: Final[object] = getattr(self, "client", None)
+            if isinstance(session, ClientSession) and not session.closed:
+                self._close_finalized_session(session)
+        except Exception:
+            # Finalizers must never surface errors during garbage collection or interpreter shutdown.
+            pass
 
     def _get_valid_client_session(self) -> ClientSession:
         """

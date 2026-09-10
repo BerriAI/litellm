@@ -14,7 +14,11 @@ See: https://github.com/BerriAI/litellm/pull/22247
 """
 
 import asyncio
+import gc
+import weakref
+from typing import Final
 
+import httpx
 import pytest
 
 import litellm
@@ -125,3 +129,38 @@ async def test_ttl_expired_openai_sdk_client_stays_usable():
         "'Cannot send a request, as the client has been closed' in production"
     )
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_evicted_openai_client_finalizes_aiohttp_session():
+    """Cache eviction must not leave the OpenAI path's aiohttp session unclosed."""
+    from openai import AsyncOpenAI
+
+    from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    transport = AsyncHTTPHandler._create_async_transport()
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    session_ref = weakref.ref(transport._get_valid_client_session())
+    http_client = httpx.AsyncClient(transport=transport)
+    client = AsyncOpenAI(api_key="sk-test", http_client=http_client)
+    transport_ref = weakref.ref(transport)
+    warning: Final[asyncio.Future[str]] = asyncio.get_running_loop().create_future()
+
+    def exception_handler(_loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
+        if not warning.done():
+            warning.set_result(str(context.get("message", "")))
+
+    asyncio.get_running_loop().set_exception_handler(exception_handler)
+
+    cache = litellm.in_memory_llm_clients_cache
+    cache.set_cache("openai-aiohttp-client", client, ttl=600)
+    cache.set_cache("filler", "x", ttl=600)
+
+    del client, http_client, transport
+    gc.collect()
+    await asyncio.sleep(0.15)
+
+    assert transport_ref() is None
+    assert session_ref() is None
+    assert not warning.done(), "finalized OpenAI transport must not emit unclosed-session warnings"
