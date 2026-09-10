@@ -1078,6 +1078,7 @@ def responses(
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
         skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
+        require_encrypted_task_support: Final = kwargs.pop("_require_encrypted_task_support", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
         client_headers: Final = kwargs.get("headers")
@@ -1185,6 +1186,13 @@ def responses(
             responses_api_provider_config = _resolve_responses_api_provider_config(
                 model, custom_llm_provider, deployment_model_info
             )
+
+        if require_encrypted_task_support and (
+            _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
+            or responses_api_provider_config is None
+            or not responses_api_provider_config.supports_encrypted_agent_messages()
+        ):
+            raise ValueError("Encrypted task classification requires a compatible native Responses deployment")
 
         local_vars.update(kwargs)
         # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set

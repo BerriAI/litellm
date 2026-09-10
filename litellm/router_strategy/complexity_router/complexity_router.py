@@ -25,7 +25,7 @@ from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, TypeAdapter, create_model
+from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import (
@@ -504,7 +504,10 @@ def _encrypted_classifier_task(
     raw_input: Final = (request_kwargs or EMPTY_MAPPING).get("input")
     if not isinstance(raw_input, list) or (request_kwargs or EMPTY_MAPPING).get("messages"):
         return None
-    items: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(raw_input)
+    try:
+        items: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(raw_input)
+    except ValidationError:
+        return None
     current: Final = next(
         (
             item
@@ -516,7 +519,10 @@ def _encrypted_classifier_task(
     )
     if current is None or current.get("type") != "agent_message" or not isinstance(current.get("content"), list):
         return None
-    parts: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(current["content"])
+    try:
+        parts: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(current["content"])
+    except ValidationError:
+        return None
     if not any(part.get("type") == "encrypted_content" and part.get("encrypted_content") for part in parts):
         return None
     return {
@@ -2058,7 +2064,7 @@ class ComplexityRouter(CustomLogger):
             classifier_call_params = MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
 
         payload: Final = (
-            self._native_classifier_payload(llm_config.model, messages_for_call, response_format, encrypted_task)
+            self._native_classifier_payload(messages_for_call, response_format, encrypted_task)
             if encrypted_task is not None
             else {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
         )
@@ -2098,7 +2104,6 @@ class ComplexityRouter(CustomLogger):
 
     def _native_classifier_payload(
         self,
-        model: str,
         messages: list[AllMessageValues],  # mutable-ok: existing transformation accepts the SDK message list
         response_format: Mapping[str, object],
         encrypted_task: Mapping[str, object],
@@ -2106,26 +2111,7 @@ class ComplexityRouter(CustomLogger):
         from litellm.completion_extras.litellm_responses_transformation.transformation import (
             LiteLLMResponsesTransformationHandler,
         )
-        from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
-        from litellm.types.router import LiteLLM_Params
 
-        deployments: Final = self._group_deployments(model)
-        if not deployments:
-            raise ValueError("Encrypted task classification requires a native OpenAI Responses classifier deployment")
-        for params in (LiteLLM_Params.model_validate(deployment.get("litellm_params")) for deployment in deployments):
-            if declared_authenticating_provider(params.model, params.custom_llm_provider):
-                raise ValueError(
-                    "Encrypted task classification requires a native OpenAI Responses classifier deployment"
-                )
-            _, provider, _, _ = get_llm_provider(model=params.model, litellm_params=params)
-            if (
-                provider not in ("openai", "azure")
-                or params.use_chat_completions_api
-                or params.model.startswith("openai/chat_completions/")
-            ):
-                raise ValueError(
-                    "Encrypted task classification requires a native OpenAI Responses classifier deployment"
-                )
         transformation: Final = LiteLLMResponsesTransformationHandler()
         input_items, instructions = transformation.convert_chat_completion_messages_to_responses_api(messages)
         llm_config: Final = self.config.classifier_llm_config
@@ -2139,6 +2125,7 @@ class ComplexityRouter(CustomLogger):
             "instructions": instructions,
             "text": transformation.transform_response_format_to_text_format(dict(response_format)),
             "store": False,
+            "_require_encrypted_task_support": True,
             **reasoning,
         }
 
