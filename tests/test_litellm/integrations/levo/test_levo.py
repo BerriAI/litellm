@@ -198,7 +198,7 @@ class TestLevoIntegration(unittest.TestCase):
         """Test health check returns unhealthy status when required vars are missing."""
         # Try to create logger without required env vars
         # This should fail during config, but we can test health check logic
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='LEVOAI_API_KEY environment variable is required for Levo'):
             LevoLogger.get_levo_config()
 
     @patch.dict(

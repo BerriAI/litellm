@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import sys
 import unittest.mock as mock
 from unittest.mock import patch
 
@@ -13,7 +12,6 @@ from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
 
-sys.path.insert(0, os.path.abspath("../../.."))
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
     SendKeyCreatedEmailEvent,

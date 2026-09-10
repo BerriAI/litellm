@@ -1,4 +1,7 @@
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -40,7 +43,7 @@ def _generic_passthrough_handler() -> BaseTranslation:
 _StringHolder = tuple[Any, str | int]
 
 
-def _collect_strings(node: Any, holders: list[_StringHolder]) -> None:
+def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
     """
     Record a (container, key) holder for every non-empty string value nested
     under an arbitrary JSON node, so prompt content a caller hides in fields
@@ -48,7 +51,7 @@ def _collect_strings(node: Any, holders: list[_StringHolder]) -> None:
     and can be written back in place. Iterative to avoid unbounded recursion
     on deeply nested payloads.
     """
-    stack: Final[list[Any]] = [node]
+    stack: Final[list[object]] = [node]
     while stack:
         current = stack.pop()
         if isinstance(current, dict):
@@ -86,11 +89,24 @@ def _extract_converse_texts(
     top-level ``text`` blocks this scans the arbitrary-JSON fields a caller can
     hide prompt content in -- ``toolUse.input`` and
     ``toolResult.content[].json`` (alongside ``toolResult.content[].text``) --
-    as well as the request-level fields still forwarded to Bedrock that a caller
-    can route blocked content through: ``toolConfig.tools`` (tool names,
-    descriptions and input schemas) and ``additionalModelRequestFields``. Tool
-    message blocks are skipped when tool messages are excluded, but tool
-    definitions are always scanned to match the chat-completions guardrail path.
+    as well as ``additionalModelRequestFields``, a free-form model-parameter bag
+    with no schema that a caller can route blocked content through.
+
+    ``toolConfig.tools`` is deliberately NOT scanned. Tool definitions are
+    app-authored config, so their names, descriptions and JSON-schema strings
+    ("object", property names, titles, type names, enum values) would each reach
+    the guardrail as a separate INPUT item, producing false positives and
+    inflating guardrail usage for a request whose only prompt is one user
+    message. No other guardrail translation handler puts tool definitions in
+    ``texts``; the chat and messages handlers carry them in the structured
+    ``tools`` input instead, which this handler does not populate because a
+    Bedrock ``toolSpec`` is not the OpenAI tool shape those consumers expect.
+
+    ``additionalModelRequestFields`` is treated differently on purpose. Bedrock
+    gives ``toolConfig.tools`` a fixed schema whose contents are tool metadata by
+    contract, while ``additionalModelRequestFields`` is free-form and defined by
+    the target model, so what it carries cannot be classified without knowing
+    that model. Scanning it stays the fail-closed default.
     """
     holders: Final[list[_StringHolder]] = []
 
@@ -118,10 +134,6 @@ def _extract_converse_texts(
                         _collect_block_text(inner, holders)
                         _collect_strings(inner.get("json"), holders)
 
-    tool_config: Final = body.get("toolConfig")
-    if isinstance(tool_config, dict):
-        _collect_strings(tool_config.get("tools"), holders)
-
     _collect_strings(body.get("additionalModelRequestFields"), holders)
 
     texts: Final = [container[key] for container, key in holders]
@@ -129,7 +141,7 @@ def _extract_converse_texts(
 
 
 def _extract_converse_output_texts(
-    content_blocks: list[Any],
+    content_blocks: Sequence[object],
 ) -> tuple[list[str], list[_StringHolder]]:
     """
     Collect user-visible text from Bedrock Converse output content blocks.
@@ -178,10 +190,34 @@ def _write_back_texts(
         container[key] = guardrailed_texts[idx]
 
 
-_DeltaHolder = tuple[Any, Any, str | int]
+_GroupKey: TypeAlias = str | tuple[str, int]
 
 
-def _collect_stream_delta_text_holders(delta: Any) -> list[_DeltaHolder]:
+class _TextContainer(Protocol):
+    """JSON object whose ``key`` entry holds a guardrailable text string."""
+
+    def __getitem__(self, key: str, /) -> str: ...
+
+    def __setitem__(self, key: str, value: str, /) -> None: ...
+
+
+_DeltaHolder = tuple[_GroupKey, _TextContainer, str]
+
+
+class _StreamFrame(TypedDict):
+    """One raw event-stream frame plus the guardrailable texts it carries."""
+
+    raw: ReadOnly[bytes]
+    texts: ReadOnly[Sequence[tuple[_GroupKey, str]]]
+
+
+def _unpack_uint32(buffer: bytes) -> int:
+    import struct
+
+    return struct.unpack("!I", buffer)[0]
+
+
+def _collect_stream_delta_text_holders(delta: object) -> list[_DeltaHolder]:
     """
     Collect the user-visible text strings a Bedrock Converse ``contentBlockDelta``
     can carry, matching the coverage of the non-streaming output handler.
@@ -238,11 +274,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         from botocore.eventstream import EventStreamBuffer
 
-        frames: Final[list[dict]] = []
+        frames: Final[list[_StreamFrame]] = []
         offset = 0
 
         while offset + 16 <= len(body_bytes):
-            total_length = struct.unpack("!I", body_bytes[offset : offset + 4])[0]
+            total_length = _unpack_uint32(body_bytes[offset : offset + 4])
             if total_length < 16 or offset + total_length > len(body_bytes):
                 break
             frame_raw = body_bytes[offset : offset + total_length]
@@ -263,10 +299,10 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 frames.append({"raw": frame_raw, "texts": []})
                 continue
 
-            texts: list[tuple[Any, str]] = []
+            texts: list[tuple[_GroupKey, str]] = []
             if event_type == "contentBlockDelta":
                 try:
-                    payload_dict = _json.loads(payload_bytes)
+                    payload_dict: dict[str, object] = _json.loads(payload_bytes)
                     texts = [
                         (group_key, container[key])
                         for group_key, container, key in _collect_stream_delta_text_holders(payload_dict.get("delta"))
@@ -282,9 +318,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         trailing_bytes: Final = body_bytes[offset:]
 
-        group_order: Final[list[Any]] = []
-        group_members: Final[dict[Any, list[tuple[int, int]]]] = {}
-        group_texts: Final[dict[Any, list[str]]] = {}
+        group_order: Final[list[_GroupKey]] = []
+        group_members: Final[dict[_GroupKey, list[tuple[int, int]]]] = {}
+        group_texts: Final[dict[_GroupKey, list[str]]] = {}
         for frame_idx, frame in enumerate(frames):
             for local_idx, (group_key, text) in enumerate(frame["texts"]):
                 if group_key not in group_members:
@@ -351,8 +387,8 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 continue
 
             frame_raw = frame["raw"]
-            orig_total = struct.unpack("!I", frame_raw[0:4])[0]
-            orig_hdrs_len = struct.unpack("!I", frame_raw[4:8])[0]
+            orig_total = _unpack_uint32(frame_raw[0:4])
+            orig_hdrs_len = _unpack_uint32(frame_raw[4:8])
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
@@ -386,7 +422,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Any:
+    ) -> Mapping[str, object]:
         endpoint: Final = data.get("endpoint", "")
         body: Final = data.get("data")
 
@@ -428,12 +464,12 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
     async def process_output_response(
         self,
-        response: Any,
+        response: object,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> object:
         endpoint: Final = (request_data or {}).get("endpoint", "")
         if endpoint and not _is_converse_endpoint(endpoint):
             return await _generic_passthrough_handler().process_output_response(

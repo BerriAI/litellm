@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from datetime import datetime, timezone
 from litellm._uuid import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
@@ -1125,3 +1120,81 @@ async def test_add_new_member_creates_missing_user_atomically_via_upsert():
     assert upsert_data["create"]["teams"] == ["team-1"]
     assert upsert_data["update"], "empty update branch degrades the upsert to a racy SELECT-then-INSERT"
     assert "teams" not in upsert_data["update"]
+
+
+def _member_write_tx() -> MagicMock:
+    tx = MagicMock()
+    created_user = MagicMock()
+    created_user.user_id = "pool-user"
+    created_user.model_dump.return_value = {
+        "user_id": "pool-user",
+        "user_email": "pool@example.com",
+        "teams": ["team-pool"],
+        "user_role": "internal_user",
+    }
+    created_budget = MagicMock()
+    created_budget.budget_id = "budget-pool"
+    membership = MagicMock()
+    membership.model_dump.return_value = {
+        "team_id": "team-pool",
+        "user_id": "pool-user",
+        "budget_id": "budget-pool",
+        "litellm_budget_table": None,
+    }
+    tx.litellm_usertable.upsert = AsyncMock(return_value=created_user)
+    tx.litellm_usertable.create = AsyncMock(return_value=created_user)
+    tx.litellm_usertable.update_many = AsyncMock()
+    tx.litellm_usertable.find_many = AsyncMock(return_value=[])
+    tx.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+    tx.litellm_budgettable.create = AsyncMock(return_value=created_budget)
+    tx.litellm_teammembership.create = AsyncMock(return_value=membership)
+    return tx
+
+
+@pytest.mark.parametrize(
+    "new_member",
+    [
+        Member(user_id="pool-user", role="user"),
+        Member(user_email="pool@example.com", role="user"),
+    ],
+    ids=["by_user_id", "by_user_email"],
+)
+@pytest.mark.asyncio
+async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_member):
+    """
+    Regression pin against exhausting the connection pool with advisory-lock waiters.
+
+    /team/member_add calls this while holding the team's advisory lock inside a transaction,
+    so it already owns a pooled connection. Any query issued on the regular client here needs
+    a second one, and enough concurrent adds for one team leave every connection parked on the
+    lock while the holder waits for a free one, so nothing ever commits or releases the lock.
+    Given a transaction, every read and write has to go through it.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+
+    tx = _member_write_tx()
+    prisma_client = AsyncMock()
+
+    result_user, result_membership = await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=50.0,
+        prisma_client=prisma_client,
+        team_id="team-pool",
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+        ),
+        litellm_proxy_admin_name="admin",
+        tx=tx,
+    )
+
+    assert result_user.user_id == "pool-user"
+    assert result_membership is not None
+    assert result_membership.budget_id == "budget-pool"
+
+    assert tx.litellm_budgettable.create.await_count == 1
+    assert tx.litellm_teammembership.create.await_count == 1
+    assert tx.litellm_usertable.upsert.await_count + tx.litellm_usertable.create.await_count == 1
+
+    prisma_client.db.assert_not_called()
+    prisma_client.get_data.assert_not_awaited()
+    prisma_client.insert_data.assert_not_awaited()

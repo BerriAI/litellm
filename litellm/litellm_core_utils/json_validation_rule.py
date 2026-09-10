@@ -5,10 +5,10 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
 def normalize_json_schema_types(
-    schema: dict[str, Any] | list[Any] | Any,
+    schema: object,
     depth: int = 0,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
-) -> dict[str, Any] | list[Any] | Any:
+) -> object:
     """
     Normalize JSON schema types from uppercase to lowercase format.
 
@@ -47,7 +47,7 @@ def normalize_json_schema_types(
         return [normalize_json_schema_types(item, depth + 1, max_depth) for item in schema]
 
     if isinstance(schema, dict):
-        normalized_schema: Final[dict[str, Any]] = {}
+        normalized_schema: Final[dict[str, object]] = {}
 
         for key, value in schema.items():
             if key == "type" and isinstance(value, str) and value in type_mapping:

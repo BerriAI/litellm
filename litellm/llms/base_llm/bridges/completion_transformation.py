@@ -4,9 +4,10 @@ Bridge for transforming API requests to another API requests
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
+    import tiktoken
     from pydantic import BaseModel
 
     from litellm import LiteLLMLoggingObj, ModelResponse
@@ -38,7 +39,7 @@ class CompletionTransformationBridge(ABC):
         messages: list["AllMessageValues"],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":

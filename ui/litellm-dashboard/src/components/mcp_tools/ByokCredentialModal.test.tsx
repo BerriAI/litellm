@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { registerAuthHeaderNameGetter, registerAuthTokenGetter, registerBaseUrlGetter } from "@/lib/http/runtime";
+import { toast } from "@/lib/toast";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import type { MCPServer } from "./types";
 
@@ -12,10 +13,6 @@ const fetchSpy = vi.hoisted(() => {
   return spy;
 });
 
-vi.mock("@/components/molecules/message_manager", () => ({
-  default: { success: vi.fn(), error: vi.fn() },
-}));
-
 const SERVER = { server_id: "srv-1", alias: "Linear", server_name: "Linear" } as MCPServer;
 
 const jsonResponse = (body: unknown, status = 200) =>
@@ -23,7 +20,7 @@ const jsonResponse = (body: unknown, status = 200) =>
 
 async function fillAndSubmit(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByText("Continue to Authentication"));
-  await user.type(screen.getByPlaceholderText("Enter your API key"), "linear-key");
+  fireEvent.change(screen.getByPlaceholderText("Enter your API key"), { target: { value: "linear-key" } });
   await user.click(screen.getByRole("button", { name: /Connect & Authorize/ }));
 }
 
@@ -57,16 +54,13 @@ describe("ByokCredentialModal", () => {
     fetchSpy.mockResolvedValue(
       jsonResponse({ detail: { error: "This MCP server does not support BYOK credentials" } }, 400),
     );
-    const MessageManager = (await import("@/components/molecules/message_manager")).default;
     const onSuccess = vi.fn();
     const user = userEvent.setup();
     render(<ByokCredentialModal server={SERVER} open onClose={() => {}} onSuccess={onSuccess} />);
 
     await fillAndSubmit(user);
 
-    await waitFor(() =>
-      expect(MessageManager.error).toHaveBeenCalledWith("This MCP server does not support BYOK credentials"),
-    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("This MCP server does not support BYOK credentials"));
     expect(onSuccess).not.toHaveBeenCalled();
   });
 });

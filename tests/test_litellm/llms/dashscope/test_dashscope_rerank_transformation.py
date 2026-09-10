@@ -3,14 +3,11 @@ Unit tests for DashScope rerank transformation.
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.dashscope.common_utils import DashScopeError
 from litellm.llms.dashscope.rerank.transformation import (

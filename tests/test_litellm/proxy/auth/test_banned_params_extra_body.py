@@ -23,6 +23,7 @@ from litellm.proxy.auth.auth_utils import is_request_body_safe  # noqa: E402
         "aws_web_identity_token",
         "aws_sts_endpoint",
         "aws_role_name",
+        "aws_profile_name",
         "api_base",
         "base_url",
         "vertex_credentials",
