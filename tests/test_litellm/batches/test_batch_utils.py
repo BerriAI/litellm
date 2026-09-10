@@ -1809,11 +1809,6 @@ class TestBatchCostIsFinal:
         assert bu.batch_cost_is_final(_retrieved_batch(status)) is True
 
 
-# =========================================================================== #
-# OCR batch output lines (Mistral /v1/ocr batches) are billed per page, not per token
-# =========================================================================== #
-
-
 def _ocr_row(pages_processed, annotation_pages=None, model="mistral-ocr-latest"):
     usage_info = {"pages_processed": pages_processed, "doc_size_bytes": 4096}
     if annotation_pages is not None:
