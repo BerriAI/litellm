@@ -17575,9 +17575,7 @@ def _is_litellm_internal_callback(callback_name: str, callback: CustomLogger | C
     from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
     module_owner: Final = _callback_module_name(callback).partition(".")[0]
-    is_registered_integration: Final = (
-        _normalize_callback_alias(callback_name) in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
-    )
+    is_registered_integration: Final = callback_name in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
     return not is_registered_integration and module_owner in ("litellm", "litellm_enterprise")
 
 

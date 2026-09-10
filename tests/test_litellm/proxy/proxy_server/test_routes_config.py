@@ -13,6 +13,7 @@ Routes covered:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1393,6 +1394,8 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.integrations.langsmith import LangsmithLogger
+    from litellm.integrations.s3_v2 import S3Logger
+    from litellm.integrations.sqs import SQSLogger
     from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import VectorStorePreCallHook
     from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
     from litellm.router import Router
@@ -1406,10 +1409,16 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     def user_code_function(*args, **kwargs):
         pass
 
+    async def build_aws_loggers() -> tuple[S3Logger, SQSLogger]:
+        return S3Logger(s3_bucket_name="inventory-bucket"), SQSLogger(sqs_queue_url="https://sqs.example/inventory")
+
+    s3_logger, sqs_logger = asyncio.run(build_aws_loggers())
     router = Router(model_list=[])
     monkeypatch.setattr(litellm, "input_callback", [])
-    monkeypatch.setattr(litellm, "success_callback", [LangsmithLogger(), router.sync_deployment_callback_on_success])
-    monkeypatch.setattr(litellm, "_async_success_callback", [router.deployment_callback_on_success])
+    monkeypatch.setattr(
+        litellm, "success_callback", [LangsmithLogger(), s3_logger, router.sync_deployment_callback_on_success]
+    )
+    monkeypatch.setattr(litellm, "_async_success_callback", [sqs_logger, router.deployment_callback_on_success])
     monkeypatch.setattr(litellm, "failure_callback", [user_code_function])
     monkeypatch.setattr(litellm, "_async_failure_callback", [router.async_deployment_callback_on_failure])
     monkeypatch.setattr(
@@ -1436,6 +1445,8 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
     ] == [
         ("_UserCodeLogger", "success_and_failure", True),
         ("langsmith", "success", True),
+        ("s3", "success", True),
+        ("sqs", "success", True),
         ("user_code_function", "failure", True),
     ]
 
