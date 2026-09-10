@@ -39,11 +39,19 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
             # First try a normal Python import (site-packages, installed modules, etc.)
             module = importlib.import_module(module_name)
 
-        except ImportError:
-            # Fall back to loading a local callback relative to the config file
+        except ModuleNotFoundError as e:
+            # Only fall back to local file if the root module itself isn't found.
+            # If the module exists but has missing dependencies, let that error propagate.
             if config_file_path is None:
                 raise
 
+            # Check if the error is about the module we're trying to import or a dependency
+            # e.name will be set to the module that couldn't be found
+            if e.name and not module_name.startswith(e.name.split(".")[0]):
+                # The error is about a dependency, not our target module
+                raise
+
+            # Fall back to loading a local callback relative to the config file
             directory = os.path.dirname(config_file_path)
             module_file_path = os.path.join(directory, *module_name.split("."))
             module_file_path += ".py"
