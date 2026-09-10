@@ -4813,6 +4813,24 @@ def test_ocr_cost_uses_deployment_annotation_only_pricing_for_unmapped_model():
     assert cost == pytest.approx(0.01 * 2)
 
 
+def test_ocr_cost_annotation_only_override_keeps_mapped_per_page_rate():
+    from litellm.cost_calculator import ocr_cost
+
+    map_price: Final = litellm.model_cost[MAPPED_OCR_MODEL]["ocr_cost_per_page"]
+    response: Final = OCRResponse(
+        pages=[OCRPage(index=index, markdown=f"page {index}") for index in range(3)],
+        model=MAPPED_OCR_MODEL,
+        usage_info=OCRUsageInfo(pages_processed=3, pages_processed_annotation=2),
+    )
+    cost, _ = ocr_cost(
+        model=MAPPED_OCR_MODEL,
+        custom_llm_provider="mistral",
+        response=response,
+        model_info={"annotation_cost_per_page": 0.01},
+    )
+    assert cost == pytest.approx(map_price * 3 + 0.01 * 2)
+
+
 def test_ocr_cost_uses_deployment_per_credit_pricing_for_unmapped_model():
     from litellm.cost_calculator import ocr_cost
 
