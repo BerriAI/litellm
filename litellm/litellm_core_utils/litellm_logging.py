@@ -17,7 +17,7 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
 
 from httpx import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 import litellm
 from litellm import (
@@ -64,6 +64,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils.classifier_logging import (
+    classifier_audit_fields,
+    classifier_input_snapshot,
+    is_classifier_call,
+)
 from litellm.litellm_core_utils.core_helpers import is_expected_client_error, reconstruct_model_name
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
@@ -89,6 +94,7 @@ from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redact_streaming_responses_for_custom_logger,
+    should_redact_message_logging,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -473,6 +479,7 @@ class Logging(LiteLLMLoggingBaseClass):
     stream_options = None
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
+    classifier_input: Mapping[str, JsonValue] | None = None
 
     def __init__(
         self,
@@ -1211,6 +1218,14 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["api_key"] = api_key
         self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
+        if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or {}):
+            self.classifier_input = (
+                None
+                if should_redact_message_logging(self.model_call_details)
+                else classifier_input_snapshot(
+                    additional_args.get("complete_input_dict"), openai_sdk=additional_args.get("openai_sdk") is True
+                )
+            )
         if model:  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
         self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(
@@ -6293,6 +6308,16 @@ def get_standard_logging_object_payload(
         )
 
         payload: Final[StandardLoggingPayload] = StandardLoggingPayload(
+            **(
+                classifier_audit_fields(
+                    {
+                        "classifier_input": logging_obj.classifier_input,
+                        "originating_request_masked": proxy_server_request.get("originating_request_masked"),
+                    }
+                )
+                if is_classifier_call(call_type or "", litellm_params) and not should_redact_message_logging(kwargs)
+                else {}
+            ),
             id=str(id),
             litellm_call_id=kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
             trace_id=StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(

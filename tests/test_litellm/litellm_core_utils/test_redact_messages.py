@@ -6,6 +6,7 @@ but litellm_params["litellm_metadata"] is None.
 """
 
 import threading
+from typing import Final
 from types import SimpleNamespace
 
 import pytest
@@ -775,6 +776,29 @@ class TestPerformRedaction:
         perform_redaction(model_call_details, result=None, redact_streaming_responses=False)
 
         assert response_obj.choices[0].message.content == "secret content"
+
+
+@pytest.mark.parametrize("callback_only", [False, True])
+def test_classifier_audit_redaction_removes_both_fields_and_source_carrier(callback_only: bool) -> None:
+    audit: Final = {"classifier_input": {"system": "private rubric"}, "originating_request_masked": {"input": "private source"}}
+    details: Final = {
+        "standard_logging_object": {**audit, "messages": [], "response": {}},
+        "litellm_params": {"proxy_server_request": {"body": {}, "originating_request_masked": audit["originating_request_masked"]}},
+    }
+    logger: Final = CustomLogger()
+    logger.turn_off_message_logging = True
+    if callback_only:
+        redacted: Final = logger.redact_standard_logging_payload_from_model_call_details(details)
+        assert "classifier_input" not in redacted["standard_logging_object"]
+        assert "originating_request_masked" not in redacted["standard_logging_object"]
+        assert "originating_request_masked" not in redacted["litellm_params"]["proxy_server_request"]
+        assert details["standard_logging_object"]["classifier_input"] == audit["classifier_input"]
+        assert details["litellm_params"]["proxy_server_request"]["originating_request_masked"] == audit["originating_request_masked"]
+    else:
+        perform_redaction(details, result=None)
+        assert "classifier_input" not in details["standard_logging_object"]
+        assert "originating_request_masked" not in details["standard_logging_object"]
+        assert "originating_request_masked" not in details["litellm_params"]["proxy_server_request"]
 
     def test_unredactable_result_is_not_deepcopied(self):
         """A result shape no branch can redact must not be deepcopied.

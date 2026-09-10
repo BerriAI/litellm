@@ -927,6 +927,17 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         # Handle turn_off_message_logging - redact messages and responses (if not already excluded)
         if turn_off_message_logging:
+            from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS, without_classifier_audit
+
+            for field in CLASSIFIER_AUDIT_FIELDS:
+                standard_logging_object_copy.pop(field, None)
+            params: Final = model_call_details_copy.get("litellm_params")
+            request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
+            if isinstance(params, dict) and isinstance(request, dict):
+                model_call_details_copy["litellm_params"] = {
+                    **params,
+                    "proxy_server_request": without_classifier_audit(request),
+                }
             redacted_str: Final = "redacted-by-litellm"
 
             if "messages" not in (excluded_fields or []) and standard_logging_object_copy.get("messages") is not None:

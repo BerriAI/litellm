@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Final
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS, without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
@@ -183,6 +184,9 @@ def _redact_standard_logging_object(model_call_details: dict):
 
     redacted_str: Final = REDACTED_BY_LITELLM
 
+    for field in CLASSIFIER_AUDIT_FIELDS:
+        standard_logging_object.pop(field, None)
+
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
 
@@ -254,6 +258,12 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     copy via redact_streaming_responses_for_custom_logger instead.
     """
     # Redact model_call_details
+    for field in CLASSIFIER_AUDIT_FIELDS:
+        model_call_details.pop(field, None)
+    params: Final = model_call_details.get("litellm_params")
+    request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
+    if isinstance(params, dict) and isinstance(request, Mapping):
+        model_call_details["litellm_params"] = {**params, "proxy_server_request": without_classifier_audit(request)}
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""

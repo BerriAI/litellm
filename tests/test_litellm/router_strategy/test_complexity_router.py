@@ -2941,6 +2941,29 @@ class TestLLMClassifier:
         ]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("source_body", [
+        {"model": "router", "messages": [{"role": "user", "content": "source-only"}]},
+        {"model": "router", "system": "source-only", "messages": [{"role": "user", "content": "ask"}]},
+        {"model": "router", "instructions": "source-only", "input": "ask"},
+    ])
+    async def test_classifier_source_is_masked_and_separate_from_provider_input(
+        self, llm_complexity_router, mock_router_instance, source_body
+    ):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        outcome = await llm_complexity_router.aclassify(
+            "classify-this-ask", request_kwargs={"proxy_server_request": {
+                "body": {**source_body, "metadata": {"authorization": "source-secret"}}
+            }}
+        )
+        assert outcome.cause == "llm_classifier"
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        source = call_kwargs["proxy_server_request"]["originating_request_masked"]
+        assert source == {**source_body, "metadata": {"authorization": "REDACTED"}}
+        assert "source-only" not in str(call_kwargs["messages"])
+        assert "source-only" not in str(call_kwargs["proxy_server_request"]["body"])
+        assert "classify-this-ask" in str(call_kwargs["messages"])
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("reasoning_effort", [None, "none", "low"], ids=["omitted", "none", "low"])
     async def test_classifier_reasoning_effort_reaches_only_classifier_call(
         self, mock_router_instance, llm_classifier_config, reasoning_effort

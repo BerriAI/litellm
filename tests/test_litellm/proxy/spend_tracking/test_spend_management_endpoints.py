@@ -5703,6 +5703,29 @@ def _cold_storage_handler(payload):
     return ColdStorageHandler(cold_storage_logger=logger), logger
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cold_has_audit", [False, True])
+async def test_resolve_payload_recovers_truncated_classifier_audit_without_losing_existing_fields(cold_has_audit):
+    full_audit = {"classifier_input": {"system": "full rubric"}, "originating_request_masked": {"input": "source"}}
+    truncated_request = {"model": "classifier", "classifier_input": {"system": "litellm_truncated"}}
+    handler, logger = _cold_storage_handler({
+        "proxy_server_request": {"body": {}}, **(full_audit if cold_has_audit else {}),
+    })
+    row = {
+        "messages": '[{"role":"user","content":"ask"}]', "response": '{"tier":"SIMPLE"}',
+        "proxy_server_request": json.dumps(truncated_request), "metadata": {"cold_storage_object_key": "k/audit.json"},
+    }
+    resolved = await spend_management_endpoints._resolve_request_response_payload(row, cold_storage_handler=handler)
+    assert logger.requested_object_keys == ["k/audit.json"]
+    assert resolved.messages == row["messages"]
+    assert resolved.response == row["response"]
+    if cold_has_audit:
+        assert resolved.proxy_server_request["classifier_input"] == full_audit["classifier_input"]
+        assert resolved.proxy_server_request["originating_request_masked"] == full_audit["originating_request_masked"]
+    else:
+        assert resolved.proxy_server_request == row["proxy_server_request"]
+
+
 @pytest.mark.parametrize(
     "value, expected",
     [
