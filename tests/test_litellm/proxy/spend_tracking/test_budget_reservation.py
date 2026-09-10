@@ -2,6 +2,7 @@ from typing import Final
 
 import pytest
 
+import litellm
 import litellm.proxy.proxy_server as proxy_server
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -54,6 +55,16 @@ async def test_non_exempt_llm_route_still_reserves_budget():
 
     assert reservation is not None
     assert reservation["reserved_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_reservation_carries_the_admission_input_token_count():
+    reservation: Final = await _reserve("/v1/responses")
+    expected: Final = litellm.token_counter(model="gpt-4o", text="hello")
+
+    assert reservation is not None
+    assert expected > 0
+    assert reservation["input_tokens"] == expected
 
 
 ANTHROPIC_MESSAGES: Final = [{"role": "user", "content": "hello!!!"}]
