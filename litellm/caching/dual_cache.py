@@ -410,8 +410,10 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
-            verbose_logger.warning(
-                "Redis async_increment_cache failed, falling back to in-memory result: %s",
+            log_redis_failure(
+                verbose_logger,
+                logging.WARNING,
+                "Redis async_increment_cache failed, falling back to in-memory result",
                 e,
             )
             return result
