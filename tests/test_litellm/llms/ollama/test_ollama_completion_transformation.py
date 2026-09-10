@@ -727,3 +727,37 @@ async def test_ollama_async_native_tools(legacy_functions: bool) -> None:
             client=handler,
         )
     assert response.choices[0].message.content == "Hello"
+
+
+def test_ollama_add_function_to_prompt_keeps_legacy_json_emulation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "add_function_to_prompt", True)
+    requests = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(
+            200, json={"response": '{"name": "graph_stats", "arguments": {}}', "done": True, "prompt_eval_count": 1}
+        )
+
+    messages: Final = [
+        {"role": "system", "content": "You are a graph assistant."},
+        {"role": "user", "content": "How many nodes does the graph have?"},
+    ]
+
+    response: Final = litellm.completion(
+        model="ollama/qwen3.8:27b",
+        messages=messages,
+        tools=GRAPH_STATS_TOOLS,
+        tool_choice="auto",
+        api_base="http://ollama.example:11434",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+    )
+
+    assert [path for path, _ in requests] == ["/api/generate"]
+    body: Final = requests[0][1]
+    assert body["format"] == "json"
+    assert "Produce JSON OUTPUT ONLY" in body["prompt"]
+    assert "graph_stats" in body["prompt"]
+    assert "prompted_functions" not in body["options"]
+    assert response.choices[0].message.tool_calls[0].function.name == "graph_stats"
+    assert response.choices[0].finish_reason == "tool_calls"

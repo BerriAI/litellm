@@ -220,6 +220,7 @@ from .llms.nvidia_riva.audio_transcription.transformation import (
     NvidiaRivaAudioTranscriptionConfig,
 )
 from .llms.oci.chat.transformation import OCIChatConfig
+from .llms.ollama.common_utils import resolve_ollama_tool_calling_provider
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
 from .llms.openai.completion.handler import OpenAITextCompletion
@@ -5307,11 +5308,11 @@ def completion(
                 GenericLiteLLMParams(**_supplemental_provider_params) if _supplemental_provider_params else None
             ),
         )
-        if custom_llm_provider == "ollama" and (tools or functions):
-            custom_llm_provider = "ollama_chat"  # rebind-ok: /api/generate has no native tool calling
-        elif custom_llm_provider == "ollama":
-            tools = None  # rebind-ok: empty tools must not change plain completion behavior
-            functions = None  # rebind-ok: empty functions must not change plain completion behavior
+        custom_llm_provider = resolve_ollama_tool_calling_provider(  # rebind-ok: ollama tools use the chat adapter
+            custom_llm_provider,
+            has_tools=True if tools or functions else False,
+            add_function_to_prompt=litellm.add_function_to_prompt,
+        )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
