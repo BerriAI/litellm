@@ -1,5 +1,7 @@
 use thiserror::Error as ThisError;
 
+pub use crate::auth::error::AuthError;
+
 #[derive(Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]

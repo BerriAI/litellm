@@ -39,7 +39,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"]
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
+azure_core = "1.0.0"
+azure_identity = { version = "1.0.0", features = ["tokio"] }
+moka = { version = "0.12.16", features = ["future"] }
+strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
+veil = "0.3.0"
 
 [profile.release]
 opt-level = 3
