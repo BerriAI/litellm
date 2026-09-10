@@ -59,6 +59,7 @@ PGBOUNCER_STOP_GRACE_SECONDS: Final = 10.0
 PGBOUNCER_UNPRIVILEGED_USER: Final = "nobody"
 PGBOUNCER_MIN_VERSION: Final = (1, 19)
 PGBOUNCER_VERSION_PATTERN: Final = re.compile(r"PgBouncer (\d+)\.(\d+)")
+PGBOUNCER_LIST_DELIMITER_PATTERN: Final = re.compile(r"[,\s]")
 PGBOUNCER_TOKEN_AUTH_CONFLICT: Final = (
     f"the in-container pgbouncer cannot be combined with {IAM_TOKEN_DB_AUTH_ENV_VAR} or "
     f"{AZURE_POSTGRESQL_AUTH_ENV_VAR}: each worker rotates the database password on its own schedule and the pooler "
@@ -183,6 +184,11 @@ def plan_pgbouncer(
         return PgBouncerError(
             "DATABASE_URL must carry a host, user, password and database name for the in-container PgBouncer"
         )
+    if PGBOUNCER_LIST_DELIMITER_PATTERN.search(username):
+        return PgBouncerError(
+            f"the database user {username!r} cannot be named in PgBouncer's stats_users list: "
+            "PgBouncer splits list settings on commas and whitespace and has no quoting for them"
+        )
     if "sslidentity" in params:
         return PgBouncerError("client certificates (sslidentity) are not supported with the in-container PgBouncer")
     tls: Final = _server_tls_settings(
@@ -214,6 +220,7 @@ def plan_pgbouncer(
             f"unix_socket_dir = {runtime_dir}",
             f"auth_file = {runtime_dir / PGBOUNCER_USERLIST_NAME}",
             "auth_type = scram-sha-256",
+            f"stats_users = {username}",
             "pool_mode = transaction",
             f"max_client_conn = {settings.max_client_conn}",
             f"default_pool_size = {settings.max_db_connections}",
