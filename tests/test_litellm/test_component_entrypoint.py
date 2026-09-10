@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from gateway.launch import GATEWAY_APP
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPONENT_ENTRYPOINT = REPO_ROOT / "docker" / "component_entrypoint.sh"
 PROD_ENTRYPOINT = REPO_ROOT / "docker" / "prod_entrypoint.sh"
@@ -330,20 +332,24 @@ def test_entrypoint_script_has_no_carriage_returns() -> None:
 
 
 @pytest.mark.parametrize(
-    "dockerfile, app_target",
+    "dockerfile, launcher",
     [
-        (GATEWAY_DOCKERFILE, "gateway.main:app"),
-        (BACKEND_DOCKERFILE, "backend.main:app"),
+        (GATEWAY_DOCKERFILE, "python -m gateway.launch"),
+        (BACKEND_DOCKERFILE, "uvicorn backend.main:app"),
     ],
 )
-def test_component_images_launch_uvicorn_through_the_entrypoint(dockerfile: Path, app_target: str) -> None:
+def test_component_images_launch_uvicorn_through_the_entrypoint(dockerfile: Path, launcher: str) -> None:
     entrypoint = " ".join(_entrypoint_argv(dockerfile))
 
     assert IMAGE_ENTRYPOINT_PATH in entrypoint, f"{dockerfile} bypasses the ddtrace-aware entrypoint"
-    assert app_target in entrypoint
-    assert entrypoint.index(IMAGE_ENTRYPOINT_PATH) < entrypoint.index("uvicorn"), (
+    assert launcher in entrypoint
+    assert entrypoint.index(IMAGE_ENTRYPOINT_PATH) < entrypoint.index(launcher), (
         f"{dockerfile} must invoke uvicorn through the entrypoint, not the other way around"
     )
+
+
+def test_gateway_launcher_serves_the_gateway_app() -> None:
+    assert GATEWAY_APP == "gateway.main:app"
 
 
 @pytest.mark.parametrize("dockerfile", [GATEWAY_DOCKERFILE, BACKEND_DOCKERFILE])
