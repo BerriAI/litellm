@@ -588,6 +588,10 @@ class BedrockGuardrailStreamingParams(BaseModel):
         )
 
 
+class BedrockGuardrailUIConfigModel(BedrockGuardrailConfigModel, BedrockGuardrailStreamingParams):
+    pass
+
+
 class LakeraV2GuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
 
