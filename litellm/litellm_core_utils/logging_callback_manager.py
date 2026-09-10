@@ -442,7 +442,6 @@ class LoggingCallbackManager:
         return result
 
     def get_callback_objects(self) -> tuple[tuple[str, CustomLogger | Callable], ...]:
-        """Every non-string active callback paired with the name `get_callbacks_by_type` reports it under."""
         return tuple(
             (self._get_callback_string(callback), callback)
             for callback in self._get_all_callbacks()

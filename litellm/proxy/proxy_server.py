@@ -17572,7 +17572,6 @@ def _callback_module_name(callback: CustomLogger | Callable[..., object]) -> str
 
 
 def _is_litellm_internal_callback(callback_name: str, callback: CustomLogger | Callable[..., object]) -> bool:
-    """Hooks litellm registers on its own (router, proxy, service logging) are not user logging callbacks."""
     from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
     module_owner: Final = _callback_module_name(callback).partition(".")[0]
@@ -17585,9 +17584,8 @@ def _is_litellm_internal_callback(callback_name: str, callback: CustomLogger | C
 def _is_instance_of_configured_callback(
     callback_name: str, callback: CustomLogger | Callable[..., object], configured_classes: tuple[type, ...]
 ) -> bool:
-    """A configured string callback is replaced at init by an instance that may only be identifiable by class
-    (`logfire` initializes a bare `OpenTelemetry`). An instance that names itself (`arize`, `weave_otel`) is
-    matched by name instead, so a configured OTel-family callback does not hide its YAML-configured siblings."""
+    """Self-naming OTel-family instances (`arize`, `weave_otel`) match by name, so a configured `logfire` (a bare
+    `OpenTelemetry`) does not hide YAML-configured siblings of the same class."""
     from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
     class_derived_name: Final = CustomLoggerRegistry.get_callback_str_from_class_type(type(callback))
@@ -17595,7 +17593,6 @@ def _is_instance_of_configured_callback(
 
 
 def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) -> frozenset[str]:
-    """Return runtime callback names that are internal hooks, guardrails, or instances of a configured callback."""
     from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
     configured_classes: Final = tuple(
