@@ -206,6 +206,9 @@ class DualCache(BaseCache):
                 redis_result: Final = self.redis_cache.batch_get_cache(
                     key_list=sublist_keys, parent_otel_span=parent_otel_span
                 )
+            except RedisCircuitBreakerOpenError:
+                self._rollback_redis_batch_key_reservations(previous_access_times)
+                return result
             except Exception:
                 # Do not throttle subsequent callers if the Redis read fails.
                 self._rollback_redis_batch_key_reservations(previous_access_times)

@@ -653,3 +653,23 @@ def test_open_breaker_is_a_quiet_cache_miss_on_the_sync_read_path(dual_cache_wit
 
     noisy = [r for r in caplog.records if r.levelno > logging.DEBUG]
     assert noisy == [], f"an open breaker must be silent per call, got {[r.getMessage() for r in noisy]}"
+
+
+def test_open_breaker_does_not_leave_sync_batch_reservations_behind(dual_cache_with_open_breaker, caplog):
+    """A batch read skipped by the breaker must not hold its keys for the batch expiry window.
+
+    The sync read reserves keys before dialing Redis so concurrent callers do not all hit it.
+    When the breaker rejects the read, those reservations have to be released, otherwise the
+    first read after Redis recovers is still throttled for up to default_redis_batch_cache_expiry.
+    """
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    dual_cache_with_open_breaker.redis_cache.redis_client.mget.side_effect = AssertionError(
+        "an open breaker must not touch Redis"
+    )
+
+    assert dual_cache_with_open_breaker.batch_get_cache(keys=["lit7468", "lit7460"]) == [None, None]
+
+    assert "lit7468" not in dual_cache_with_open_breaker.last_redis_batch_access_time
+    assert "lit7460" not in dual_cache_with_open_breaker.last_redis_batch_access_time
+    noisy = [r for r in caplog.records if r.levelno > logging.DEBUG]
+    assert noisy == [], f"an open breaker must be silent per call, got {[r.getMessage() for r in noisy]}"
