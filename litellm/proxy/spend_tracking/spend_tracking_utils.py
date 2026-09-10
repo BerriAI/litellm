@@ -22,6 +22,7 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
+from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
@@ -1250,6 +1251,10 @@ def _get_proxy_server_request_for_spend_logs_payload(
         _proxy_server_request: Final = cast(dict | None, litellm_params.get("proxy_server_request", {}))
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
+
+            standard_payload: Final = (kwargs or {}).get("standard_logging_object")
+            if isinstance(standard_payload, Mapping):
+                _request_body = {**_request_body, **classifier_audit_fields(standard_payload)}
 
             if kwargs is not None:
                 realtime_tools: Final = kwargs.get("realtime_tools")

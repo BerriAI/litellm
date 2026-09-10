@@ -67,6 +67,30 @@ def _get_additional_usage_values_for_usage(usage: litellm.Usage) -> dict:
     return metadata["additional_usage_values"]
 
 
+@pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
+def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch, store_prompts, redact):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": store_prompts})
+    audit: Final = {
+        "classifier_input": {"system": "rubric" * 1000, "messages": [{"role": "user", "content": "ask"}]},
+        "originating_request_masked": {"input": "source-only", "api_key": "REDACTED"},
+    }
+    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
+        kwargs={"standard_logging_object": audit, "standard_callback_dynamic_params": {"turn_off_message_logging": redact}},
+    ))
+    if not store_prompts or redact:
+        assert "classifier_input" not in stored
+        assert "originating_request_masked" not in stored
+    else:
+        assert stored["classifier_input"]["messages"] == audit["classifier_input"]["messages"]
+        assert LITELLM_TRUNCATED_PAYLOAD_FIELD in json.dumps(stored["classifier_input"])
+        assert stored["originating_request_masked"]["input"] == "source-only"
+        assert stored["model"] == "classifier"
+        assert audit["classifier_input"]["system"] == "rubric" * 1000
+
+
 def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_tokens():
     additional_usage_values = _get_additional_usage_values_for_usage(
         litellm.Usage(
