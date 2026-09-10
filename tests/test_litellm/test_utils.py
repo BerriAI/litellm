@@ -4071,7 +4071,7 @@ def test_deepseek_v4_models_in_cost_map():
     configured in model_prices_and_context_window.json.
 
     Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
-    - deepseek-v4-flash: $0.44/M input, $1.32/M output
+    - deepseek-v4-flash: $0.30/M input, $1.20/M output
     - deepseek-v4-pro:   $1.32/M input, $3.96/M output
 
     Closes https://github.com/BerriAI/litellm/issues/26709
@@ -4085,7 +4085,7 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09),
         ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
@@ -4101,7 +4101,7 @@ def test_deepseek_v4_models_in_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09),
         ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
@@ -4129,7 +4129,7 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- bare model names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09),
         ("deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
@@ -4143,7 +4143,7 @@ def test_deepseek_v4_models_in_backup_cost_map():
 
     # --- provider-prefixed names ---
     for key, expected_input, expected_output, expected_cache in [
-        ("deepseek/deepseek-v4-flash", 4.4e-07, 1.32e-06, 1.4e-08),
+        ("deepseek/deepseek-v4-flash", 3e-07, 1.2e-06, 6e-09),
         ("deepseek/deepseek-v4-pro", 1.32e-06, 3.96e-06, 4.4e-08),
     ]:
         info = model_cost.get(key)
@@ -4153,6 +4153,27 @@ def test_deepseek_v4_models_in_backup_cost_map():
         assert info["input_cost_per_token"] == expected_input
         assert info["output_cost_per_token"] == expected_output
         assert info["cache_read_input_token_cost"] == expected_cache
+
+
+def test_deepseek_flash_completion_cost():
+    from litellm.types.utils import ModelResponse
+
+    response = ModelResponse(
+        model="deepseek-flash",
+        usage=Usage(
+            prompt_tokens=1_000_000,
+            completion_tokens=1_000_000,
+            total_tokens=2_000_000,
+        ),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="deepseek-flash",
+        custom_llm_provider="deepseek",
+    )
+
+    assert cost == pytest.approx(1.50, abs=1e-9)
 
 
 _FIREWORKS_MODELS = [
