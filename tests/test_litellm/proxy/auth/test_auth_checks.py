@@ -2374,6 +2374,44 @@ def _mock_prisma_for_team_lookup(find_unique):
     return mock_prisma_client
 
 
+_TEAM_ALIAS_TABLE_ROW = {"id": 1, "model_aliases": '{"fast": "gpt-4o"}', "created_by": "admin", "updated_by": "admin"}
+
+
+def _prisma_team_row(include):
+    """Mimics Prisma: the `litellm_model_table` relation rides on the row only when the query `include`s it."""
+    columns = {"team_id": "team-aliases", "team_alias": "aliases", "models": ["gpt-4o"]}
+    row = (
+        {**columns, "litellm_model_table": _TEAM_ALIAS_TABLE_ROW}
+        if (include or {}).get("litellm_model_table")
+        else columns
+    )
+    return SimpleNamespace(dict=lambda: row, model_dump=lambda: row)
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_loads_model_aliases_relation():
+    """LIT-5858: the auth path read teams without `include`ing `litellm_model_table`, so every JWT
+    team came back with `model_aliases=None` and alias requests 403'd."""
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.auth.team_grants import team_model_aliases
+
+    async def find_unique(where, include=None):
+        return _prisma_team_row(include)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    team = await get_team_object(
+        team_id="team-aliases",
+        prisma_client=_mock_prisma_for_team_lookup(AsyncMock(side_effect=find_unique)),
+        user_api_key_cache=mock_cache,
+        check_db_only=True,
+    )
+
+    assert team_model_aliases(team) == {"fast": "gpt-4o"}
+
+
 @pytest.mark.asyncio
 async def test_get_team_object_distinguishes_absent_team_from_unreadable_row():
     """A deleted team and a database that would not answer both surface as a 404,
@@ -6193,6 +6231,32 @@ async def test_get_team_object_by_alias_db_fetch_returns_cached_obj():
     assert result.team_id == "t-9"
     assert result.team_alias == "alias-9"
     assert result.models == ["gpt-4"]
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_by_alias_loads_model_aliases_relation():
+    """LIT-5858: same regression as `test_get_team_object_loads_model_aliases_relation`, for the
+    `team_alias_jwt_field` lookup."""
+    from litellm.proxy.auth.auth_checks import get_team_object_by_alias
+    from litellm.proxy.auth.team_grants import team_model_aliases
+
+    async def find_many(where, include=None):
+        return [_prisma_team_row(include)]
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    team = await get_team_object_by_alias(
+        team_alias="aliases",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert team_model_aliases(team) == {"fast": "gpt-4o"}
 
 
 @pytest.mark.asyncio

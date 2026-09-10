@@ -28,6 +28,7 @@ from litellm.proxy.client.cli.commands.agents import (
 )
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
+CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
 
 
 def _agent_command(name):
@@ -162,6 +163,27 @@ class TestBuildAgentEnv:
         )
         assert env["PATH"] == "/usr/bin"
         assert base == {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
+
+    def test_anthropic_profile_leaves_the_bearer_to_the_api_key_helper(self):
+        env = build_agent_env(
+            {"ANTHROPIC_AUTH_TOKEN": "stale-token", "ANTHROPIC_API_KEY": "real-key"},
+            "http://localhost:4000/",
+            "sk-key",
+            frozenset({"anthropic"}),
+            export_anthropic_token=False,
+        )
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+        assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
+        assert env["ENABLE_TOOL_SEARCH"] == "true"
+        assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+
+    def test_helper_mode_still_exports_the_openai_key(self):
+        env = build_agent_env(
+            {}, "http://localhost:4000", "sk-key", frozenset({"anthropic", "openai"}), export_anthropic_token=False
+        )
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+        assert env["OPENAI_API_KEY"] == "sk-key"
 
 
 class TestAgentLaunchArgs:
@@ -508,6 +530,25 @@ class TestRunAgent:
         assert env["ENABLE_TOOL_SEARCH"] == "true"
         assert "ANTHROPIC_API_KEY" not in env
         assert "OPENAI_BASE_URL" not in env
+
+    def test_helper_supplied_token_never_reaches_the_launch_env(self):
+        calls = {}
+        verified = []
+
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            base_env={"PATH": "/usr/bin", "ANTHROPIC_AUTH_TOKEN": "stale-token"},
+            which=lambda name: "/usr/local/bin/claude",
+            verify=lambda base_url, api_key: verified.append(api_key),
+            launcher=lambda p, a, e: calls.update(env=dict(e)),
+            export_anthropic_token=False,
+        )
+
+        assert verified == ["sk-key"]
+        assert "ANTHROPIC_AUTH_TOKEN" not in calls["env"]
+        assert calls["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
 
     def test_codex_gets_openai_env(self):
         calls = {}
@@ -1051,6 +1092,101 @@ class TestAgentCommands:
             "routing Claude Code through proxy at http://localhost:4000"
             in result.output
         )
+
+    def _invoke_claude_with_settings(self, tmp_path, settings, obj, *, default_settings=None):
+        config_dir = tmp_path / "claude-config"
+        config_dir.mkdir()
+        if settings is not None:
+            (config_dir / "settings.json").write_text(json.dumps(settings))
+        default_path = tmp_path / "home-claude" / "settings.json"
+        default_path.parent.mkdir()
+        if default_settings is not None:
+            default_path.write_text(json.dumps(default_settings))
+        captured = {}
+        with (
+            patch(f"{CLAUDE_SETTINGS_MODULE}.CLAUDE_SETTINGS_PATH", default_path),
+            patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value="/usr/local/bin/lite"),
+            patch(f"{AGENTS_MODULE}.run_agent", side_effect=lambda b, k, c, **kw: captured.update(kw)),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"), [], obj=obj, env={"CLAUDE_CONFIG_DIR": str(config_dir)}
+            )
+        assert result.exit_code == 0, result.output
+        return captured, result.output
+
+    def test_helper_is_read_from_the_config_dir_claude_code_uses(self, tmp_path):
+        captured, output = self._invoke_claude_with_settings(
+            tmp_path,
+            {"apiKeyHelper": "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"},
+            {"base_url": "http://localhost:4000", "api_key": "sk-key", "api_key_from_token_file": True},
+        )
+
+        assert captured["export_anthropic_token"] is False
+        assert str(tmp_path / "claude-config" / "settings.json") in output
+
+    def test_helper_only_in_the_default_file_keeps_the_env_token_when_config_dir_points_elsewhere(self, tmp_path):
+        captured, output = self._invoke_claude_with_settings(
+            tmp_path,
+            None,
+            {"base_url": "http://localhost:4000", "api_key": "sk-key", "api_key_from_token_file": True},
+            default_settings={"apiKeyHelper": "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"},
+        )
+
+        assert captured["export_anthropic_token"] is True
+        assert "apiKeyHelper" not in output
+
+    def test_stored_login_with_a_matching_helper_leaves_the_token_to_the_helper(self, tmp_path):
+        captured, output = self._invoke_claude_with_settings(
+            tmp_path,
+            {"apiKeyHelper": "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"},
+            {"base_url": "http://localhost:4000", "api_key": "sk-key", "api_key_from_token_file": True},
+        )
+
+        assert captured["export_anthropic_token"] is False
+        assert "reads its key from the apiKeyHelper" in output
+
+    def test_explicit_key_is_exported_even_when_a_helper_matches(self, tmp_path):
+        captured, output = self._invoke_claude_with_settings(
+            tmp_path,
+            {"apiKeyHelper": "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"},
+            {"base_url": "http://localhost:4000", "api_key": "sk-key", "api_key_from_token_file": False},
+        )
+
+        assert captured["export_anthropic_token"] is True
+        assert "apiKeyHelper" not in output
+
+    def test_helper_for_another_proxy_keeps_the_env_token(self, tmp_path):
+        captured, _ = self._invoke_claude_with_settings(
+            tmp_path,
+            {"apiKeyHelper": "/usr/local/bin/lite --base-url https://other.example.com auth print-token"},
+            {"base_url": "http://localhost:4000", "api_key": "sk-key", "api_key_from_token_file": True},
+        )
+
+        assert captured["export_anthropic_token"] is True
+
+    def test_no_claude_settings_keeps_the_env_token(self, tmp_path):
+        captured, _ = self._invoke_claude_with_settings(
+            tmp_path,
+            None,
+            {"base_url": "http://localhost:4000", "api_key": "sk-key", "api_key_from_token_file": True},
+        )
+
+        assert captured["export_anthropic_token"] is True
+
+    def test_codex_never_consults_claude_settings(self):
+        captured = {}
+        with (
+            patch(f"{AGENTS_MODULE}.lite_api_key_helper_configured", side_effect=AssertionError("consulted")),
+            patch(f"{AGENTS_MODULE}.run_agent", side_effect=lambda b, k, c, **kw: captured.update(kw)),
+        ):
+            result = self.runner.invoke(
+                _agent_command("codex"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": "sk-key", "api_key_from_token_file": True},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured["export_anthropic_token"] is True
 
     def test_codex_shows_friendly_name(self):
         captured = {}

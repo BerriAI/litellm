@@ -335,6 +335,7 @@ DEFAULT_SSL_CIPHERS: Final = os.getenv(
 
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY: Final = "litellm_spend_update_buffer"
+REDIS_GATEWAY_REQUESTS_BUFFER_KEY: Final = "litellm_gateway_requests_buffer"
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update_buffer"
@@ -396,6 +397,18 @@ TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS: Final = get_env_int_in_range(
     default=1024,
     minimum=1,
     maximum=TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS,
+)
+TOKEN_COUNTER_MAX_EXACT_CHARS: Final = get_env_int_in_range(
+    "TOKEN_COUNTER_MAX_EXACT_CHARS",
+    default=4_000_000,
+    minimum=1,
+    maximum=1_000_000_000,
+)
+TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
+    "TOKEN_COUNTER_MAX_CONCURRENT_COUNTS",
+    default=4,
+    minimum=1,
+    maximum=256,
 )
 MAX_TILE_WIDTH: Final = int(os.getenv("MAX_TILE_WIDTH", 512))
 MAX_TILE_HEIGHT: Final = int(os.getenv("MAX_TILE_HEIGHT", 512))
@@ -569,6 +582,7 @@ LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS: Final = float(
 LOGGING_EXECUTOR_MAX_THREADS: Final = get_env_int("LOGGING_EXECUTOR_MAX_THREADS", 100)
 LOGGING_EXECUTOR_MAX_PENDING_TASKS: Final = get_env_int("LOGGING_EXECUTOR_MAX_PENDING_TASKS", 10_000)
 LOGGING_EXECUTOR_DROPPED_TASK_LOG_INTERVAL_SECONDS: Final = 30.0
+AWS_SIGNING_MAX_THREADS: Final = 16
 DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE: Final = os.getenv(
     "DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE", "streaming.chunk.yield"
 )
