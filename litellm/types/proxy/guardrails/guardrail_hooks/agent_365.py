@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, Literal, TypeAlias
 
 from pydantic import Field
 
@@ -9,7 +9,37 @@ AGENT_365_PROD_RESOURCE_APP_ID: Final = "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1"
 AGENT_365_SCOPE_NAME: Final = "ThreatProtection.Evaluate.All"
 
 
+Agent365AuthMode: TypeAlias = Literal["on_behalf_of", "agent_identity"]
+
+
 class Agent365GuardrailConfigModel(GuardrailConfigModel):
+    auth_mode: Agent365AuthMode | None = Field(
+        default=None,
+        description=(
+            "How the guardrail authenticates to Agent 365. 'on_behalf_of' (default) exchanges the caller's "
+            "incoming Entra bearer token, so every MCP caller must present one. 'agent_identity' uses a "
+            "Microsoft Entra Agent ID: client_id/client_secret are the agent identity blueprint's, and the "
+            "guardrail mints the agent user's token itself, so callers need no Entra token."
+        ),
+    )
+
+    agent_identity_client_id: str | None = Field(
+        default=None,
+        description=(
+            "Client id of the Entra agent identity created from the blueprint. Required when "
+            "auth_mode is 'agent_identity'. Falls back to the AGENT365_AGENT_IDENTITY_CLIENT_ID environment variable."
+        ),
+    )
+
+    agent_user_upn: str | None = Field(
+        default=None,
+        description=(
+            "User principal name of the agent user account parented by the agent identity; Defender evaluates "
+            "and audits as this account. Required when auth_mode is 'agent_identity'. "
+            "Falls back to the AGENT365_AGENT_USER_UPN environment variable."
+        ),
+    )
+
     tenant_id: str | None = Field(
         default=None,
         description=(
@@ -21,7 +51,8 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
     client_id: str | None = Field(
         default=None,
         description=(
-            "Client id of the gateway's Entra app registration (a confidential client). "
+            "Client id of the gateway's Entra app registration (a confidential client), or of the agent "
+            "identity blueprint when auth_mode is 'agent_identity'. "
             "Falls back to the AGENT365_CLIENT_ID environment variable."
         ),
     )
@@ -29,8 +60,8 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
     client_secret: str | None = Field(
         default=None,
         description=(
-            "Client secret of the gateway's Entra app registration, used to perform the "
-            "On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable."
+            "Client secret of the gateway's Entra app registration (or of the agent identity blueprint), "
+            "used to perform the token exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable."
         ),
     )
 

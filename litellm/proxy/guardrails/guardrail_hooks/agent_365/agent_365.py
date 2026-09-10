@@ -3,18 +3,22 @@
 Before the gateway executes an MCP tool, the pending call is sent to the
 Agent 365 tool-evaluation endpoint, where Microsoft Defender scores it and
 Agent 365 records it for observability. The returned allow/block verdict is
-enforced here. Authentication is the Entra On-Behalf-Of flow: the caller's
-incoming bearer token (audienced to this gateway's app registration) is
-exchanged for a delegated Agent 365 token, so Defender evaluates and audits
-as the signed-in user.
+enforced here. Authentication is either the Entra On-Behalf-Of flow (the
+caller's incoming bearer token, audienced to this gateway's app registration,
+is exchanged for a delegated Agent 365 token, so Defender evaluates and audits
+as the signed-in user) or a Microsoft Entra Agent ID (the gateway mints a
+delegated token for the agent's own user account, so callers need no Entra
+token).
 """
 
+import asyncio
 import hashlib
 import threading
 import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 
 import httpx
@@ -54,6 +58,15 @@ _MCP_CALL_TYPES: Final[tuple[str, ...]] = ("mcp_call", "call_mcp_tool")
 _OBO_CACHE_MAX_ENTRIES: Final = 1000
 _DEFAULT_TOKEN_TTL_SECONDS: Final = 3599.0
 _TOKEN_EXPIRY_SLACK_SECONDS: Final = 60.0
+_JWT_BEARER_ASSERTION_TYPE: Final = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+_AGENT_ID_EXCHANGE_SCOPE: Final = "api://AzureADTokenExchange/.default"
+_AGENT_USER_CACHE_KEY: Final = "agent_user"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentIdentityCredentials:
+    client_id: str
+    agent_user_upn: str
 
 
 def _parse_expires_in(raw: object) -> float:
@@ -126,6 +139,7 @@ class Agent365Guardrail(CustomGuardrail):
         api_base: str = AGENT_365_PROD_API_BASE,
         resource_app_id: str = AGENT_365_PROD_RESOURCE_APP_ID,
         agent_id: str | None = None,
+        agent_identity: AgentIdentityCredentials | None = None,
         request_timeout: float = 10.0,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         async_handler: AsyncHTTPHandler | None = None,
@@ -143,6 +157,7 @@ class Agent365Guardrail(CustomGuardrail):
         self.api_base = api_base.rstrip("/")
         self.resource_app_id = resource_app_id
         self.agent_id = agent_id
+        self.agent_identity = agent_identity
         self.request_timeout = request_timeout
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
@@ -152,6 +167,7 @@ class Agent365Guardrail(CustomGuardrail):
         )
         self._obo_token_cache: OrderedDict[str, tuple[str, float]] = OrderedDict()  # mutable-ok: lock-guarded LRU
         self._obo_cache_lock = threading.Lock()
+        self._agent_user_token_lock = asyncio.Lock()
         verbose_proxy_logger.info("Initialized Microsoft Agent 365 guardrail: %s", guardrail_name)
 
     @staticmethod
@@ -178,21 +194,21 @@ class Agent365Guardrail(CustomGuardrail):
             return data
 
         tool_name: Final = str(data.get("mcp_tool_name") or "")
-        assertion: Final = data.get("incoming_bearer_token")
-        if not isinstance(assertion, str) or assertion.count(".") != 2:
-            self._handle_caller_fault(
-                data=data,
-                tool_name=tool_name,
-                status_code=401,
-                reason=(
-                    "the caller did not present an Entra bearer token; the Agent 365 guardrail "
-                    "authorizes tool calls On-Behalf-Of the signed-in user"
-                ),
-            )
+        principal: Final = self._resolve_principal(data=data, tool_name=tool_name)
 
         try:
-            obo_token: Final = await self._get_obo_token(assertion)
+            token: Final = await (
+                self._get_agent_user_token(principal)
+                if isinstance(principal, AgentIdentityCredentials)
+                else self._get_obo_token(principal)
+            )
         except Agent365TokenExchangeError as exc:
+            if isinstance(principal, AgentIdentityCredentials):
+                return self._handle_unavailable(
+                    data=data,
+                    tool_name=tool_name,
+                    reason=f"the Entra agent identity token request was rejected ({exc.error_code}: {exc.description})",
+                )
             self._handle_caller_fault(
                 data=data,
                 tool_name=tool_name,
@@ -224,7 +240,7 @@ class Agent365Guardrail(CustomGuardrail):
             response: Final = await self._post_allowing_error_status(
                 url=f"{self.api_base}{EVALUATE_PATH}",
                 json=self._build_evaluate_payload(data=data, user_api_key_dict=user_api_key_dict),
-                headers={"Authorization": f"Bearer {obo_token}"},  # mutable-ok: httpx header dict
+                headers={"Authorization": f"Bearer {token}"},  # mutable-ok: httpx header dict
             )
         except (httpx.HTTPError, LitellmTimeout, TimeoutError) as exc:
             return self._handle_unavailable(
@@ -234,17 +250,41 @@ class Agent365Guardrail(CustomGuardrail):
             )
         latency_ms: Final = (time.perf_counter() - start) * 1000.0
         fallback: Final = self._handle_evaluate_error(
-            data=data, tool_name=tool_name, assertion=assertion, response=response, latency_ms=latency_ms
+            data=data,
+            tool_name=tool_name,
+            token_cache_key=self._token_cache_key(principal),
+            response=response,
+            latency_ms=latency_ms,
         )
         if fallback is not None:
             return fallback
         return self._enforce_verdict(data=data, tool_name=tool_name, response=response, latency_ms=latency_ms)
 
+    def _resolve_principal(
+        self,
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
+        tool_name: str,
+    ) -> str | AgentIdentityCredentials:
+        if self.agent_identity is not None:
+            return self.agent_identity
+        assertion: Final = data.get("incoming_bearer_token")
+        if isinstance(assertion, str) and assertion.count(".") == 2:
+            return assertion
+        self._handle_caller_fault(
+            data=data,
+            tool_name=tool_name,
+            status_code=401,
+            reason=(
+                "the caller did not present an Entra bearer token; the Agent 365 guardrail "
+                "authorizes tool calls On-Behalf-Of the signed-in user"
+            ),
+        )
+
     def _handle_evaluate_error(
         self,
         data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
-        assertion: str,
+        token_cache_key: str,
         response: httpx.Response,
         latency_ms: float,
     ) -> dict | None:  # mutable-ok: returns the request data dict per hook contract on fail_open
@@ -257,7 +297,7 @@ class Agent365Guardrail(CustomGuardrail):
             )
         if 400 <= response.status_code < 500:
             if response.status_code == 401:
-                self._evict_obo_token(assertion)
+                self._evict_token(token_cache_key)
             self._record_verdict(
                 data=data,
                 verdict="Rejected",
@@ -387,25 +427,92 @@ class Agent365Guardrail(CustomGuardrail):
             return call_id
         return str(uuid.uuid4())
 
-    async def _get_obo_token(self, assertion: str) -> str:
-        cache_key: Final = hashlib.sha256(assertion.encode("utf-8")).hexdigest()
+    @staticmethod
+    def _token_cache_key(principal: str | AgentIdentityCredentials) -> str:
+        if isinstance(principal, AgentIdentityCredentials):
+            return _AGENT_USER_CACHE_KEY
+        return hashlib.sha256(principal.encode("utf-8")).hexdigest()
+
+    def _cached_token(self, cache_key: str) -> str | None:
         now: Final = time.time()
         with self._obo_cache_lock:
             cached: Final = self._obo_token_cache.get(cache_key)
             if cached and cached[1] > now + _TOKEN_EXPIRY_SLACK_SECONDS:
                 self._obo_token_cache.move_to_end(cache_key)
                 return cached[0]
+        return None
 
-        response: Final = await self._post_allowing_error_status(
-            url=TOKEN_ENDPOINT_TEMPLATE.format(tenant_id=self.tenant_id),
-            data={  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
+    def _store_token(self, cache_key: str, access_token: str, expires_at: float) -> None:
+        with self._obo_cache_lock:
+            self._obo_token_cache[cache_key] = (access_token, expires_at)
+            self._obo_token_cache.move_to_end(cache_key)
+            while len(self._obo_token_cache) > _OBO_CACHE_MAX_ENTRIES:
+                self._obo_token_cache.popitem(last=False)
+
+    async def _get_obo_token(self, assertion: str) -> str:
+        cache_key: Final = self._token_cache_key(assertion)
+        cached: Final = self._cached_token(cache_key)
+        if cached is not None:
+            return cached
+        access_token, expires_at = await self._request_token(
+            {  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
                 "assertion": assertion,
                 "scope": f"{self.resource_app_id}/{AGENT_365_SCOPE_NAME}",
                 "requested_token_use": "on_behalf_of",
-            },
+            }
+        )
+        self._store_token(cache_key, access_token, expires_at)
+        return access_token
+
+    async def _get_agent_user_token(self, agent_identity: AgentIdentityCredentials) -> str:
+        """Entra Agent ID chain: blueprint (client secret) -> agent identity (FIC) -> agent user (user_fic)."""
+        async with self._agent_user_token_lock:
+            cached: Final = self._cached_token(_AGENT_USER_CACHE_KEY)
+            if cached is not None:
+                return cached
+            blueprint_token, _ = await self._request_token(
+                {  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
+                    "grant_type": "client_credentials",
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "scope": _AGENT_ID_EXCHANGE_SCOPE,
+                    "fmi_path": agent_identity.client_id,
+                }
+            )
+            agent_identity_token, _ = await self._request_token(
+                {  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
+                    "grant_type": "client_credentials",
+                    "client_id": agent_identity.client_id,
+                    "client_assertion_type": _JWT_BEARER_ASSERTION_TYPE,
+                    "client_assertion": blueprint_token,
+                    "scope": _AGENT_ID_EXCHANGE_SCOPE,
+                }
+            )
+            access_token, expires_at = await self._request_token(
+                {  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
+                    "grant_type": "user_fic",
+                    "client_id": agent_identity.client_id,
+                    "client_assertion_type": _JWT_BEARER_ASSERTION_TYPE,
+                    "client_assertion": blueprint_token,
+                    "user_federated_identity_credential": agent_identity_token,
+                    "username": agent_identity.agent_user_upn,
+                    "scope": f"{self.resource_app_id}/{AGENT_365_SCOPE_NAME}",
+                    "requested_token_use": "on_behalf_of",
+                }
+            )
+            self._store_token(_AGENT_USER_CACHE_KEY, access_token, expires_at)
+            return access_token
+
+    async def _request_token(
+        self,
+        form: dict[str, str],  # mutable-ok: OAuth form body; AsyncHTTPHandler.post requires dict
+    ) -> tuple[str, float]:
+        response: Final = await self._post_allowing_error_status(
+            url=TOKEN_ENDPOINT_TEMPLATE.format(tenant_id=self.tenant_id),
+            data=form,
             headers={"Content-Type": "application/x-www-form-urlencoded"},  # mutable-ok: httpx header dict
         )
         if response.status_code in (408, 429):
@@ -434,14 +541,7 @@ class Agent365Guardrail(CustomGuardrail):
         raw_access_token: Final = body.get("access_token")
         if not isinstance(raw_access_token, str) or not raw_access_token:
             raise Agent365MalformedResponseError("the Entra token endpoint returned a non-string access_token")
-        access_token: Final = raw_access_token
-        expires_at: Final = time.time() + _parse_expires_in(body.get("expires_in", 3599))
-        with self._obo_cache_lock:
-            self._obo_token_cache[cache_key] = (access_token, expires_at)
-            self._obo_token_cache.move_to_end(cache_key)
-            while len(self._obo_token_cache) > _OBO_CACHE_MAX_ENTRIES:
-                self._obo_token_cache.popitem(last=False)
-        return access_token
+        return raw_access_token, time.time() + _parse_expires_in(body.get("expires_in", 3599))
 
     async def _post_allowing_error_status(
         self,
@@ -508,17 +608,16 @@ class Agent365Guardrail(CustomGuardrail):
         }
         raise HTTPException(status_code=503, detail=throttled_detail)
 
-    def _evict_obo_token(self, assertion: str) -> None:
-        cache_key: Final = hashlib.sha256(assertion.encode("utf-8")).hexdigest()
+    def _evict_token(self, cache_key: str) -> None:
         with self._obo_cache_lock:
             self._obo_token_cache.pop(cache_key, None)
 
     def _handle_unavailable(
         self,
-        data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
+        data: dict[str, object],  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         reason: str,
-    ) -> dict:  # mutable-ok: returns the request data dict per hook contract
+    ) -> dict[str, object]:  # mutable-ok: returns the request data dict per hook contract
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.warning(
                 "Agent 365 guardrail (%s): %s; unreachable_fallback='fail_open', allowing tool call '%s' unscanned",

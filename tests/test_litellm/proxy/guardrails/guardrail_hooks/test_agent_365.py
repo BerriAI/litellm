@@ -1,3 +1,4 @@
+import asyncio
 import time
 from types import SimpleNamespace
 from typing import Any, Final
@@ -12,6 +13,7 @@ from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365Guardrail,
+    AgentIdentityCredentials,
     guardrail_class_registry,
     guardrail_initializer_registry,
     initialize_guardrail,
@@ -30,6 +32,10 @@ from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
 FAKE_ASSERTION: Final = "eyJhbGciOi.eyJhdWQiOi.c2lnbmF0dXJl"
 TOKEN_URL: Final = "https://login.microsoftonline.com/tenant-abc/oauth2/v2.0/token"
 EVALUATE_URL: Final = f"{AGENT_365_PROD_API_BASE}/agents/tool-evaluation/evaluate"
+AGENT_IDENTITY: Final = AgentIdentityCredentials(
+    client_id="agent-identity-id", agent_user_upn="litellm-agent@contoso.onmicrosoft.com"
+)
+JWT_BEARER: Final = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 
 
 def _response(status_code: int, payload: Any = None, text: str | None = None) -> httpx.Response:
@@ -73,6 +79,7 @@ class FakeHandler:
 
     async def post(self, *, url, headers=None, data=None, json=None, timeout=None):
         self.calls.append(SimpleNamespace(url=url, headers=headers, data=data, json=json, timeout=timeout))
+        await asyncio.sleep(0)
         if not self._items:
             raise AssertionError("FakeHandler ran out of programmed responses")
         item = self._items.pop(0)
@@ -89,6 +96,7 @@ def _make_guardrail(
     unreachable_fallback: str = "fail_closed",
     agent_id: str | None = None,
     api_base: str = AGENT_365_PROD_API_BASE,
+    agent_identity: AgentIdentityCredentials | None = None,
 ) -> Agent365Guardrail:
     return Agent365Guardrail(
         guardrail_name="agent-365-guard",
@@ -97,6 +105,7 @@ def _make_guardrail(
         client_secret="secret-123",
         api_base=api_base,
         agent_id=agent_id,
+        agent_identity=agent_identity,
         unreachable_fallback=unreachable_fallback,
         async_handler=handler,
         event_hook="pre_mcp_call",
@@ -215,6 +224,61 @@ class TestInitializeGuardrail:
         )
         with pytest.raises(Exception, match="post_call"):
             initialize_guardrail(params, {"guardrail_name": "a365-badmode"})
+
+    def test_default_auth_mode_is_on_behalf_of(self, monkeypatch):
+        monkeypatch.setenv("AGENT365_AGENT_IDENTITY_CLIENT_ID", "env-agent-identity")
+        monkeypatch.setenv("AGENT365_AGENT_USER_UPN", "env-agent@contoso.onmicrosoft.com")
+        params: Final = LitellmParams(
+            guardrail="agent_365",
+            mode="pre_mcp_call",
+            tenant_id="tenant-abc",
+            client_id="client-xyz",
+            client_secret="secret-123",
+        )
+        guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-default"})
+        assert guardrail.agent_identity is None
+
+    def test_agent_identity_mode_requires_identity_and_user(self, monkeypatch):
+        monkeypatch.delenv("AGENT365_AGENT_IDENTITY_CLIENT_ID", raising=False)
+        monkeypatch.delenv("AGENT365_AGENT_USER_UPN", raising=False)
+        params: Final = LitellmParams(
+            guardrail="agent_365",
+            mode="pre_mcp_call",
+            auth_mode="agent_identity",
+            tenant_id="tenant-abc",
+            client_id="blueprint-id",
+            client_secret="blueprint-secret",
+            agent_identity_client_id="agent-identity-id",
+        )
+        with pytest.raises(ValueError, match="agent_user_upn"):
+            initialize_guardrail(params, {"guardrail_name": "a365-agentid"})
+
+    def test_agent_identity_mode_params_and_env_fallback(self, monkeypatch):
+        monkeypatch.setenv("AGENT365_AGENT_USER_UPN", "env-agent@contoso.onmicrosoft.com")
+        params: Final = LitellmParams(
+            guardrail="agent_365",
+            mode="pre_mcp_call",
+            auth_mode="agent_identity",
+            tenant_id="tenant-abc",
+            client_id="blueprint-id",
+            client_secret="blueprint-secret",
+            agent_identity_client_id="agent-identity-id",
+        )
+        guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-agentid"})
+        assert guardrail.agent_identity == AgentIdentityCredentials(
+            client_id="agent-identity-id", agent_user_upn="env-agent@contoso.onmicrosoft.com"
+        )
+
+    def test_unknown_auth_mode_rejected(self):
+        with pytest.raises(Exception, match="auth_mode"):
+            LitellmParams(
+                guardrail="agent_365",
+                mode="pre_mcp_call",
+                auth_mode="client_credentials",
+                tenant_id="tenant-abc",
+                client_id="client-xyz",
+                client_secret="secret-123",
+            )
 
 
 def _guardrail_info(data: dict) -> dict:
@@ -473,6 +537,153 @@ class TestUnreachableFallback:
         info: Final = _guardrail_info(data)
         assert info["guardrail_status"] == "guardrail_failed_to_respond"
         assert info["guardrail_response"]["verdict"] == "Unscanned"
+
+
+def _agent_id_chain(agent_user_token: str = "agent-user-token") -> list[httpx.Response]:
+    return [
+        _token_response(access_token="blueprint-exchange-token"),
+        _token_response(access_token="agent-identity-exchange-token"),
+        _token_response(access_token=agent_user_token),
+    ]
+
+
+class TestAgentIdentityMode:
+    @pytest.mark.asyncio
+    async def test_no_caller_token_needed_and_chain_is_wired(self):
+        handler: Final = FakeHandler([*_agent_id_chain(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY)
+        data: Final = _mcp_data(incoming_bearer_token=None)
+        result: Final = await _run(guardrail, data)
+        assert result is data
+        assert _guardrail_info(data)["guardrail_status"] == "success"
+
+        blueprint, identity, agent_user, evaluate = handler.calls
+        assert [c.url for c in (blueprint, identity, agent_user)] == [TOKEN_URL] * 3
+        assert blueprint.data == {
+            "grant_type": "client_credentials",
+            "client_id": "client-xyz",
+            "client_secret": "secret-123",
+            "scope": "api://AzureADTokenExchange/.default",
+            "fmi_path": "agent-identity-id",
+        }
+        assert identity.data == {
+            "grant_type": "client_credentials",
+            "client_id": "agent-identity-id",
+            "client_assertion_type": JWT_BEARER,
+            "client_assertion": "blueprint-exchange-token",
+            "scope": "api://AzureADTokenExchange/.default",
+        }
+        assert agent_user.data == {
+            "grant_type": "user_fic",
+            "client_id": "agent-identity-id",
+            "client_assertion_type": JWT_BEARER,
+            "client_assertion": "blueprint-exchange-token",
+            "user_federated_identity_credential": "agent-identity-exchange-token",
+            "username": "litellm-agent@contoso.onmicrosoft.com",
+            "scope": f"{AGENT_365_PROD_RESOURCE_APP_ID}/ThreatProtection.Evaluate.All",
+            "requested_token_use": "on_behalf_of",
+        }
+        assert evaluate.url == EVALUATE_URL
+        assert evaluate.headers["Authorization"] == "Bearer agent-user-token"
+
+    @pytest.mark.asyncio
+    async def test_caller_bearer_token_is_ignored(self):
+        handler: Final = FakeHandler([*_agent_id_chain(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY)
+        await _run(guardrail, _mcp_data(incoming_bearer_token=FAKE_ASSERTION))
+        forms: Final = [c.data for c in handler.calls if c.url == TOKEN_URL]
+        assert all("assertion" not in form for form in forms)
+        assert all(FAKE_ASSERTION not in form.values() for form in forms)
+
+    @pytest.mark.asyncio
+    async def test_defender_block_still_enforced(self):
+        handler: Final = FakeHandler([*_agent_id_chain(), _block_response(message="Injection detected")])
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY, unreachable_fallback="fail_open")
+        data: Final = _mcp_data(incoming_bearer_token=None)
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "Blocked by Microsoft Defender"
+        assert _guardrail_info(data)["guardrail_response"]["verdict"] == "Block"
+
+    @pytest.mark.asyncio
+    async def test_agent_user_token_shared_across_callers(self):
+        handler: Final = FakeHandler([*_agent_id_chain(), _allow_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY)
+        await _run(guardrail, _mcp_data(incoming_bearer_token=None))
+        await _run(guardrail, _mcp_data(incoming_bearer_token=FAKE_ASSERTION))
+        assert len([c for c in handler.calls if c.url == TOKEN_URL]) == 3
+        assert handler.calls[-1].headers["Authorization"] == "Bearer agent-user-token"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_callers_share_one_token_chain(self):
+        handler: Final = FakeHandler([*_agent_id_chain(), _allow_response(), _allow_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY)
+        await asyncio.gather(*(_run(guardrail, _mcp_data(incoming_bearer_token=None)) for _ in range(3)))
+        assert len([c for c in handler.calls if c.url == TOKEN_URL]) == 3
+        assert all(c.headers["Authorization"] == "Bearer agent-user-token" for c in handler.calls[3:])
+
+    @pytest.mark.asyncio
+    async def test_expired_agent_user_token_reminted(self):
+        handler: Final = FakeHandler(
+            [
+                _token_response(access_token="blueprint-1"),
+                _token_response(access_token="identity-1"),
+                _token_response(access_token="short-lived", expires_in=1),
+                _allow_response(),
+                *_agent_id_chain(agent_user_token="fresh"),
+                _allow_response(),
+            ]
+        )
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY)
+        await _run(guardrail, _mcp_data(incoming_bearer_token=None))
+        await _run(guardrail, _mcp_data(incoming_bearer_token=None))
+        assert len([c for c in handler.calls if c.url == TOKEN_URL]) == 6
+        assert handler.calls[-1].headers["Authorization"] == "Bearer fresh"
+
+    @pytest.mark.asyncio
+    async def test_evaluate_401_evicts_agent_user_token(self):
+        handler: Final = FakeHandler(
+            [
+                *_agent_id_chain(agent_user_token="stale"),
+                _response(401, text="token revoked"),
+                *_agent_id_chain(agent_user_token="reminted"),
+                _allow_response(),
+            ]
+        )
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY)
+        with pytest.raises(HTTPException):
+            await _run(guardrail, _mcp_data(incoming_bearer_token=None))
+        await _run(guardrail, _mcp_data(incoming_bearer_token=None))
+        assert len([c for c in handler.calls if c.url == TOKEN_URL]) == 6
+        assert handler.calls[-1].headers["Authorization"] == "Bearer reminted"
+
+    @pytest.mark.asyncio
+    async def test_chain_rejected_is_gateway_fault_not_caller_fault(self):
+        handler: Final = FakeHandler(
+            [_response(401, {"error": "invalid_client", "error_description": "AADSTS7000215: bad secret"})]
+        )
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY)
+        data: Final = _mcp_data(incoming_bearer_token=None)
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        assert "invalid_client" in exc_info.value.detail["message"]
+        assert _guardrail_info(data)["guardrail_status"] == "guardrail_failed_to_respond"
+
+    @pytest.mark.asyncio
+    async def test_chain_rejected_fail_open_passes_unscanned(self):
+        handler: Final = FakeHandler(
+            [
+                _token_response(access_token="blueprint-1"),
+                _response(400, {"error": "invalid_grant", "error_description": "AADSTS700222: FIC mismatch"}),
+            ]
+        )
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY, unreachable_fallback="fail_open")
+        data: Final = _mcp_data(incoming_bearer_token=None)
+        result: Final = await _run(guardrail, data)
+        assert result is data
+        assert _guardrail_info(data)["guardrail_response"]["verdict"] == "Unscanned"
 
 
 class TestOboTokenCache:
