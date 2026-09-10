@@ -78,6 +78,15 @@ class TestPlanPgBouncer:
         assert pgb["auth_file"] == "/run/pgb/userlist.txt"
         assert pgb["unix_socket_dir"] == "/run/pgb"
 
+    def test_the_app_user_can_read_the_pgbouncer_console(self):
+        assert _ini(_plan())["pgbouncer"]["stats_users"] == "app"
+
+    @pytest.mark.parametrize("user", ["app,admin", "app%20admin", "app%09admin"])
+    def test_a_user_pgbouncer_would_split_into_several_console_users_is_refused(self, user: str):
+        outcome: Final = plan_pgbouncer(f"postgresql://{user}:pw@db/litellm", SETTINGS, Path("/run/pgb"), None)
+        assert isinstance(outcome, PgBouncerError)
+        assert "stats_users" in outcome.reason
+
     def test_pooled_url_points_prisma_at_loopback_without_prepared_statements(self):
         pooled: Final = urllib.parse.urlsplit(_plan().pooled_url)
         assert (pooled.hostname, pooled.port, pooled.path) == ("127.0.0.1", 6543, "/litellm")
