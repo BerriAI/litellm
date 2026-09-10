@@ -214,6 +214,7 @@ def plan_pgbouncer(
             f"unix_socket_dir = {runtime_dir}",
             f"auth_file = {runtime_dir / PGBOUNCER_USERLIST_NAME}",
             "auth_type = scram-sha-256",
+            f"stats_users = {username}",
             "pool_mode = transaction",
             f"max_client_conn = {settings.max_client_conn}",
             f"default_pool_size = {settings.max_db_connections}",

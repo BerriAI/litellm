@@ -78,6 +78,9 @@ class TestPlanPgBouncer:
         assert pgb["auth_file"] == "/run/pgb/userlist.txt"
         assert pgb["unix_socket_dir"] == "/run/pgb"
 
+    def test_the_app_user_can_read_the_pgbouncer_console(self):
+        assert _ini(_plan())["pgbouncer"]["stats_users"] == "app"
+
     def test_pooled_url_points_prisma_at_loopback_without_prepared_statements(self):
         pooled: Final = urllib.parse.urlsplit(_plan().pooled_url)
         assert (pooled.hostname, pooled.port, pooled.path) == ("127.0.0.1", 6543, "/litellm")
