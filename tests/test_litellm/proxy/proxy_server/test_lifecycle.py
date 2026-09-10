@@ -17,26 +17,22 @@ Pins covered:
 
 from __future__ import annotations
 
-import datetime
+import asyncio
 import inspect
 import json
 import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
-from typing import Final, Optional, Union
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from typing import List, Optional, Union
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from prometheus_client import REGISTRY
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-import litellm
-import litellm.litellm_core_utils.litellm_logging as logging_module
 import litellm.proxy.proxy_server as ps
-import litellm.proxy.utils as proxy_utils
-from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
     _initialize_shared_aiohttp_session,
@@ -752,221 +748,6 @@ async def test_proxy_startup_event_invalid_missing_app_arg_raises():
         # no arguments — the decorator preserves the missing-arg TypeError.
         async with proxy_startup_event():  # type: ignore[call-arg]
             pass
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("configured", "db_value", "expected"),
-    (
-        (True, None, True),
-        (False, True, True),
-        (False, "true", True),
-        (False, False, False),
-        (False, None, False),
-    ),
-)
-async def test_resolve_store_model_in_db_uses_config_or_db(
-    monkeypatch: pytest.MonkeyPatch, configured: bool, db_value: object, expected: bool
-):
-    monkeypatch.setattr(ps, "get_secret_bool", lambda name, default: default)
-    db_record: Final = None if db_value is None else MagicMock(param_value={"store_model_in_db": db_value})
-    prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_config.find_first = AsyncMock(return_value=db_record)
-
-    result: Final = await ProxyStartupEvent.resolve_store_model_in_db(
-        prisma_client=prisma_client, configured=configured
-    )
-
-    assert result is expected
-    assert prisma_client.db.litellm_config.find_first.await_count == (0 if configured else 1)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("configured", "environment", "db_value", "expected"),
-    (
-        ("false", None, False, False),
-        ("true", None, False, False),
-        ("false", "false", False, False),
-        ("false", "true", False, True),
-        (True, "false", False, True),
-        (False, "false", True, True),
-        ("false", None, True, True),
-    ),
-)
-async def test_resolve_store_model_in_db_preserves_legacy_config_and_env_precedence(
-    monkeypatch: pytest.MonkeyPatch,
-    configured: bool | str,
-    environment: str | None,
-    db_value: bool,
-    expected: bool,
-):
-    if environment is None:
-        monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
-    else:
-        monkeypatch.setenv("STORE_MODEL_IN_DB", environment)
-    prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_config.find_first = AsyncMock(
-        return_value=MagicMock(param_value={"store_model_in_db": db_value})
-    )
-
-    assert await ProxyStartupEvent.resolve_store_model_in_db(prisma_client, configured) is expected
-    assert prisma_client.db.litellm_config.find_first.await_count == (
-        0 if configured is True or environment == "true" else 1
-    )
-
-
-@pytest.mark.asyncio
-async def test_resolve_store_model_in_db_continues_after_database_failure(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
-    prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_config.find_first = AsyncMock(side_effect=RuntimeError("database unavailable"))
-
-    assert await ProxyStartupEvent.resolve_store_model_in_db(prisma_client, configured=False) is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("param_value", ("legacy", ["store_model_in_db"], 7))
-async def test_resolve_store_model_in_db_ignores_non_mapping_row(monkeypatch: pytest.MonkeyPatch, param_value: object):
-    monkeypatch.setattr(ps, "get_secret_bool", lambda name, default: default)
-    prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_config.find_first = AsyncMock(return_value=MagicMock(param_value=param_value))
-
-    assert await ProxyStartupEvent.resolve_store_model_in_db(prisma_client=prisma_client, configured=False) is False
-
-
-@pytest.mark.asyncio
-async def test_startup_logging_applies_db_settings_before_callback_init(monkeypatch: pytest.MonkeyPatch):
-    events: Final = MagicMock()
-    proxy_config: Final = MagicMock()
-
-    async def apply_db_settings(prisma_client: object) -> None:
-        events.db_settings()
-
-    proxy_config.apply_safe_litellm_settings_overrides_from_db = apply_db_settings
-    proxy_logging: Final = MagicMock()
-    proxy_logging.startup_event.side_effect = lambda **kwargs: events.callback_init()
-    prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_config.find_first = AsyncMock(
-        return_value=MagicMock(param_value={"store_model_in_db": True})
-    )
-    monkeypatch.setattr(ps, "cost_tracking", MagicMock())
-    monkeypatch.setattr(ps, "get_secret_bool", lambda name, default: default)
-
-    await ProxyStartupEvent._initialize_startup_logging(
-        llm_router=None,
-        proxy_logging_obj=proxy_logging,
-        redis_usage_cache=None,
-        prisma_client=prisma_client,
-        should_load_db_litellm_settings=True,
-        proxy_config_obj=proxy_config,
-    )
-
-    assert events.method_calls == [call.db_settings(), call.callback_init()]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("yaml_value", "db_value"), ((False, True), (True, False)))
-@pytest.mark.parametrize("also_callback", (False, True))
-async def test_prometheus_alerting_uses_persisted_settings_without_duplicate_callbacks(
-    monkeypatch: pytest.MonkeyPatch, yaml_value: bool, db_value: bool, also_callback: bool
-):
-    collectors: Final = tuple(REGISTRY._collector_to_names)  # pyright: ignore[reportPrivateUsage]  # isolate global registry
-    for collector in collectors:
-        REGISTRY.unregister(collector)
-    monkeypatch.setattr(logging_module, "_in_memory_loggers", [])
-    monkeypatch.setattr(litellm, "prometheus_emit_input_sequence_length_label", yaml_value)
-    monkeypatch.setattr(litellm, "callbacks", ["prometheus"] if also_callback else [])
-    monkeypatch.setattr(proxy_utils, "PROXY_HOOKS", ())
-    monkeypatch.setattr(ps, "cost_tracking", MagicMock())
-    proxy_logging: Final = ps.ProxyLogging(user_api_key_cache=ps.user_api_key_cache)
-    proxy_logging.deprecation_check_started = True
-    monkeypatch.setattr(ps, "proxy_logging_obj", proxy_logging)
-    config: Final = ps.ProxyConfig()
-    settings: Final = {"alerting": ["prometheus"], "alert_types": []}
-    prisma_client: Final = MagicMock()
-    monkeypatch.setattr(proxy_utils, "litellm_config_cache", proxy_utils.DualCache())
-    prisma_client.get_generic_data = AsyncMock(
-        return_value=MagicMock(param_value={"prometheus_emit_input_sequence_length_label": db_value})
-    )
-    try:
-        config._load_alerting_settings(settings)
-        config._load_alerting_settings(settings)
-        await ProxyStartupEvent._initialize_startup_logging(
-            llm_router=None,
-            proxy_logging_obj=proxy_logging,
-            redis_usage_cache=None,
-            prisma_client=prisma_client,
-            should_load_db_litellm_settings=True,
-            proxy_config_obj=config,
-        )
-        logger: Final = PrometheusLogger.get_instance()
-        assert logger is not None
-        assert litellm.prometheus_emit_input_sequence_length_label is db_value
-        for metric in (
-            "litellm_llm_api_latency_metric",
-            "litellm_request_total_latency_metric",
-            "litellm_llm_api_time_to_first_token_metric",
-        ):
-            assert ("input_sequence_length" in logger.get_labels_for_metric(metric)) is db_value
-
-        config._load_alerting_settings(settings)
-        config._load_alerting_settings(settings)
-        assert "prometheus" not in litellm.callbacks
-        assert sum(isinstance(callback, PrometheusLogger) for callback in litellm.callbacks) == 1
-        assert sum(isinstance(callback, PrometheusLogger) for callback in litellm._async_success_callback) == 1
-        now: Final = datetime.datetime.now()
-        await logger.async_log_success_event(
-            {
-                "model": "test-model",
-                "litellm_params": {"metadata": {}},
-                "start_time": now,
-                "end_time": now,
-                "standard_logging_object": {
-                    "id": "alerting-startup",
-                    "call_type": "completion",
-                    "status": "success",
-                    "model": "test-model",
-                    "model_group": "test-model",
-                    "model_id": "test-model",
-                    "api_base": "https://api.openai.com",
-                    "custom_llm_provider": "openai",
-                    "request_tags": [],
-                    "prompt_tokens": 4_000,
-                    "completion_tokens": 20,
-                    "total_tokens": 4_020,
-                    "response_cost": 0,
-                    "startTime": now,
-                    "endTime": now,
-                    "metadata": {
-                        "user_api_key_user_id": None,
-                        "user_api_key_hash": None,
-                        "user_api_key_alias": None,
-                        "user_api_key_team_id": None,
-                        "user_api_key_team_alias": None,
-                        "user_api_key_user_email": None,
-                    },
-                    "hidden_params": {},
-                },
-            },
-            None,
-            now,
-            now,
-        )
-        samples: Final = tuple(
-            sample
-            for metric in REGISTRY.collect()
-            for sample in metric.samples
-            if sample.name == "litellm_request_total_latency_metric_count"
-        )
-        assert len(samples) == 1
-        assert samples[0].value == 1
-        assert samples[0].labels.get("input_sequence_length") == ("4k-16k" if db_value else None)
-    finally:
-        for collector in tuple(REGISTRY._collector_to_names):  # pyright: ignore[reportPrivateUsage]  # restore test registry
-            REGISTRY.unregister(collector)
-        for collector in collectors:
-            REGISTRY.register(collector)
 
 
 @pytest.mark.asyncio

@@ -270,7 +270,6 @@ from litellm.constants import (
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -1201,16 +1200,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             general_settings=general_settings
         )
 
-    should_load_db_litellm_settings: Final = await ProxyStartupEvent.resolve_store_model_in_db(
-        prisma_client=prisma_client, configured=store_model_in_db
-    )
-    await ProxyStartupEvent._initialize_startup_logging(
+    ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
         proxy_logging_obj=proxy_logging_obj,
         redis_usage_cache=transaction_buffer_redis_cache,
-        prisma_client=prisma_client,
-        should_load_db_litellm_settings=should_load_db_litellm_settings,
-        proxy_config_obj=proxy_config,
     )
 
     ## V2 OTEL: publish the chosen V2 logger's TracerProvider as the OTel global.
@@ -1301,7 +1294,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
-            resolved_store_model_in_db=should_load_db_litellm_settings,
         )
         if prisma_client is not None
         else None
@@ -5528,8 +5520,6 @@ class ProxyConfig:
 
                     parse_budget_reset_time(value)
                     setattr(litellm, key, value)
-                elif key == "prometheus_emit_input_sequence_length_label":
-                    self._apply_safe_litellm_setting_override(key, value)
                 elif key == "drop_params":
                     litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
                 else:
@@ -6065,9 +6055,6 @@ class ProxyConfig:
             if _alert == "slack":
                 # [OLD] v0 implementation - already handled by update_values above
                 pass
-            elif _alert == "prometheus":
-                if PrometheusLogger.get_instance() is None:
-                    litellm.logging_callback_manager.add_litellm_callback("prometheus")
             else:
                 # [NEW] v1 implementation - init as a custom logger
                 if _alert in litellm._known_custom_logger_compatible_callbacks:
@@ -6993,7 +6980,8 @@ class ProxyConfig:
             return current_config
         elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
             for key, value in db_param_value.items():
-                self._apply_safe_litellm_setting_override(key, value)
+                if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:  # params that are safe to override with db values
+                    setattr(litellm, key, value)
 
         # If param doesn't exist in config, add it
         if param_name not in current_config:
@@ -7274,9 +7262,9 @@ class ProxyConfig:
             await self._init_hashicorp_vault_config_override(prisma_client=prisma_client)
             await self._init_cyberark_config_override(prisma_client=prisma_client)
 
-        await self.apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
+        await self._apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
 
-    async def apply_safe_litellm_settings_overrides_from_db(self, prisma_client: PrismaClient) -> None:
+    async def _apply_safe_litellm_settings_overrides_from_db(self, prisma_client: PrismaClient) -> None:
         config_record: Final = await get_config_param(prisma_client, "litellm_settings")
         if config_record is None or config_record.param_value is None:
             return
@@ -7285,19 +7273,8 @@ class ProxyConfig:
         if not isinstance(litellm_settings, dict):
             return
         for key, value in litellm_settings.items():
-            self._apply_safe_litellm_setting_override(key, value)
-
-    @staticmethod
-    def _apply_safe_litellm_setting_override(key: str, value: object) -> None:
-        if key not in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
-            return
-        if key == "prometheus_emit_input_sequence_length_label":
-            if isinstance(value, bool):
+            if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
                 setattr(litellm, key, value)
-            elif isinstance(value, str) and (normalized_value := str_to_bool(value)) is not None:
-                setattr(litellm, key, normalized_value)
-            return
-        setattr(litellm, key, value)
 
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -9048,45 +9025,14 @@ class ProxyStartupEvent:
             max_budget,
         )
 
-    @staticmethod
-    async def resolve_store_model_in_db(prisma_client: PrismaClient | None, configured: bool | str) -> bool:
-        default: Final = str_to_bool(configured) if isinstance(configured, str) else configured is True
-        if (get_secret_bool("STORE_MODEL_IN_DB", default) or configured) is True:
-            return True
-        if prisma_client is None:
-            return False
-        try:
-            db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
-                where={"param_name": "general_settings"}
-            )
-        except Exception as e:  # noqa: BLE001  # a config-row read failure must not block proxy startup
-            verbose_proxy_logger.debug("Failed to check DB for store_model_in_db: %s", str(e))
-            return False
-        if db_general_settings is None or not isinstance(db_general_settings.param_value, dict):
-            return False
-        db_value: Final = db_general_settings.param_value.get("store_model_in_db")
-        if db_value is True or (isinstance(db_value, str) and db_value.lower() == "true"):
-            verbose_proxy_logger.info("store_model_in_db=True loaded from DB, overriding config/env")
-            return True
-        return False
-
     @classmethod
-    async def _initialize_startup_logging(
+    def _initialize_startup_logging(
         cls,
         llm_router: Router | None,
         proxy_logging_obj: ProxyLogging,
         redis_usage_cache: RedisCache | None,
-        prisma_client: PrismaClient | None = None,
-        should_load_db_litellm_settings: bool = False,
-        proxy_config_obj: ProxyConfig | None = None,
-    ) -> None:
+    ):
         """Initialize logging and alerting on startup"""
-        if should_load_db_litellm_settings and prisma_client is not None and proxy_config_obj is not None:
-            try:
-                await proxy_config_obj.apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
-            except Exception as e:  # noqa: BLE001  # a config-row read failure must not block proxy startup
-                verbose_proxy_logger.warning("Could not read litellm_settings from the database: %s", e)
-
         ## COST TRACKING ##
         cost_tracking()
 
@@ -9485,7 +9431,6 @@ class ProxyStartupEvent:
         proxy_budget_rescheduler_max_time: int,
         proxy_batch_write_at: int,
         proxy_logging_obj: ProxyLogging,
-        resolved_store_model_in_db: bool = False,
     ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
         global heuristic_v1_tuning_baselines, store_model_in_db, scheduler  # rebind-ok: startup publishes the one read-only baseline snapshot
@@ -9618,11 +9563,23 @@ class ProxyStartupEvent:
             prisma_client.spend_logs_queue_monitor_task = monitor_task  # rebind-ok: the client owns its monitor handle
 
         ### ADD NEW MODELS ###
-        store_model_in_db = (  # rebind-ok: preserve legacy YAML values unless env or DB explicitly enables storage
-            resolved_store_model_in_db
-            or await cls.resolve_store_model_in_db(prisma_client=prisma_client, configured=store_model_in_db)
-            or store_model_in_db
-        )
+        store_model_in_db = get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
+
+        # If store_model_in_db is still False, check DB for override.
+        # This breaks the chicken-and-egg where DB has store_model_in_db=True
+        # but YAML config has False.
+        if store_model_in_db is not True and prisma_client is not None:
+            try:
+                _db_gs_record: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
+                    where={"param_name": "general_settings"}
+                )
+                if _db_gs_record is not None and isinstance(_db_gs_record.param_value, dict):
+                    _db_val: Final = _db_gs_record.param_value.get("store_model_in_db")
+                    if _db_val is True or (isinstance(_db_val, str) and _db_val.lower() == "true"):
+                        store_model_in_db = True
+                        verbose_proxy_logger.info("store_model_in_db=True loaded from DB, overriding config/env")
+            except Exception as e:
+                verbose_proxy_logger.debug("Failed to check DB for store_model_in_db: %s", str(e))
 
         config_reload_interval_seconds = proxy_config_reload_interval_seconds
         if not isinstance(config_reload_interval_seconds, int) or config_reload_interval_seconds <= 0:
@@ -17166,13 +17123,6 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "description": (
             "Carry spend beyond max_budget into the next window when budgets reset, instead of "
             "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
-        ),
-    },
-    "prometheus_emit_input_sequence_length_label": {  # mutable-ok: frozen with the registry below
-        "type": "Boolean",
-        "description": (
-            "Break latency and time-to-first-token metrics into input token length buckets. "
-            "Takes effect on the next proxy restart."
         ),
     },
     "max_ui_session_budget": {

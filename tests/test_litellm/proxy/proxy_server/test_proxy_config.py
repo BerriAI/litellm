@@ -12,16 +12,13 @@ import json
 import logging
 import os
 import re
-from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, Final
+from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm
-import litellm.proxy.proxy_server as ps
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
@@ -1164,28 +1161,6 @@ async def test_ProxyConfig_load_config_builds_the_secret_manager_exactly_once(tm
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("raw_value", "expected"), (("true", True), ("false", False)))
-async def test_load_config_normalizes_hosted_input_sequence_length_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_value: str, expected: bool
-) -> None:
-    monkeypatch.setattr(litellm, "prometheus_emit_input_sequence_length_label", not expected)
-    monkeypatch.delenv("PROM_FLAG", raising=False)
-    config_yaml: Final = (
-        VAULT_BACKED_CONFIG.replace("master_key: os.environ/LITELLM_MASTER_KEY", "master_key: null")
-        .replace("      - MY_PROVIDER_KEY", "      - MY_PROVIDER_KEY\n      - PROM_FLAG")
-        + "\nlitellm_settings:\n  prometheus_emit_input_sequence_length_label: os.environ/PROM_FLAG\n"
-    )
-    config_file_path: Final = _write_vault_backed_config(tmp_path, monkeypatch, config_yaml)
-    (tmp_path / "vault_secret_manager.py").write_text(
-        VAULT_SECRET_MANAGER_MODULE + f"\nVAULT['PROM_FLAG'] = {raw_value!r}\n"
-    )
-
-    await ProxyConfig().load_config(router=None, config_file_path=config_file_path)
-
-    assert litellm.prometheus_emit_input_sequence_length_label is expected
-
-
-@pytest.mark.asyncio
 async def test_ProxyConfig_get_config_reuses_an_already_initialized_secret_manager(tmp_path, monkeypatch):
     """get_config() also runs on management-endpoint request paths.
 
@@ -2021,32 +1996,6 @@ def test_ProxyConfig__load_alerting_settings_noop_when_no_alerting():
         "called": True,
         "no_alerting": True,
     }
-
-
-def test_ProxyConfig__load_alerting_settings_preserves_other_logger_arguments(monkeypatch: pytest.MonkeyPatch):
-    logger: Final = CustomLogger()
-    factory: Final = MagicMock(return_value=logger)
-    proxy_logging: Final = MagicMock()
-    monkeypatch.setattr(ps, "_init_custom_logger_compatible_class", factory)
-    monkeypatch.setattr(ps, "proxy_logging_obj", proxy_logging)
-    settings: Final = {
-        "alerting": ["slack", "pagerduty", "prometheus"],
-        "alerting_args": {"routing_key": "test-routing-key"},
-        "alerting_threshold": 15,
-    }
-
-    ProxyConfig()._load_alerting_settings(settings)
-
-    factory.assert_called_once_with(
-        logging_integration="pagerduty",
-        internal_usage_cache=None,
-        llm_router=None,
-        custom_logger_init_args={"alerting_args": {"routing_key": "test-routing-key"}},
-    )
-    assert logger in ps.litellm.callbacks
-    assert "prometheus" in ps.litellm.callbacks
-    assert proxy_logging.update_values.call_args.kwargs["alerting"] == settings["alerting"]
-    assert proxy_logging.update_values.call_args.kwargs["alerting_threshold"] == 15
 
 
 def test_ProxyConfig__load_alerting_settings_invalid_alerting_raises():
@@ -3096,31 +3045,6 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
     fake_router.update_settings.assert_called_once_with(routing_strategy="latency-based-routing")
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("param_value", "expected"),
-    (
-        ({"prometheus_emit_input_sequence_length_label": "true"}, True),
-        ('{"prometheus_emit_input_sequence_length_label": "true"}', True),
-        ('{"prometheus_emit_input_sequence_length_label": false}', False),
-        (None, False),
-        ('["prometheus_emit_input_sequence_length_label"]', False),
-    ),
-)
-async def test_apply_safe_litellm_settings_overrides_parses_input_sequence_length_record(
-    monkeypatch: pytest.MonkeyPatch, param_value: object, expected: bool
-):
-    from litellm.proxy import proxy_server
-
-    config_record: Final = None if param_value is None else SimpleNamespace(param_value=param_value)
-    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=config_record))
-    monkeypatch.setattr(litellm, "prometheus_emit_input_sequence_length_label", False)
-
-    await ProxyConfig().apply_safe_litellm_settings_overrides_from_db(prisma_client=MagicMock())
-
-    assert litellm.prometheus_emit_input_sequence_length_label is expected
-
-
 def _stub_add_deployment_collaborators(
     monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, fake_prisma: MagicMock
 ) -> None:
@@ -3442,24 +3366,6 @@ def test_ProxyConfig__update_config_fields_merges_dict():
         db_param_value={"b": 3, "c": 4, "d": 5},
     )
     assert out == {"general_settings": {"a": 1, "b": 3, "c": 4, "d": 5}}
-
-
-@pytest.mark.parametrize(
-    ("db_value", "expected"),
-    ((True, True), (False, False), ("true", True), ("false", False), ("invalid", False)),
-)
-def test_update_config_fields_normalizes_input_sequence_length_flag(
-    monkeypatch: pytest.MonkeyPatch, db_value: object, expected: bool
-):
-    monkeypatch.setattr(litellm, "prometheus_emit_input_sequence_length_label", False)
-
-    ProxyConfig()._update_config_fields(
-        current_config={},
-        param_name="litellm_settings",
-        db_param_value={"prometheus_emit_input_sequence_length_label": db_value},
-    )
-
-    assert litellm.prometheus_emit_input_sequence_length_label is expected
 
 
 def test_ProxyConfig__update_config_fields_invalid_param_raises():

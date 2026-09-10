@@ -7448,8 +7448,7 @@ async def test_batch_cost_poller_is_confirmed_before_serving(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("resolve_before_logging", (False, True))
-async def test_store_model_in_db_db_override_when_config_false(resolve_before_logging: bool):
+async def test_store_model_in_db_db_override_when_config_false():
     """
     Verify the early DB check in initialize_scheduled_background_jobs
     overrides store_model_in_db=False when DB has True.
@@ -7472,11 +7471,8 @@ async def test_store_model_in_db_db_override_when_config_false(resolve_before_lo
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
         patch("litellm.proxy.proxy_server.store_model_in_db", False),
-        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False) as secret_lookup,
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
     ):
-        resolved: Final = resolve_before_logging and await ProxyStartupEvent.resolve_store_model_in_db(
-            prisma_client=mock_prisma_client, configured=False
-        )
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
             prisma_client=mock_prisma_client,
@@ -7484,13 +7480,8 @@ async def test_store_model_in_db_db_override_when_config_false(resolve_before_lo
             proxy_budget_rescheduler_max_time=2,
             proxy_batch_write_at=5,
             proxy_logging_obj=mock_proxy_logging,
-            resolved_store_model_in_db=resolved,
         )
 
-        mock_prisma_client.db.litellm_config.find_first.assert_awaited_once_with(
-            where={"param_name": "general_settings"}
-        )
-        assert sum(args.args[0] == "STORE_MODEL_IN_DB" for args in secret_lookup.call_args_list) == 1
         import litellm.proxy.proxy_server as ps
 
         # store_model_in_db should now be True (overridden by DB)
@@ -7498,54 +7489,6 @@ async def test_store_model_in_db_db_override_when_config_false(resolve_before_lo
 
         assert mock_proxy_config.add_deployment.call_count == 1
         mock_proxy_config.get_credentials.assert_not_called()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("configured", ("true", "false"))
-async def test_scheduled_startup_preserves_quoted_config_persistence(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, configured: str
-):
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-    from litellm.proxy.proxy_server import ProxyConfig, ProxyStartupEvent
-    from litellm.proxy.utils import ProxyLogging
-
-    prisma: Final = MagicMock(insert_data=AsyncMock())
-    prisma.db.litellm_config.find_first = AsyncMock(return_value=None)
-    proxy_logging: Final = MagicMock(spec=ProxyLogging)
-    proxy_logging.slack_alerting_instance = MagicMock()
-    proxy_logging.db_spend_update_writer = MagicMock()
-    config: Final = _mock_scheduled_proxy_config()
-    scheduler: Final = AsyncIOScheduler()
-    config_file: Final = tmp_path / "config.yaml"
-    config_file.write_text("general_settings: {}\n")
-    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
-    monkeypatch.setattr(proxy_server_module, "prisma_client", prisma)
-    monkeypatch.setattr(proxy_server_module, "general_settings", {"store_model_in_db": configured})
-    monkeypatch.setattr(proxy_server_module, "store_model_in_db", configured)
-    monkeypatch.setattr(proxy_server_module, "proxy_config", config)
-    monkeypatch.setattr(proxy_server_module, "user_config_file_path", str(config_file))
-    monkeypatch.setattr(proxy_server_module, "AsyncIOScheduler", MagicMock(return_value=scheduler))
-
-    try:
-        await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings={},
-            prisma_client=prisma,
-            proxy_budget_rescheduler_min_time=1,
-            proxy_budget_rescheduler_max_time=2,
-            proxy_batch_write_at=5,
-            proxy_logging_obj=proxy_logging,
-        )
-        await ProxyConfig().save_config(new_config={"litellm_settings": {"enable_anthropic_prompt_caching": True}})
-
-        assert proxy_server_module.store_model_in_db == configured
-        assert scheduler.get_job("add_deployment_job") is None
-        assert config_file.read_text() == "general_settings: {}\n"
-        prisma.insert_data.assert_awaited_once_with(
-            data={"litellm_settings": {"enable_anthropic_prompt_caching": True}}, table_name="config"
-        )
-    finally:
-        scheduler.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -10338,7 +10281,6 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
         assert fields["enable_anthropic_prompt_caching"]["field_tab"] == "prompt_caching"
         assert fields["anthropic_prompt_caching_ttl"]["field_tab"] == "prompt_caching"
         assert fields["budget_exceeded_throttle_percentage"]["field_tab"] is None
-        assert fields["prometheus_emit_input_sequence_length_label"]["field_type"] == "Boolean"
     finally:
         app.dependency_overrides.clear()
 
