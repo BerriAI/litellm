@@ -92,6 +92,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
     populate_request_with_path_params,
 )
+from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
@@ -181,6 +182,44 @@ def _get_model_from_request_context(
         llm_router=llm_router,
         request=request,
     )
+
+
+_CLAUDE_MODEL_ROUTES: Final = frozenset(
+    f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
+)
+_CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+
+
+async def _normalize_claude_model(
+    request_data: dict, valid_token: UserAPIKeyAuth, request: Request | None, route: str
+) -> None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+
+    if route not in _CLAUDE_MODEL_ROUTES or llm_router is None:
+        return
+    if request is not None and request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True:
+        return
+    requested: Final = _get_model_from_request_context(request_data, route, request, llm_router)
+    if not isinstance(requested, str) or requested != request_data.get("model"):
+        return
+    if not requested.startswith("claude-router-") and not requested.lower().endswith("[1m]"):
+        return
+    settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    aliases: Final = settings.get("model_group_alias") if isinstance(settings, Mapping) else None
+    source: Final = claude_code_requested_group(
+        requested, llm_router, valid_token.team_id, (valid_token.aliases, valid_token.team_model_aliases, aliases)
+    )
+    if request is not None:
+        request.scope[_CLAUDE_MODEL_NORMALIZED] = True
+    if source is None:
+        return
+    request_data["model"] = source
+    _safe_set_request_parsed_body(request=request, parsed_body=request_data)
+    if request is not None:
+        request._json = request_data
+        request._body = orjson.dumps(request_data)
 
 
 def _get_model_names_for_budget_checks(
@@ -2793,6 +2832,7 @@ async def _authorize_authenticated_request(
     """
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
+    await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
 
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
@@ -3156,6 +3196,7 @@ async def _enforce_key_and_fallback_model_access(
     Key-level model allowlist and client fallbacks (same as standard auth).
     Not included in common_checks — common_checks enforces team/user/project model access only.
     """
+    await _normalize_claude_model(request_data, valid_token, request, route)
     config: Final = valid_token.config
 
     if config != {}:

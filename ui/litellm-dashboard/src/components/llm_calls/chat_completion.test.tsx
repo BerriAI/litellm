@@ -468,6 +468,18 @@ describe("chat_completion prompt cache usage", () => {
     expect(usageData).not.toHaveProperty("cacheReadTokens");
     expect(usageData).not.toHaveProperty("cacheCreationTokens");
   });
+
+  it("omits cost when the provider reports a non-numeric value", async () => {
+    const usageData = await captureUsage({ cost: "not-a-number" });
+
+    expect(usageData).toEqual(expect.not.objectContaining({ cost: expect.anything() }));
+  });
+
+  it("omits cost when the provider reports a blank value", async () => {
+    const usageData = await captureUsage({ cost: "  " });
+
+    expect(usageData).toEqual(expect.not.objectContaining({ cost: expect.anything() }));
+  });
 });
 
 describe("chat_completion response cache", () => {

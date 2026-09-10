@@ -62,6 +62,7 @@ _BASE_URL_PATH: Final = f"{ENV_KEY}.{ANTHROPIC_BASE_URL_KEY}"
 STARTING_MODEL_ROLE: Final = "the /model picker's default row, the model Claude Code starts on"
 
 CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
+CLAUDE_CONFIG_DIR_ENV: Final = "CLAUDE_CONFIG_DIR"
 BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
 AUTOROUTE_BACKUP_PATH: Final = Path.home() / ".litellm" / "autorouter" / "claude_settings_backup.json"
 CONFIGURE_STATE_PATH: Final = Path.home() / ".litellm" / "claude_configure_state.json"
@@ -86,6 +87,33 @@ _SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
 
 class ClaudeSettingsError(Exception):
     """Raised for any user-actionable failure while reading or writing Claude Code settings."""
+
+
+def claude_settings_path(environ: Mapping[str, str]) -> Path:
+    """The settings.json Claude Code reads: under CLAUDE_CONFIG_DIR when set, else ~/.claude/settings.json."""
+    config_dir: Final = environ.get(CLAUDE_CONFIG_DIR_ENV, "")
+    if not config_dir:
+        return CLAUDE_SETTINGS_PATH
+    return Path(config_dir).expanduser() / "settings.json"
+
+
+def _is_default_settings_file(settings_path: Path) -> bool:
+    return settings_path.resolve() == CLAUDE_SETTINGS_PATH.resolve()
+
+
+def settings_file_owners(settings_path: Path) -> tuple[SettingsFileOwner, ...]:
+    """The commands whose backups guard settings_path: `lite up` and `lite autoroute up` only ever manage the default file."""
+    return SETTINGS_FILE_OWNERS if _is_default_settings_file(settings_path) else ()
+
+
+def configure_state_path(settings_path: Path) -> Path:
+    """The receipt describing settings_path: the default file keeps CONFIGURE_STATE_PATH, and any other file
+    (a CLAUDE_CONFIG_DIR) gets its own beside it, keyed by its resolved path, so two settings files never
+    share one undo record."""
+    if _is_default_settings_file(settings_path):
+        return CONFIGURE_STATE_PATH
+    digest: Final = hashlib.sha256(str(settings_path.resolve()).encode()).hexdigest()
+    return CONFIGURE_STATE_PATH.parent / CONFIGURE_STATE_PATH.stem / f"{digest}.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +353,19 @@ def resolve_api_key_helper(base_url: str, platform: str = sys.platform) -> str:
     return " ".join(quote(token) for token in (lite_path, "--base-url", base_url, "auth", "print-token"))
 
 
+def lite_api_key_helper_configured(base_url: str, settings_path: Path) -> bool:
+    """Whether settings_path already carries the apiKeyHelper `lite login --config-claude` writes for base_url.
+
+    Only an exact match counts: a helper for another proxy, a hand-written one, or
+    settings that cannot be read leave the caller on the env-token path.
+    """
+    try:
+        configured_helper: Final = load_json_or_empty(settings_path).get(API_KEY_HELPER_KEY)
+        return configured_helper == resolve_api_key_helper(base_url.rstrip("/"))
+    except ClaudeSettingsError:
+        return False
+
+
 def _owned(container: Mapping[str, JsonValue], key: str) -> OwnedValue:
     return OwnedValue(present=key in container, value=container.get(key))
 
@@ -543,6 +584,7 @@ __all__ = (
     "API_KEY_HELPER_KEY",
     "AUTOROUTE_BACKUP_PATH",
     "BACKUP_PATH",
+    "CLAUDE_CONFIG_DIR_ENV",
     "CLAUDE_SETTINGS_PATH",
     "CONFIGURE_STATE_PATH",
     "ENABLE_GATEWAY_MODEL_DISCOVERY_KEY",
@@ -569,11 +611,15 @@ __all__ = (
     "UnconfigureOutcome",
     "UnpinModel",
     "WithheldCredential",
+    "claude_settings_path",
     "configure_claude_settings",
+    "configure_state_path",
+    "lite_api_key_helper_configured",
     "load_json_or_empty",
     "merge_claude_settings",
     "read_configure_receipt",
     "refuse_while_owned",
     "resolve_api_key_helper",
+    "settings_file_owners",
     "unconfigure_claude_settings",
 )

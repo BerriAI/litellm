@@ -67,7 +67,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
@@ -98,6 +98,8 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_credentials_in_payload,
     mask_sensitive_structure,
 )
+from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
@@ -149,6 +151,7 @@ from litellm.router_utils.common_utils import (
     filter_team_based_models,
     filter_web_search_deployments,
     get_request_team_id,
+    provider_for_generic_call,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
     warn_on_provider_credential_mismatch,
@@ -5198,7 +5201,7 @@ class Router:
                 # If get_llm_provider fails, fall back to using model_name as-is
                 replacement_model_name = model_name
 
-            kwargs["endpoint"] = kwargs["endpoint"].replace(model, replacement_model_name)
+            kwargs["endpoint"] = replace_path_segment(kwargs["endpoint"], model, replacement_model_name)
         return kwargs
 
     async def _ageneric_api_call_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
@@ -5234,16 +5237,7 @@ class Router:
                 kwargs=kwargs, model=model, model_name=model_name
             )
 
-            # Get custom_llm_provider from deployment params
-            try:
-                custom_llm_provider = data.get("custom_llm_provider")
-                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                    model=data["model"],
-                    custom_llm_provider=custom_llm_provider,
-                )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
-            except Exception:
-                custom_llm_provider = None
+            custom_llm_provider: Final = provider_for_generic_call(data)
 
             response_kwargs: Final = {
                 **data,
@@ -5754,15 +5748,7 @@ class Router:
             # Perform pre-call checks for routing strategy
             self.routing_strategy_pre_call_checks(deployment=deployment)
 
-            try:
-                custom_llm_provider = data.get("custom_llm_provider")
-                _, inferred_custom_llm_provider, _, _ = get_llm_provider(
-                    model=data["model"],
-                    custom_llm_provider=custom_llm_provider,
-                )
-                custom_llm_provider = custom_llm_provider or inferred_custom_llm_provider
-            except Exception:
-                custom_llm_provider = None
+            custom_llm_provider: Final = provider_for_generic_call(data)
 
             response: Final = original_function(
                 **{
@@ -12113,7 +12099,7 @@ class Router:
         try:
             if not self._pre_call_checks_need_token_count(model, healthy_deployments):
                 return None
-            return await asyncify(self._count_pre_call_check_tokens)(
+            return await offload_token_count(self._count_pre_call_check_tokens)(
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
                 request_kwargs=request_kwargs,

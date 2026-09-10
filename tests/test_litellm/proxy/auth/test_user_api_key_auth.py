@@ -7376,3 +7376,46 @@ async def test_sideband_custom_header_cannot_fall_back_to_other_credentials(monk
     assert error.value.status_code == 403
     authenticate.assert_not_awaited()
     send.assert_awaited_once_with({"type": "websocket.close", "code": 1008, "reason": ""})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/messages", "/messages", "/v1/chat/completions", "/chat/completions", "/v1/responses", "/responses"])
+async def test_claude_view_normalizes_before_model_access(monkeypatch, route):
+    from starlette.requests import Request
+    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+
+    source = "foo[1m]"
+    encoded = "claude-router-" + source.encode().hex() + "[1m]"
+    router = litellm.Router(model_list=[{"model_name": source, "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}}])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    data = {"model": encoded, "messages": [{"role": "user", "content": "hi"}]}
+    request = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+    token = UserAPIKeyAuth(models=[source])
+    await _enforce_key_and_fallback_model_access(valid_token=token, request_data=data, route=route, request=request, llm_model_list=router.model_list, llm_router=router)
+    assert data["model"] == source
+    assert (await request.json())["model"] == source
+    assert json.loads(await request.body())["model"] == source
+    assert request.scope["parsed_body"][1]["model"] == source
+    with pytest.raises(ProxyException):
+        await _enforce_key_and_fallback_model_access(valid_token=UserAPIKeyAuth(models=["other"]), request_data=data, route=route, request=request, llm_model_list=router.model_list, llm_router=router)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("layer", ["literal", "global", "router", "key", "hierarchical", "unclaimed"])
+async def test_claude_view_never_reinterprets_explicit_names(monkeypatch, layer):
+    from starlette.requests import Request
+    from litellm.proxy.auth.user_api_key_auth import _normalize_claude_model
+
+    encoded = "claude-router-666f6f"
+    names = ("foo", "other", encoded) if layer == "literal" else ("foo", "other")
+    alias = {encoded: "other"}
+    router = litellm.Router(model_list=[{"model_name": name, "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}} for name in names], model_group_alias=alias if layer == "router" else None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "model_alias_map", alias if layer == "global" else {})
+    token = UserAPIKeyAuth(aliases=alias if layer == "key" else {}, router_settings={"model_group_alias": alias} if layer == "hierarchical" else None)
+    data = {"model": encoded}
+    request = Request({"type": "http", "method": "POST", "path": "/v1/messages", "headers": [], "query_string": b""})
+    await _normalize_claude_model(data, token, request, "/v1/messages")
+    assert data["model"] == ("foo" if layer == "unclaimed" else encoded)
+    await _normalize_claude_model(data, token, request, "/v1/messages")
+    assert data["model"] == ("foo" if layer == "unclaimed" else encoded)

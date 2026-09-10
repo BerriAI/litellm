@@ -620,10 +620,7 @@ class TestUpCanInvokeTheRealLoginCommand:
             ctx.obj = {"base_url": "http://127.0.0.1:9"}
             ctx.invoke(real_login, pkce=False)
 
-        with (
-            patch(f"{AUTH_MODULE}.CLAUDE_SETTINGS_PATH", settings_path),
-            patch(f"{AUTH_MODULE}._start_cli_sso_flow", side_effect=RuntimeError("stop")),
-        ):
-            CliRunner().invoke(driver, [], standalone_mode=False)
+        with patch(f"{AUTH_MODULE}._start_cli_sso_flow", side_effect=RuntimeError("stop")):
+            CliRunner().invoke(driver, [], standalone_mode=False, env={"CLAUDE_CONFIG_DIR": str(tmp_path)})
 
         assert not settings_path.exists()
