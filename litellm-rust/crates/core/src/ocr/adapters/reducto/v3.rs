@@ -3,7 +3,8 @@ use crate::ocr::OcrClient;
 use crate::ocr::codecs::reducto::{self, ReductoResponse, ReductoV3Params};
 use crate::ocr::error::{OcrError, OcrResponseError};
 use crate::ocr::prepare::{
-    _prepare_ocr_request, build_http_request, credential_env, guardrail_document,
+    _prepare_ocr_request, ParsedProviderParams, build_http_request, credential_env,
+    guardrail_document,
 };
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
@@ -21,7 +22,10 @@ impl OcrAdapter for ReductoV3Adapter {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
-        let params: ReductoV3Params = _prepare_ocr_request(request)?;
+        let ParsedProviderParams {
+            known: params,
+            extra_params: _extra_params,
+        } = _prepare_ocr_request::<ReductoV3Params>(request)?;
         let headers = super::validate_environment(&request.connection, &credential_env)?;
         let url = super::get_complete_url(request.connection.api_base.as_deref(), "parse")?;
         let document = guardrail_document(request, &url).await?;

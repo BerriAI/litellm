@@ -16,7 +16,9 @@ fn request_body(request: &str) -> Value {
     json!({
         "formatting":{"table_output_format":"html"},
         "retrieval":{"chunk_mode":"section"},
-        "settings":{"ocr_system":"standard"}
+        "settings":{"ocr_system":"standard"},
+        "future_ocr_option":true,
+        "extra_body":{"provider_option":"value"}
     }),
     "reducto://already.pdf",
     json!({
@@ -28,7 +30,11 @@ fn request_body(request: &str) -> Value {
 )]
 #[case(
     "reducto/parse-legacy",
-    json!({"enhance":{"agentic":[{"type":"table"}]}}),
+    json!({
+        "enhance":{"agentic":[{"type":"table"}]},
+        "future_ocr_option":true,
+        "extra_body":{"provider_option":"value"}
+    }),
     "reducto://legacy.pdf",
     json!({
         "document_url":"reducto://legacy.pdf",
