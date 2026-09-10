@@ -6,8 +6,6 @@ use crate::error::TransportError;
 pub enum OcrRequestError {
     #[error("Invalid `req_format`. Expected 'native' or 'litellm'.")]
     RequestFormat,
-    #[error("`req_format=native` is not supported for provider {0}")]
-    NativeUnsupported(&'static str),
     #[error("invalid OCR request field: {path}")]
     RequestField { path: String },
     #[error("missing required field: {0}")]

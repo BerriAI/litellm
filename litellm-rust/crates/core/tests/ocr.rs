@@ -76,18 +76,23 @@ async fn facade_executes_direct_mistral_once() {
 }
 
 #[tokio::test]
-async fn facade_rejects_unsupported_native_response_before_dispatch() {
-    let error = perform_ocr(wire_request(
+async fn facade_retains_native_response_when_requested() {
+    let provider_response = json!({
+        "pages":[{"index":0,"markdown":"hello"}],
+        "usage_info":{"pages_processed":1},
+        "provider_only":"preserved"
+    });
+    let (base, _, server) = mock_server(vec![MockResponse::json(provider_response.clone())]).await;
+    let response = perform_ocr(wire_request(
         "mistral/model",
-        "http://127.0.0.1:1",
+        &base,
         json!({"req_format":"native"}),
     ))
     .await
-    .unwrap_err();
+    .unwrap();
 
-    assert!(
-        matches!(error, crate::Error::InvalidRequest(message) if message.contains("req_format=native"))
-    );
+    server.await.unwrap();
+    assert_eq!(response.provider_native_response, Some(provider_response));
 }
 
 #[tokio::test]

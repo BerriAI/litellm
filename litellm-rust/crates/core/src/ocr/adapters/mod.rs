@@ -18,7 +18,6 @@ pub(crate) trait OcrAdapter: Send + Sync + Sized + 'static {
     type ProviderResponse: DeserializeOwned + Send;
 
     const PROVIDER: OcrProvider;
-    const SUPPORTS_NATIVE_RESPONSE: bool = false;
 
     /// Python: `transform_ocr_request`, including its preceding auth and URL preparation.
     /// `request` contains the model, document, connection, and unmapped caller options.
