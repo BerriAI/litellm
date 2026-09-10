@@ -18,6 +18,7 @@ from litellm.constants import (
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
+    UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
@@ -34,6 +35,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
@@ -335,6 +337,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     if kwargs is None:
         kwargs = {}
 
+    rejected_as_unknown_model: Final = isinstance(response_obj, ProxyModelNotFoundError)
     if response_obj is None:
         response_obj = {}
     elif not isinstance(response_obj, BaseModel) and not isinstance(response_obj, dict):
@@ -433,8 +436,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     )
     raw_model: Final = cast(str, kwargs.get("model") or "")
     model_name: Final = (
-        standard_logging_payload.get("model") if standard_logging_payload is not None else None
-    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+        UNKNOWN_MODEL_SPEND_LOG_MODEL
+        if rejected_as_unknown_model
+        else (standard_logging_payload.get("model") if standard_logging_payload is not None else None)
+        or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+    )
     litellm_call_id: Final = cast(
         str | None,
         kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
