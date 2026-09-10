@@ -20,15 +20,21 @@ MANAGED_CLOUD_STORAGE_SCHEMES: Final = ("s3://", "gs://")
 _MAPPING_PROXY_TYPE: Final[type] = type(MappingProxyType({}))
 
 
+def _fully_unquoted(value: str) -> str:
+    decoded: Final = unquote(value)
+    return value if decoded == value else _fully_unquoted(decoded)
+
+
 def is_managed_cloud_storage_uri(file_id: str) -> bool:
     """
-    True if file_id is a raw cloud-storage object URI (e.g. ``s3://bucket/key``).
+    True if file_id is a raw cloud-storage object URI (e.g. ``s3://bucket/key``),
+    however many times it was percent-encoded on the way in.
 
     These are internal provider artifacts. On the multi-tenant proxy they must be
     retrieved through their managed unified file id so owner/team access is enforced;
     a raw URI supplied by a caller bypasses that check.
     """
-    return isinstance(file_id, str) and file_id.startswith(MANAGED_CLOUD_STORAGE_SCHEMES)
+    return isinstance(file_id, str) and _fully_unquoted(file_id).startswith(MANAGED_CLOUD_STORAGE_SCHEMES)
 
 
 _SAFE_OBJECT_COMPONENT_PATTERN: Final = re.compile(r"[^A-Za-z0-9._-]+")

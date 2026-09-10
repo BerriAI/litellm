@@ -1,3 +1,5 @@
+import pytest
+
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
@@ -13,3 +15,16 @@ def test_is_managed_cloud_storage_uri_ignores_provider_and_unified_ids():
     assert not is_managed_cloud_storage_uri("file-abc123")
     assert not is_managed_cloud_storage_uri("bGl0ZWxsbV9wcm94eQ==")
     assert not is_managed_cloud_storage_uri("")
+
+
+@pytest.mark.parametrize(
+    "file_id",
+    (
+        "gs%3A%2F%2Fbucket%2Flitellm-vertex-files%2Fprediction-model%2Fpredictions.jsonl",
+        "gs%253A%252F%252Fbucket%252Flitellm-vertex-files%252Fprediction-model%252Fpredictions.jsonl",
+        "s3%3A%2F%2Fbucket%2Flitellm-batch-outputs%2Fx.jsonl.out",
+        "s3%253A%252F%252Fbucket%252Flitellm-batch-outputs%252Fx.jsonl.out",
+    ),
+)
+def test_is_managed_cloud_storage_uri_sees_through_percent_encoding(file_id: str):
+    assert is_managed_cloud_storage_uri(file_id)
