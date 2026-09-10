@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 func newKeyResourceData(t *testing.T, raw map[string]interface{}) *schema.ResourceData {
@@ -218,6 +219,47 @@ func TestUpdateKeyOmitsEmptyBudgetDuration(t *testing.T) {
 	}
 	if captured["budget_duration"] != "30d" {
 		t.Errorf("budget_duration = %v, want 30d", captured["budget_duration"])
+	}
+}
+
+func TestResourceKeyUpdateFailureKeepsPriorState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/update" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":{"message":"Invalid budget_duration 'bad'"}}`))
+			return
+		}
+		w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"demo","models":["fake-model"]}}`))
+	}))
+	defer srv.Close()
+
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{
+		"key_alias": "demo",
+		"models":    []interface{}{"fake-model"},
+	})
+	priorData.SetId("hash-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"key_alias":       "demo",
+		"models":          []interface{}{"fake-model"},
+		"budget_duration": "bad",
+	})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+
+	newState, diags := res.Apply(context.Background(), prior, diff, NewClient(srv.URL, "test-key", true))
+	if !diags.HasError() {
+		t.Fatal("apply succeeded, want the proxy's 400 surfaced as an error")
+	}
+	if got, ok := newState.Attributes["budget_duration"]; ok {
+		t.Errorf("failed update persisted budget_duration=%q into state, want it absent", got)
+	}
+	if newState.Attributes["key_alias"] != "demo" {
+		t.Errorf("prior key_alias lost from state: %v", newState.Attributes)
 	}
 }
 
