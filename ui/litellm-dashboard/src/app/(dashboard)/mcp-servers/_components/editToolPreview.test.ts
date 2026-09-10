@@ -14,16 +14,34 @@ describe("getEditToolPreview", () => {
   });
 
   it("previews URL changes with the existing server credential left for server-side inheritance", () => {
-    expect(getEditToolPreview({ ...saved, url: "https://correct.example/mcp" }, saved)).toEqual({
+    expect(getEditToolPreview({ ...saved, url: "https://example.com/corrected-mcp" }, saved)).toEqual({
       kind: "preview",
       config: {
-        url: "https://correct.example/mcp",
+        url: "https://example.com/corrected-mcp",
         transport: "http",
         auth_type: "basic",
         static_headers: { "X-Tenant": "original" },
         credentials: undefined,
       },
     });
+  });
+
+  it.each(["https://other.example/mcp", "http://example.com/mcp", "https://example.com:8443/mcp"])(
+    "requires explicit credentials for a changed origin: %s",
+    (url) => {
+      expect(getEditToolPreview({ ...saved, url, static_headers: [] }, saved)).toEqual({
+        kind: "incomplete",
+        message: expect.stringContaining("origin changed"),
+      });
+      const explicit = { ...saved, url, static_headers: [], credentials: { auth_value: "new:secret" } };
+      expect(getEditToolPreview(explicit, saved).kind).toBe("preview");
+    },
+  );
+
+  it("does not automatically send saved static headers to a new origin", () => {
+    expect(getEditToolPreview({ ...saved, url: "https://other.example/mcp", auth_type: "none" }, saved).kind).toBe(
+      "incomplete",
+    );
   });
 
   it("uses edited static headers and only the static auth value", () => {

@@ -1255,7 +1255,18 @@ if MCP_AVAILABLE:
             MCPRequestHandler,
         )
 
-        request: Final = _inherit_credentials_from_existing_server(new_mcp_server_request)
+        saved_server: Final = (
+            global_mcp_server_manager.get_mcp_server_by_id(new_mcp_server_request.server_id)
+            if new_mcp_server_request.server_id
+            else None
+        )
+        saved_origin: Final = _redact_mcp_resource_url(saved_server.url) if saved_server else None
+        may_inherit: Final = new_mcp_server_request.auth_type not in _STAGED_AUTH_VALUE_AUTH_TYPES or (
+            saved_origin is not None and saved_origin == _redact_mcp_resource_url(new_mcp_server_request.url)
+        )
+        request: Final = (
+            _inherit_credentials_from_existing_server(new_mcp_server_request) if may_inherit else new_mcp_server_request
+        )
         mcp_auth_header: Final = (
             request.credentials.get("auth_value")
             if request.auth_type in _STAGED_AUTH_VALUE_AUTH_TYPES and isinstance(request.credentials, dict)
