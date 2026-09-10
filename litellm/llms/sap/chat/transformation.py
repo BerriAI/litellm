@@ -408,7 +408,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return response
 
     @staticmethod
-    def _normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]: # mutable-ok: generic types
+    def _normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic types
         """Normalize list-shaped reasoning_content to the string field litellm expects.
 
         SAP AI Core forwards reasoning tokens from Gemini and other thinking models as:
@@ -438,9 +438,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             new_msg = {
                 **msg,
                 "thinking_blocks": thinking_blocks,
-                "reasoning_content": (
-                    "\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None
-                ),
+                "reasoning_content": ("\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None),
             }
             new_choices.append({**choice, "message": new_msg})
         return {**raw, "choices": new_choices}
