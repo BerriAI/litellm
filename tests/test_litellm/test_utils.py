@@ -4155,6 +4155,7 @@ def test_deepseek_v4_models_in_backup_cost_map():
         assert info["cache_read_input_token_cost"] == expected_cache
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_deepseek_flash_completion_cost():
     from litellm.types.utils import ModelResponse
 
