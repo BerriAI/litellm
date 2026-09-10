@@ -32,11 +32,11 @@ run "defaults_scale_on_cpu_and_memory_only" {
   }
 }
 
-run "requests_per_target_adds_an_alb_request_count_policy" {
+run "requests_per_second_adds_an_alb_request_count_policy" {
   command = plan
 
   variables {
-    gateway_requests_per_target = 600
+    gateway_target_requests_per_second = 90
   }
 
   assert {
@@ -57,19 +57,19 @@ run "requests_per_target_adds_an_alb_request_count_policy" {
 
   assert {
     condition = alltrue([
-      one(aws_appautoscaling_policy.gateway_requests[0].target_tracking_scaling_policy_configuration).target_value == 600,
+      one(aws_appautoscaling_policy.gateway_requests[0].target_tracking_scaling_policy_configuration).target_value == 5400,
       one(one(aws_appautoscaling_policy.gateway_requests[0].target_tracking_scaling_policy_configuration).predefined_metric_specification).predefined_metric_type == "ALBRequestCountPerTarget",
       length(one(aws_appautoscaling_policy.gateway_requests[0].target_tracking_scaling_policy_configuration).customized_metric_specification) == 0,
     ])
-    error_message = "The request policy must track ALBRequestCountPerTarget at the configured requests per minute per task."
+    error_message = "The request policy must track ALBRequestCountPerTarget at 60 times the configured requests per second per task."
   }
 }
 
-run "tokens_per_target_adds_a_metric_math_policy" {
+run "tokens_per_second_adds_a_metric_math_policy" {
   command = plan
 
   variables {
-    gateway_tokens_per_target = 400000
+    gateway_target_tokens_per_second = 6000000
     gateway_tokens_metric = {
       namespace  = "LiteLLM/Prometheus"
       dimensions = { ClusterName = "acme-litellm-test", TaskDefinitionFamily = "acme-litellm-test-gateway" }
@@ -85,21 +85,21 @@ run "tokens_per_target_adds_a_metric_math_policy" {
     condition = alltrue([
       aws_appautoscaling_policy.gateway_tokens[0].name == "acme-litellm-test-gateway-tokens",
       aws_appautoscaling_policy.gateway_tokens[0].resource_id == "service/acme-litellm-test/acme-litellm-test-gateway",
-      one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).target_value == 400000,
+      one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).target_value == 6000000,
       length(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).predefined_metric_specification) == 0,
     ])
-    error_message = "The token policy must track a customized metric at the configured tokens per minute per task."
+    error_message = "The token policy must track a customized metric at the configured tokens per second per task."
   }
 
   assert {
     condition = alltrue([
-      length(one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics) == 3,
-      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute"].id == "tokens_per_minute",
-      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute"].return_data == false,
-      one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute"].metric_stat).stat == "Sum",
-      one(one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute"].metric_stat).metric).namespace == "LiteLLM/Prometheus",
-      one(one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute"].metric_stat).metric).metric_name == "litellm_total_tokens_metric_total",
-      { for d in one(one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute"].metric_stat).metric).dimensions : d.name => d.value } == { ClusterName = "acme-litellm-test", TaskDefinitionFamily = "acme-litellm-test-gateway" },
+      length(one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics) == 4,
+      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens"].id == "tokens",
+      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens"].return_data == false,
+      one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens"].metric_stat).stat == "Sum",
+      one(one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens"].metric_stat).metric).namespace == "LiteLLM/Prometheus",
+      one(one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens"].metric_stat).metric).metric_name == "litellm_total_tokens_metric_total",
+      { for d in one(one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens"].metric_stat).metric).dimensions : d.name => d.value } == { ClusterName = "acme-litellm-test", TaskDefinitionFamily = "acme-litellm-test-gateway" },
     ])
     error_message = "The first metric must sum the published token counter deltas under the configured namespace and dimensions."
   }
@@ -118,19 +118,27 @@ run "tokens_per_target_adds_a_metric_math_policy" {
 
   assert {
     condition = alltrue([
-      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute_per_task"].id == "tokens_per_minute_per_task",
-      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute_per_task"].expression == "tokens_per_minute / running_tasks",
-      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute_per_task"].return_data == true,
+      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_second"].expression == "tokens / 60",
+      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_second"].return_data == false,
     ])
-    error_message = "Only the per-task division may return data to the scaling policy."
+    error_message = "The 60s period Sum must be divided by 60 to yield tokens per second."
+  }
+
+  assert {
+    condition = alltrue([
+      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_second_per_task"].expression == "tokens_per_second / running_tasks",
+      { for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_second_per_task"].return_data == true,
+      length([for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m if m.return_data]) == 1,
+    ])
+    error_message = "Only the per-task tokens per second may return data to the scaling policy."
   }
 }
 
-run "tokens_per_target_needs_the_metric_location" {
+run "tokens_per_second_needs_the_metric_location" {
   command = plan
 
   variables {
-    gateway_tokens_per_target = 400000
+    gateway_target_tokens_per_second = 6000000
   }
 
   expect_failures = [
@@ -142,9 +150,9 @@ run "requests_and_tokens_scale_next_to_cpu_and_memory" {
   command = plan
 
   variables {
-    gateway_requests_per_target = 600
-    gateway_tokens_per_target   = 400000
-    gateway_tokens_metric       = { namespace = "LiteLLM/Prometheus" }
+    gateway_target_requests_per_second = 90
+    gateway_target_tokens_per_second   = 6000000
+    gateway_tokens_metric              = { namespace = "LiteLLM/Prometheus" }
   }
 
   assert {
@@ -160,7 +168,7 @@ run "requests_and_tokens_scale_next_to_cpu_and_memory" {
   }
 
   assert {
-    condition     = length(one(one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens_per_minute"].metric_stat).metric).dimensions) == 0
+    condition     = length(one(one({ for m in one(one(aws_appautoscaling_policy.gateway_tokens[0].target_tracking_scaling_policy_configuration).customized_metric_specification).metrics : m.id => m }["tokens"].metric_stat).metric).dimensions) == 0
     error_message = "Omitting dimensions must query the token metric without any."
   }
 }
@@ -169,10 +177,10 @@ run "workload_targets_are_ignored_when_autoscaling_is_off" {
   command = plan
 
   variables {
-    gateway_autoscaling_enabled = false
-    gateway_requests_per_target = 600
-    gateway_tokens_per_target   = 400000
-    gateway_tokens_metric       = { namespace = "LiteLLM/Prometheus" }
+    gateway_autoscaling_enabled        = false
+    gateway_target_requests_per_second = 90
+    gateway_target_tokens_per_second   = 6000000
+    gateway_tokens_metric              = { namespace = "LiteLLM/Prometheus" }
   }
 
   assert {

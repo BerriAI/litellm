@@ -387,16 +387,24 @@ gateway:
     #       - { type: Percent, value: 100, periodSeconds: 30 }
     behavior: {}
     # Opt-in per-pod workload targets, rendered as autoscaling/v2 `Pods` metrics
-    # named `litellm_requests_per_minute` and `litellm_tokens_per_minute` with an
+    # named `litellm_requests_per_second` and `litellm_tokens_per_second` with an
     # AverageValue target. They coexist with the CPU/memory targets above: the
     # HPA scales on whichever metric asks for the most replicas. Kubernetes has
     # no idea what a token is, so a Prometheus Adapter must serve those two
-    # names on custom.metrics.k8s.io from the proxy's request and token
-    # counters; the adapter rules and the replica arithmetic are documented at
-    # https://docs.litellm.ai/docs/proxy/deploy#scale-on-requests-and-tokens-per-pod
-    # Tokens are counted when a response completes, so TPM trails long streams.
-    targetRequestsPerMinute: ""
-    targetTokensPerMinute: ""
+    # names on custom.metrics.k8s.io from the proxy's counters, grouped by the
+    # scrape target's `pod` label (enable serviceMonitor above):
+    #   litellm_requests_per_second:
+    #     sum(rate(litellm_proxy_total_requests_metric_total{<<.LabelMatchers>>}[1m])) by (<<.GroupBy>>)
+    #   litellm_tokens_per_second:
+    #     sum(rate(litellm_total_tokens_metric_total{<<.LabelMatchers>>}[1m])) by (<<.GroupBy>>)
+    # rate() over [1m] is already per second, so no `* 60`. How fast the HPA
+    # reacts is set by that window, the scrape interval and the HPA sync period
+    # (15s by default), not by the unit: keep serviceMonitor.interval at 15s or
+    # faster so a 1m window holds at least 4 samples. averageValue takes SI
+    # suffixes, so "6M" is six million tokens per second per pod. Tokens are
+    # counted when a response completes, so TPS trails long streams.
+    targetRequestsPerSecond: ""
+    targetTokensPerSecond: ""
   # PodDisruptionBudget for the gateway pods. Set exactly one of
   # `minAvailable` / `maxUnavailable` (minAvailable wins if both are set;
   # enabling without either falls back to `maxUnavailable: 1`). Disabled by
