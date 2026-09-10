@@ -5,7 +5,9 @@ use crate::ocr::OcrClient;
 use crate::ocr::codecs::mistral::{self, MistralOcrParams, MistralOcrResponse};
 use crate::ocr::document::{inline_remote_document, validate_inline_document};
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
-use crate::ocr::prepare::{_prepare_ocr_request, credential_env, transform_request_body};
+use crate::ocr::prepare::{
+    _prepare_ocr_request, ParsedProviderParams, credential_env, transform_request_body,
+};
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::url_utils::ApiUrl;
@@ -24,7 +26,10 @@ impl OcrAdapter for VertexMistralAdapter {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
-        let params: MistralOcrParams = _prepare_ocr_request(request)?;
+        let ParsedProviderParams {
+            known: params,
+            extra_params: _extra_params,
+        } = _prepare_ocr_request::<MistralOcrParams>(request)?;
         let config = VertexAuthInputs::from_optional_params(&request.optional_params)
             .map_err(Error::from)?;
         let authentication = vertex::authenticate(
