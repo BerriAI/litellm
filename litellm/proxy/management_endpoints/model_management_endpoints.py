@@ -130,6 +130,9 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points"})
+NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset(
+    (*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS)
+)
 
 
 async def update_team(*args, **kwargs):
@@ -762,13 +765,12 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     # CLEARABLE_LITELLM_PARAMS lists non-mirrored litellm_params that explicit null may clear.
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
-            if getattr(updated_patch.litellm_params, field) is not None:
-                continue
-            if field in SPECIAL_MODEL_INFO_PARAMS:
+            if (
+                getattr(updated_patch.litellm_params, field) is None
+                and field in NULL_CLEARABLE_LITELLM_PARAMS
+            ):
                 merged_litellm_params.pop(field, None)
                 merged_model_info.pop(field, None)
-            elif field in CLEARABLE_LITELLM_PARAMS:
-                merged_litellm_params.pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
             if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
