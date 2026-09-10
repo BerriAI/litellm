@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -15,11 +16,13 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 def classifier_input_snapshot(value: object, *, openai_sdk: bool = False) -> Mapping[str, JsonValue] | None:
     try:
         if openai_sdk and isinstance(value, Mapping):
-            body: Final = {
-                key: item for key, item in value.items() if key not in ("extra_headers", "extra_query", "extra_body")
-            }
+            body: Final = MappingProxyType(
+                {key: item for key, item in value.items() if key not in ("extra_headers", "extra_query", "extra_body")}
+            )
             extra_body: Final = value.get("extra_body")
-            return _JSON_OBJECT.validate_python({**body, **extra_body} if isinstance(extra_body, Mapping) else body)
+            return _JSON_OBJECT.validate_python(
+                MappingProxyType({**body, **extra_body}) if isinstance(extra_body, Mapping) else body
+            )
         return (
             _JSON_OBJECT.validate_json(value)
             if isinstance(value, (str, bytes))
@@ -30,7 +33,7 @@ def classifier_input_snapshot(value: object, *, openai_sdk: bool = False) -> Map
 
 
 def is_classifier_call(call_type: str, params: Mapping[str, object]) -> bool:
-    return call_type in ("completion", "acompletion") and any(
+    return call_type in ("completion", "acompletion", "responses", "aresponses") and any(
         isinstance(metadata := params.get(key), Mapping)
         and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == AUTOROUTER_CLASSIFIER_CALL_ORIGIN
         for key in ("metadata", "litellm_metadata")
@@ -49,10 +52,15 @@ def masked_originating_request(request_kwargs: Mapping[str, object] | None) -> M
 def classifier_audit_fields(payload: Mapping[str, object]) -> ClassifierAudit:
     classifier_input: Final = classifier_input_snapshot(payload.get("classifier_input"))
     originating_request: Final = classifier_input_snapshot(payload.get("originating_request_masked"))
-    return {
-        **(ClassifierAudit(classifier_input=classifier_input) if classifier_input is not None else {}),
-        **(ClassifierAudit(originating_request_masked=originating_request) if originating_request is not None else {}),
-    }
+    if classifier_input is None:
+        return (
+            ClassifierAudit(originating_request_masked=originating_request)
+            if originating_request is not None
+            else ClassifierAudit()
+        )
+    if originating_request is None:
+        return ClassifierAudit(classifier_input=classifier_input)
+    return ClassifierAudit(classifier_input=classifier_input, originating_request_masked=originating_request)
 
 
 def without_classifier_audit(payload: Mapping[str, object]) -> dict[str, object]:

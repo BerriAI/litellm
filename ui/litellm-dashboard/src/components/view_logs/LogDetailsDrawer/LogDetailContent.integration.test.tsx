@@ -301,27 +301,29 @@ describe("LogDetailContent", () => {
     },
   );
 
-  it.each(["classifier_input", "originating_request_masked"])(
-    "shows partial classifier audits when only %s is captured",
-    (field) => {
-      render(
-        <LogDetailContent
-          logEntry={createLogEntry({
-            call_type: "acompletion",
-            proxy_server_request: JSON.stringify({
-              [field]: { messages: [{ role: "user", content: "captured prompt" }] },
-            }),
-            metadata: { status: "success", internal_call_origin: "autorouter_classifier" },
-          })}
-        />,
-      );
+  it.each([
+    ["classifier_input", "acompletion"],
+    ["originating_request_masked", "acompletion"],
+    ["classifier_input", "aresponses"],
+    ["originating_request_masked", "responses"],
+  ])("shows partial classifier audits when only %s is captured for %s", (field, callType) => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          call_type: callType,
+          proxy_server_request: JSON.stringify({
+            [field]: { messages: [{ role: "user", content: "captured prompt" }] },
+          }),
+          metadata: { status: "success", internal_call_origin: "autorouter_classifier" },
+        })}
+      />,
+    );
 
-      expect(screen.getByRole("region", { name: "Classifier input" })).toBeInTheDocument();
-      expect(screen.getByRole("region", { name: "Originating request, credentials masked" })).toBeInTheDocument();
-      expect(screen.getByText("Not captured or message logging disabled")).toBeInTheDocument();
-      expect(screen.queryByText("Request & Response")).not.toBeInTheDocument();
-    },
-  );
+    expect(screen.getByRole("region", { name: "Classifier input" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Originating request, credentials masked" })).toBeInTheDocument();
+    expect(screen.getByText("Not captured or message logging disabled")).toBeInTheDocument();
+    expect(screen.queryByText("Request & Response")).not.toBeInTheDocument();
+  });
 
   it("should display Request and Response tabs when JSON view is selected", async () => {
     const user = userEvent.setup();

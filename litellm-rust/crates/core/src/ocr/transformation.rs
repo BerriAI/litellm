@@ -1,7 +1,7 @@
 use crate::Error;
 use serde_json::{Map, Value};
 
-use super::types::{OcrRequestData, OcrResponseData};
+use super::types::{LiteLLMOcrResponse, OcrRequestData};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrAuthStrategy {
@@ -49,14 +49,14 @@ pub trait OcrProviderConfig: Sync {
         &self,
         model: &str,
         response_json: Value,
-    ) -> Result<OcrResponseData, Error>;
+    ) -> Result<LiteLLMOcrResponse, Error>;
 
     fn transform_ocr_response_with_params(
         &self,
         model: &str,
         response_json: Value,
         _optional_params: &Map<String, Value>,
-    ) -> Result<OcrResponseData, Error> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         self.transform_ocr_response(model, response_json)
     }
 

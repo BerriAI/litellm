@@ -6804,7 +6804,7 @@ def test_get_error_information_redacts_provider_key_from_upstream_url():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["openai", "azure", "anthropic", "bedrock"])
+@pytest.mark.parametrize("provider", ["openai", "azure", "anthropic", "bedrock", "responses"])
 async def test_classifier_audit_matches_provider_transport(provider: str) -> None:
     import json
 
@@ -6819,6 +6819,10 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
     def respond(request: httpx.Request) -> httpx.Response:
         outbound.put_nowait(json.loads(request.content))
         content: Final = '{"tier":"SIMPLE"}'
+        if provider == "responses":
+            from litellm.responses.main import mock_responses_api_response
+
+            return httpx.Response(200, json=mock_responses_api_response(content).model_dump())
         if provider == "anthropic":
             return httpx.Response(200, json={
                 "id": "msg-audit", "type": "message", "role": "assistant", "model": "claude-haiku-4-5",
@@ -6857,9 +6861,19 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
             "azure": "azure/gpt-5.6",
             "anthropic": "anthropic/claude-haiku-4-5",
             "bedrock": "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            "responses": "openai/gpt-5.6",
         }[provider]
 
         async def run(marker: str) -> None:
+            if provider == "responses":
+                await litellm.aresponses(
+                    model=model, api_key="transport-only", client=client, max_output_tokens=128,
+                    instructions="classifier-rubric", input=marker,
+                    metadata={"internal_call_origin": "autorouter_classifier"},
+                    proxy_server_request={"body": {}, "originating_request_masked": {"input": f"source-only-{marker}"}},
+                    success_callback=[capture], num_retries=0,
+                )
+                return
             await litellm.acompletion(
                 model=model, api_key="transport-only", client=client, max_tokens=128,
                 aws_access_key_id="transport-only", aws_secret_access_key="transport-only", aws_region_name="us-east-1",
@@ -6886,13 +6900,14 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
             marker: Final = "request-one" if "request-one" in json.dumps(snapshot) else "request-two"
             assert payload["originating_request_masked"] == {"input": f"source-only-{marker}"}
             assert classifier_input_snapshot(snapshot) is not None
-        if provider not in ("openai", "azure"):
+        if provider not in ("openai", "azure", "responses"):
             assert all("system" in request for request in requests)
 
 
 @pytest.mark.parametrize("redaction", ["none", "global", "request", "header"])
 @pytest.mark.parametrize("status", ["success", "failure"])
-def test_classifier_audit_obeys_message_logging_before_payload_emission(logging_obj, monkeypatch, redaction, status):
+@pytest.mark.parametrize("call_type", ["completion", "acompletion", "responses", "aresponses"])
+def test_classifier_audit_obeys_message_logging_before_payload_emission(logging_obj, monkeypatch, redaction, status, call_type):
     from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 
     monkeypatch.setattr(litellm, "turn_off_message_logging", redaction == "global")
@@ -6902,6 +6917,7 @@ def test_classifier_audit_obeys_message_logging_before_payload_emission(logging_
         )},
         "proxy_server_request": {"body": {}, "originating_request_masked": {"input": "source-only"}},
     }
+    logging_obj.call_type = call_type
     logging_obj.model_call_details["litellm_params"] = params
     logging_obj.model_call_details["standard_callback_dynamic_params"] = (
         {"turn_off_message_logging": True} if redaction == "request" else {}
@@ -6911,7 +6927,7 @@ def test_classifier_audit_obeys_message_logging_before_payload_emission(logging_
     )
     now: Final = datetime.datetime.now()
     payload: Final = get_standard_logging_object_payload(
-        kwargs={**logging_obj.model_call_details, "call_type": "completion"}, init_response_obj={},
+        kwargs={**logging_obj.model_call_details, "call_type": call_type}, init_response_obj={},
         start_time=now, end_time=now, logging_obj=logging_obj, status=status,
     )
     assert payload is not None

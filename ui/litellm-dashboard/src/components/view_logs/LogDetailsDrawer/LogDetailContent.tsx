@@ -72,7 +72,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
   const errorInfo = hasError ? metadata.error_information : null;
   const isClassifier =
     metadata.internal_call_origin === AUTOROUTER_CLASSIFIER_ORIGIN &&
-    (logEntry.call_type === "completion" || logEntry.call_type === "acompletion");
+    ["completion", "acompletion", "responses", "aresponses"].includes(logEntry.call_type);
   const rawRequest = formatData(logEntry.proxy_server_request || logEntry.messages);
   const hasClassifierAudit =
     isClassifier && (rawRequest?.classifier_input != null || rawRequest?.originating_request_masked != null);
