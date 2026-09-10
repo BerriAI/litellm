@@ -1,12 +1,17 @@
 import json
+import asyncio
 import os
 from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import httpx
 
 import litellm
 from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Mock responses for different embedding models
 titan_embedding_response = {"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}
@@ -1062,6 +1067,41 @@ def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(mo
     assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
 
 
+@pytest.mark.asyncio
+async def test_async_single_func_embeddings_signs_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: Titan, Nova, and TwelveLabs embeddings sign one SigV4 request per
+    input, and botocore refreshes expiring credentials inside that signing with a blocking HTTP call,
+    so each signing must run on a worker thread to keep the loop serving other requests."""
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    probe = EventLoopProbe()
+    client = MagicMock()
+    client.__class__ = AsyncHTTPHandler
+    client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            json=titan_embedding_response,
+            request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
+        )
+    )
+
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+    response = await BedrockEmbedding()._async_single_func_embeddings(
+        client=client,
+        timeout=None,
+        batch_data=[{"inputText": test_input}],
+        credentials=probe.credentials(),
+        extra_headers=None,
+        endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com/model/amazon.titan-embed-text-v1/invoke",
+        aws_region_name="us-west-2",
+        model="amazon.titan-embed-text-v1",
+        logging_obj=MagicMock(),
+        provider="amazon",
+    )
+    await release
+
+    assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
+    assert "Authorization" in client.post.call_args.kwargs["headers"]
+    assert probe.served_during_refresh is True
 marengo_3_embedding_response = {"data": [{"embedding": [0.01 * i for i in range(512)]}]}
 MARENGO_3_DUCK = "data:image/png;base64,ZHVjaw=="
 
