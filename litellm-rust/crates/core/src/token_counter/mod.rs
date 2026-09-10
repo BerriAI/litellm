@@ -2,12 +2,16 @@
 //! for the shapes it can count exactly. Everything else is declined so the host
 //! keeps its own counter as the reference.
 
+mod byte_level;
 mod python_json;
 mod tools;
 pub mod types;
+mod unicode_classes;
 
 use serde::Serialize;
 use thiserror::Error as ThisError;
+
+use byte_level::ByteLevelCounter;
 
 use crate::constants::{
     NAMED_TOOL_CHOICE_TOKENS, REPLY_PRIMING_TOKENS, TOKENS_PER_MESSAGE, TOKENS_PER_NAME,
@@ -41,6 +45,7 @@ pub struct InputTokenCount {
 /// event loop.
 pub struct TokenCounter {
     tokenizer: tokenizers::Tokenizer,
+    byte_level: Option<ByteLevelCounter>,
 }
 
 impl TokenCounter {
@@ -49,10 +54,21 @@ impl TokenCounter {
         let tokenizer = tokenizer_json
             .parse::<tokenizers::Tokenizer>()
             .map_err(|error| TokenCountError::Load(error.to_string()))?;
-        Ok(Self { tokenizer })
+        let byte_level = ByteLevelCounter::detect(&tokenizer);
+        Ok(Self {
+            tokenizer,
+            byte_level,
+        })
     }
 
     pub fn count_text(&self, text: &str) -> Result<usize, TokenCountError> {
+        if let Some(count) = self
+            .byte_level
+            .as_ref()
+            .and_then(|counter| counter.count(&self.tokenizer, text))
+        {
+            return Ok(count);
+        }
         self.tokenizer
             .encode_fast(text, true)
             .map(|encoding| encoding.len())
