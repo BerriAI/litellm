@@ -31,7 +31,6 @@ CALLBACK_ATTRIBUTES: Final = (
 )
 EXPECTED_FAILURE_REASONS: Final = {
     "ocr/test_callbacks.py": "requires the OCR callback lifecycle implementation from #40070",
-    "ocr/test_dispatch.py": "requires the OCR native dispatch implementation from #40070",
     "ocr/test_guardrails.py": "requires the OCR guardrail lifecycle implementation from #40070",
     "ocr/test_requests.py": "requires the OCR request and Azure authentication implementation from #40070",
 }
@@ -67,12 +66,6 @@ def _rebound(container: object, attribute: str, value: object) -> Iterator[None]
         setattr(container, attribute, original)
 
 
-@contextmanager
-def _rust_mode(enabled: bool) -> Iterator[None]:
-    with _rebound(_CONFIGURATION, "override", enabled):
-        yield
-
-
 @pytest_asyncio.fixture(autouse=True, loop_scope="function")
 async def isolate_ocr_test_state() -> AsyncIterator[None]:
     with ExitStack() as stack:
@@ -81,7 +74,7 @@ async def isolate_ocr_test_state() -> AsyncIterator[None]:
         stack.enter_context(_isolated_list(litellm_logging, "_in_memory_loggers"))  # pyright: ignore[reportPrivateUsage]  # no public callback-cache accessor
         stack.enter_context(_rebound(utils, "callback_list", []))  # rebind-ok: isolate legacy callback registry
         stack.enter_context(_rebound(litellm, "cache", None))  # test-quality-ok: isolate process-global cache
-        stack.enter_context(_rust_mode(True))
+        stack.enter_context(_rebound(_CONFIGURATION, "override", None))
         executor: Final = ThreadPoolExecutor(thread_name_prefix="rust-ocr-test-logging")
         stack.enter_context(_rebound(utils, "executor", executor))
         try:

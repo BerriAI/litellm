@@ -8,19 +8,17 @@ from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
     OCR_RESPONSE,
-    call_aocr,
+    call_native_aocr,
     call_native_ocr,
-    call_ocr as call_public_ocr,
 )
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.response_marker import has_rust_response_marker
 
 pytestmark = pytest.mark.requires_rust_extension
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_public_azure_ocr_uses_token_provider_result_as_bearer_token(
+async def test_native_azure_ocr_uses_token_provider_result_as_bearer_token(
     ocr_server: RecordingServer, isolated_azure_auth: None, asynchronous: bool
 ) -> None:
     calls: Final = []
@@ -35,11 +33,10 @@ async def test_public_azure_ocr_uses_token_provider_result_as_bearer_token(
         "azure_ad_token_provider": token_provider,
     }
     response: Final = (
-        await call_aocr(ocr_server, **arguments) if asynchronous else call_public_ocr(ocr_server, **arguments)
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     )
 
     assert calls == ["token"]
-    assert has_rust_response_marker(response)
     assert response.pages[0].markdown == "native OCR response"
     assert_native_request(ocr_server)
     assert ocr_server.requests[0].headers["authorization"] == "Bearer callback-token"
@@ -51,17 +48,13 @@ def ocr_server(recording_server: RecordingServer) -> RecordingServer:
     return recording_server
 
 
-def call_ocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
-    return call_native_ocr(server, **kwargs)
-
-
 def assert_native_request(server: RecordingServer) -> None:
     assert len(server.requests) == 1
     assert not server.requests[0].headers.get("user-agent", "").startswith("python-httpx")
 
 
 def test_native_ocr_sends_model_and_document_to_mistral_ocr_path(ocr_server: RecordingServer) -> None:
-    response: Final = call_ocr(ocr_server)
+    response: Final = call_native_ocr(ocr_server)
 
     assert response.pages[0].markdown == "native OCR response"
     assert_native_request(ocr_server)
@@ -87,14 +80,14 @@ def test_native_ocr_prepares_file_document_like_python(ocr_server: RecordingServ
 
 
 def test_native_ocr_sends_pages_and_image_options(ocr_server: RecordingServer) -> None:
-    call_ocr(ocr_server, pages=[0, 2], include_image_base64=True)
+    call_native_ocr(ocr_server, pages=[0, 2], include_image_base64=True)
 
     assert ocr_server.requests[0].body["pages"] == [0, 2]
     assert ocr_server.requests[0].body["include_image_base64"] is True
 
 
 def test_native_ocr_merges_custom_headers_with_authorization(ocr_server: RecordingServer) -> None:
-    call_ocr(ocr_server, extra_headers={"x-trace-id": "trace-1"})
+    call_native_ocr(ocr_server, extra_headers={"x-trace-id": "trace-1"})
 
     assert ocr_server.requests[0].headers["authorization"] == "Bearer test-key"
     assert ocr_server.requests[0].headers["x-trace-id"] == "trace-1"
@@ -115,7 +108,7 @@ def test_native_mistral_ocr_prefers_explicit_api_key_over_environment(
 ) -> None:
     monkeypatch.setenv("MISTRAL_API_KEY", "environment-key")
 
-    call_ocr(ocr_server)
+    call_native_ocr(ocr_server)
 
     assert ocr_server.requests[0].headers["authorization"] == "Bearer test-key"
 
@@ -149,7 +142,7 @@ def test_native_vertex_ocr_builds_path_from_project_and_location(ocr_server: Rec
 
 
 def test_native_ocr_normalizes_provider_response_model_and_usage(ocr_server: RecordingServer) -> None:
-    response: Final = call_ocr(ocr_server)
+    response: Final = call_native_ocr(ocr_server)
 
     assert isinstance(response, OCRResponse)
     assert response.model == "mistral-ocr-latest"
@@ -160,7 +153,7 @@ def test_native_ocr_maps_provider_400_without_exposing_response_body(ocr_server:
     ocr_server.enqueue(ResponseSpec(body={"message": "invalid OCR request"}, status=400))
 
     with pytest.raises(litellm.BadRequestError) as caught:
-        call_ocr(ocr_server)
+        call_native_ocr(ocr_server)
 
     assert caught.value.status_code == 400
     assert caught.value.model == "mistral-ocr-latest"
@@ -172,14 +165,13 @@ def test_native_ocr_raises_transport_error_when_request_exceeds_timeout(ocr_serv
     ocr_server.enqueue(ResponseSpec(body=OCR_RESPONSE, delay=0.2))
 
     with pytest.raises(RuntimeError, match="OCR transport failed"):
-        call_ocr(ocr_server, timeout=0.01)
+        call_native_ocr(ocr_server, timeout=0.01)
 
     assert len(ocr_server.requests) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("backend", ["python", "rust"], ids=["python-backend", "rust-backend"])
 @pytest.mark.parametrize(
     "credentials, expected_token, expected_calls",
     [
@@ -189,16 +181,14 @@ def test_native_ocr_raises_transport_error_when_request_exceeds_timeout(ocr_serv
     ],
     ids=["api-key-skips-provider", "provider-overrides-static-token", "header-overrides-provider"],
 )
-async def test_public_azure_ocr_applies_same_credential_precedence_on_python_and_rust(
+async def test_native_azure_ocr_applies_python_credential_precedence(
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
     asynchronous: bool,
-    backend: str,
     credentials: dict[str, object],
     expected_token: str,
     expected_calls: int,
 ) -> None:
-    litellm.rust(backend == "rust")
     calls: Final = []
 
     def token_provider() -> str:
@@ -212,9 +202,9 @@ async def test_public_azure_ocr_applies_same_credential_precedence_on_python_and
         **credentials,
     }
     response: Final = (
-        await call_aocr(ocr_server, **arguments) if asynchronous else call_public_ocr(ocr_server, **arguments)
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     )
-    assert has_rust_response_marker(response) == (backend == "rust")
+    assert response.pages[0].markdown == "native OCR response"
     assert len(calls) == expected_calls
     assert len(ocr_server.requests) == 1
     assert ocr_server.requests[0].headers["authorization"] == f"Bearer {expected_token}"
@@ -222,7 +212,7 @@ async def test_public_azure_ocr_applies_same_credential_precedence_on_python_and
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_public_azure_ocr_calls_token_provider_for_each_request(
+async def test_native_azure_ocr_calls_token_provider_for_each_request(
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
     asynchronous: bool,
@@ -241,9 +231,11 @@ async def test_public_azure_ocr_calls_token_provider_for_each_request(
             "azure_ad_token_provider": token_provider,
         }
         response: Final = (
-            await call_aocr(ocr_server, **arguments) if asynchronous else call_public_ocr(ocr_server, **arguments)
+            await call_native_aocr(ocr_server, **arguments)
+            if asynchronous
+            else call_native_ocr(ocr_server, **arguments)
         )
-        assert has_rust_response_marker(response)
+        assert response.pages[0].markdown == "native OCR response"
     assert len(calls) == 2
     assert [request.headers["authorization"] for request in ocr_server.requests] == [
         "Bearer callback-1",
@@ -257,20 +249,17 @@ class TokenAbort(BaseException):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("backend", ["python", "rust"], ids=["python-backend", "rust-backend"])
 @pytest.mark.parametrize(
     "failure",
     ["non_string", "type_error", "ordinary", "abort"],
     ids=["non-string-result", "type-error", "value-error", "base-exception"],
 )
-async def test_public_azure_ocr_token_provider_failure_prevents_pre_call_callback_and_request(
+async def test_native_azure_ocr_token_provider_failure_prevents_pre_call_callback_and_request(
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
     asynchronous: bool,
-    backend: str,
     failure: str,
 ) -> None:
-    litellm.rust(backend == "rust")
     ocr_server.expected_requests = 0
     calls: Final = []
     recorder: Final = RecordingLogger()
@@ -294,7 +283,7 @@ async def test_public_azure_ocr_token_provider_failure_prevents_pre_call_callbac
     }
     expected: Final = TokenAbort if failure == "abort" else litellm.APIConnectionError
     with pytest.raises(expected) as caught:
-        await call_aocr(ocr_server, **arguments) if asynchronous else call_public_ocr(ocr_server, **arguments)
+        await call_native_aocr(ocr_server, **arguments) if asynchronous else call_native_ocr(ocr_server, **arguments)
     assert calls == ["token"]
     assert ocr_server.requests == []
     assert "log_pre_api_call" not in recorder.names
@@ -346,13 +335,10 @@ def test_native_azure_ocr_rejects_unsupported_configuration_before_token_or_call
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ["python", "rust"], ids=["python-backend", "rust-backend"])
-async def test_public_azure_ocr_validates_endpoint_before_calling_token_provider(
+async def test_native_azure_ocr_validates_endpoint_before_calling_token_provider(
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
-    backend: str,
 ) -> None:
-    litellm.rust(backend == "rust")
     ocr_server.expected_requests = 0
     calls: Final = []
 
@@ -361,7 +347,7 @@ async def test_public_azure_ocr_validates_endpoint_before_calling_token_provider
         return "unused"
 
     with pytest.raises(litellm.APIConnectionError, match="Missing Azure AI API Base"):
-        await call_aocr(
+        await call_native_aocr(
             ocr_server,
             model="azure_ai/mistral-ocr-latest",
             api_key=None,
@@ -373,20 +359,17 @@ async def test_public_azure_ocr_validates_endpoint_before_calling_token_provider
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ["python", "rust"], ids=["python-backend", "rust-backend"])
-async def test_public_azure_ocr_does_not_fall_back_to_static_token_after_empty_provider_result(
+async def test_native_azure_ocr_does_not_fall_back_to_static_token_after_empty_provider_result(
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
-    backend: str,
 ) -> None:
-    litellm.rust(backend == "rust")
     ocr_server.expected_requests = 0
 
     def provider() -> str:
         return ""
 
     with pytest.raises(litellm.APIConnectionError, match="Missing Azure AI credentials"):
-        await call_aocr(
+        await call_native_aocr(
             ocr_server,
             model="azure_ai/mistral-ocr-latest",
             api_key=None,
@@ -397,13 +380,10 @@ async def test_public_azure_ocr_does_not_fall_back_to_static_token_after_empty_p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ["python", "rust"], ids=["python-backend", "rust-backend"])
-async def test_public_azure_ocr_ignores_falsey_token_provider_and_uses_static_token(
+async def test_native_azure_ocr_ignores_falsey_token_provider_and_uses_static_token(
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
-    backend: str,
 ) -> None:
-    litellm.rust(backend == "rust")
     calls: Final = []
 
     class Provider:
@@ -414,26 +394,23 @@ async def test_public_azure_ocr_ignores_falsey_token_provider_and_uses_static_to
             calls.append("token")
             return "unused"
 
-    response: Final = await call_aocr(
+    response: Final = await call_native_aocr(
         ocr_server,
         model="azure_ai/mistral-ocr-latest",
         api_key=None,
         azure_ad_token="static-token",
         azure_ad_token_provider=Provider(),
     )
-    assert has_rust_response_marker(response) == (backend == "rust")
+    assert response.pages[0].markdown == "native OCR response"
     assert calls == []
     assert ocr_server.requests[0].headers["authorization"] == "Bearer static-token"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ["python", "rust"], ids=["python-backend", "rust-backend"])
-async def test_public_azure_ocr_rejects_coroutine_returned_by_sync_token_provider(
+async def test_native_azure_ocr_rejects_coroutine_returned_by_sync_token_provider(
     ocr_server: RecordingServer,
     isolated_azure_auth: None,
-    backend: str,
 ) -> None:
-    litellm.rust(backend == "rust")
     ocr_server.expected_requests = 0
     calls: Final = []
 
@@ -448,7 +425,7 @@ async def test_public_azure_ocr_rejects_coroutine_returned_by_sync_token_provide
 
     try:
         with pytest.raises(litellm.APIConnectionError, match="Azure AD token must be a string"):
-            await call_aocr(
+            await call_native_aocr(
                 ocr_server, model="azure_ai/mistral-ocr-latest", api_key=None, azure_ad_token_provider=provider
             )
     finally:
