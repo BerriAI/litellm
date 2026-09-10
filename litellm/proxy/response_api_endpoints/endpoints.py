@@ -62,6 +62,20 @@ class BackgroundResponseStore(Protocol):
     ) -> None: ...
 
 
+_STORABLE_BACKGROUND_STATUSES: Final[frozenset[str]] = frozenset({"queued", "in_progress"})
+
+
+def should_store_background_response(data: Mapping[str, object], response: object) -> bool:
+    """Whether a create just produced a generation the cost poller will have to bill later.
+
+    Only a background create leaves usage unreported, and only while the provider has not
+    finished it; anything already terminal reported its usage on this very call.
+    """
+    if not data.get("background") or not isinstance(response, ResponsesAPIResponse):
+        return False
+    return response.status in _STORABLE_BACKGROUND_STATUSES
+
+
 async def store_background_response_object(
     response: ResponsesAPIResponse,
     managed_files_obj: BackgroundResponseStore,
@@ -418,12 +432,7 @@ async def responses_api(
             version=version,
         )
 
-        # Store in managed objects table if background mode is enabled
-        if (
-            data.get("background")
-            and isinstance(response, ResponsesAPIResponse)
-            and response.status in ("queued", "in_progress")
-        ):
+        if should_store_background_response(data, response):
             managed_files_obj: Final = cast(
                 BackgroundResponseStore | None,
                 proxy_logging_obj.get_proxy_hook("managed_files"),
