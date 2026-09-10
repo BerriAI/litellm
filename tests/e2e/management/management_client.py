@@ -43,6 +43,9 @@ from models import (
     KeyResetSpendBody,
     KeyResetSpendResponse,
     KeyUpdateBody,
+    McpServerCreateBody,
+    McpServerRow,
+    McpServerUpdateBody,
     ModelDeleteBody,
     OrgDeleteBody,
     OrgInfoParams,
@@ -535,6 +538,38 @@ class ManagementClient:
                     response_type=TagListResponse,
                 )
             ).root
+        )
+
+    def create_mcp_server(self, body: McpServerCreateBody) -> McpServerRow:
+        return unwrap(
+            self.proxy.transport.post(
+                "/v1/mcp/server",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=McpServerRow,
+            )
+        )
+
+    def update_mcp_server(self, body: McpServerUpdateBody) -> McpServerRow:
+        """PUT /v1/mcp/server, the call behind the dashboard's Save Changes: a partial
+        update where a field left unset keeps its stored value and None clears it."""
+        return unwrap(
+            self.proxy.transport.put(
+                "/v1/mcp/server",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=McpServerRow,
+            )
+        )
+
+    def delete_mcp_server(self, server_id: str) -> Result[NoBody]:
+        """DELETE /v1/mcp/server/{server_id}. Returns the outcome so the act phase can
+        unwrap it while a deferred teardown can ignore an already-deleted server."""
+        return self.proxy.transport.delete(
+            f"/v1/mcp/server/{server_id}",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
         )
 
     def chat_status(self, key: str, model: str, content: str) -> StreamingResponse:

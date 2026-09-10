@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import MCPToolArgumentsForm, { MCPToolArgumentsFormRef } from "./MCPToolArgumentsForm";
@@ -26,6 +26,118 @@ const submitError = async (ref: React.RefObject<MCPToolArgumentsFormRef | null>)
 };
 
 describe("MCPToolArgumentsForm", () => {
+  it("keeps dotted arguments separate from a same-prefix object and converts their values", async () => {
+    const ref = renderForm({
+      type: "object",
+      properties: {
+        "filter.category": { type: "string" },
+        filter: { type: "object" },
+        "page.limit": { type: "integer" },
+        query: { type: "string" },
+      },
+      required: ["filter.category"],
+    });
+
+    fireEvent.change(screen.getByRole("textbox", { name: "filter.category *" }), {
+      target: { value: "invoices" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "filter" }), {
+      target: { value: '{"category":"receipts","metadata":{"region":"eu"}}' },
+    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "page.limit" }), { target: { value: "7" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "query" }), { target: { value: "September" } });
+
+    const expected = {
+      "filter.category": "invoices",
+      filter: { category: "receipts", metadata: { region: "eu" } },
+      "page.limit": 7,
+      query: "September",
+    };
+    await expect(submit(ref)).resolves.toEqual(expected);
+  });
+
+  it("shows required validation on the literal dotted field and accepts a correction", async () => {
+    const ref = renderForm({
+      type: "object",
+      properties: { "filter.category": { type: "string" } },
+      required: ["filter.category"],
+    });
+
+    expect(await submitError(ref)).toEqual({
+      errorFields: [{ name: ["filter.category"], errors: ["Please enter filter.category"] }],
+    });
+    expect(await screen.findByText("Please enter filter.category")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "filter.category *" })).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "filter.category *" }), {
+      target: { value: "invoices" },
+    });
+    await expect(submit(ref)).resolves.toEqual({ "filter.category": "invoices" });
+  });
+
+  it("validates JSON for dotted arguments inside params and preserves their literal names", async () => {
+    const ref = renderForm({
+      type: "object",
+      properties: {
+        params: {
+          type: "object",
+          properties: { "filter.options": { type: "object" } },
+          required: ["filter.options"],
+        },
+      },
+      required: [],
+    });
+    const field = screen.getByRole("textbox", { name: "filter.options *" });
+    fireEvent.change(field, { target: { value: "invalid" } });
+
+    expect(await submitError(ref)).toEqual({
+      errorFields: [{ name: ["filter.options"], errors: ["Invalid JSON"] }],
+    });
+    expect(await screen.findByText("Invalid JSON")).toBeInTheDocument();
+
+    fireEvent.change(field, { target: { value: '{"region":"eu"}' } });
+    await expect(submit(ref)).resolves.toEqual({ params: { "filter.options": { region: "eu" } } });
+  });
+
+  it("resets dotted defaults and positional values when the selected tool changes", async () => {
+    const ref = React.createRef<MCPToolArgumentsFormRef>();
+    const { rerender } = render(
+      <MCPToolArgumentsForm
+        ref={ref}
+        tool={toolWith({
+          type: "object",
+          properties: { "filter.category": { type: "string", default: "invoices" } },
+          required: [],
+        })}
+      />,
+    );
+    expect(screen.getByRole("textbox", { name: "filter.category" })).toHaveValue("invoices");
+    await expect(submit(ref)).resolves.toEqual({ "filter.category": "invoices" });
+    fireEvent.change(screen.getByRole("textbox", { name: "filter.category" }), {
+      target: { value: "edited" },
+    });
+    await expect(submit(ref)).resolves.toEqual({ "filter.category": "edited" });
+
+    rerender(
+      <MCPToolArgumentsForm
+        ref={ref}
+        tool={{
+          ...toolWith({
+            type: "object",
+            properties: {
+              query: { type: "string", default: "new tool" },
+              "filter.category": { type: "string", default: "receipts" },
+            },
+            required: [],
+          }),
+          name: "another_tool",
+        }}
+      />,
+    );
+    expect(screen.getByRole("textbox", { name: "filter.category" })).toHaveValue("receipts");
+    await expect(submit(ref)).resolves.toEqual({ query: "new tool", "filter.category": "receipts" });
+  });
+
   it("returns typed values for a string, integer, number and boolean field", async () => {
     const user = userEvent.setup();
     const ref = renderForm({

@@ -82,6 +82,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.resolvers import CredentialRef, Principal
 from litellm.proxy.auth.resolvers.store import IdentityStore
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.team_grants import team_grants
 from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -1476,24 +1477,16 @@ async def _user_api_key_auth_builder(
                             user_id=user_id,
                             user_email=user_email,
                             team_id=team_id,
-                            team_alias=(team_object.team_alias if team_object is not None else None),
-                            team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
-                            team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
-                            team_models=(team_object.models if team_object is not None else []),
-                            team_metadata=(team_object.metadata if team_object is not None else None),
                             org_id=org_id,
                             end_user_id=end_user_id,
                             parent_otel_span=parent_otel_span,
                             jwt_claims=jwt_claims,
+                            **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
                         )
 
                     valid_token = UserAPIKeyAuth(
                         api_key=None,
                         team_id=team_id,
-                        team_alias=(team_object.team_alias if team_object is not None else None),
-                        team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
-                        team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
-                        team_models=(team_object.models if team_object is not None else []),
                         user_role=(
                             LitellmUserRoles(user_object.user_role)
                             if user_object is not None and user_object.user_role is not None
@@ -1507,17 +1500,8 @@ async def _user_api_key_auth_builder(
                         user_tpm_limit=(user_object.tpm_limit if user_object is not None else None),
                         user_rpm_limit=(user_object.rpm_limit if user_object is not None else None),
                         user_model_max_budget=(user_object.model_max_budget if user_object is not None else None),
-                        team_member_rpm_limit=(
-                            team_membership.safe_get_team_member_rpm_limit() if team_membership is not None else None
-                        ),
-                        team_member_tpm_limit=(
-                            team_membership.safe_get_team_member_tpm_limit() if team_membership is not None else None
-                        ),
-                        team_metadata=(team_object.metadata if team_object is not None else None),
                         jwt_claims=jwt_claims,
-                    )
-                    valid_token.team_object_permission = (
-                        team_object.object_permission if team_object is not None else None
+                        **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
                     )
 
                     # AUTO_REGISTER deferred from _resolve_jwt_to_virtual_key.

@@ -68,7 +68,7 @@ proxy = [
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
     "litellm-proxy-extras==0.4.95",
-    "litellm-enterprise==0.1.65",
+    "litellm-enterprise==0.1.66",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
