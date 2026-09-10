@@ -2246,7 +2246,7 @@ async def test_get_api_key_metadata_resolves_cli_session_keys_from_the_key_itsel
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.query_raw = AsyncMock(side_effect=AssertionError("no reverse-hash or spend-log scan expected"))
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(
-        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com", teams=["team-a", "team-b"])]
+        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com", teams=["team-a"])]
     )
 
     result = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={"cli-session-alice"})

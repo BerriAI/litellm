@@ -153,7 +153,7 @@ async def _reverse_hash_key_metadata(
 @dataclass(frozen=True, slots=True)
 class _UserDetails:
     email: str | None
-    first_team: str | None
+    only_team: str | None
 
 
 _EMPTY_USER_DETAILS: Final[Mapping[str, _UserDetails]] = MappingProxyType({})
@@ -178,12 +178,19 @@ async def _details_for_user_ids(
         {
             user.user_id: _UserDetails(
                 email=getattr(user, "user_email", None) or None,
-                first_team=next(iter(getattr(user, "teams", None) or ()), None),
+                only_team=_only_team(getattr(user, "teams", None)),
             )
             for user in users
             if getattr(user, "user_id", None)
         }
     )
+
+
+def _only_team(teams: object) -> str | None:
+    if not isinstance(teams, list) or len(teams) != 1:
+        return None
+    team: Final = teams[0]
+    return team if isinstance(team, str) and team else None
 
 
 def _is_cli_session_key(api_key: str) -> bool:
@@ -198,7 +205,7 @@ def _meta_with_user_details(
         return meta
     user: Final = details[user_id]
     email: Final = meta.get("user_email") or user.email
-    team_id: Final = meta.get("team_id") or (user.first_team if _is_cli_session_key(api_key) else None)
+    team_id: Final = meta.get("team_id") or (user.only_team if _is_cli_session_key(api_key) else None)
     updated: Final[KeyMetadataDict] = {
         **meta,
         **({"user_email": email} if email else {}),
@@ -213,7 +220,8 @@ async def attach_user_details(
 ) -> Mapping[str, KeyMetadataDict]:
     """
     Fill user_email from the owner's user row, and for a cli-session key also
-    the team the CLI login attaches to that user (its first team).
+    the team the CLI login attaches on its own: the user's only team. A user in
+    several teams picks one per login, so the alias claims none for them.
     """
     needing_details: Final = frozenset(
         user_id
