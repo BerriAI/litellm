@@ -1362,6 +1362,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
 
+    from litellm.proxy.realtime_endpoints.call_supervision import CALL_SUPERVISORS
+
+    await CALL_SUPERVISORS.shutdown()
     await _flush_spend_logs_queue_on_shutdown()
 
     await proxy_config.stop_config_sync_subscriber()

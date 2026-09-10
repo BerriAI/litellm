@@ -117,6 +117,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
+        account_usage: bool = True,
         **kwargs: object,
     ):
         import websockets
@@ -172,6 +173,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                         model if (query_params or {}).get("intent") == "transcription" else None
                     ),
                     event_normalizer=self._make_event_normalizer(),
+                    account_usage=account_usage,
                 )
                 await realtime_streaming.bidirectional_forward()
 

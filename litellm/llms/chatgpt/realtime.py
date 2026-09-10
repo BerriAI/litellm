@@ -1,10 +1,12 @@
 from collections.abc import Mapping
+from enum import Enum, auto
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from httpx import URL
 from pydantic import TypeAdapter
 
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.openai.realtime.handler import OpenAIRealtime
 from litellm.llms.openai.realtime.http_transformation import OpenAIRealtimeHTTPConfig
 from litellm.types.realtime import RealtimeQueryParams
@@ -15,12 +17,35 @@ from .authenticator import Authenticator
 from .common_utils import without_oauth_identity_headers
 from .responses.transformation import ChatGPTResponsesAPIConfig
 
+if TYPE_CHECKING:
+    from websockets.asyncio.client import ClientConnection
+
+
+class CallAccounting(Enum):
+    SUPERVISED = auto()
+
+
+def accounts_for_call_usage(params: GenericLiteLLMParams) -> bool:
+    return getattr(params, "chatgpt_call_accounting", None) is not CallAccounting.SUPERVISED
+
 
 def configured_realtime_headers(headers: Mapping[str, object] | None) -> Mapping[str, str]:
     validated: Final = TypeAdapter(Mapping[str, str]).validate_python(
         without_oauth_identity_headers(headers or MappingProxyType({}))
     )
     return MappingProxyType({key.lower(): value for key, value in validated.items()})
+
+
+def configured_realtime_query(params: GenericLiteLLMParams) -> Mapping[str, str]:
+    inbound: Final = TypeAdapter(Mapping[str, str]).validate_python(
+        getattr(params, "chatgpt_realtime_client_query", None) or MappingProxyType({})
+    )
+    configured: Final = TypeAdapter(Mapping[str, str]).validate_python(
+        getattr(params, "extra_query", None) or MappingProxyType({})
+    )
+    return MappingProxyType(
+        {**{key: value for key, value in inbound.items() if key in ("intent", "architecture")}, **configured}
+    )
 
 
 def realtime_call_headers(params: GenericLiteLLMParams) -> dict[str, str]:  # mutable-ok: HTTP handler header contract
@@ -72,6 +97,40 @@ def realtime_endpoint(model: str) -> str:
 
 
 class ChatGPTRealtime(OpenAIRealtime):
+    async def open_call_connection(self, model: str, api_base: str) -> "ClientConnection":
+        import websockets
+
+        url: Final = self._construct_url(api_base, RealtimeQueryParams(model=model))
+        return await websockets.connect(
+            url,
+            additional_headers=self._profile_headers,
+            max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+            ssl=self._get_ssl_config(url),
+            open_timeout=20,
+        )
+
+    async def close_call(self, connection: "ClientConnection", model: str, api_base: str) -> None:
+        if realtime_endpoint(model) == "live":
+            await connection.send('{"type":"session.close"}')
+            return
+        await self.hangup_call(api_base)
+
+    async def hangup_call(self, api_base: str) -> None:
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        base: Final = URL(api_base)
+        url: Final = base.copy_with(
+            scheme="https" if base.scheme in ("https", "wss") else "http",
+            path=f"{base.path.rstrip('/')}/realtime/calls/{self._call_id}/hangup",
+            params=tuple((key, value) for key, value in self._extra_query.items() if key not in ("model", "call_id")),
+        )
+        client: Final = AsyncHTTPHandler()
+        try:
+            response: Final = await client.post(str(url), headers=self._profile_headers, data=b"", timeout=10)
+            response.raise_for_status()
+        finally:
+            await client.close()
+
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:
         return api_base or Authenticator.get_api_base(default_base="https://api.openai.com/v1")
@@ -85,6 +144,7 @@ class ChatGPTRealtime(OpenAIRealtime):
         super().__init__()
         self._profile_headers = realtime_headers(params, headers, extra_headers)
         self._call_id = TypeAdapter(str | None).validate_python(getattr(params, "chatgpt_realtime_call_id", None))
+        self._extra_query = configured_realtime_query(params)
 
     def _get_additional_headers(
         self, api_key: str, *, openai_beta_realtime: bool = False
@@ -98,13 +158,16 @@ class ChatGPTRealtime(OpenAIRealtime):
         base: Final = URL(api_base)
         endpoint: Final = realtime_endpoint(query_params.get("model", ""))
         if self._call_id:
+            gateway_query: Final = tuple(
+                (key, value) for key, value in self._extra_query.items() if key not in ("model", "call_id")
+            )
             return str(
                 base.copy_with(
                     scheme="wss" if base.scheme in ("https", "wss") else "ws",
                     path=f"{base.path.rstrip('/')}/{endpoint}/{self._call_id}"
                     if endpoint == "live"
                     else f"{base.path.rstrip('/')}/realtime",
-                    params=() if endpoint == "live" else (("call_id", self._call_id),),
+                    params=gateway_query + (() if endpoint == "live" else (("call_id", self._call_id),)),
                 )
             )
         return str(
@@ -138,9 +201,7 @@ class ChatGPTRealtimeHTTPConfig(OpenAIRealtimeHTTPConfig):
         return "chatgpt-oauth"
 
     def get_realtime_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
-        query: Final = TypeAdapter(Mapping[str, str]).validate_python(
-            getattr(self._params, "extra_query", None) or MappingProxyType({})
-        )
+        query: Final = configured_realtime_query(self._params)
         return str(URL(f"{self.get_api_base(api_base).rstrip('/')}/realtime/calls", params=query))
 
     def get_realtime_calls_headers(

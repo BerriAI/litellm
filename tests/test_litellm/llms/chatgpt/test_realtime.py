@@ -67,6 +67,7 @@ async def test_routed_call_preserves_deployment_gateway_headers(inbound_headers,
                     "model": "chatgpt/gpt-live-1-codex",
                     "api_base": "https://voice.example/backend-api/codex",
                     "extra_headers": {"x-gateway-route": "configured"},
+                    "extra_query": {"gateway_token": "configured", "intent": "pinned-intent"},
                 },
             }
         ],
@@ -74,8 +75,17 @@ async def test_routed_call_preserves_deployment_gateway_headers(inbound_headers,
     )
     offer = CodexRealtimeOffer(sdp="v=0\r\n", session={"model": "voice-gateway"})
     try:
-        response = await router.arealtime_calls(**build_call_request(offer, {}, inbound_headers), client=client)
+        response = await router.arealtime_calls(
+            **build_call_request(offer, {"intent": "quicksilver", "architecture": "avas"}, inbound_headers),
+            client=client,
+        )
         assert requests[0].headers.get("x-gateway-route") == "configured"
+        assert dict(requests[0].url.params) == {
+            "gateway_token": "configured",
+            "intent": "pinned-intent",
+            "architecture": "avas",
+        }
+        assert response.extensions["chatgpt_realtime"]["extra_query"] == dict(requests[0].url.params)
         assert response.extensions["chatgpt_realtime"]["extra_headers"]["x-gateway-route"] == "configured"
         for name, value in inbound_headers.items():
             assert requests[0].headers[name] == value
@@ -137,6 +147,7 @@ async def test_chatgpt_call_keeps_oauth_and_frameless_session(chatgpt_tokens, ap
         sdp_body=b"v=0\r\n",
         session={"model": "chatgpt/gpt-live-1-codex", "audio": {"output": {"voice": "sol"}}},
         extra_query={"intent": "quicksilver", "architecture": "avas"},
+        chatgpt_realtime_client_query={"intent": "untrusted-override", "architecture": "avas", "untrusted": "bad"},
         extra_headers={
             "openai-alpha": "quicksilver=v2",
             "x-gateway-route": "voice",
@@ -146,9 +157,13 @@ async def test_chatgpt_call_keeps_oauth_and_frameless_session(chatgpt_tokens, ap
         client=client,
     )
     assert response.extensions["chatgpt_realtime"]["api_base"] == (api_base or "https://api.openai.com/v1")
-    assert response.extensions["chatgpt_realtime"]["extra_headers"] == {"openai-alpha": "quicksilver=v2", "x-gateway-route": "voice"}
+    assert response.extensions["chatgpt_realtime"]["extra_headers"] == {
+        "openai-alpha": "quicksilver=v2",
+        "x-gateway-route": "voice",
+    }
     assert requests[0].url.host == ("voice.example" if api_base else "chatgpt.com")
     assert response.status_code == 201
+    assert response.extensions["chatgpt_realtime"]["extra_query"] == {"intent": "quicksilver", "architecture": "avas"}
     assert requests[0].url.path == "/backend-api/codex/realtime/calls"
     assert requests[0].url.params["architecture"] == "avas"
     assert requests[0].headers["authorization"] == "Bearer test-token-" + "default"
@@ -244,3 +259,52 @@ def test_realtime_routes_use_configured_gateway(monkeypatch, env_name, api_base,
     assert handler._construct_url(handler.get_api_base(api_base), {"model": "gpt-realtime-1.5"}) == (
         expected.replace("https://", "wss://") + "/realtime?model=gpt-realtime-1.5"
     )
+
+
+@pytest.mark.parametrize("model,endpoint", [("gpt-live-1-codex", "live"), ("gpt-realtime-1.5", "realtime")])
+def test_sideband_restores_gateway_query_without_overriding_call(model, endpoint, chatgpt_tokens):
+    handler = ChatGPTRealtime(
+        GenericLiteLLMParams(
+            chatgpt_realtime_call_id="rtc_selected",
+            extra_query={"gateway_token": "opaque +/& value", "model": "other", "call_id": "rtc_other"},
+        ),
+        {},
+    )
+    url = httpx.URL(handler._construct_url("https://gateway.example/v1", {"model": model}))
+    assert url.params["gateway_token"] == "opaque +/& value"
+    assert "model" not in url.params
+    if endpoint == "live":
+        assert url.path == "/v1/live/rtc_selected"
+        assert "call_id" not in url.params
+    else:
+        assert url.path == "/v1/realtime"
+        assert url.params["call_id"] == "rtc_selected"
+
+
+def test_client_cannot_forge_supervised_call_accounting(chatgpt_tokens):
+    from litellm.llms.chatgpt.realtime import CallAccounting, accounts_for_call_usage
+
+    assert accounts_for_call_usage(GenericLiteLLMParams(chatgpt_call_accounting={"supervised": True}))
+    assert accounts_for_call_usage(GenericLiteLLMParams(chatgpt_call_accounting="supervised"))
+    assert not accounts_for_call_usage(GenericLiteLLMParams(chatgpt_call_accounting=CallAccounting.SUPERVISED))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-live-1-codex", "gpt-realtime-1.5"])
+async def test_supervisor_connection_preserves_call_routing(model, chatgpt_tokens):
+    handler = ChatGPTRealtime(
+        GenericLiteLLMParams(
+            chatgpt_token_dir=chatgpt_tokens,
+            chatgpt_realtime_call_id="rtc_owner",
+            extra_query={"gateway_token": "a+b&c"},
+        ),
+        {"openai-alpha": "quicksilver=v2"},
+        {"x-gateway-token": "configured"},
+    )
+    connection = AsyncMock()
+    with patch("websockets.connect", AsyncMock(return_value=connection)) as connect:
+        assert await handler.open_call_connection(model, "https://gateway.example/v1") is connection
+    url = httpx.URL(connect.call_args.args[0])
+    assert url.params["gateway_token"] == "a+b&c"
+    assert connect.call_args.kwargs["additional_headers"]["x-gateway-token"] == "configured"
+    assert url.path.endswith("/rtc_owner") if model == "gpt-live-1-codex" else url.params["call_id"] == "rtc_owner"

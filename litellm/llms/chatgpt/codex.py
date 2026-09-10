@@ -17,17 +17,22 @@ class CodexRealtimeOffer(BaseModel):
 class CodexRealtimeCall(BaseModel):
     call_id: str = Field(pattern=r"^rtc_[A-Za-z0-9_-]+$")
     model: str
+    model_id: str | None = None
     alias: str
     api_base: str | None = None
     extra_headers: Mapping[str, str] | None = None
+    extra_query: Mapping[str, str] | None = None
+    usage_supervised: bool = False
     owner: str
     expires_at: float
 
 
 class ChatGPTCallRouting(BaseModel):
     model: str
+    model_id: str | None = None
     api_base: str | None = None
     extra_headers: Mapping[str, str] | None = None
+    extra_query: Mapping[str, str] | None = None
 
 
 class CodexSidebandRequest(TypedDict):
@@ -36,6 +41,7 @@ class CodexSidebandRequest(TypedDict):
     chatgpt_realtime_call_id: ReadOnly[str]
     query_params: ReadOnly[RealtimeQueryParams]
     extra_headers: ReadOnly[Mapping[str, str] | None]
+    extra_query: ReadOnly[Mapping[str, str] | None]
 
 
 def build_call_request(
@@ -46,7 +52,7 @@ def build_call_request(
         "sdp_body": offer.sdp.encode(),
         "session": offer.session.model_dump(exclude_none=True),
         "openai_ephemeral_key": "",
-        "extra_query": {  # mutable-ok: router request parameters
+        "chatgpt_realtime_client_query": {  # mutable-ok: router request parameters
             key: value for key, value in query.items() if key in ("intent", "architecture")
         },
         "chatgpt_realtime_client_headers": {  # mutable-ok: router request headers
@@ -66,11 +72,13 @@ def parse_call_response(response: httpx.Response, alias: str, owner: str, expire
     return CodexRealtimeCall(
         call_id=call_id,
         model=routing.model,
+        model_id=routing.model_id,
         alias=alias,
         owner=owner,
         expires_at=expires_at,
         api_base=routing.api_base,
         extra_headers=routing.extra_headers,
+        extra_query=routing.extra_query,
     )
 
 
@@ -81,4 +89,5 @@ def build_sideband_request(call: CodexRealtimeCall) -> CodexSidebandRequest:
         chatgpt_realtime_call_id=call.call_id,
         query_params=RealtimeQueryParams(model=call.model),
         extra_headers=call.extra_headers,
+        extra_query=call.extra_query,
     )

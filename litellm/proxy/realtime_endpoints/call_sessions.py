@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import time
+from contextlib import AsyncExitStack
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -11,7 +12,7 @@ from starlette.types import Message
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY, RealTimeStreaming
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.chatgpt.codex import (
     CodexRealtimeCall,
@@ -20,7 +21,12 @@ from litellm.llms.chatgpt.codex import (
     build_sideband_request,
     parse_call_response,
 )
-from litellm.llms.chatgpt.realtime import configured_realtime_headers
+from litellm.llms.chatgpt.realtime import (
+    CallAccounting,
+    ChatGPTRealtime,
+    configured_realtime_headers,
+    realtime_endpoint,
+)
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import (
@@ -30,7 +36,126 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
+from litellm.proxy.spend_tracking.budget_reservation import (
+    invalidate_budget_reservation_counters,
+    release_or_invalidate_budget_reservation,
+)
+from litellm.types.router import GenericLiteLLMParams
+
+
+async def supervise_codex_call(request: Request, call: CodexRealtimeCall, auth: UserAPIKeyAuth) -> None:
+    from collections.abc import Mapping
+
+    from pydantic import TypeAdapter
+
+    import litellm
+    from litellm.proxy.realtime_endpoints.call_supervision import CALL_SUPERVISORS, CallSupervisor
+
+    async def receive() -> Message:
+        return {
+            "type": "http.request",
+            "body": json.dumps({"model": call.alias}).encode(),
+            "more_body": False,
+        }  # mutable-ok: ASGI message
+
+    async def send(_message: Message) -> None:
+        return None
+
+    supervision_owned = False  # rebind-ok: supervisor owns cleanup after construction
+    effective_handler: ChatGPTRealtime | None = None  # rebind-ok: reuse hook-enriched credentials for cleanup
+    sockets: Final = AsyncExitStack()
+    try:
+        observer_request: Final = Request({**request.scope}, receive=receive)  # mutable-ok: ASGI request scope
+        processed, logger = await process_codex_request(
+            observer_request,
+            {
+                **build_sideband_request(call),
+                "model": call.alias,
+            },  # mutable-ok: common request processing enriches metadata
+            auth,
+            call.alias,
+            "_arealtime",
+        )
+        pinned: Final = {  # mutable-ok: logging and provider parameter contract
+            **processed,
+            **build_sideband_request(call),
+            "extra_headers": {
+                **configured_realtime_headers(
+                    TypeAdapter(Mapping[str, object] | None).validate_python(processed.get("extra_headers"))
+                ),
+                **configured_realtime_headers(call.extra_headers),
+            },
+            "litellm_metadata": {
+                **TypeAdapter(Mapping[str, object]).validate_python(processed.get("litellm_metadata") or {}),
+                **(
+                    {"model_info": {**litellm.get_model_info(model=call.model_id), "id": call.model_id}}
+                    if call.model_id is not None
+                    else {}
+                ),
+            },
+        }
+        logger.update_from_kwargs(
+            kwargs=pinned,
+            model=call.model,
+            user=None,
+            optional_params={},  # mutable-ok: logging contract
+            litellm_params={
+                **logger.litellm_params,
+                "litellm_metadata": pinned["litellm_metadata"],
+                "arealtime": True,
+            },  # mutable-ok: logging contract
+            custom_llm_provider="chatgpt",
+        )
+        params: Final = GenericLiteLLMParams.model_validate(pinned)
+        handler: Final = ChatGPTRealtime(
+            params, request.headers, TypeAdapter(Mapping[str, object]).validate_python(pinned["extra_headers"])
+        )
+        effective_handler = handler
+        api_base: Final = ChatGPTRealtime.get_api_base(call.api_base)
+        connection: Final = await handler.open_call_connection(call.model, api_base)
+        sockets.push_async_callback(connection.close)
+
+        async def close_call() -> None:
+            await handler.close_call(connection, call.model, api_base)
+
+        frontend: Final = WebSocket(
+            {**request.scope, "type": "websocket"}, receive=receive, send=send
+        )  # mutable-ok: ASGI scope
+        stream: Final = RealTimeStreaming(frontend, connection, logger, model=call.model, user_api_key_dict=auth)
+        supervisor: Final = CallSupervisor(
+            connection,
+            stream,
+            logger,
+            auth,
+            close_call,
+            terminal_usage_required=realtime_endpoint(call.model) == "live",
+        )
+        supervision_owned = True
+        sockets.pop_all()
+        await CALL_SUPERVISORS.start(supervisor)
+    except BaseException:
+        if not supervision_owned:
+            try:
+                fallback_handler: Final = effective_handler or ChatGPTRealtime(
+                    GenericLiteLLMParams.model_validate(build_sideband_request(call)),
+                    request.headers,
+                    call.extra_headers,
+                )
+                await fallback_handler.hangup_call(ChatGPTRealtime.get_api_base(call.api_base))
+            except Exception:  # noqa: BLE001  # preserve original failure without logging provider credentials
+                verbose_proxy_logger.error("Realtime startup cleanup could not confirm upstream termination")
+                try:
+                    await invalidate_budget_reservation_counters(budget_reservation=auth.budget_reservation)
+                except Exception:  # noqa: BLE001  # cleanup errors must not replace the original startup failure
+                    verbose_proxy_logger.error("Realtime startup cleanup could not invalidate budget counters")
+            else:
+                await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)
+            finally:
+                try:
+                    await sockets.aclose()
+                except Exception:  # noqa: BLE001  # socket cleanup must preserve the original startup failure
+                    verbose_proxy_logger.error("Realtime startup cleanup could not close observer socket")
+        raise
 
 
 def encode_call(call: CodexRealtimeCall) -> str:
@@ -126,6 +251,7 @@ async def create_codex_realtime_call(request: Request) -> Response:
     owner_key: Final = (
         get_api_key_from_custom_header(request, custom_header) if isinstance(custom_header, str) else selected_key
     )
+    supervision_started = False  # rebind-ok: transfer reservation ownership only after supervision is established
     try:
         await can_key_call_resolved_model(
             model=model,
@@ -134,7 +260,10 @@ async def create_codex_realtime_call(request: Request) -> Response:
             llm_router=server.llm_router,
         )
         data: Final = build_call_request(offer, request.query_params, request.headers)
-        processed, _ = await process_codex_request(request, data, auth, model, "arealtime_calls")
+        signaling_auth: Final = auth.model_copy(
+            update={"budget_reservation": None}
+        )  # mutable-ok: Pydantic update contract
+        processed, _ = await process_codex_request(request, data, signaling_auth, model, "arealtime_calls")
         result: Final = await server.route_request(
             data=processed,
             route_type="arealtime_calls",
@@ -158,7 +287,12 @@ async def create_codex_realtime_call(request: Request) -> Response:
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
-        token: Final = encode_call(call)
+        supervised_call: Final = call.model_copy(
+            update={"usage_supervised": True}
+        )  # mutable-ok: Pydantic update contract
+        token: Final = encode_call(supervised_call)
+        supervision_started = True
+        await supervise_codex_call(request, supervised_call, auth)
         return Response(
             response.content,
             status_code=response.status_code,
@@ -166,7 +300,8 @@ async def create_codex_realtime_call(request: Request) -> Response:
             headers=MappingProxyType({"Location": f"/v1/realtime/calls/{token}"}),
         )
     finally:
-        await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)
+        if not supervision_started:
+            await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)
 
 
 async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAPIKeyAuth) -> None:
@@ -238,6 +373,7 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
                 ),
                 "websocket": websocket,
                 "user_api_key_dict": auth,
+                "chatgpt_call_accounting": CallAccounting.SUPERVISED if call.usage_supervised else None,
             }
         )
     finally:

@@ -309,13 +309,19 @@ async def arealtime_calls(
         api_version=litellm_params.api_version,
     )
     if custom_llm_provider == "chatgpt":
-        from litellm.llms.chatgpt.realtime import ChatGPTRealtime, configured_realtime_headers
+        from litellm.llms.chatgpt.realtime import (
+            ChatGPTRealtime,
+            configured_realtime_headers,
+            configured_realtime_query,
+        )
 
         response.extensions["chatgpt_realtime"] = MappingProxyType(
             {
                 "model": model_name,
+                "model_id": litellm_logging_obj.get_router_model_id(),
                 "api_base": ChatGPTRealtime.get_api_base(litellm_params.api_base),
                 "extra_headers": configured_realtime_headers(call_headers),
+                "extra_query": configured_realtime_query(litellm_params),
             }
         )
     return response
@@ -464,7 +470,7 @@ async def _arealtime(
             litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "chatgpt":
-        from litellm.llms.chatgpt.realtime import ChatGPTRealtime
+        from litellm.llms.chatgpt.realtime import ChatGPTRealtime, accounts_for_call_usage
 
         await ChatGPTRealtime(litellm_params, websocket.headers, headers).async_realtime(
             model=model,
@@ -476,6 +482,7 @@ async def _arealtime(
             query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
+            account_usage=accounts_for_call_usage(litellm_params),
         )
     elif _custom_llm_provider == "openai":
         api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or "https://api.openai.com/"

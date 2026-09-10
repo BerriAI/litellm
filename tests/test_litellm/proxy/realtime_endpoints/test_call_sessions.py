@@ -174,7 +174,9 @@ async def test_realtime_endpoint_rejects_untrusted_call_ids(monkeypatch, call_id
 @pytest.mark.parametrize("multipart", [False, True])
 @pytest.mark.parametrize("credential", ["authorization", "api-key", "subprotocol", "x-litellm-api-key", "custom"])
 @pytest.mark.parametrize("signaling_credential", ["authorization", "api-key", "x-litellm-api-key", "mixed"])
-async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch, multipart, credential, signaling_credential):
+async def test_offer_exchange_wraps_call_and_filters_client_headers(
+    monkeypatch, multipart, credential, signaling_credential
+):
     import json
     from unittest.mock import AsyncMock
 
@@ -188,11 +190,15 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-salt-for-codex-realtime")
     session = {"model": "voice-alias", "audio": {"output": {"voice": "sol"}}}
     if multipart:
-        body_request = httpx.Request("POST", "http://test/v1/realtime/calls", files={
-            "sdp": (None, "v=0\r\n"), "session": (None, json.dumps(session))
-        })
+        body_request = httpx.Request(
+            "POST",
+            "http://test/v1/realtime/calls",
+            files={"sdp": (None, "v=0\r\n"), "session": (None, json.dumps(session))},
+        )
     else:
-        body_request = httpx.Request("POST", "http://test/v1/realtime/calls", json={"sdp": "v=0\r\n", "session": session})
+        body_request = httpx.Request(
+            "POST", "http://test/v1/realtime/calls", json={"sdp": "v=0\r\n", "session": session}
+        )
     body = body_request.read()
 
     async def receive():
@@ -203,16 +209,30 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
         if signaling_credential == "mixed"
         else [(signaling_credential.encode(), b"Bearer owner" if signaling_credential == "authorization" else b"owner")]
     )
-    request = Request({"type": "http", "method": "POST", "path": "/v1/realtime/calls",
-        "scheme": "http", "server": ("localhost", 80),
-        "query_string": b"intent=quicksilver&architecture=avas&untrusted=bad",
-        "headers": [(b"content-type", body_request.headers["content-type"].encode()),
-                    *signaling_headers, *([(b"x-proxy-key", b"Bearer owner")] if credential == "custom" else []), (b"openai-alpha", b"quicksilver=v2"),
-                    (b"x-untrusted", b"bad")]}, receive)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/realtime/calls",
+            "scheme": "http",
+            "server": ("localhost", 80),
+            "query_string": b"intent=quicksilver&architecture=avas&untrusted=bad",
+            "headers": [
+                (b"content-type", body_request.headers["content-type"].encode()),
+                *signaling_headers,
+                *([(b"x-proxy-key", b"Bearer owner")] if credential == "custom" else []),
+                (b"openai-alpha", b"quicksilver=v2"),
+                (b"x-untrusted", b"bad"),
+            ],
+        },
+        receive,
+    )
     auth = UserAPIKeyAuth()
     authorize = AsyncMock()
     monkeypatch.setattr(proxy_server, "master_key", "owner")
-    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "x-proxy-key"} if credential == "custom" else {})
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"litellm_key_header_name": "x-proxy-key"} if credential == "custom" else {}
+    )
     monkeypatch.setattr(codex, "can_key_call_resolved_model", authorize)
 
     class Processor:
@@ -225,7 +245,16 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
                 assert self.data["model"] == "voice-alias"
                 assert self.data["guardrails"] == ["query-guardrail"]
                 assert await kwargs["request"].json() == {"model": "voice-alias"}
-                return {**self.data, "extra_headers": {"X-Hook-Required": "policy-value", "x-gateway-token": "untrusted-override", "Authorization": "Bearer untrusted"}, "metadata": {"guardrails": ["policy-guardrail"], "user_api_key_team_id": "team"}}, None
+                return {
+                    **self.data,
+                    "extra_headers": {
+                        "X-Hook-Required": "policy-value",
+                        "x-gateway-token": "untrusted-override",
+                        "Authorization": "Bearer untrusted",
+                    },
+                    "extra_query": {"gateway_token": "untrusted-override"},
+                    "metadata": {"guardrails": ["policy-guardrail"], "user_api_key_team_id": "team"},
+                }, None
             return self.data, None
 
     monkeypatch.setattr(common_request_processing, "ProxyBaseLLMRequestProcessing", Processor)
@@ -236,14 +265,28 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
         assert data["session"] == session
         assert data["chatgpt_realtime_client_headers"] == {"openai-alpha": "quicksilver=v2"}
         assert "extra_headers" not in data
-        assert data["extra_query"] == {"intent": "quicksilver", "architecture": "avas"}
+        assert data["chatgpt_realtime_client_query"] == {"intent": "quicksilver", "architecture": "avas"}
 
         async def respond():
-            return httpx.Response(201, content=b"v=0\r\nanswer", headers={"Location": "/v1/realtime/calls/rtc_private"},
-                extensions={"chatgpt_realtime": {"model": "gpt-live-1-codex", "api_base": "https://voice.example/codex", "extra_headers": {"X-Gateway-Token": "pinned-value"}}})
+            return httpx.Response(
+                201,
+                content=b"v=0\r\nanswer",
+                headers={"Location": "/v1/realtime/calls/rtc_private"},
+                extensions={
+                    "chatgpt_realtime": {
+                        "model": "gpt-live-1-codex",
+                        "api_base": "https://voice.example/codex",
+                        "extra_headers": {"X-Gateway-Token": "pinned-value"},
+                        "extra_query": {"gateway_token": "pinned-query-value"},
+                    }
+                },
+            )
+
         return respond()
 
     monkeypatch.setattr(proxy_server, "route_request", route)
+    supervise = AsyncMock()
+    monkeypatch.setattr(codex, "supervise_codex_call", supervise)
     response = await codex.create_codex_realtime_call(request)
     assert response.status_code == 201
     assert response.body == b"v=0\r\nanswer"
@@ -252,7 +295,11 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
     assert call.call_id == "rtc_private"
     assert call.alias == "voice-alias"
     assert call.model == "gpt-live-1-codex"
+    assert call.usage_supervised
+    supervise.assert_awaited_once()
     assert "rtc_private" not in token
+    assert "pinned-query-value" not in token
+    assert call.extra_query == {"gateway_token": "pinned-query-value"}
     assert time.time() < call.expires_at < time.time() + 3601
     authorize.assert_awaited_once()
 
@@ -271,16 +318,28 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
         "custom": [(b"x-proxy-key", b"Bearer owner")],
         "subprotocol": [(b"sec-websocket-protocol", b"realtime, openai-insecure-api-key.owner")],
     }
-    websocket = WebSocket({"type": "websocket", "path": "/v1/live/opaque",
-        "query_string": b"guardrails=query-guardrail", "headers": credential_headers[credential]}, receive_ws, send)
+    websocket = WebSocket(
+        {
+            "type": "websocket",
+            "path": "/v1/live/opaque",
+            "query_string": b"guardrails=query-guardrail",
+            "headers": credential_headers[credential],
+        },
+        receive_ws,
+        send,
+    )
     forward = AsyncMock()
     monkeypatch.setattr(litellm, "_arealtime", forward)
     await codex.codex_realtime_sideband(websocket, token, auth)
     assert sent[0]["type"] == "websocket.accept"
     if credential == "subprotocol":
         assert sent[0]["subprotocol"] == "realtime"
-    assert forward.await_args.kwargs["extra_headers"] == {"x-hook-required": "policy-value", "x-gateway-token": "pinned-value"}
+    assert forward.await_args.kwargs["extra_headers"] == {
+        "x-hook-required": "policy-value",
+        "x-gateway-token": "pinned-value",
+    }
     assert forward.await_args.kwargs["metadata"] == {"guardrails": ["policy-guardrail"], "user_api_key_team_id": "team"}
+    assert forward.await_args.kwargs["extra_query"] == {"gateway_token": "pinned-query-value"}
     assert forward.await_args.kwargs["chatgpt_realtime_call_id"] == "rtc_private"
     assert forward.await_args.kwargs["model"] == "chatgpt/gpt-live-1-codex"
     assert forward.await_args.kwargs["api_base"] == "https://voice.example/codex"
@@ -344,3 +403,158 @@ async def test_sideband_pre_call_block_prevents_upstream_connection(monkeypatch)
     await codex.codex_realtime_sideband(websocket, token, UserAPIKeyAuth())
     forward.assert_not_called()
     assert sent == [{"type": "websocket.close", "code": 1008, "reason": "Realtime pre-call rejected"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("observer_fails", [False, True])
+async def test_signaling_transfers_reservation_only_to_ready_observer(monkeypatch, observer_fails):
+    import json
+    from unittest.mock import AsyncMock
+
+    import httpx
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-reservation-transfer")
+    reservation = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
+    auth = UserAPIKeyAuth(budget_reservation=reservation)
+    monkeypatch.setattr(codex, "user_api_key_auth", AsyncMock(return_value=auth))
+    monkeypatch.setattr(codex, "can_key_call_resolved_model", AsyncMock())
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    process = AsyncMock(return_value=({}, None))
+    monkeypatch.setattr(codex, "process_codex_request", process)
+
+    async def response():
+        return httpx.Response(
+            201,
+            text="v=0\r\n",
+            headers={"Location": "/v1/realtime/calls/rtc_ready"},
+            extensions={"chatgpt_realtime": {"model": "gpt-live-1-codex"}},
+        )
+
+    async def route(**kwargs):
+        return response()
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+
+    async def supervise(request, call, owner):
+        assert owner is auth
+        assert not owner.budget_reservation["finalized"]
+        assert call.usage_supervised
+        if observer_fails:
+            await codex.release_or_invalidate_budget_reservation(budget_reservation=owner.budget_reservation)
+            raise RuntimeError("Observer unavailable")
+
+    monkeypatch.setattr(codex, "supervise_codex_call", supervise)
+
+    async def receive():
+        return {"type": "http.request", "body": json.dumps({"sdp": "v=0", "session": {"model": "voice"}}).encode()}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/realtime/calls",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"authorization", b"Bearer owner")],
+        },
+        receive,
+    )
+    if observer_fails:
+        with pytest.raises(RuntimeError, match="Observer unavailable"):
+            await codex.create_codex_realtime_call(request)
+    else:
+        assert (await codex.create_codex_realtime_call(request)).status_code == 201
+    assert process.await_args.args[2].budget_reservation is None
+    assert auth.budget_reservation["finalized"] is observer_fails
+
+
+@pytest.mark.asyncio
+async def test_supervisor_policy_failure_hangs_up_before_releasing(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from fastapi import Request
+
+    call = CodexRealtimeCall(
+        call_id="rtc_open", model="gpt-live-1-codex", alias="voice", owner="owner", expires_at=time.time() + 60
+    )
+    auth = UserAPIKeyAuth(budget_reservation={"reserved_cost": 0.5, "finalized": False, "entries": []})
+    monkeypatch.setattr(codex, "process_codex_request", AsyncMock(side_effect=HTTPException(403, "Policy rejected")))
+    closed = []
+
+    class Handler:
+        def __init__(self, *args):
+            pass
+
+        @staticmethod
+        def get_api_base(base):
+            return "https://gateway.test/v1"
+
+        async def hangup_call(self, base):
+            assert not auth.budget_reservation["finalized"]
+            closed.append(base)
+
+    monkeypatch.setattr(codex, "ChatGPTRealtime", Handler)
+    request = Request({"type": "http", "headers": [], "method": "POST", "path": "/v1/realtime/calls"})
+    with pytest.raises(HTTPException) as error:
+        await codex.supervise_codex_call(request, call, auth)
+    assert error.value.status_code == 403
+    assert closed == ["https://gateway.test/v1"]
+    assert auth.budget_reservation["finalized"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hangup_fails", [False, True])
+async def test_supervisor_constructor_failure_closes_effective_connection(monkeypatch, hangup_fails, caplog):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import Request
+
+    call = CodexRealtimeCall(
+        call_id="rtc_open", model="gpt-live-1-codex", alias="voice", owner="owner", expires_at=time.time() + 60
+    )
+    auth = UserAPIKeyAuth(budget_reservation={"reserved_cost": 0.5, "finalized": False, "entries": []})
+    logger = MagicMock()
+    logger.litellm_params = {}
+    connection = AsyncMock()
+    handlers = []
+    invalidate = AsyncMock()
+    release = AsyncMock()
+    monkeypatch.setattr(codex, "invalidate_budget_reservation_counters", invalidate, raising=False)
+    monkeypatch.setattr(codex, "release_or_invalidate_budget_reservation", release)
+    monkeypatch.setattr(
+        codex, "process_codex_request", AsyncMock(return_value=({"extra_headers": {"x-hook": "effective"}}, logger))
+    )
+
+    class Handler:
+        def __init__(self, params, headers, extra_headers):
+            self.headers = extra_headers
+            handlers.append(self)
+
+        @staticmethod
+        def get_api_base(base):
+            return "https://gateway.test/v1"
+
+        async def open_call_connection(self, model, base):
+            return connection
+
+        async def hangup_call(self, base):
+            assert self.headers["x-hook"] == "effective"
+            if hangup_fails:
+                raise RuntimeError("private-cleanup-credential")
+
+    monkeypatch.setattr(codex, "ChatGPTRealtime", Handler)
+    monkeypatch.setattr(codex, "RealTimeStreaming", MagicMock(side_effect=ValueError("original constructor failure")))
+    request = Request({"type": "http", "headers": [], "method": "POST", "path": "/v1/realtime/calls"})
+    with pytest.raises(ValueError, match="original constructor failure"):
+        await codex.supervise_codex_call(request, call, auth)
+    connection.close.assert_awaited_once()
+    assert len(handlers) == 1
+    if hangup_fails:
+        invalidate.assert_awaited_once_with(budget_reservation=auth.budget_reservation)
+        release.assert_not_awaited()
+    else:
+        release.assert_awaited_once_with(budget_reservation=auth.budget_reservation)
+        invalidate.assert_not_awaited()
+    assert "private-cleanup-credential" not in caplog.text
