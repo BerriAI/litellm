@@ -7,6 +7,7 @@ allowed to run: only when the row is missing or belongs to an older window.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
@@ -14,6 +15,7 @@ from typing import Final
 import pytest
 
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
@@ -42,6 +44,19 @@ class _FakeSpendLogsTable:
         return [{by[0]: where.get(by[0]), "_sum": {"spend": self._total}}]
 
 
+class _InFlightCountingTable:
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def find_unique(self, where: dict[str, str]) -> SimpleNamespace:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0.001)
+        self.in_flight -= 1
+        return SimpleNamespace(token=where["token"], spend=1.0)
+
+
 class _FakePrismaClient:
     def __init__(
         self,
@@ -55,6 +70,7 @@ class _FakePrismaClient:
             litellm_budgetwindowspend=_FakeFindUniqueTable(row=row, error=error),
             litellm_spendlogs=_FakeSpendLogsTable(total=spend_logs_total),
             litellm_endusertable=_FakeFindUniqueTable(row=end_user_row, error=end_user_error),
+            litellm_verificationtoken=_InFlightCountingTable(),
         )
 
 
@@ -304,6 +320,21 @@ async def test_end_user_from_db_returns_none_without_a_row_a_client_or_on_db_err
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_from_db_bounds_in_flight_prisma_requests_across_counter_keys():
+    """Per-counter singleflight only collapses duplicates of one key. A cold-cache burst
+    over many distinct keys must still not flood the prisma engine HTTP pool (LIT-6435)."""
+    prisma: Final = _FakePrismaClient()
+    burst: Final = PROXY_DB_LOOKUP_MAX_CONCURRENCY * 5
+
+    results: Final = await asyncio.gather(
+        *(SpendCounterReseed.from_db(prisma_client=prisma, counter_key=f"spend:key:hashed-{i}") for i in range(burst))
+    )
+
+    assert results == [1.0] * burst
+    assert prisma.db.litellm_verificationtoken.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
 
 
 @pytest.mark.asyncio

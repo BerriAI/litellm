@@ -411,7 +411,7 @@ def relative_request_url(request: Request) -> str:
 
 
 def resolve_scoped_resource_server(request: Request, resource: str | None) -> MCPServer | None:
-    """Resolve an RFC 8707 ``resource`` value to the single gateway-managed oauth2 server it
+    """Resolve an RFC 8707 ``resource`` value to the single gateway-owned server it
     names, or ``None`` for every other shape: absent, the aggregate resource, a foreign
     host, an unparseable value, a multi-server path, an unknown name, or any server mode the
     keyless gateway flow does not serve (whose protected-resource metadata never directs a
@@ -443,7 +443,7 @@ def resolve_scoped_resource_server(request: Request, resource: str | None) -> MC
     if len(names) != 1:
         return None
     server: Final = global_mcp_server_manager.get_mcp_server_by_name(names[0])
-    if server is None or not server.is_gateway_managed_oauth2:
+    if server is None or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server):
         return None
     return server
 
@@ -729,11 +729,15 @@ async def _flow_target(
     server: Final = global_mcp_server_manager.get_mcp_server_by_id(flow.resource_server_id)
     if (
         server is None
-        or not server.is_gateway_managed_oauth2
+        or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server)
         or not await lookup_server_reachability(flow.user_id, server.server_id)
     ):
         return "stale", None
-    state: Final = "m2m" if MCPServerManager.effective_oauth2_flow(server) == "client_credentials" else "interactive"
+    state: Final = (
+        "interactive"
+        if server.is_gateway_managed_oauth2 and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
+        else "m2m"
+    )
     return state, server
 
 

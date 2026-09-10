@@ -39,7 +39,7 @@ def _is_form_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
 
 
-def _is_json_content_type(content_type: str) -> bool:
+def is_json_content_type(content_type: str) -> bool:
     """True iff the body should be parsed as JSON."""
     return _normalize_media_type(content_type) == "application/json"
 
@@ -406,7 +406,7 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     """
     if request.method == "POST":
         content_type: Final = request.headers.get("content-type", "")
-        if _is_json_content_type(content_type):
+        if is_json_content_type(content_type):
             return await _read_request_body(request)
         elif _is_form_content_type(content_type):
             return await get_form_data(request)
