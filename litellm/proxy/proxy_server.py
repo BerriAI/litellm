@@ -62,6 +62,7 @@ from litellm.constants import (
     LITELLM_UI_SESSION_DURATION,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
@@ -12713,7 +12714,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    _tokenizer_used: Final = await offload_token_count(litellm.utils._select_tokenizer)(
+    _tokenizer_used: Final = await asyncify(litellm.utils._select_tokenizer)(
         model=model_to_use, custom_tokenizer=custom_tokenizer
     )
 
