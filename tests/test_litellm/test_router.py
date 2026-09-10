@@ -42,7 +42,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
 )
 from litellm.router_strategy import simple_shuffle
-from litellm.types.router import DeploymentTypedDict, RetryPolicy
+from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, RetryPolicy
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -15140,3 +15140,24 @@ def test_deployment_ids_stringifies_ids_and_skips_entries_without_a_model_info_i
         {"no_model_info": True},
     )
     assert Router._deployment_ids(deployments) == frozenset({"a", "2"})
+
+
+def test_cached_model_info_lookups_match_uncached_and_reset_on_model_list_change():
+    def deployment(max_output_tokens: int) -> Deployment:
+        return Deployment(
+            model_name="grp",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="sk-a"),
+            model_info=ModelInfo(id="dep-a", max_output_tokens=max_output_tokens),
+        )
+
+    router = Router(model_list=[deployment(100).model_dump()])
+
+    assert router.cached_model_group_info("grp") == router.get_model_group_info("grp")
+    first = router.cached_deployment_model_info("dep-a", "openai/gpt-4o")
+    assert first == router.get_deployment_model_info(model_id="dep-a", model_name="openai/gpt-4o")
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o") is first
+
+    router.upsert_deployment(deployment(200))
+
+    assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["max_output_tokens"] == 200
+    assert router.cached_model_group_info("grp").max_output_tokens == 200
