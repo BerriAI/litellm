@@ -690,6 +690,27 @@ def test_ocr_routes_azure_entra_inputs_to_rust_without_python_auth(fake_bridge):
     }
 
 
+def test_ocr_routes_vertex_auth_inputs_to_rust(fake_bridge):
+    response = litellm.ocr(
+        model="vertex_ai/mistral-ocr-maas",
+        document=DOCUMENT,
+        vertex_project="project-1",
+        vertex_location="us-central1",
+        vertex_credentials={"type": "service_account", "private_key": "secret"},
+        include_image_base64=True,
+    )
+
+    assert isinstance(response, OCRResponse)
+    assert fake_bridge.calls[0]["api_key"] is None
+    assert fake_bridge.calls[0]["custom_llm_provider"] == "vertex_ai"
+    assert fake_bridge.calls[0]["optional_params"] == {
+        "vertex_project": "project-1",
+        "vertex_location": "us-central1",
+        "vertex_credentials": {"type": "service_account", "private_key": "secret"},
+        "include_image_base64": True,
+    }
+
+
 def test_ocr_rust_path_converts_file_document_before_bridge(fake_bridge):
     response = litellm.ocr(
         model=MODEL,
@@ -790,12 +811,6 @@ def test_ocr_does_not_route_to_rust_when_disabled():
     # The impl stays available for injection, but the disabled flag gates usage,
     # so ocr() never reaches the Rust path (asserted via the enabled-path test).
     assert bridge.calls == []
-
-
-def test_vertex_ocr_stays_on_python_until_its_stack_boundary():
-    prepared = build_prepared_request(custom_llm_provider="vertex_ai")
-
-    assert ocr_main._rust_ocr_supported(prepared) is False
 
 
 def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):

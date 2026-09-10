@@ -40,19 +40,17 @@ def load_vertex_ai_credentials():
         service_account_key_data = {}
 
     # Update the service_account_key_data with environment variables
-    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
-    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
-    private_key = private_key.replace("\\n", "\n")
-    service_account_key_data["private_key_id"] = private_key_id
-    service_account_key_data["private_key"] = private_key
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY")
+    if private_key_id:
+        service_account_key_data["private_key_id"] = private_key_id
+    if private_key:
+        service_account_key_data["private_key"] = private_key.replace("\\n", "\n")
 
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
-        # Write the updated content to the temporary files
-        json.dump(service_account_key_data, temp_file, indent=2)
-
-    # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
+    if service_account_key_data.get("private_key"):
+        with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_file:
+            json.dump(service_account_key_data, temp_file, indent=2)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
 class TestVertexAIMistralOCR(BaseOCRTest):

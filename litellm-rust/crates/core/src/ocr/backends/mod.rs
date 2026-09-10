@@ -2,6 +2,7 @@ pub(crate) mod azure_ai;
 pub(crate) mod azure_document_intelligence;
 pub(crate) mod mistral;
 pub(crate) mod reducto;
+pub(crate) mod vertex_ai;
 
 use serde_json::{Map, Value};
 

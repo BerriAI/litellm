@@ -639,6 +639,79 @@ async fn azure_ai_mistral_ocr_sends_api_key_as_bearer() {
 }
 
 #[tokio::test]
+async fn vertex_mistral_ocr_uses_rust_auth_url_and_body() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        let response_body = r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-2505"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("writes response");
+        request
+    });
+    let api_base = format!("http://{addr}");
+    let optional_params = json!({
+        "vertex_project": "project-1",
+        "vertex_location": "us-central1",
+        "include_image_base64": true
+    })
+    .as_object()
+    .expect("object")
+    .clone();
+
+    let response = ocr(OcrRequest {
+        model: "mistral-ocr-2505",
+        document: json!({
+            "type": "document_url",
+            "document_url": "data:application/pdf;base64,YWJj"
+        }),
+        api_key: Some("vertex-token"),
+        api_base: Some(&api_base),
+        custom_llm_provider: Some("vertex_ai"),
+        extra_headers: None,
+        optional_params,
+        timeout: Some(Duration::from_secs(5)),
+        callbacks: Vec::new(),
+        guardrails: Vec::new(),
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: None,
+    })
+    .await
+    .expect("Vertex OCR request succeeds");
+
+    assert_eq!(response["pages"][0]["markdown"], "ok");
+    let request = server.await.expect("server task completes");
+    assert!(
+        request.starts_with(
+            "POST /v1/projects/project-1/locations/us-central1/publishers/mistralai/models/mistral-ocr-2505:rawPredict "
+        ),
+        "{request}"
+    );
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer vertex-token"),
+        "{request}"
+    );
+    assert!(
+        request.contains(r#""include_image_base64":true"#),
+        "{request}"
+    );
+    assert!(!request.contains("vertex_project"), "{request}");
+    assert!(!request.contains("vertex_location"), "{request}");
+}
+
+#[tokio::test]
 async fn azure_ai_entra_token_survives_pre_call_guardrail_mapping() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

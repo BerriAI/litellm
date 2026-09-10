@@ -58,6 +58,7 @@ class _PreparedOCRRequest:
 _RUST_OCR_PROVIDERS: Final = {
     "mistral",
     "azure_ai",
+    "vertex_ai",
 }
 
 _AZURE_RUST_AUTH_PARAMS: Final = (
@@ -69,6 +70,15 @@ _AZURE_RUST_AUTH_PARAMS: Final = (
     "azure_authority_host",
     "azure_credential",
     "azure_federated_token_file",
+)
+
+_VERTEX_RUST_PARAMS: Final = (
+    "vertex_project",
+    "vertex_ai_project",
+    "vertex_location",
+    "vertex_ai_location",
+    "vertex_credentials",
+    "vertex_ai_credentials",
 )
 
 
@@ -226,9 +236,15 @@ def _rust_bridge_optional_params(
         if prepared_request.custom_llm_provider == "azure_ai"
         else {}
     )
+    vertex_params: Final = (
+        {name: raw_optional_params[name] for name in _VERTEX_RUST_PARAMS if name in raw_optional_params}
+        if prepared_request.custom_llm_provider == "vertex_ai"
+        else {}
+    )
     return {
         **provider_params,
         **azure_auth_params,
+        **vertex_params,
     }
 
 

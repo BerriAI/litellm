@@ -6,7 +6,7 @@ use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider}
 
 pub use super::backends::OcrBackend;
 pub use super::integrations::{
-    AzureDocumentIntelligence, AzureMistral, MistralDirect, ReductoLegacy, ReductoV3,
+    AzureDocumentIntelligence, AzureMistral, MistralDirect, ReductoLegacy, ReductoV3, VertexMistral,
 };
 use super::integrations::{BackendConfig, InputParams, OcrIntegration};
 
@@ -62,6 +62,7 @@ super::integrations::for_each_ocr_integration!(define_integration_types);
 pub enum OcrProvider {
     Mistral,
     AzureAi,
+    VertexAi,
     Reducto,
 }
 
@@ -70,6 +71,7 @@ impl OcrProvider {
         match self {
             Self::Mistral => "mistral",
             Self::AzureAi => "azure_ai",
+            Self::VertexAi => "vertex_ai",
             Self::Reducto => "reducto",
         }
     }
@@ -100,6 +102,7 @@ pub fn resolve_ocr_integration(provider: OcrProvider, model: &OcrModel) -> OcrIn
     match provider {
         OcrProvider::Mistral => OcrIntegrationKind::Mistral,
         OcrProvider::AzureAi => super::backends::azure_ai::resolve_integration(model),
+        OcrProvider::VertexAi => super::backends::vertex_ai::resolve_integration(model),
         OcrProvider::Reducto => super::backends::reducto::resolve_integration(model),
     }
 }

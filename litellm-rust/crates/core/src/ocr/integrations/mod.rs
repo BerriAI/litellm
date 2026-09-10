@@ -14,6 +14,7 @@ mod azure_mistral;
 mod mistral_direct;
 mod reducto_legacy;
 mod reducto_v3;
+mod vertex_mistral;
 
 pub use super::backends::reducto::ReductoUpload;
 pub use super::document::{DocumentPreparation, PassThrough, RequireInline};
@@ -22,6 +23,7 @@ pub use azure_mistral::AzureMistral;
 pub use mistral_direct::MistralDirect;
 pub use reducto_legacy::ReductoLegacy;
 pub use reducto_v3::ReductoV3;
+pub use vertex_mistral::VertexMistral;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GuardrailStage {
@@ -128,6 +130,7 @@ macro_rules! for_each_ocr_integration {
             Mistral, $crate::ocr::integrations::MistralDirect, $crate::ocr::integrations::MistralDirect, Mistral;
             AzureMistral, $crate::ocr::integrations::AzureMistral, $crate::ocr::integrations::AzureMistral, AzureAi;
             AzureDocumentIntelligence, $crate::ocr::integrations::AzureDocumentIntelligence, $crate::ocr::integrations::AzureDocumentIntelligence, AzureAi;
+            VertexMistral, $crate::ocr::integrations::VertexMistral, $crate::ocr::integrations::VertexMistral, VertexAi;
             ReductoV3, $crate::ocr::integrations::ReductoV3, $crate::ocr::integrations::ReductoV3, Reducto;
             ReductoLegacy, $crate::ocr::integrations::ReductoLegacy, $crate::ocr::integrations::ReductoLegacy, Reducto;
         }
