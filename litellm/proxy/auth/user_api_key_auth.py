@@ -82,6 +82,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.resolvers import CredentialRef, Principal
 from litellm.proxy.auth.resolvers.store import IdentityStore
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.team_grants import team_grants
 from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -91,6 +92,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
     populate_request_with_path_params,
 )
+from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
@@ -180,6 +182,44 @@ def _get_model_from_request_context(
         llm_router=llm_router,
         request=request,
     )
+
+
+_CLAUDE_MODEL_ROUTES: Final = frozenset(
+    f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
+)
+_CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+
+
+async def _normalize_claude_model(
+    request_data: dict, valid_token: UserAPIKeyAuth, request: Request | None, route: str
+) -> None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
+
+    if route not in _CLAUDE_MODEL_ROUTES or llm_router is None:
+        return
+    if request is not None and request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True:
+        return
+    requested: Final = _get_model_from_request_context(request_data, route, request, llm_router)
+    if not isinstance(requested, str) or requested != request_data.get("model"):
+        return
+    if not requested.startswith("claude-router-") and not requested.lower().endswith("[1m]"):
+        return
+    settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    aliases: Final = settings.get("model_group_alias") if isinstance(settings, Mapping) else None
+    source: Final = claude_code_requested_group(
+        requested, llm_router, valid_token.team_id, (valid_token.aliases, valid_token.team_model_aliases, aliases)
+    )
+    if request is not None:
+        request.scope[_CLAUDE_MODEL_NORMALIZED] = True
+    if source is None:
+        return
+    request_data["model"] = source
+    _safe_set_request_parsed_body(request=request, parsed_body=request_data)
+    if request is not None:
+        request._json = request_data
+        request._body = orjson.dumps(request_data)
 
 
 def _get_model_names_for_budget_checks(
@@ -1476,24 +1516,16 @@ async def _user_api_key_auth_builder(
                             user_id=user_id,
                             user_email=user_email,
                             team_id=team_id,
-                            team_alias=(team_object.team_alias if team_object is not None else None),
-                            team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
-                            team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
-                            team_models=(team_object.models if team_object is not None else []),
-                            team_metadata=(team_object.metadata if team_object is not None else None),
                             org_id=org_id,
                             end_user_id=end_user_id,
                             parent_otel_span=parent_otel_span,
                             jwt_claims=jwt_claims,
+                            **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
                         )
 
                     valid_token = UserAPIKeyAuth(
                         api_key=None,
                         team_id=team_id,
-                        team_alias=(team_object.team_alias if team_object is not None else None),
-                        team_tpm_limit=(team_object.tpm_limit if team_object is not None else None),
-                        team_rpm_limit=(team_object.rpm_limit if team_object is not None else None),
-                        team_models=(team_object.models if team_object is not None else []),
                         user_role=(
                             LitellmUserRoles(user_object.user_role)
                             if user_object is not None and user_object.user_role is not None
@@ -1507,17 +1539,8 @@ async def _user_api_key_auth_builder(
                         user_tpm_limit=(user_object.tpm_limit if user_object is not None else None),
                         user_rpm_limit=(user_object.rpm_limit if user_object is not None else None),
                         user_model_max_budget=(user_object.model_max_budget if user_object is not None else None),
-                        team_member_rpm_limit=(
-                            team_membership.safe_get_team_member_rpm_limit() if team_membership is not None else None
-                        ),
-                        team_member_tpm_limit=(
-                            team_membership.safe_get_team_member_tpm_limit() if team_membership is not None else None
-                        ),
-                        team_metadata=(team_object.metadata if team_object is not None else None),
                         jwt_claims=jwt_claims,
-                    )
-                    valid_token.team_object_permission = (
-                        team_object.object_permission if team_object is not None else None
+                        **team_grants(team_object=team_object, team_membership=team_membership, user_id=user_id),
                     )
 
                     # AUTO_REGISTER deferred from _resolve_jwt_to_virtual_key.
@@ -2038,7 +2061,7 @@ async def _user_api_key_auth_builder(
                                     fallback_spend=team_member_spend,
                                     max_budget=team_member_budget,
                                 )
-                            if team_member_spend > team_member_budget:
+                            if team_member_spend >= team_member_budget:
                                 _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
                                 raise litellm.BudgetExceededError(
                                     current_cost=team_member_spend,
@@ -2784,6 +2807,7 @@ async def _authorize_authenticated_request(
     """
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj, request=request)
+    await _normalize_claude_model(request_data, user_api_key_auth_obj, request, route)
 
     # Single authorization point. Builder paths MUST NOT call common_checks.
     # Route through the same exception handler the builder uses so
@@ -2836,6 +2860,43 @@ async def _authorize_authenticated_request(
     return None
 
 
+def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Request | None = None) -> None:
+    """Anchor the OTLP destinations this key or team overrides its traces to.
+
+    Called inside the ``auth`` phase span so that span reaches the tenant's account
+    as well, and on the request task so the ``ContextVar`` is inherited by the logging
+    tasks that close the LLM span. Best-effort: trace routing must never fail auth.
+
+    ``request`` carries the headers, so a backend this request disabled with
+    ``x-litellm-disable-callbacks`` resolves to no destination.
+
+    Only destinations the published fan-out can build are anchored. Anchoring one is
+    what tells the operator's exporter to hold that backend's spans back under
+    ``override``, so an unbuildable one would leave the span with nowhere to go.
+
+    The ``postgres`` spans under ``auth`` close before this runs, because they are the
+    reads that resolve the identity being read here. They never reach the tenant's
+    account, and they are never withheld from the operator's backend, whichever mode
+    is set.
+    """
+    try:
+        from litellm.integrations.otel.logger import fan_out_provider
+        from litellm.integrations.otel.plumbing.context import set_request_destinations
+        from litellm.integrations.otel.plumbing.providers import deliverable_destinations
+        from litellm.proxy.litellm_pre_call_utils import (
+            resolve_tenant_otel_destinations,
+        )
+
+        set_request_destinations(
+            deliverable_destinations(
+                resolve_tenant_otel_destinations(user_api_key_dict, _safe_get_request_headers(request)),
+                fan_out_provider(),
+            )
+        )
+    except Exception as exc:  # noqa: BLE001  # telemetry routing is best-effort and must never break authentication
+        verbose_proxy_logger.debug("OTel V2: tenant destination resolution failed: %s", exc)
+
+
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
@@ -2883,6 +2944,7 @@ async def user_api_key_auth(
                 raise body_parse_exception
             raise
         user_api_key_auth_obj.budget_reservation = None
+        _seed_request_destinations(user_api_key_auth_obj, request)
 
         # A body that never parsed is authenticated (so the trace carries identity
         # and this ``auth`` span) but not authorized: there is no model to check it
@@ -3109,6 +3171,7 @@ async def _enforce_key_and_fallback_model_access(
     Key-level model allowlist and client fallbacks (same as standard auth).
     Not included in common_checks — common_checks enforces team/user/project model access only.
     """
+    await _normalize_claude_model(request_data, valid_token, request, route)
     config: Final = valid_token.config
 
     if config != {}:

@@ -22,7 +22,13 @@ from litellm.litellm_core_utils.litellm_logging import (
     _get_status_fields,
     set_callbacks,
 )
-from litellm.types.utils import ModelResponse, TextCompletionResponse
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import (
+    CallTypes,
+    LiteLLMRealtimeStreamLoggingObject,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 
 @pytest.fixture
@@ -6068,15 +6074,17 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
         for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
 def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
-    """With LITELLM_OTEL_V2 on, the "newrelic" callback builds the OTel v2
-    logger (per-team credential routing); with the flag off (default) it keeps
-    the legacy agent-based logger, so existing deployments are untouched."""
+    """With LITELLM_OTEL_V2 on and operator credentials present, the "newrelic"
+    callback builds the OTel v2 logger (per-team credential routing); with the
+    flag off (default) it keeps the legacy agent-based logger, so existing
+    deployments are untouched."""
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
     try:
         v2_logger = logging_module._init_custom_logger_compatible_class(
@@ -6131,6 +6139,7 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
 
     logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
     try:
         created = logging_module._init_custom_logger_compatible_class(
@@ -6391,6 +6400,90 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
         request_kwargs=pre_choice,
     )
     assert pre_choice["metadata"]["litellm_gateway_injected_cache"] == ""
+
+
+def _responses_ws_logging_obj() -> LitellmLogging:
+    return LitellmLogging(
+        model="gpt-4o",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id="responses-ws-usage-test",
+        function_id="responses-ws-usage-test",
+    )
+
+
+def test_normalize_logging_result_extracts_usage_for_responses_websocket(monkeypatch):
+    """LIT-6512: native /v1/responses WebSocket sessions logged $0 spend because the usage
+    carried by stored response.completed events was never extracted. The session must cost
+    exactly what the same usage costs over HTTP /v1/responses, discounts included."""
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.5})
+    logging_obj = _responses_ws_logging_obj()
+    events = [
+        {"type": "response.created", "response": {}},
+        {
+            "type": "response.completed",
+            "response": {"usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140}},
+        },
+        {
+            "type": "response.completed",
+            "response": {"usage": {"input_tokens": 60, "output_tokens": 10, "total_tokens": 70}},
+        },
+    ]
+
+    normalized = logging_obj.normalize_logging_result(result=events)
+
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.usage.prompt_tokens == 160
+    assert normalized.usage.completion_tokens == 50
+
+    ws_cost = litellm.completion_cost(
+        completion_response=normalized,
+        model="gpt-4o",
+        call_type=CallTypes.aresponses_websocket.value,
+        custom_llm_provider="openai",
+    )
+    http_cost = litellm.completion_cost(
+        completion_response=ResponsesAPIResponse(
+            id="resp-6512",
+            created_at=1700000000,
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=160, output_tokens=50, total_tokens=210),
+        ),
+        model="gpt-4o",
+        call_type=CallTypes.aresponses.value,
+        custom_llm_provider="openai",
+    )
+    assert ws_cost > 0
+    assert ws_cost == http_cost
+
+
+def test_normalize_logging_result_bills_incomplete_responses_websocket_turns():
+    """LIT-6512: a turn cut short by max_output_tokens ends in response.incomplete, which
+    OpenAI bills, so its usage counts toward the session like a completed turn."""
+    events = [
+        {
+            "type": "response.created",
+            "response": {"usage": {"input_tokens": 999, "output_tokens": 999, "total_tokens": 1998}},
+        },
+        {
+            "type": "response.incomplete",
+            "response": {"usage": {"input_tokens": 15, "output_tokens": 16, "total_tokens": 31}},
+        },
+        {
+            "type": "response.completed",
+            "response": {"usage": {"input_tokens": 40, "output_tokens": 4, "total_tokens": 44}},
+        },
+        {"type": "response.failed", "response": {"usage": None}},
+    ]
+
+    normalized = _responses_ws_logging_obj().normalize_logging_result(result=events)
+
+    assert isinstance(normalized, LiteLLMRealtimeStreamLoggingObject)
+    assert normalized.usage.prompt_tokens == 55
+    assert normalized.usage.completion_tokens == 20
+    assert normalized.usage.total_tokens == 75
 
 
 def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for_dict_results(logging_obj):
