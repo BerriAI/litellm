@@ -3,7 +3,7 @@ import inspect
 import json
 import sys
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
@@ -88,6 +88,125 @@ def _route_has_dependency(route, dependency) -> bool:
 
 class TestExecuteWithMcpClient:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("auth_type", "auth_value", "expected_auth"),
+        (
+            (MCPAuth.none, None, {}),
+            (MCPAuth.basic, "preview:correct", {"Authorization": "Basic cHJldmlldzpjb3JyZWN0"}),
+            (MCPAuth.basic, None, {"Authorization": "Basic cHJldmlldzpzdG9yZWQ="}),
+            (MCPAuth.bearer_token, "edited", {"Authorization": "Bearer edited"}),
+            (MCPAuth.api_key, "edited", {"X-API-Key": "edited"}),
+            (MCPAuth.token, "edited", {"Authorization": "token edited"}),
+            (MCPAuth.authorization, "Custom edited", {"Authorization": "Custom edited"}),
+        ),
+    )
+    async def test_static_preview_uses_edited_connection_instead_of_registered_server(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        auth_type: MCPAuth,
+        auth_value: str | None,
+        expected_auth: dict[str, str],
+    ) -> None:
+        from starlette.datastructures import Headers
+
+        from litellm.experimental_mcp_client.client import MCPClient
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+        saved: Final = MCPServer(
+            server_id="saved-preview-server",
+            name="saved",
+            url="https://stored.example/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            authentication_token="preview:stored",
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {saved.server_id: saved}
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+        payload: Final = NewMCPServerRequest(
+            server_id=saved.server_id,
+            server_name="edited",
+            url="https://stored.example/corrected-mcp",
+            transport=MCPTransport.sse,
+            auth_type=auth_type,
+            credentials={"auth_value": auth_value} if auth_value is not None else None,
+            static_headers={"X-Preview": "edited"},
+        )
+        staged: Final = rest_endpoints._stage_server_test(payload, Headers())
+
+        async def inspect_connection(client: MCPClient) -> dict[str, object]:
+            return {"url": client.server_url, "transport": client.transport_type, "headers": client._get_auth_headers()}
+
+        result: Final = await rest_endpoints._execute_with_mcp_client(
+            staged.request,
+            inspect_connection,
+            mcp_auth_header=staged.mcp_auth_header,
+            oauth2_headers=staged.oauth2_headers,
+        )
+        assert result == {
+            "url": "https://stored.example/corrected-mcp",
+            "transport": MCPTransport.sse,
+            "headers": {"X-Preview": "edited", **expected_auth},
+        }
+        assert manager.get_mcp_server_by_id(saved.server_id) is saved
+        assert saved.url == "https://stored.example/mcp"
+
+    @pytest.mark.parametrize(
+        ("saved_url", "url", "same_origin"),
+        (
+            ("https://stored.example/mcp", "https://other.example/mcp", False),
+            ("https://stored.example/mcp", "http://stored.example/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:8443/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:443/mcp", True),
+            ("http://stored.example/mcp", "http://stored.example:80/edited", True),
+            ("https://stored.example/mcp", "HTTPS://STORED.EXAMPLE/edited", True),
+            ("https://[::1]/mcp", "https://[::1]/edited", True),
+            ("https://[::1]/mcp", "https://[::1]:443/edited", True),
+            ("https://[::1]/mcp", "https://[::2]/edited", False),
+            ("https://stored.example/mcp", "https://stored.example:invalid/mcp", False),
+        ),
+    )
+    @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
+    def test_static_preview_respects_origin_when_inheriting_credentials(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        saved_url: str,
+        url: str,
+        same_origin: bool,
+        explicit_credential: str | None,
+    ) -> None:
+        from starlette.datastructures import Headers
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy.management_endpoints import mcp_management_endpoints
+
+        saved: Final = MCPServer(
+            server_id="saved-preview-server",
+            name="saved",
+            url=saved_url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            authentication_token="preview:stored",
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {saved.server_id: saved}
+        monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+        monkeypatch.setattr(mcp_management_endpoints, "global_mcp_server_manager", manager)
+        payload: Final = NewMCPServerRequest(
+            server_id=saved.server_id,
+            url=url,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.basic,
+            credentials={"auth_value": explicit_credential} if explicit_credential else None,
+        )
+        staged: Final = rest_endpoints._stage_server_test(payload, Headers())
+        expected: Final = explicit_credential or ("preview:stored" if same_origin else None)
+        assert staged.mcp_auth_header == expected
+        assert staged.request.credentials == ({"auth_value": expected} if expected else None)
+
+    @pytest.mark.asyncio
     async def test_redacts_stack_trace(self, monkeypatch):
         async def fake_create_client(*args, **kwargs):
             return object()
@@ -113,7 +232,7 @@ class TestExecuteWithMcpClient:
         assert "stack_trace" not in result
 
     @pytest.mark.asyncio
-    async def test_timeout_caps_hanging_operation_and_names_url(self, monkeypatch):
+    async def test_timeout_caps_hanging_operation_and_names_origin(self, monkeypatch):
         async def fake_create_client(*args, **kwargs):
             return object()
 
@@ -138,7 +257,7 @@ class TestExecuteWithMcpClient:
         )
 
         assert result["error"] is True
-        assert "https://mcp.example.com/mcp/" in result["message"]
+        assert "https://mcp.example.com" in result["message"]
 
     @pytest.mark.asyncio
     async def test_timeout_covers_client_creation(self, monkeypatch):
@@ -166,15 +285,15 @@ class TestExecuteWithMcpClient:
         )
 
         assert result["error"] is True
-        assert "https://mcp.example.com/mcp/" in result["message"]
+        assert "https://mcp.example.com" in result["message"]
 
     def test_timeout_defaults_to_tool_listing_timeout(self):
         default = inspect.signature(rest_endpoints._execute_with_mcp_client).parameters["timeout_seconds"].default
         assert default == MCP_TOOL_LISTING_TIMEOUT
 
-    def test_connection_error_message_timeout_names_url_and_budget(self):
+    def test_connection_error_message_timeout_names_origin_and_budget(self):
         message = rest_endpoints._connection_error_message(TimeoutError(), "https://api.example.com/mcp/", 30.0)
-        assert "https://api.example.com/mcp/" in message
+        assert "https://api.example.com" in message
         assert "30s" in message
 
     def test_connection_error_message_hides_arbitrary_http_exception_detail(self):
@@ -592,7 +711,7 @@ class TestExecuteWithMcpClient:
 
         assert result["status"] == "error"
         assert result["error"] is True
-        assert "Failed to connect to MCP server" in result["message"]
+        assert "reference" in result["message"]
         # Error message must not leak raw exception details
         assert "cancel scope" not in result["message"]
 
@@ -3427,10 +3546,191 @@ class TestConnectionErrorMessage:
         message = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
         assert "503" in message
 
+    @pytest.mark.parametrize(
+        "error_type", [httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError, ConnectionResetError]
+    )
+    def test_interrupted_connection_message_is_safe(self, error_type: type[Exception]) -> None:
+        message: Final = rest_endpoints._connection_error_message(
+            error_type("secret-transport-detail"), "https://example.com/?token=secret-query", 30
+        )
+        assert "connection was interrupted" in message
+        assert "secret" not in message
+
+    def test_closed_connection_explains_incomplete_request(self) -> None:
+        from mcp import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=-32000, message="Connection closed", data="secret-data")), None, 30
+        )
+        assert "connection was closed before the request completed" in message
+        assert "secret" not in message
+
+    def test_timeout_does_not_claim_the_server_sent_nothing(self) -> None:
+        message: Final = rest_endpoints._connection_error_message(TimeoutError(), None, 30)
+        assert "no valid MCP response received" in message
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sdk_timeout", [True, False])
+    @pytest.mark.parametrize("read_timeout", [0, 1])
+    async def test_timeout_message_uses_the_deadline_that_expired(self, sdk_timeout: bool, read_timeout: int) -> None:
+        from mcp import McpError
+        from mcp.types import ErrorData
+
+        async def operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            try:
+                raise TimeoutError("secret-timeout")
+            except TimeoutError as elapsed:
+                if not sdk_timeout:
+                    raise
+                try:
+                    raise McpError(ErrorData(code=408, message="secret-sdk-timeout")) from elapsed
+                except McpError as sdk_error:
+                    raise TimeoutError() from sdk_error
+
+        payload: Final = NewMCPServerRequest(
+            server_name="timeout", url="https://example.com", auth_type=MCPAuth.none, timeout=read_timeout
+        )
+        result: Final = await rest_endpoints._execute_with_mcp_client(payload, operation, timeout_seconds=30)
+        assert (f"within {read_timeout}s" if sdk_timeout else "within 30s") in result["message"]
+        assert "secret" not in result["message"]
+
     def test_unknown_error_falls_back_to_generic(self):
         message = rest_endpoints._connection_error_message(RuntimeError("weird"), "https://example.com", 30.0)
         assert "weird" not in message
-        assert "proxy logs" in message.lower()
+        assert "reference" in message.lower()
+
+    def test_sdk_session_terminated_explains_endpoint_and_retry(self) -> None:
+        from mcp.shared.exceptions import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=32600, message="Session terminated")), "https://example.com/mcp", 30.0
+        )
+
+        assert "session was terminated" in message
+        assert "MCP endpoint" in message
+        assert "transport" in message
+        assert "retry" in message
+        assert "404" not in message
+
+    @pytest.mark.parametrize("code", [-32700, -32601, -32602, -32603, -32000, 32600, 408])
+    def test_rpc_errors_include_code_without_echoing_upstream_data(self, code: int) -> None:
+        from mcp.shared.exceptions import McpError
+        from mcp.types import ErrorData
+
+        message: Final = rest_endpoints._connection_error_message(
+            McpError(ErrorData(code=code, message="secret-message", data={"token": "secret-data"})),
+            "https://example.com/secret-path?token=secret-query",
+            30.0,
+        )
+
+        assert f"JSON-RPC code {code}" in message
+        assert "secret" not in message
+        assert "timed out" not in message
+        assert "session was terminated" not in message
+
+    @pytest.mark.parametrize("status_code", [401, 403, 404, 405, 429, 503])
+    def test_wrapped_http_failures_preserve_status(self, status_code: int) -> None:
+        response: Final = httpx.Response(status_code, text="secret-body")
+        upstream: Final = httpx.HTTPStatusError(
+            "secret-exception",
+            request=httpx.Request("POST", "https://example.com/?token=secret-query"),
+            response=response,
+        )
+        wrapped: Final = BaseExceptionGroup(
+            "secret-group", [asyncio.CancelledError(), BaseExceptionGroup("nested", [upstream])]
+        )
+
+        message: Final = rest_endpoints._connection_error_message(wrapped, "https://example.com", 30.0)
+
+        assert f"HTTP {status_code}" in message
+        assert "secret" not in message
+
+    def test_explicit_cause_is_classified_before_incidental_context(self) -> None:
+        wrapped: Final = RuntimeError("secret-wrapper")
+        wrapped.__cause__ = httpx.ConnectError("secret-cause")
+        wrapped.__context__ = TimeoutError("secret-context")
+
+        message: Final = rest_endpoints._connection_error_message(wrapped, "https://example.com", 30.0)
+
+        assert "unreachable" in message
+        assert "secret" not in message
+
+    def test_timeout_url_redacts_credentials_path_query_and_fragment(self) -> None:
+        message: Final = rest_endpoints._connection_error_message(
+            TimeoutError("secret-error"),
+            "https://secret-user:secret-pass@example.com:8443/secret-path?token=secret-query#secret-fragment",
+            30.0,
+        )
+
+        assert "https://example.com:8443" in message
+        assert "30s" in message
+        assert "secret" not in message
+
+    def test_unknown_failure_reference_matches_safe_diagnostics(self, caplog: pytest.LogCaptureFixture) -> None:
+        import re
+
+        try:
+            raise RuntimeError("secret-exception-body")
+        except RuntimeError as exc:
+            message: Final = rest_endpoints._connection_error_message(
+                exc, "https://secret-user:secret-password@example.com/secret-path?token=secret-query", 30.0
+            )
+
+        reference: Final = re.search(r"reference ([a-f0-9]{32})", message)
+        assert reference is not None
+        diagnostics: Final = tuple(
+            record for record in caplog.records if "MCP connection test failed" in record.message
+        )
+        assert len(diagnostics) == 1
+        assert reference.group(1) in diagnostics[0].message
+        assert "RuntimeError" in diagnostics[0].message
+        assert "test_unknown_failure_reference_matches_safe_diagnostics" in diagnostics[0].message
+        assert diagnostics[0].exc_info is None
+        assert "secret" not in message + diagnostics[0].message
+
+    @pytest.mark.parametrize("exc", [ValueError("secret-config"), HTTPException(500, "secret-detail")])
+    def test_unrelated_errors_are_not_misreported_as_invalid_mcp(self, exc: Exception) -> None:
+        message: Final = rest_endpoints._connection_error_message(exc, "https://example.com", 30.0)
+
+        assert "reference" in message
+        assert "invalid MCP response" not in message
+        assert "secret" not in message
+
+    def test_configuration_validation_error_uses_unknown_fallback(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as caught:
+            NewMCPServerRequest.model_validate({"server_name": "example", "transport": "secret-invalid-transport"})
+
+        message: Final = rest_endpoints._connection_error_message(caught.value, "https://example.com", 30.0)
+        assert "reference" in message
+        assert "invalid MCP response" not in message
+        assert "secret" not in message
+
+    @pytest.mark.asyncio
+    async def test_connection_test_preserves_cancellation(self) -> None:
+        async def cancelled_operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            raise asyncio.CancelledError
+
+        payload: Final = NewMCPServerRequest(server_name="cancelled", url="https://example.com", auth_type=MCPAuth.none)
+        with pytest.raises(asyncio.CancelledError):
+            await rest_endpoints._execute_with_mcp_client(payload, cancelled_operation)
+
+    @pytest.mark.asyncio
+    async def test_unknown_failure_preserves_response_contract(self) -> None:
+        async def failing_operation(client: rest_endpoints.MCPClient) -> dict[str, object]:
+            raise RuntimeError("secret-operation")
+
+        payload: Final = NewMCPServerRequest(server_name="unknown", url="https://example.com", auth_type=MCPAuth.none)
+        result: Final = await rest_endpoints._execute_with_mcp_client(payload, failing_operation)
+
+        assert result["error"] is True
+        assert result["status"] == "error"
+        assert "reference" in result["message"]
+        assert "secret" not in result["message"]
+        assert "stack_trace" not in result
 
 
 class TestGetServerAuthHeaderGroupDefault:
