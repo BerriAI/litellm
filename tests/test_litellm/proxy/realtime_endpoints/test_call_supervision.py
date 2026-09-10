@@ -147,6 +147,34 @@ class Sink:
         self.logger.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "duration,valid", [(0, True), (1000, True), (None, False), (-1, False), (True, False), ("1000", False)]
+)
+async def test_live_terminal_requires_valid_duration_for_accounting(monkeypatch, duration, valid):
+    from litellm.proxy.realtime_endpoints import call_supervision
+
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    invalidate = AsyncMock()
+    monkeypatch.setattr(call_supervision, "invalidate_budget_reservation_counters", invalidate)
+    close = AsyncMock()
+    force = AsyncMock()
+    supervisor = CallSupervisor(socket, Sink(logger), logger, UserAPIKeyAuth(), close, force_close_call=force)
+    await socket.messages.put({"type": "session.started"})
+    await supervisor.start()
+    await socket.messages.put(
+        {"type": "session.closed", **({"usage": {"audio_duration_ms": duration}} if duration is not None else {})}
+    )
+    await supervisor.wait()
+    close.assert_not_awaited()
+    force.assert_not_awaited()
+    assert socket.closed
+    assert bool(logger.model_call_details.get("realtime_usage_incomplete")) is not valid
+    assert invalidate.await_count == (0 if valid else 1)
+
+
 def fixture(*, ready_timeout=1, lifetime=1):
     socket = Socket()
     logger = MagicMock(spec=Logging)
@@ -454,7 +482,14 @@ async def test_shutdown_allows_hangup_longer_than_usage_drain_timeout():
         hangup_finished.set()
 
     supervisor = CallSupervisor(
-        socket, sink, logger, UserAPIKeyAuth(), hangup, drain_timeout=0.01, termination_timeout=1
+        socket,
+        sink,
+        logger,
+        UserAPIKeyAuth(),
+        hangup,
+        drain_timeout=0.01,
+        termination_timeout=1,
+        terminal_usage_required=False,
     )
     registry = CallSupervisors()
     await socket.messages.put({"type": "session.created"})

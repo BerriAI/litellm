@@ -1,7 +1,28 @@
+import hashlib
+import time
+
 import httpx
 import pytest
 
 from litellm.llms.chatgpt.codex import CodexRealtimeCall, build_sideband_request, parse_call_response
+
+
+def test_encrypted_call_preserves_repeated_gateway_query(monkeypatch):
+    from litellm.proxy.realtime_endpoints.call_sessions import decode_call, encode_call
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-repeated-query")
+    authorization = "Bearer test-owner"
+    call = CodexRealtimeCall(
+        call_id="rtc_repeated",
+        model="gpt-live-1-codex",
+        alias="voice",
+        owner=hashlib.sha256(authorization.encode()).hexdigest(),
+        expires_at=time.time() + 60,
+        extra_query={"tag": ["alpha +/&", "beta"], "gateway": "tenant"},
+    )
+    restored = decode_call(encode_call(call), authorization)
+    assert restored.extra_query == {"tag": ("alpha +/&", "beta"), "gateway": "tenant"}
+    assert build_sideband_request(restored)["extra_query"] == restored.extra_query
 
 
 @pytest.mark.parametrize("location", ["", "/v1/realtime/calls/foreign-id"])

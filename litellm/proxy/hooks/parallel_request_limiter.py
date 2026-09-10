@@ -1,9 +1,10 @@
 import asyncio
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
@@ -50,10 +51,63 @@ class CacheObject(TypedDict):
     request_count_end_user_id: dict | None
 
 
+class _RealtimeAttachmentReservations(BaseModel):
+    cache_keys: tuple[str, ...] = ()
+    global_acquired: bool = False
+
+    def acquire(self, key: str) -> None:
+        self.cache_keys = tuple(dict.fromkeys((*self.cache_keys, key)))
+
+    def acquire_global(self) -> None:
+        self.global_acquired = True
+
+    def take(self) -> tuple[tuple[str, ...], bool]:
+        owned: Final = (self.cache_keys, self.global_acquired)
+        self.cache_keys = ()
+        self.global_acquired = False
+        return owned
+
+
 class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache):
         self.internal_usage_cache = internal_usage_cache
+
+    def begin_realtime_attachment(self, request_data: dict[str, object]) -> None:
+        request_data["_legacy_realtime_attachment_reservations"] = _RealtimeAttachmentReservations()
+
+    async def async_release_realtime_attachment(
+        self, request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        receipt: Final = request_data.get("_legacy_realtime_attachment_reservations")
+        if not isinstance(receipt, _RealtimeAttachmentReservations):
+            return
+        keys, global_acquired = receipt.take()
+        if global_acquired:
+            await self.internal_usage_cache.async_increment_cache(
+                key="global_max_parallel_requests",
+                value=-1,
+                local_only=True,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+        for key in keys:
+            await self._release_realtime_counter(key, user_api_key_dict)
+
+    async def _release_realtime_counter(self, key: str, user_api_key_dict: UserAPIKeyAuth) -> None:
+        raw: Final[object] = await self.internal_usage_cache.async_get_cache(
+            key=key,
+            local_only=True,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        if raw is None:
+            return
+        current: Final = TypeAdapter(Mapping[str, int]).validate_python(raw)
+        await self.internal_usage_cache.async_set_cache(
+            key=key,
+            value={**current, "current_requests": max(current["current_requests"] - 1, 0)},
+            ttl=60,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
 
     def print_verbose(self, print_statement):
         try:
@@ -142,6 +196,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             local_only=True,
         )
+        receipt: Final = data.get("_legacy_realtime_attachment_reservations")
+        if isinstance(receipt, _RealtimeAttachmentReservations):
+            receipt.acquire(request_count_api_key)
         return new_val
 
     def time_to_next_minute(self) -> float:
@@ -299,6 +356,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     local_only=True,
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
+                receipt: Final = data.get("_legacy_realtime_attachment_reservations")
+                if isinstance(receipt, _RealtimeAttachmentReservations):
+                    receipt.acquire_global()
         _model = data.get("model", None)
 
         current_date: Final = datetime.now().strftime("%Y-%m-%d")
@@ -480,6 +540,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 values_to_update_in_cache=values_to_update_in_cache,
             )
 
+        if isinstance(data.get("_legacy_realtime_attachment_reservations"), _RealtimeAttachmentReservations):
+            await self.internal_usage_cache.async_batch_set_cache(
+                cache_list=values_to_update_in_cache,
+                ttl=60,
+                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+            return
         asyncio.create_task(
             self.internal_usage_cache.async_batch_set_cache(
                 cache_list=values_to_update_in_cache,

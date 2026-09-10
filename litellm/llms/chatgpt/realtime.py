@@ -36,18 +36,18 @@ def configured_realtime_headers(headers: Mapping[str, object] | None) -> Mapping
     return MappingProxyType({key.lower(): value for key, value in validated.items()})
 
 
-def configured_realtime_query(params: GenericLiteLLMParams) -> Mapping[str, str]:
+def configured_realtime_query(params: GenericLiteLLMParams) -> Mapping[str, str | tuple[str, ...]]:
     inbound: Final = TypeAdapter(Mapping[str, str]).validate_python(
         getattr(params, "chatgpt_realtime_client_query", None) or MappingProxyType({})
     )
-    configured: Final = TypeAdapter(Mapping[str, str | int | float | bool | None]).validate_python(
-        getattr(params, "extra_query", None) or MappingProxyType({})
-    )
+    configured: Final = TypeAdapter(
+        Mapping[str, str | int | float | bool | None | tuple[str | int | float | bool | None, ...]]
+    ).validate_python(getattr(params, "extra_query", None) or MappingProxyType({}))
+    merged: Final = QueryParams(
+        tuple((key, value) for key, value in inbound.items() if key in ("intent", "architecture"))
+    ).merge(configured)
     return MappingProxyType(
-        {
-            **{key: value for key, value in inbound.items() if key in ("intent", "architecture")},
-            **QueryParams(configured),
-        }
+        {key: merged[key] if len(merged.get_list(key)) == 1 else tuple(merged.get_list(key)) for key in merged}
     )
 
 
@@ -132,7 +132,11 @@ class ChatGPTRealtime(OpenAIRealtime):
         url: Final = base.copy_with(
             scheme="https" if base.scheme in ("https", "wss") else "http",
             path=f"{base.path.rstrip('/')}/realtime/calls/{self._call_id}/hangup",
-            params=tuple((key, value) for key, value in self._extra_query.items() if key not in ("model", "call_id")),
+            params=tuple(
+                (key, value)
+                for key, value in QueryParams(self._extra_query).multi_items()
+                if key not in ("model", "call_id")
+            ),
         )
         client: Final = get_async_httpx_client(llm_provider=LlmProviders.CHATGPT)
         response: Final = await client.post(str(url), headers=self._profile_headers, data=b"", timeout=10)
@@ -166,7 +170,9 @@ class ChatGPTRealtime(OpenAIRealtime):
         endpoint: Final = realtime_endpoint(query_params.get("model", ""))
         if self._call_id:
             gateway_query: Final = tuple(
-                (key, value) for key, value in self._extra_query.items() if key not in ("model", "call_id")
+                (key, value)
+                for key, value in QueryParams(self._extra_query).multi_items()
+                if key not in ("model", "call_id")
             )
             return str(
                 base.copy_with(
@@ -182,7 +188,11 @@ class ChatGPTRealtime(OpenAIRealtime):
                 scheme="wss" if base.scheme in ("https", "wss") else "ws",
                 path=f"{base.path.rstrip('/')}/{endpoint}",
                 params=QueryParams(TypeAdapter(Mapping[str, str | None]).validate_python(query_params)).merge(
-                    tuple((key, value) for key, value in self._extra_query.items() if key not in ("model", "call_id"))
+                    tuple(
+                        (key, value)
+                        for key, value in QueryParams(self._extra_query).multi_items()
+                        if key not in ("model", "call_id")
+                    )
                 ),
             )
         )

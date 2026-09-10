@@ -83,6 +83,103 @@ async def test_sideband_preserves_pending_cost_reconciliation(monkeypatch, logge
     assert auth.budget_reservation["finalized"] is not logged_success
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["normal", "disconnect", "pre_call", "admission"])
+async def test_supervised_attachments_release_real_limiter_before_reconnect(monkeypatch, ending):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    import litellm
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server as server
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+        _request_stash,
+        get_request_stash,
+    )
+    from litellm.proxy.utils import InternalUsageCache
+
+    cache = DualCache()
+    limiter = _PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(api_key="attachment-owner", max_parallel_requests=1, tpm_limit=10000)
+    token_key = limiter.create_rate_limit_keys(key="api_key", value=auth.api_key, rate_limit_type="tokens")
+    parallel_key = f"{{api_key:{auth.api_key}}}:max_parallel_requests"
+    call = CodexRealtimeCall(
+        call_id="rtc_test",
+        model="gpt-live-1-codex",
+        alias="voice",
+        usage_supervised=True,
+        owner=hashlib.sha256(b"Bearer owner").hexdigest(),
+        expires_at=time.time() + 300,
+    )
+    monkeypatch.setenv("LITELLM_SALT_KEY", "attachment-cleanup-test")
+    monkeypatch.setattr(codex, "can_key_call_resolved_model", AsyncMock())
+    monkeypatch.setattr(server, "proxy_logging_obj", SimpleNamespace(get_proxy_hook=lambda name: limiter))
+
+    async def process(request, data, selected_auth, model, call_type):
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=selected_auth,
+            cache=cache,
+            data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 50},
+            call_type="completion",
+        )
+        assert get_request_stash().reserved_tokens > 0
+        if ending == "pre_call":
+            raise RuntimeError("Later policy rejected attachment")
+        return data, SimpleNamespace(model_call_details={})
+
+    async def forward(**kwargs):
+        if ending == "disconnect":
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(codex, "process_codex_request", process)
+    monkeypatch.setattr(litellm, "_arealtime", forward)
+    blocker_stash = None
+    blocker_reserved = 0
+    if ending == "admission":
+        setup_token = _request_stash.set(None)
+        try:
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=auth,
+                cache=cache,
+                data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 50},
+                call_type="completion",
+            )
+            blocker_stash = get_request_stash()
+            blocker_reserved = blocker_stash.reserved_tokens
+        finally:
+            _request_stash.reset(setup_token)
+    for _ in range(3):
+        stash_token = _request_stash.set(None)
+        try:
+            websocket = WebSocket(
+                {
+                    "type": "websocket",
+                    "path": "/v1/live/opaque",
+                    "query_string": b"",
+                    "headers": [(b"authorization", b"Bearer owner")],
+                },
+                AsyncMock(return_value={"type": "websocket.connect"}),
+                AsyncMock(),
+            )
+            if ending == "disconnect":
+                with pytest.raises(asyncio.CancelledError):
+                    await codex.codex_realtime_sideband(websocket, encode_call(call), auth)
+            else:
+                await codex.codex_realtime_sideband(websocket, encode_call(call), auth)
+            assert limiter._gauge_in_flight_from_cache_value(await cache.async_get_cache(parallel_key)) == int(
+                ending == "admission"
+            )
+            assert int(await cache.async_get_cache(token_key) or 0) == blocker_reserved
+        finally:
+            _request_stash.reset(stash_token)
+    if blocker_stash is not None:
+        cleanup_token = _request_stash.set(blocker_stash)
+        try:
+            await limiter.async_release_realtime_attachment({}, auth)
+        finally:
+            _request_stash.reset(cleanup_token)
+
 def test_sideband_token_binds_owner_and_model(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-salt-for-codex-realtime")
     call = CodexRealtimeCall(

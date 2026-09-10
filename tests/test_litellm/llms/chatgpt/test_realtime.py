@@ -27,7 +27,7 @@ async def test_live_closed_observer_uses_independent_hangup(failure, hangup_stat
         GenericLiteLLMParams(
             chatgpt_realtime_call_id="rtc_live_closed",
             chatgpt_token_dir=chatgpt_tokens,
-            extra_query={"gateway": "tenant"},
+            extra_query={"gateway": "tenant", "tag": ["alpha +/&", "beta"]},
         ),
         {},
         {"x-gateway-token": "test-only"},
@@ -59,7 +59,9 @@ async def test_live_closed_observer_uses_independent_hangup(failure, hangup_stat
         await client.aclose()
     assert len(requests) == 2
     assert requests[0].method == "POST"
-    assert str(requests[0].url) == "https://gateway.example/v1/realtime/calls/rtc_live_closed/hangup?gateway=tenant"
+    assert requests[0].url.path == "/v1/realtime/calls/rtc_live_closed/hangup"
+    assert requests[0].url.params.get_list("tag") == ["alpha +/&", "beta"]
+    assert requests[0].url.params["gateway"] == "tenant"
     assert requests[0].headers["x-gateway-token"] == "test-only"
     assert requests[0].headers["Authorization"] == "Bearer test-token-default"
     assert requests[0].extensions["timeout"]["read"] == 10
@@ -138,6 +140,8 @@ async def test_routed_call_preserves_deployment_gateway_headers(
                         "enabled": True,
                         "disabled": False,
                         "blank": None,
+                        "tag": ["alpha +/&", "beta"],
+                        "empty": [],
                         "model": "other-model",
                         "call_id": "rtc_wrong",
                     },
@@ -163,10 +167,16 @@ async def test_routed_call_preserves_deployment_gateway_headers(
             "enabled": "true",
             "disabled": "false",
             "blank": "",
+            "tag": "alpha +/&",
             "model": "other-model",
             "call_id": "rtc_wrong",
         }
-        assert response.extensions["chatgpt_realtime"]["extra_query"] == dict(requests[0].url.params)
+        assert requests[0].url.params.get_list("tag") == ["alpha +/&", "beta"]
+        assert response.extensions["chatgpt_realtime"]["extra_query"] == {
+            **dict(requests[0].url.params),
+            "tag": ("alpha +/&", "beta"),
+            "empty": (),
+        }
         assert response.extensions["chatgpt_realtime"]["extra_headers"]["x-gateway-route"] == "configured"
         for name, value in inbound_headers.items():
             assert requests[0].headers[name] == value
@@ -180,6 +190,7 @@ async def test_routed_call_preserves_deployment_gateway_headers(
             key: value for key, value in requests[0].url.params.items() if key not in ("model", "call_id")
         }
         assert sideband_url.params.get("call_id") == ("rtc_test" if endpoint == "realtime" else None)
+        assert sideband_url.params.get_list("tag") == ["alpha +/&", "beta"]
         assert sideband_url.path.endswith("/realtime" if endpoint == "realtime" else "/live/rtc_test")
     finally:
         await client.client.aclose()
@@ -203,6 +214,8 @@ async def test_websocket_forwards_configured_headers_without_client_identity(mod
             websocket=websocket,
             api_base="https://voice.example/codex",
             chatgpt_realtime_call_id=call_id,
+            query_params={"model": model, "intent": "client-intent"},
+            extra_query={"intent": "configured-intent", "tag": ["alpha +/&", "beta"]},
             headers={"x-deployment-header": "configured"},
             extra_headers={
                 "X-Gateway-Route": "voice",
@@ -213,6 +226,9 @@ async def test_websocket_forwards_configured_headers_without_client_identity(mod
         )
         connect.assert_called_once()
         headers = httpx.Headers(connect.call_args.kwargs["additional_headers"])
+        upstream_url = httpx.URL(connect.call_args.args[0])
+        assert upstream_url.params.get_list("intent") == ["configured-intent"]
+        assert upstream_url.params.get_list("tag") == ["alpha +/&", "beta"]
     assert headers["x-deployment-header"] == "configured"
     assert headers["x-gateway-route"] == "voice"
     assert headers["openai-alpha"] == "configured-value"

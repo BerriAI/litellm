@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from typing import Final, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 from websockets.exceptions import ConnectionClosedOK
 
 from litellm._logging import verbose_proxy_logger
@@ -31,6 +31,14 @@ class UsageSink(Protocol):
 
 class _ObserverEvent(BaseModel):
     type: str
+
+
+class _LiveDurationUsage(BaseModel):
+    audio_duration_ms: float = Field(strict=True, ge=0, allow_inf_nan=False)
+
+
+class _LiveTerminalEvent(BaseModel):
+    usage: _LiveDurationUsage
 
 
 class CallSupervisor:
@@ -66,6 +74,7 @@ class CallSupervisor:
         self._stop = asyncio.Event()
         self._started = False
         self._terminal = False
+        self._terminal_usage_valid = False
         self._close_confirmed = False
         self._accounting_complete = False
         self._task: asyncio.Task[None] | None = None
@@ -106,10 +115,18 @@ class CallSupervisor:
                 self._ready.set()
             if event.type == "session.closed":
                 self._terminal = True
+                try:
+                    _LiveTerminalEvent.model_validate_json(message)
+                except ValidationError:
+                    self._terminal_usage_valid = False
+                else:
+                    self._terminal_usage_valid = True
                 return
 
     def _usage_complete(self) -> bool:
-        return self._terminal or (not self._terminal_usage_required and self._close_confirmed)
+        if self._terminal_usage_required:
+            return self._terminal and self._terminal_usage_valid
+        return self._terminal or self._close_confirmed
 
     async def _run(self) -> None:
         reader: Final = asyncio.create_task(self._read())

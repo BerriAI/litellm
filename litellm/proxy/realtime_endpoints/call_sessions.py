@@ -38,6 +38,12 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
+from litellm.proxy.hooks.parallel_request_limiter import (
+    _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # existing built-in limiter has no public alias
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # existing built-in limiter has no public alias
+)
 from litellm.proxy.spend_tracking.budget_reservation import (
     invalidate_budget_reservation_counters,
     release_or_invalidate_budget_reservation,
@@ -324,6 +330,7 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
         p.strip() for p in websocket.headers.get("sec-websocket-protocol", "").split(",") if p.strip()
     )
     logging_obj: Logging | None = None  # rebind-ok: cleanup needs the logger only after pre-call succeeds
+    attachment_limiter: _PROXY_MaxParallelRequestsHandler | _PROXY_MaxParallelRequestsHandler_v3 | None = None
     try:
         try:
             api_key: Final = get_websocket_api_key(websocket)
@@ -364,6 +371,13 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
                 name.strip() for name in websocket.query_params.get("guardrails", "").split(",") if name.strip()
             ],
         }
+        limiter: Final = server.proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+        if call.usage_supervised and isinstance(
+            limiter, (_PROXY_MaxParallelRequestsHandler, _PROXY_MaxParallelRequestsHandler_v3)
+        ):
+            attachment_limiter = limiter
+            if isinstance(limiter, _PROXY_MaxParallelRequestsHandler):
+                limiter.begin_realtime_attachment(data)
         try:
             processed, logging_obj = await process_codex_request(request, data, auth, call.alias, "_arealtime")
         except Exception:  # noqa: BLE001  # custom hook exceptions must reject the connection
@@ -397,5 +411,9 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
             },
         )
     finally:
-        if logging_obj is None or not logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
-            await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)
+        try:
+            if attachment_limiter is not None:
+                await attachment_limiter.async_release_realtime_attachment(data, auth)
+        finally:
+            if logging_obj is None or not logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
+                await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)

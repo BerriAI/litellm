@@ -4677,6 +4677,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         stash.parallel_slot = None
 
+    async def async_release_realtime_attachment(
+        self, request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        await self.async_post_call_failure_hook(
+            request_data={},  # mutable-ok: existing failure hook requires dict; attachment has no billable usage
+            original_exception=Exception("Realtime attachment completed"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
         Post-call hook to update rate limit headers in the response.
