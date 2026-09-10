@@ -15101,7 +15101,9 @@ def test_get_candidate_model_ids_for_route_covers_model_name_and_pattern():
     pre-call check can tell a genuine cross-group route from same-group unavailability.
     A concrete model group returns its member ids; a wildcard/pattern deployment is
     included for a concrete model it matches, which the bare model_name index misses.
-    Regression guard for the LIT-7195 tier-change discriminator's team/pattern gaps.
+    The unprefixed-name case must resolve through get_deployments_by_pattern (which retries
+    the provider-qualified form), not a bare pattern_router.route that only sees the literal
+    name. Regression guard for the LIT-7195 tier-change discriminator's team/pattern gaps.
     """
     router = Router(
         model_list=[
@@ -15125,6 +15127,9 @@ def test_get_candidate_model_ids_for_route_covers_model_name_and_pattern():
 
     assert router.get_candidate_model_ids_for_route(model="grp") == frozenset({"dep-a", "dep-b"})
     assert "dep-wild" in router.get_candidate_model_ids_for_route(model="openai/gpt-4o-some-new-model")
+    # unprefixed name whose provider resolves to openai: only get_deployments_by_pattern's
+    # provider-qualified retry matches "openai/*"; a bare route() on the literal name misses it
+    assert "dep-wild" in router.get_candidate_model_ids_for_route(model="gpt-5")
 
 
 def test_deployment_ids_stringifies_ids_and_skips_entries_without_a_model_info_id():

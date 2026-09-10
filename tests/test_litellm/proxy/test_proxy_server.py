@@ -6,6 +6,7 @@ import os
 import re
 import socket
 import subprocess
+import time
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,7 +29,7 @@ from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -12954,3 +12955,59 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
         import litellm.proxy.proxy_server as ps
 
         assert ps.general_settings["enable_openai_websocket_passthrough"] is False
+
+
+async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_count(monkeypatch):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    warm_tokenizer("claude-fable-5")
+
+    response, took, lags = await timed_with_loop_lags(
+        lambda: proxy_server_module.token_counter(TokenCountRequest(model="claude-fable-5", prompt=text * 100))
+    )
+
+    assert response.total_tokens > 0
+    assert_loop_stayed_free(took, lags)
+
+
+async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
+    from tokenizers import Tokenizer
+
+    from litellm import Router
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
+
+    claude_tokenizer: Final = litellm.utils._select_tokenizer("claude-fable-5")["tokenizer"]
+
+    class SlowHubTokenizer:
+        @staticmethod
+        def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> Tokenizer:
+            time.sleep(0.3)
+            return claude_tokenizer
+
+    monkeypatch.setattr(litellm.utils, "Tokenizer", SlowHubTokenizer)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "self-hosted",
+                    "litellm_params": {"model": "openai/self-hosted-model", "api_base": "http://localhost:8080/v1"},
+                    "model_info": {"custom_tokenizer": {"identifier": "my-org/tokenizer", "revision": "main", "auth_token": None}},
+                }
+            ]
+        ),
+    )
+
+    response, took, lags = await timed_with_loop_lags(
+        lambda: proxy_server_module.token_counter(TokenCountRequest(model="self-hosted", prompt="count me off the loop"))
+    )
+
+    assert response.tokenizer_type == "huggingface_tokenizer"
+    assert response.total_tokens > 0
+    assert_loop_stayed_free(took, lags)

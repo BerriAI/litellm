@@ -31,6 +31,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     ESTIMATED_OUTPUT_TOKENS_FIELD,
@@ -3307,7 +3308,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             min_configured_tpm_limit=min_configured_otpm_limit,
             call_type=call_type,
         )
-        raw_estimated_input_tokens: Final = self._estimate_precise_input_tokens(
+        raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
             data=data, model=requested_model, call_type=call_type
         )
         estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
