@@ -15,7 +15,7 @@ import hashlib
 import inspect
 import json
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -334,11 +334,22 @@ def _redis_timeout_error_types() -> tuple[type, ...]:
     return (RedisTimeoutError, TimeoutError)
 
 
+_MAX_EXCEPTION_CAUSE_DEPTH: Final = 20
+
+
+def _exception_cause_chain(exc: BaseException) -> Iterator[BaseException]:
+    current = exc  # rebind-ok: advances one link per iteration of the bounded walk
+    for _ in range(_MAX_EXCEPTION_CAUSE_DEPTH):
+        yield current
+        if current.__cause__ is None:
+            return
+        current = current.__cause__
+
+
 def _is_redis_timeout_failure(exc: BaseException) -> bool:
-    """Follows __cause__: a blocking pool wait raises ConnectionError from asyncio.TimeoutError."""
-    if isinstance(exc, _redis_timeout_error_types()):
-        return True
-    return exc.__cause__ is not None and _is_redis_timeout_failure(exc.__cause__)
+    """Walks __cause__: a blocking pool wait raises ConnectionError from asyncio.TimeoutError."""
+    timeout_types: Final = _redis_timeout_error_types()
+    return any(isinstance(cause, timeout_types) for cause in _exception_cause_chain(exc))
 
 
 class _BreakerMetrics:
