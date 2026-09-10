@@ -5,6 +5,8 @@ Tests the rule-based complexity scoring and tier assignment logic.
 """
 
 import asyncio
+import copy
+import json
 import logging
 import sys
 import time
@@ -66,6 +68,7 @@ from litellm.types.router import (
     LiteLLM_Params,
     TaggedPreRoutingStrategy,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 requires_semantic_router = pytest.mark.skipif(
@@ -2480,6 +2483,181 @@ class TestTierLabels:
         )
         assert set(config.tiers) == {"SIMPLE", "REASONING"}
         assert set(config.tier_boundaries) == {"simple_medium", "medium_complex", "complex_reasoning"}
+
+
+def _encrypted_agent_task() -> dict[str, object]:
+    return {
+        "type": "agent_message",
+        "author": "/root",
+        "recipient": "/root/child",
+        "content": [
+            {"type": "input_text", "text": "Message Type: NEW_TASK\nTask name: /root/child\nPayload:\nHello"},
+            {"type": "encrypted_content", "encrypted_content": "opaque-provider-task"},
+        ],
+    }
+
+
+def _native_classifier_response(content: str) -> ResponsesAPIResponse:
+    response: Final = ResponsesAPIResponse(
+        id="resp_classifier",
+        created_at=0,
+        status="completed",
+        output=[{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": content}]}],
+    )
+    response._hidden_params = {"response_cost": 0.0001}
+    return response
+
+
+def _native_classifier_router(
+    output: str = '{"tier":"REASONING"}',
+    classifier_type: str = "llm",
+    deployment_model: str = "openai/gpt-6-astra",
+    failure: Exception | None = None,
+) -> tuple[ComplexityRouter, MagicMock]:
+    dependency: Final = MagicMock(
+        aresponses=AsyncMock(return_value=_native_classifier_response(output), side_effect=failure),
+        acompletion=AsyncMock(return_value=_llm_response('{"tier":"SIMPLE"}')),
+        get_model_list=MagicMock(return_value=[{"litellm_params": {"model": deployment_model}}]),
+    )
+    return (
+        ComplexityRouter(
+            model_name="encrypted-router",
+            litellm_router_instance=dependency,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "cheap-model", "REASONING": "deep-model"},
+                "classifier_type": classifier_type,
+                "classifier_llm_config": {"model": "classifier", "timeout_ms": 100, "reasoning_effort": "low"},
+                "heuristic_first_max_tier": "SIMPLE" if classifier_type == "heuristic_first" else None,
+                "hybrid_boundary_margin": 0.01 if classifier_type == "hybrid" else None,
+                "classifier_fallback": "default_model",
+                "default_model": "deep-model",
+                "session_affinity": False,
+                "deployment_affinity": False,
+            },
+        ),
+        dependency,
+    )
+
+
+class TestEncryptedTaskClassifier:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("classifier_type", ["llm", "heuristic_first", "hybrid"])
+    @pytest.mark.parametrize("tier,model", [("SIMPLE", "cheap-model"), ("REASONING", "deep-model")])
+    async def test_encrypted_task_routes_by_native_verdict(self, classifier_type: str, tier: str, model: str):
+        router, dependency = _native_classifier_router(json.dumps({"tier": tier}), classifier_type)
+        task: Final = _encrypted_agent_task()
+        request: Final = {
+            "input": [
+                {"role": "user", "content": "Prior task context"},
+                task,
+                {"type": "function_call_output", "call_id": "call_1", "output": "Tool output"},
+                {"role": "user", "content": "<system-reminder>Injected reminder</system-reminder>"},
+            ],
+            "instructions": "Caller constraints",
+            "tools": [{"type": "function", "name": "execute"}],
+            "previous_response_id": "resp_parent",
+            "litellm_session_id": "parent-session",
+            "litellm_trace_id": "parent-trace",
+            "turn_off_message_logging": True,
+            "litellm_metadata": {"user_api_key_hash": "caller-key-hash"},
+        }
+        original: Final = copy.deepcopy(request)
+
+        result: Final = await router.async_pre_routing_hook(model="encrypted-router", request_kwargs=request)
+
+        assert result.model == model
+        assert result.routing_decision["tier"] == tier
+        assert result.routing_decision["cause"] == "llm_classifier"
+        assert result.routing_decision["classifier_cost"] == 0.0001
+        assert result.messages is None
+        assert request == original
+        dependency.acompletion.assert_not_called()
+        call: Final = dependency.aresponses.call_args.kwargs
+        assert call["input"][-1] == task
+        assert "opaque-provider-task" not in json.dumps(call["input"][:-1])
+        assert "Prior task context" in json.dumps(call["input"][:-1])
+        assert "Caller constraints" in json.dumps(call["input"][:-1])
+        assert "Caller constraints" not in call["instructions"]
+        assert "SIMPLE" in call["instructions"] and "REASONING" in call["instructions"]
+        assert call["text"]["format"]["schema"]["properties"]["tier"]["enum"] == [
+            "SIMPLE", "MEDIUM", "COMPLEX", "REASONING"
+        ]
+        assert call["text"]["format"]["strict"] is True
+        assert call["reasoning"] == {"effort": "low"}
+        assert call["store"] is False
+        assert call["stream"] is False
+        assert "tools" not in call and "previous_response_id" not in call
+        assert "messages" not in call and "response_format" not in call
+        assert call["timeout"] == 0.1 and call["num_retries"] == 0 and call["disable_fallbacks"] is True
+        assert call["litellm_session_id"] == "parent-session"
+        assert call["litellm_trace_id"] == "parent-trace"
+        assert call["turn_off_message_logging"] is True
+        assert call["metadata"]["user_api_key_hash"] == "caller-key-hash"
+        assert call["proxy_server_request"]["body"]["input"] == call["input"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "items",
+        [
+            [{"type": "reasoning", "encrypted_content": "opaque-history", "summary": []}, {"role": "user", "content": "hi"}],
+            [_encrypted_agent_task(), {"role": "user", "content": "hi"}],
+            [{**_encrypted_agent_task(), "content": [{"type": "input_text", "text": "hi"}]}],
+            [{"role": "user", "content": "gAAAA is plain text"}],
+            [{"role": "user", "content": "hi"}, {"type": "function_call_output", "call_id": "call_1", "output": "opaque-provider-task"}],
+        ],
+        ids=["historical-reasoning", "older-encrypted-task", "plaintext-agent", "ciphertext-looking-text", "tool-output"],
+    )
+    async def test_other_asks_keep_chat_classifier(self, items: list[dict[str, object]]):
+        router, dependency = _native_classifier_router()
+
+        result: Final = await router.async_pre_routing_hook(model="encrypted-router", request_kwargs={"input": items})
+
+        assert result.model == "cheap-model"
+        assert result.routing_decision["cause"] == "llm_classifier"
+        dependency.aresponses.assert_not_called()
+        dependency.acompletion.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("output", ["", "not-json", '{"tier":"UNKNOWN"}'])
+    async def test_invalid_native_verdict_uses_existing_fallback(self, output: str):
+        router, dependency = _native_classifier_router(output=output)
+
+        result: Final = await router.async_pre_routing_hook(
+            model="encrypted-router", request_kwargs={"input": [_encrypted_agent_task()]}
+        )
+
+        assert result.model == "deep-model"
+        assert result.routing_decision["cause"] == "default_model_fallback"
+        dependency.aresponses.assert_awaited_once()
+        dependency.acompletion.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("deployment_model", ["anthropic/test-classifier", "openai/chat_completions/gpt-6-astra"])
+    async def test_incompatible_classifier_does_not_flatten_encryption(self, deployment_model: str):
+        router, dependency = _native_classifier_router(deployment_model=deployment_model)
+
+        result: Final = await router.async_pre_routing_hook(
+            model="encrypted-router", request_kwargs={"input": [_encrypted_agent_task()]}
+        )
+
+        assert result.model == "deep-model"
+        assert result.routing_decision["cause"] == "default_model_fallback"
+        dependency.aresponses.assert_not_called()
+        dependency.acompletion.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", [ValueError("invalid_encrypted_content"), TimeoutError("classifier timed out")])
+    async def test_native_provider_failure_uses_existing_fallback(self, failure: Exception):
+        router, dependency = _native_classifier_router(failure=failure)
+
+        result: Final = await router.async_pre_routing_hook(
+            model="encrypted-router", request_kwargs={"input": [_encrypted_agent_task()]}
+        )
+
+        assert result.model == "deep-model"
+        assert result.routing_decision["cause"] == "default_model_fallback"
+        dependency.aresponses.assert_awaited_once()
+        dependency.acompletion.assert_not_called()
 
 
 class TestLLMClassifier:
