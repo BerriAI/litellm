@@ -20,6 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -59,6 +60,7 @@ import {
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
+import ProjectUsage from "./ProjectUsage/ProjectUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
@@ -102,12 +104,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // filter reads as loading rather than as a range with no customers.
   const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
+  const { data: projectsResponse } = useProjects();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
   const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
+  const canViewProjectUsage = hasCapability(userRole, "viewProjectUsage");
 
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
@@ -932,6 +936,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
               premiumUser={premiumUser}
               dateValue={dateValue}
+            />
+          )}
+
+          {/* Project Usage Panel */}
+          {usageView === "project" && canViewProjectUsage && (
+            <ProjectUsage
+              accessToken={accessToken}
+              projectList={
+                projectsResponse?.map((project) => ({
+                  label: project.project_alias || project.project_id,
+                  value: project.project_id,
+                })) || null
+              }
+              dateValue={dateValue}
+              premiumUser={premiumUser}
             />
           )}
 

@@ -1,4 +1,4 @@
-import { BarChart3, Bot, Building2, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
+import { BarChart3, Bot, Building2, Folder, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
 import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,6 +9,7 @@ export type UsageOption =
   | "my-usage"
   | "organization"
   | "team"
+  | "project"
   | "customer"
   | "tag"
   | "agent"
@@ -67,6 +68,13 @@ const OPTIONS: OptionConfig[] = [
     label: "Team Usage",
     description: "View usage by team",
     icon: <Users className="size-4" />,
+  },
+  {
+    value: "project",
+    label: "Project Usage",
+    description: "View usage by project",
+    icon: <Folder className="size-4" />,
+    capability: "viewProjectUsage",
   },
   {
     value: "customer",
