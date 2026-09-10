@@ -36,35 +36,35 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
 
         # If config_file_path is provided, use it to determine the module spec and load the module
         try:
-           # First try a normal Python import (site-packages, installed modules, etc.)
-           module = importlib.import_module(module_name)
+            # First try a normal Python import (site-packages, installed modules, etc.)
+            module = importlib.import_module(module_name)
 
         except ImportError:
-           # Fall back to loading a local callback relative to the config file
-           if config_file_path is None:
-              raise
+            # Fall back to loading a local callback relative to the config file
+            if config_file_path is None:
+                raise
 
-           directory = os.path.dirname(config_file_path)
-           module_file_path = os.path.join(directory, *module_name.split("."))
-           module_file_path += ".py"
+            directory = os.path.dirname(config_file_path)
+            module_file_path = os.path.join(directory, *module_name.split("."))
+            module_file_path += ".py"
 
-           if not os.path.exists(module_file_path):
-              raise ImportError(f"Could not find module file {module_file_path}")
+            if not os.path.exists(module_file_path):
+                raise ImportError(f"Could not find module file {module_file_path}")
 
-           spec = importlib.util.spec_from_file_location(module_name, module_file_path)
-           if spec is None:
-              raise ImportError(
-                 f"Could not find a module specification for {module_file_path}"
-           )
+            spec = importlib.util.spec_from_file_location(module_name, module_file_path)
+            if spec is None:
+                raise ImportError(
+                    f"Could not find a module specification for {module_file_path}"
+                )
 
-           module = importlib.util.module_from_spec(spec)
+            module = importlib.util.module_from_spec(spec)
 
-           if spec.loader is None:
-              raise ImportError(
-                 f"Could not find a module loader for {module_file_path}"
-           )
+            if spec.loader is None:
+                raise ImportError(
+                    f"Could not find a module loader for {module_file_path}"
+                )
 
-           spec.loader.exec_module(module)
+            spec.loader.exec_module(module)
 
         # Get the instance from the module
         instance = getattr(module, instance_name)
