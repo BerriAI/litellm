@@ -235,6 +235,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "applied_policies",
     "policy_sources",
     "guardrail_scan_ids",
+    "guardrail_scan_metadata",
     "routing_decision",
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     "pillar_response_headers",
@@ -291,6 +292,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "applied_policies",
     "policy_sources",
     "guardrail_scan_ids",
+    "guardrail_scan_metadata",
     "routing_decision",
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
@@ -771,6 +773,16 @@ def apply_missing_session_id_policy(
         return
     if policy == "omit":
         metadata[SESSION_ID_OMITTED_METADATA_KEY] = True
+        requester_metadata: Final = data.get("metadata")
+        requester_session_id: Final = (
+            requester_metadata.get("session_id") if isinstance(requester_metadata, dict) else None
+        )
+        if (
+            (body_session_id := data.get("litellm_session_id"))
+            and not metadata.get("session_id")
+            and not requester_session_id
+        ):
+            metadata["session_id"] = body_session_id
         return
     if data.get("litellm_session_id") or metadata.get("session_id"):
         return
@@ -1041,7 +1053,9 @@ def resolve_tenant_otel_destinations(
     the request has an outcome, so honouring the filter would mean holding every span
     back until the call finishes. Those entries keep today's behaviour instead, where
     the tenant's credentials reach the backend through per-request tracer routing and
-    the operator's exporter is left alone.
+    the operator's exporter is left alone. Its ``callback_vars`` still take part in the
+    merge for a backend another entry made eligible, so the destination carries the
+    same credentials the runtime parser resolves for that request.
 
     A backend the request disabled dynamically, through the key's
     ``litellm_disabled_callbacks`` or the ``x-litellm-disable-callbacks`` header in
@@ -1069,12 +1083,13 @@ def resolve_tenant_otel_destinations(
         callback
         for item in entries
         if (callback := _get_validated_callback_metadata(item=item, source="otel-destination")) is not None
-        if callback.callback_type != "failure"
         if callback.callback_name.lower() not in disabled
     )
     return tuple(
         destination
-        for name in dict.fromkeys(callback.callback_name for callback in callbacks)
+        for name in dict.fromkeys(
+            callback.callback_name for callback in callbacks if callback.callback_type != "failure"
+        )
         if (
             destination := destination_for(
                 name,
@@ -1745,7 +1760,9 @@ class LiteLLMProxyRequestSetup:
         callback_vars_dict.pop("success_callback", None)
         callback_vars_dict.pop("failure_callback", None)
         callback_vars_dict = {
-            key: (litellm.utils.get_secret(value, default_value=value) or value if isinstance(value, str) else value)
+            key: (
+                litellm.utils.get_secret(value, default_value=value) or value if isinstance(value, str) else str(value)
+            )
             for key, value in callback_vars_dict.items()
         }
 
