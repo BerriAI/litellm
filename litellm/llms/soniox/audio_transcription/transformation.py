@@ -81,10 +81,8 @@ def _decode_form_value(key: str, value: object) -> object:
     if key in SONIOX_JSON_PARAMS and value.lstrip()[:1] in ("{", "["):
         try:
             return _JSON_CONTAINER.validate_json(value)
-        except ValidationError as exc:
-            raise SonioxException(
-                message=f"`{key}` is not valid JSON: {exc.errors()[0]['msg']}", status_code=400, headers=None
-            )
+        except ValidationError:
+            return value
     if key == "language_hints":
         return tuple(hint.strip() for hint in value.split(",") if hint.strip())
     return value
