@@ -2110,12 +2110,17 @@ export interface paths {
          *     - claude plugin marketplace add <url>
          *     - claude plugin install <name>@<marketplace>
          *
+         *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
+         *     the key is authenticated and the catalog also holds the disabled plugins granted
+         *     to it through `object_permission.skills` on the key or its team.
+         *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
          *
          *     Example:
          *         ```bash
          *         claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json
+         *         claude plugin marketplace add "http://localhost:4000/claude-code/marketplace.json?key=sk-..."
          *         claude plugin install my-plugin@litellm
          *         ```
          */
@@ -2152,8 +2157,8 @@ export interface paths {
          * @description Register a new plugin in the LiteLLM marketplace.
          *
          *     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-         *     GitHub/GitLab/Bitbucket. Claude Code will clone from the git source
-         *     when users install.
+         *     GitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).
+         *     Claude Code clones the git source or downloads the archive when users install.
          *
          *     This endpoint is create-only and never overwrites. If a plugin with
          *     the same name already exists it returns 409 Conflict; use
@@ -2163,7 +2168,7 @@ export interface paths {
          *
          *     Parameters:
          *         - name: Plugin name (kebab-case)
-         *         - source: Git source reference (github, url, or git-subdir format)
+         *         - source: Plugin source reference (github, url, git-subdir, or archive format)
          *         - version: Semantic version (optional)
          *         - description: Plugin description (optional)
          *         - author: Author information (optional)
@@ -2229,7 +2234,7 @@ export interface paths {
          *
          *     Parameters:
          *         - plugin_name: Name of the plugin to update (path parameter)
-         *         - source: Git source reference (github, url, or git-subdir format)
+         *         - source: Plugin source reference (github, url, git-subdir, or archive format)
          *         - version: Semantic version (optional)
          *         - description: Plugin description (optional)
          *         - author: Author information (optional)
@@ -29333,6 +29338,8 @@ export interface components {
             models?: string[] | null;
             /** Search Tools */
             search_tools?: string[] | null;
+            /** Skills */
+            skills?: string[] | null;
             /** Vector Stores */
             vector_stores?: string[] | null;
         };
@@ -29386,6 +29393,8 @@ export interface components {
              * @default []
              */
             search_tools: string[] | null;
+            /** Skills */
+            skills?: string[] | null;
             /**
              * Vector Stores
              * @default []
@@ -33638,7 +33647,7 @@ export interface components {
             name: string;
             /**
              * Source
-             * @description Git source reference
+             * @description Plugin source reference
              */
             source: {
                 [key: string]: string;
@@ -34887,7 +34896,7 @@ export interface components {
          * @description Request body for registering a plugin in the marketplace.
          *
          *     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-         *     GitHub/GitLab/Bitbucket and referenced by their git source.
+         *     GitHub/GitLab/Bitbucket or as a zip archive on any https host and referenced by their source.
          */
         RegisterPluginRequest: {
             /** @description Plugin author */
@@ -34929,10 +34938,11 @@ export interface components {
             namespace?: string | null;
             /**
              * Source
-             * @description Git source reference. Supported formats:
+             * @description Plugin source reference. Supported formats:
              *     - GitHub: {'source': 'github', 'repo': 'org/repo'}
              *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
              *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
+             *     - Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}
              */
             source: {
                 [key: string]: string;
@@ -38211,10 +38221,11 @@ export interface components {
             namespace?: string | null;
             /**
              * Source
-             * @description Git source reference. Supported formats:
+             * @description Plugin source reference. Supported formats:
              *     - GitHub: {'source': 'github', 'repo': 'org/repo'}
              *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
              *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
+             *     - Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}
              */
             source: {
                 [key: string]: string;
@@ -43204,7 +43215,9 @@ export interface operations {
     };
     get_marketplace_claude_code_marketplace_json_get: {
         parameters: {
-            query?: never;
+            query?: {
+                key?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -43218,6 +43231,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -3826,3 +3826,17 @@ def test_team_disable_logging_stays_proxy_admin_only():
 def test_neighbouring_team_routes_stay_closed(route):
     """The grant is the callback paths and nothing else on the team namespace."""
     assert "Only proxy admin" in _gate(route, LitellmUserRoles.INTERNAL_USER.value)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/claude-code/marketplace.json",
+        "/claude-code/plugins",
+        "/claude-code/plugins/my-skill",
+    ],
+)
+def test_claude_code_marketplace_routes_open_to_internal_users(route):
+    """Per-skill visibility is enforced inside the handler, so the route gate must let non-admins through."""
+    assert RouteChecks.is_llm_api_route(route) is True
+    assert _gate(route, LitellmUserRoles.INTERNAL_USER.value) == "allowed"
