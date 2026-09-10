@@ -76,6 +76,8 @@ def normalize_agent_card_interfaces(agent_card: "AgentCard") -> "AgentCard":
     declared version is downgraded to 0.3 to route the SDK's ClientFactory onto
     its v0.3 compat transport, which speaks that dialect.
     """
+    if not hasattr(agent_card, "CopyFrom") or not hasattr(agent_card, "supported_interfaces"):
+        return agent_card
     normalized: Final = type(agent_card)()
     normalized.CopyFrom(agent_card)
     for interface in normalized.supported_interfaces:

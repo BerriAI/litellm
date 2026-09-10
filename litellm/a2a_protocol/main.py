@@ -380,6 +380,46 @@ async def _execute_a2a_stream_with_retry(
         raise RuntimeError("A2A send_message_streaming failed: no response received after retry attempts.")
 
 
+def _build_agent_card_from_params(
+    agent_card_params: Any,
+    base_url: str | None = None,
+) -> "AgentCard":
+    """
+    Build an A2A SDK AgentCard from registered agent_card_params without network discovery.
+    """
+    if not isinstance(agent_card_params, (dict, Mapping)):
+        return normalize_agent_card_interfaces(agent_card_params)
+
+    if _a2a_conversions is None:
+        raise ImportError(
+            "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
+        )
+
+    from google.protobuf.json_format import ParseDict
+
+    pb = _a2a_conversions.pb2_v10.AgentCard()
+    card_dict = dict(agent_card_params)
+    upstream_url = base_url or card_dict.get("url") or ""
+
+    # Parse dictionary into protobuf AgentCard
+    ParseDict(card_dict, pb, ignore_unknown_fields=True)
+
+    # Ensure URL and supported interfaces point to the upstream backend URL
+    if upstream_url:
+        normalized_url = str(upstream_url).rstrip("/") + "/"
+        pb.url = normalized_url
+        if pb.supported_interfaces:
+            for interface in pb.supported_interfaces:
+                interface.url = normalized_url
+        else:
+            interface = pb.supported_interfaces.add()
+            interface.url = normalized_url
+            interface.protocol_binding = "JSONRPC"
+            interface.protocol_version = pb.protocol_version or "1.0"
+
+    return normalize_agent_card_interfaces(pb)
+
+
 @client
 async def asend_message(
     a2a_client: Optional["A2AClientType"] = None,
@@ -388,6 +428,7 @@ async def asend_message(
     litellm_params: dict[str, object] | None = None,
     agent_id: str | None = None,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_card_params: dict[str, Any] | None = None,
     **kwargs: object,
 ) -> LiteLLMSendMessageResponse:
     """
@@ -402,6 +443,7 @@ async def asend_message(
         api_base: API base URL (required for completion bridge, optional for standard A2A)
         litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
         agent_id: Optional agent ID for tracking in SpendLogs
+        agent_card_params: Optional registered agent_card_params dict to avoid re-discovery
         **kwargs: Additional arguments passed to the client decorator
 
     Returns:
@@ -463,9 +505,10 @@ async def asend_message(
     if request is None:
         raise ValueError("request is required")
 
-    # Create A2A client if not provided but api_base is available
+    # Create A2A client if not provided but api_base or agent_card_params is available
     if a2a_client is None:
-        if api_base is None:
+        base_url = api_base or (agent_card_params.get("url") if agent_card_params else None)
+        if base_url is None:
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
         trace_id = trace_id or str(uuid.uuid4())
         extra_headers: Final[dict[str, str]] = {"X-LiteLLM-Trace-Id": trace_id}
@@ -474,7 +517,11 @@ async def asend_message(
         # Overlay agent-level headers (agent headers take precedence over LiteLLM internal ones)
         if agent_extra_headers:
             extra_headers.update(agent_extra_headers)
-        a2a_client = await create_a2a_client(base_url=api_base, extra_headers=extra_headers)
+        a2a_client = await create_a2a_client(
+            base_url=cast(str, base_url),
+            extra_headers=extra_headers,
+            agent_card_params=agent_card_params,
+        )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
@@ -530,8 +577,13 @@ async def asend_message(
 
 @client
 def send_message(
-    a2a_client: "A2AClientType",
-    request: "SendMessageRequest",
+    a2a_client: Optional["A2AClientType"] = None,
+    request: Optional["SendMessageRequest"] = None,
+    api_base: str | None = None,
+    litellm_params: dict[str, object] | None = None,
+    agent_id: str | None = None,
+    agent_extra_headers: dict[str, str] | None = None,
+    agent_card_params: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> LiteLLMSendMessageResponse | Coroutine[object, object, LiteLLMSendMessageResponse]:
     """
@@ -542,6 +594,11 @@ def send_message(
     Args:
         a2a_client: An initialized a2a.client.A2AClient instance
         request: SendMessageRequest from a2a.types
+        api_base: API base URL
+        litellm_params: Optional dict with custom_llm_provider, model, etc.
+        agent_id: Optional agent ID
+        agent_extra_headers: Optional extra headers
+        agent_card_params: Optional registered agent_card_params
         **kwargs: Additional arguments passed to the client decorator
 
     Returns:
@@ -553,9 +610,29 @@ def send_message(
         loop = None
 
     if loop is not None:
-        return asend_message(a2a_client=a2a_client, request=request, **kwargs)
+        return asend_message(
+            a2a_client=a2a_client,
+            request=request,
+            api_base=api_base,
+            litellm_params=litellm_params,
+            agent_id=agent_id,
+            agent_extra_headers=agent_extra_headers,
+            agent_card_params=agent_card_params,
+            **kwargs,
+        )
     else:
-        return asyncio.run(asend_message(a2a_client=a2a_client, request=request, **kwargs))
+        return asyncio.run(
+            asend_message(
+                a2a_client=a2a_client,
+                request=request,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                agent_id=agent_id,
+                agent_extra_headers=agent_extra_headers,
+                agent_card_params=agent_card_params,
+                **kwargs,
+            )
+        )
 
 
 def _build_streaming_logging_obj(
@@ -610,6 +687,7 @@ async def asend_message_streaming(
     metadata: dict[str, object] | None = None,
     proxy_server_request: dict[str, object] | None = None,
     agent_extra_headers: dict[str, str] | None = None,
+    agent_card_params: dict[str, Any] | None = None,
     **kwargs: object,
 ) -> AsyncIterator[Any]:
     """
@@ -625,6 +703,7 @@ async def asend_message_streaming(
         agent_id: Optional agent ID for tracking in SpendLogs
         metadata: Optional metadata dict (contains user_api_key, user_id, team_id, etc.)
         proxy_server_request: Optional proxy server request data
+        agent_card_params: Optional registered agent_card_params dict to avoid re-discovery
 
     Yields:
         SendStreamingMessageResponse chunks from the agent
@@ -686,7 +765,8 @@ async def asend_message_streaming(
     logging_obj: Logging | None = _raw_logging_obj if isinstance(_raw_logging_obj, Logging) else None
 
     if a2a_client is None:
-        if api_base is None:
+        base_url = api_base or (agent_card_params.get("url") if agent_card_params else None)
+        if base_url is None:
             raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
         logging_trace_id: Final = getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None
         trace_id: Final = logging_trace_id or (str(request.id) if request.id else str(uuid.uuid4()))
@@ -696,9 +776,10 @@ async def asend_message_streaming(
         if agent_extra_headers:
             extra_headers.update(agent_extra_headers)
         a2a_client = await create_a2a_client(
-            base_url=api_base,
+            base_url=cast(str, base_url),
             extra_headers=extra_headers,
             streaming=True,
+            agent_card_params=agent_card_params,
         )
 
     assert a2a_client is not None
@@ -745,6 +826,7 @@ async def create_a2a_client(
     timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
     extra_headers: dict[str, str] | None = None,
     streaming: bool = False,
+    agent_card_params: dict[str, Any] | None = None,
 ) -> "A2AClientType":
     """
     Create an A2A client for the given agent URL.
@@ -756,6 +838,8 @@ async def create_a2a_client(
         base_url: The base URL of the A2A agent (e.g., "http://localhost:10001")
         timeout: Request timeout in seconds (default: ``DEFAULT_A2A_AGENT_TIMEOUT`` / env ``DEFAULT_A2A_AGENT_TIMEOUT``)
         extra_headers: Optional additional headers to include in requests
+        streaming: Whether this client will be used for streaming
+        agent_card_params: Optional registered agent_card_params dict to use directly without discovery
 
     Returns:
         An initialized a2a.client.A2AClient instance
@@ -787,10 +871,13 @@ async def create_a2a_client(
     if extra_headers:
         verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
-    resolver: Final = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
-    agent_card: Final = normalize_agent_card_interfaces(
-        await resolver.get_agent_card(http_kwargs={"headers": extra_headers} if extra_headers else None)
-    )
+    if agent_card_params:
+        agent_card: Final = _build_agent_card_from_params(agent_card_params, base_url=base_url)
+    else:
+        resolver: Final = A2ACardResolver(httpx_client=httpx_client, base_url=base_url)
+        agent_card = normalize_agent_card_interfaces(
+            await resolver.get_agent_card(http_kwargs={"headers": extra_headers} if extra_headers else None)
+        )
 
     a2a_client: Final = await create_client(  # pyright: ignore[reportOptionalCall]
         agent_card,
