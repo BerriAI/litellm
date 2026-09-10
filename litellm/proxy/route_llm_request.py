@@ -542,7 +542,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         # Otherwise the branches below swallow the request and it fails with
         # "no healthy deployments": `map_team_model` claims it for team-scoped keys, and the
         # wildcard/default-deployment fallback claims it whenever a pattern model group exists.
-        if _is_a2a_agent_model(data.get("model", "")):
+        if route_type == "acompletion" and _is_a2a_agent_model(data.get("model", "")):
             from litellm.proxy.agent_endpoints.a2a_routing import (
                 route_a2a_agent_request,
             )
