@@ -141,9 +141,7 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
     create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
-    cost_session: Final = _get_batch_trace_session_id(
-        call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost"
-    )
+    cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
     assert create_session == cost_session == "batch-uid-1"
 
 
@@ -974,6 +972,24 @@ def test_get_logging_payload_replaces_rejected_or_prompt_shaped_models_with_the_
     )
 
     assert payload["model"] == expected_model
+
+
+def test_get_logging_payload_keeps_a_whitespace_model_name_on_success():
+    kwargs: Final = {
+        "model": _RAW_MODEL_WITH_PROMPT,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[]),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == _RAW_MODEL_WITH_PROMPT
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -4306,7 +4322,7 @@ ANTHROPIC_MESSAGES_SSE_CHUNKS: Final = (
     'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
     'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
     '"usage":{"output_tokens":4}}\n\n',
-    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 )
 
 
@@ -4344,9 +4360,7 @@ def test_spend_log_request_id_is_the_message_id_a_non_streaming_messages_caller_
     """
     logging_obj = _anthropic_messages_logging_obj(stream=False)
 
-    logged_response = logging_obj._handle_anthropic_messages_response_logging(
-        result=ANTHROPIC_MESSAGES_RESPONSE
-    )
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(result=ANTHROPIC_MESSAGES_RESPONSE)
 
     assert logged_response.id == "msg_01Lit6806NonStreaming"
     assert (
@@ -4422,9 +4436,7 @@ def test_spend_log_request_id_still_falls_back_to_litellm_call_id_without_a_prov
         end_time=datetime.datetime.now(timezone.utc),
         logging_obj=logging_obj,
     )
-    assert logging_obj.model_call_details["complete_streaming_response"].id == (
-        "6806cafe-0000-4000-8000-000000000001"
-    )
+    assert logging_obj.model_call_details["complete_streaming_response"].id == ("6806cafe-0000-4000-8000-000000000001")
 
 
 def test_spend_log_request_id_for_chat_completions_is_untouched():
