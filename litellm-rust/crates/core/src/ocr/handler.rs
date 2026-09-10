@@ -41,7 +41,7 @@ async fn execute_ocr_provider_call<A: OcrAdapter>(
     adapter: &A,
     request: LiteLLMOcrRequest,
 ) -> Result<LiteLLMOcrResponse, Error> {
-    let provider_request = adapter.transform_ocr_request(&request, client).await?;
+    let provider_request = adapter.prepare_request(&request, client).await?;
     let url = provider_request.url().to_string();
     let headers = provider_request
         .headers()

@@ -19,11 +19,11 @@ pub(crate) trait OcrAdapter: Send + Sync + Sized + 'static {
 
     const PROVIDER: OcrProvider;
 
-    /// Python: `transform_ocr_request`, including its preceding auth and URL preparation.
+    /// Prepares the complete provider HTTP request.
     /// `request` contains the model, document, connection, and unmapped caller options.
     /// `client` supplies reusable provider and document HTTP clients.
     /// Returns the complete HTTP request, whereas Python returns body data.
-    fn transform_ocr_request(
+    fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
