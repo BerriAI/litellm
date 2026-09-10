@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import AddAgentForm from "./add_agent_form";
 import * as networking from "@/components/networking";
 import type { AgentCreateInfo } from "@/components/networking";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   createAgentCall: vi.fn(),
@@ -309,8 +310,7 @@ describe("AddAgentForm submit payload", () => {
 
     await user.type(await screen.findByLabelText("Allowed Models"), "gpt-4o,");
     await user.keyboard("{Escape}");
-    await user.click(screen.getByLabelText("Allowed Agents (Sub-Agents)"));
-    await user.click(await screen.findByTitle("Sub Agent One"));
+    await chooseSelectOption(user, screen.getByLabelText("Allowed Agents (Sub-Agents)"), "Sub Agent One");
     await user.keyboard("{Escape}");
     await user.click(screen.getByText(/Configure which models, agents, and MCP tools/));
     await user.click(screen.getByRole("button", { name: /^Next/ }));

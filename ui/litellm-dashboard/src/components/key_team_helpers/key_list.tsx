@@ -13,6 +13,9 @@ export interface Team {
   tpm_limit: number | null;
   rpm_limit: number | null;
   organization_id: string;
+  metadata?: Record<string, unknown> | null;
+  budget_reset_at?: string | null;
+  blocked?: boolean;
   created_at: string;
   updated_at?: string | null;
   keys: KeyResponse[];

@@ -757,7 +757,7 @@ export default function ComplianceUI({
                   <ChevronDown className="w-4 h-4 text-muted-foreground" />
                 </button>
                 {showGuardrailDropdown && (
-                  <div className="absolute z-30 top-full left-0 right-0 mt-1 bg-card border border-border rounded-lg shadow-lg py-1 max-h-52 overflow-y-auto">
+                  <div className="absolute z-floating top-full left-0 right-0 mt-1 bg-card border border-border rounded-lg shadow-lg py-1 max-h-52 overflow-y-auto">
                     {guardrailOptions.length === 0 ? (
                       <div className="px-3 py-2 text-xs text-muted-foreground">
                         No guardrails available. Create guardrails in the Guardrails page.

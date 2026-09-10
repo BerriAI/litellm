@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { Team } from "@/components/networking";
-import { canModifyModel, modelCreationScope } from "./modelPermissions";
+import { canCreateModels, canModifyModel, modelCreationScope } from "./modelPermissions";
 
 const teamWhere = (userId: string, role: string, teamId = "team-1"): Team[] =>
   [{ team_id: teamId, members_with_roles: [{ user_id: userId, user_email: "t@test.com", role }] }] as unknown as Team[];
 
-const PROXY_ADMIN = { userRole: "Admin", userID: "u-admin" };
-const TEAM_ADMIN = { userRole: "Internal User", userID: "u-team-admin" };
-const MEMBER = { userRole: "Internal User", userID: "u-member" };
+const PROXY_ADMIN = { userRole: "Admin", userID: "u-admin", isViewOnly: false };
+const TEAM_ADMIN = { userRole: "Internal User", userID: "u-team-admin", isViewOnly: false };
+const MEMBER = { userRole: "Internal User", userID: "u-member", isViewOnly: false };
+// proxy_admin_viewer sessions: effectiveSessionRole masquerades the role as "Admin".
+const VIEW_ONLY_ADMIN = { userRole: "Admin", userID: "u-viewer", isViewOnly: true };
 
 const noLimits = { disabledForInternalUsers: false };
 
@@ -40,8 +42,23 @@ describe("modelCreationScope", () => {
   // an unscoped create from them 403s. Treating them as admins here is what let a form submit
   // a payload the backend always rejected.
   it("does not treat an org admin as able to create unscoped", () => {
-    const orgAdmin = { userRole: "org_admin", userID: "u-org" };
+    const orgAdmin = { userRole: "org_admin", userID: "u-org", isViewOnly: false };
     expect(modelCreationScope(orgAdmin, { teams: teamWhere("u-org", "admin"), ...noLimits })).toBe("team-required");
+  });
+
+  // Server-side, POST /model/new 403s the viewer roles, so the "Admin" the masquerade
+  // reports must not read as a proxy admin here.
+  it("forbids a view-only admin session despite the masqueraded Admin role", () => {
+    expect(modelCreationScope(VIEW_ONLY_ADMIN, { teams: [], ...noLimits })).toBe("forbidden");
+    expect(canCreateModels(VIEW_ONLY_ADMIN, { teams: [], ...noLimits })).toBe(false);
+  });
+
+  // _check_proxy_admin_viewer_access (route_checks.py) 403s /model/new on the session role
+  // alone, before the team-scoped carve-out in ModelManagementAuthChecks can run.
+  it("forbids a view-only admin even when they admin a team", () => {
+    expect(modelCreationScope(VIEW_ONLY_ADMIN, { teams: teamWhere("u-viewer", "admin"), ...noLimits })).toBe(
+      "forbidden",
+    );
   });
 });
 
@@ -80,6 +97,17 @@ describe("canModifyModel", () => {
   });
 
   it("does not treat two absent identities as a match", () => {
-    expect(canModifyModel({ userRole: "Internal User", userID: null }, null, teamRow)).toBe(false);
+    expect(canModifyModel({ userRole: "Internal User", userID: null, isViewOnly: false }, null, teamRow)).toBe(false);
+  });
+
+  // PATCH /model/{id}/update and POST /model/delete 403 the viewer roles like /model/new does.
+  it("refuses a view-only admin session on a DB row", () => {
+    expect(canModifyModel(VIEW_ONLY_ADMIN, null, teamRow)).toBe(false);
+  });
+
+  // The route RBAC blocks /model/update and /model/delete for the viewer role before the
+  // team-scoped carve-out runs, so team-admin membership changes nothing here either.
+  it("refuses a view-only user even when they admin the owning team", () => {
+    expect(canModifyModel(VIEW_ONLY_ADMIN, teamWhere("u-viewer", "admin"), teamRow)).toBe(false);
   });
 });

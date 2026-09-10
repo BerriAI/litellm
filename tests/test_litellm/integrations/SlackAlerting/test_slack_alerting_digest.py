@@ -79,6 +79,23 @@ class TestDigestMode(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(self.slack_alerting.digest_buckets), 2)
 
+    async def test_digest_falls_back_to_alerting_webhook_url_env(self):
+        """With SLACK_WEBHOOK_URL unset, the digest entry resolves ALERTING_WEBHOOK_URL instead."""
+        env = {k: v for k, v in os.environ.items() if k != "SLACK_WEBHOOK_URL"}
+        env["ALERTING_WEBHOOK_URL"] = "https://chat.example.com/hooks/abc"
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            await self.slack_alerting.send_alert(
+                message="`Requests are hanging`",
+                level="Medium",
+                alert_type=AlertType.llm_requests_hanging,
+                alerting_metadata={},
+                request_model="gemini-2.5-flash",
+                api_base="None",
+            )
+
+        bucket = list(self.slack_alerting.digest_buckets.values())[0]
+        self.assertEqual(bucket["webhook_url"], "https://chat.example.com/hooks/abc")
+
     async def test_non_digest_alert_goes_to_queue(self):
         """Alert types without digest enabled should go straight to the log queue."""
         message = "Budget exceeded"

@@ -47,12 +47,14 @@ def sanitize_openapi_tool_name(raw_name: str) -> str:
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
+from litellm.types.mcp import credential_redirect_hook, custom_credential_slot
 
 
 class _OpenAPIJSONSchema(TypedDict, total=False):
@@ -117,6 +119,10 @@ _request_extra_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = c
 # over every other Authorization source in _merge_openapi_tool_request_headers.
 _request_resolved_auth_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
     "_request_resolved_auth_headers", default=None
+)
+
+_request_upstream_url: Final[contextvars.ContextVar[str | None]] = contextvars.ContextVar(
+    "_request_upstream_url", default=None
 )
 
 
@@ -349,6 +355,35 @@ def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
     }
 
 
+async def _drop_credential_across_origin(request: httpx.Request) -> None:
+    """Apply this request's cross-origin credential guard, if it needs one.
+
+    Reads the per-request context rather than closing over it so the hook is one stable object, which
+    keeps the guarded client cacheable. A closure would key a new entry per call, and the handler it
+    built would never be closed.
+    """
+    guard: Final = credential_redirect_hook(
+        _request_upstream_url.get() or "", custom_credential_slot(_request_resolved_auth_headers.get())
+    )
+    if guard is not None:
+        await guard(request)
+
+
+def _upstream_client() -> AsyncHTTPHandler:
+    """The HTTP client for one upstream call, guarded when a credential rides a custom slot.
+
+    A resolved credential outside ``Authorization`` is not stripped across origins by the client
+    itself, so this arm installs the same hook the MCP client uses. Both variants come from the
+    shared cache, so a guarded call reuses its connection pool like any other.
+    """
+    if custom_credential_slot(_request_resolved_auth_headers.get()) is None:
+        return get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+    return get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.MCP,
+        params={"event_hooks": {"request": [_drop_credential_across_origin]}},
+    )
+
+
 def _merge_openapi_tool_request_headers(
     static_headers: dict[str, str],
 ) -> dict[str, str]:
@@ -510,8 +545,9 @@ def create_tool_function(
                 except (json.JSONDecodeError, TypeError):
                     json_body = {"data": body_value}
 
-        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        client: Final = _upstream_client()
         upstream: Final = server_label or f"{original_method.upper()} {path}"
+        url_token: Final = _request_upstream_url.set(url)
 
         try:
             if original_method == "get":
@@ -529,6 +565,8 @@ def create_tool_function(
         except MaskedHTTPStatusError as e:
             _raise_for_upstream_failure(e.response, upstream, relays_upstream_auth)
             raise
+        finally:
+            _request_upstream_url.reset(url_token)
 
         _raise_for_upstream_failure(response, upstream, relays_upstream_auth)
         return response.text

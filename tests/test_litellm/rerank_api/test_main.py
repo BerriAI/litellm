@@ -1,6 +1,10 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+import respx
+
 
 import litellm
 
@@ -62,3 +66,159 @@ def test_rerank_does_not_log_request_content_at_info(caplog):
     assert all(
         r.levelno == logging.DEBUG for r in optional_params_logs
     ), "optional_rerank_params must be logged at DEBUG, not INFO"
+
+
+TOGETHER_RERANK_BODY = {
+    "id": "rerank-mock-id",
+    "results": [{"index": 0, "relevance_score": 0.95}],
+    "usage": {"prompt_tokens": 10, "total_tokens": 10},
+}
+
+
+def test_together_rerank_defaults_to_together_ai_host(respx_mock: respx.MockRouter, monkeypatch):
+    """Regression for the Together host migration: rerank used to hardcode
+    https://api.together.xyz/v1/rerank. The default must now be api.together.ai."""
+    monkeypatch.delenv("TOGETHER_AI_API_BASE", raising=False)
+
+    mock_route = respx_mock.post("https://api.together.ai/v1/rerank")
+    mock_route.return_value = httpx.Response(200, json=TOGETHER_RERANK_BODY)
+
+    response = litellm.rerank(
+        model="together_ai/mixedbread-ai/mxbai-rerank-large-v2",
+        query=MARKER_QUERY,
+        documents=[MARKER_DOC],
+        api_key="fake-together-key",
+    )
+
+    assert mock_route.called
+    assert response.results[0]["relevance_score"] == 0.95
+
+
+def test_together_rerank_honors_api_base(respx_mock: respx.MockRouter):
+    """Regression: a custom api_base was silently ignored by the Together rerank handler."""
+    mock_route = respx_mock.post("https://custom-together.example/v1/rerank")
+    mock_route.return_value = httpx.Response(200, json=TOGETHER_RERANK_BODY)
+
+    litellm.rerank(
+        model="together_ai/mixedbread-ai/mxbai-rerank-large-v2",
+        query=MARKER_QUERY,
+        documents=[MARKER_DOC],
+        api_key="fake-together-key",
+        api_base="https://custom-together.example/v1",
+    )
+
+    assert mock_route.called
+    assert mock_route.calls[0].request.headers["authorization"] == "Bearer fake-together-key"
+
+
+DASHSCOPE_404_BODY = {
+    "error": {
+        "message": "The model `does-not-exist` does not exist or you do not have access to it.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "model_not_found",
+    },
+    "request_id": "mock-request-id",
+}
+
+
+def test_rerank_error_names_provider_and_keeps_body(respx_mock: respx.MockRouter, monkeypatch):
+    """Regression for the rerank error path mapping with the unresolved provider param:
+    a provider 404 surfaced as 'None - ' instead of naming the provider and its error body."""
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_BASE_RERANK", raising=False)
+
+    mock_route = respx_mock.post("https://dashscope.example/v1/reranks")
+    mock_route.return_value = httpx.Response(404, json=DASHSCOPE_404_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as exc_info:
+        litellm.rerank(
+            model="dashscope/does-not-exist",
+            query=MARKER_QUERY,
+            documents=[MARKER_DOC],
+            api_key="fake-dashscope-key",
+            api_base="https://dashscope.example/v1",
+        )
+
+    assert mock_route.called
+    assert "DashscopeException" in str(exc_info.value)
+    assert "does not exist or you do not have access to it" in str(exc_info.value)
+    assert "None - " not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_arerank_error_is_mapped_to_litellm_exception(respx_mock: respx.MockRouter, monkeypatch):
+    """Regression for arerank's bare re-raise: provider errors escaped as raw
+    provider exception classes instead of the mapped litellm exception contract."""
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_BASE_RERANK", raising=False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+    mock_route = respx_mock.post("https://dashscope.example/v1/reranks")
+    mock_route.return_value = httpx.Response(404, json=DASHSCOPE_404_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as exc_info:
+        await litellm.arerank(
+            model="dashscope/does-not-exist",
+            query=MARKER_QUERY,
+            documents=[MARKER_DOC],
+            api_key="fake-dashscope-key",
+            api_base="https://dashscope.example/v1",
+        )
+
+    assert mock_route.called
+    assert "DashscopeException" in str(exc_info.value)
+    assert "does not exist or you do not have access to it" in str(exc_info.value)
+    assert "None - " not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_arerank_declared_authenticating_provider_skips_resolution(monkeypatch):
+    """Regression for the event-loop hazard in arerank's provider pre-resolution:
+    get_llm_provider runs the blocking OAuth device flow for github_copilot/chatgpt,
+    so arerank must adopt the declared provider instead of resolving it, while the
+    except path still maps with that declared provider."""
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    resolution_calls = []
+
+    def record_resolution(*args, **kwargs):
+        resolution_calls.append((args, kwargs))
+        return "gpt-4o", "github_copilot", None, None
+
+    def rerank_raises_provider_error(*args, **kwargs):
+        raise BaseLLMException(status_code=401, message='{"error":"bad key"}')
+
+    monkeypatch.setattr(litellm, "get_llm_provider", record_resolution)
+    monkeypatch.setattr("litellm.rerank_api.main.rerank", rerank_raises_provider_error)
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        await litellm.arerank(
+            model="github_copilot/gpt-4o",
+            query=MARKER_QUERY,
+            documents=[MARKER_DOC],
+        )
+
+    assert resolution_calls == []
+    assert "Github_copilotException" in str(exc_info.value)
+    assert "None - " not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_together_rerank_async_honors_env_api_base(respx_mock: respx.MockRouter, monkeypatch):
+    """Regression: TOGETHER_AI_API_BASE was honored by chat but ignored by rerank."""
+    monkeypatch.setenv("TOGETHER_AI_API_BASE", "https://env-together.example/v1")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+    mock_route = respx_mock.post("https://env-together.example/v1/rerank")
+    mock_route.return_value = httpx.Response(200, json=TOGETHER_RERANK_BODY)
+
+    response = await litellm.arerank(
+        model="together_ai/mixedbread-ai/mxbai-rerank-large-v2",
+        query=MARKER_QUERY,
+        documents=[MARKER_DOC],
+        api_key="fake-together-key",
+    )
+
+    assert mock_route.called
+    assert response.results[0]["relevance_score"] == 0.95

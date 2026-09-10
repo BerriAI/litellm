@@ -10,7 +10,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Info, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import NewBadge from "@/components/common_components/NewBadge";
 import { useBaseUrl } from "@/components/constants";
 import { toast } from "@/lib/toast";
 import { addAllowedIP, deleteAllowedIP, getAllowedIPs, getSSOSettings } from "@/components/networking";
@@ -19,6 +18,7 @@ import LoggingSettings from "@/components/Settings/AdminSettings/LoggingSettings
 import SSOSettings from "@/components/Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "@/components/Settings/AdminSettings/UISettings/UISettings";
 import UserBannerSettings from "@/components/Settings/AdminSettings/UserBannerSettings/UserBannerSettings";
+import CyberArk from "@/components/Settings/AdminSettings/CyberArk/CyberArk";
 import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import PluginSettings from "@/components/Settings/AdminSettings/PluginSettings/PluginSettings";
 import SSOModals from "@/components/SSOModals";
@@ -378,12 +378,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
     },
     {
       key: "ui-settings",
-      label: (
-        <span className="flex items-center gap-1.5">
-          UI Settings
-          <NewBadge />
-        </span>
-      ),
+      label: "UI Settings",
       children: (
         <div className="flex flex-col gap-4">
           <UISettings />
@@ -400,6 +395,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       key: "hashicorp-vault",
       label: "Hashicorp Vault",
       children: <HashicorpVault />,
+    },
+    {
+      key: "cyberark",
+      label: "CyberArk Conjur",
+      children: <CyberArk />,
     },
     {
       key: "plugins",

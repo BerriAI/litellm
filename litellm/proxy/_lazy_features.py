@@ -8,8 +8,8 @@ omits each feature's routes until the feature is warmed.
 
 import asyncio
 import importlib
-import sys
 from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
@@ -161,6 +161,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/callback",
             "/register",
             "/revoke",
+            "/introspect",
         ),
         # Catches the /{mcp_server_name}/authorize|token|register variants.
         path_suffixes=("/authorize", "/token", "/register"),
@@ -294,15 +295,18 @@ class LazyFeatureMiddleware:
         # Short-circuit once every feature has loaded.
         if scope["type"] in ("http", "websocket") and len(self._loaded) < len(self._features):
             path = scope.get("path", "")
-            # Strip SERVER_ROOT_PATH so prefix matching works under a server
-            # root path. Without this, requests like /api/v1/policies/... never
-            # match the registered prefixes (/policies/...) and lazy features
-            # stay unloaded — every endpoint under them returns 404. The
+            # Strip the request's root_path so prefix matching works under a
+            # server root path. Without this, requests like /api/v1/policies/...
+            # never match the registered prefixes (/policies/...) and lazy
+            # features stay unloaded — every endpoint under them returns 404.
+            # scope["root_path"] wins over the cached env scalar: FastAPI
+            # stamps SERVER_ROOT_PATH there, and PerRequestRootPathMiddleware
+            # resolves SERVER_ROOT_PATHS prefixes there per request. The
             # `+ "/"` boundary prevents false-positive matches (e.g. /apiv2
-            # against root /api). If the path doesn't start with the prefix
-            # (e.g. a reverse proxy already stripped it), we leave it alone.
-            if self._root_path and path.startswith(self._root_path + "/"):
-                path = path[len(self._root_path) :]
+            # against root /api); a pre-stripped path is left alone.
+            root_path: Final = str(scope.get("root_path", "")).rstrip("/") or self._root_path
+            if root_path and path.startswith(root_path + "/"):
+                path = path[len(root_path) :]  # rebind-ok: local strip after the boundary check above
             for feat in self._features:
                 if feat.module_path in self._loaded:
                     continue
@@ -397,11 +401,27 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
     return router
 
 
-def inject_lazy_stubs(schema: dict) -> dict:
-    """Inject openapi entries for unloaded features. Uses the snapshot file
-    when available (full route info), otherwise falls back to a single
-    placeholder per feature. Any failure logs and returns the schema unchanged
-    so /openapi.json never 500s on a cosmetic injection bug."""
+def loaded_lazy_modules(app: "FastAPI") -> frozenset[str]:
+    """The set of lazy feature modules whose routers are actually registered
+    on this app (tracked by _force_load), empty before the middleware ever ran.
+    sys.modules is the wrong signal: boot code imports several feature modules
+    (mcp_management, cloudzero, vantage, config_overrides) without mounting
+    their routers, and their stubs must still be injected."""
+    loaded: Final = getattr(app.state, "lazy_loaded", None)
+    if not isinstance(loaded, set):
+        return frozenset()
+    return frozenset(m for m in loaded if isinstance(m, str))
+
+
+def inject_lazy_stubs(
+    schema: dict,
+    loaded_modules: AbstractSet[str],
+    features: tuple[LazyFeature, ...] = LAZY_FEATURES,
+) -> dict:
+    """Inject openapi entries for features not in loaded_modules. Uses the
+    snapshot file when available (full route info), otherwise falls back to a
+    single placeholder per feature. Any failure logs and returns the schema
+    unchanged so /openapi.json never 500s on a cosmetic injection bug."""
     try:
         from litellm.proxy._lazy_openapi_snapshot import load_snapshot
 
@@ -409,8 +429,8 @@ def inject_lazy_stubs(schema: dict) -> dict:
         paths: Final = schema.setdefault("paths", {})
         schemas: Final = schema.setdefault("components", {}).setdefault("schemas", {})
 
-        for feat in LAZY_FEATURES:
-            if feat.module_path in sys.modules and not feat.persistent_swagger_stub:
+        for feat in features:
+            if feat.module_path in loaded_modules and not feat.persistent_swagger_stub:
                 continue
 
             fragment = (snapshot or {}).get(feat.name)

@@ -1,19 +1,19 @@
-from typing import Any, Final, Protocol
+from collections.abc import Mapping, Sequence
+from typing import Final, Protocol
 
 from litellm import verbose_logger
 
-_db = Any
-
 
 class SupportsExecuteRaw(Protocol):
-    """The one database operation create_view_tolerating_race needs.
-
-    Narrower than the `_db = Any` the rest of this module still uses, so the
-    helper's contract is checkable at its call sites without retyping every
-    function here.
-    """
+    """The one database operation create_view_tolerating_race needs."""
 
     async def execute_raw(self, query: str, *args: object) -> int: ...
+
+
+class SupportsRawQueries(SupportsExecuteRaw, Protocol):
+    """The database operations the view bootstrap needs: probe a relation, then create it."""
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 # Markers that indicate a view/relation does not yet exist in the database.
@@ -46,7 +46,7 @@ async def create_view_tolerating_race(db: SupportsExecuteRaw, view_name: str, dd
         verbose_logger.debug("%s already created by a concurrent replica", view_name)
 
 
-async def create_missing_views(db: _db):
+async def create_missing_views(db: SupportsRawQueries) -> None:
     """
     --------------------------------------------------
     NOTE: Copy of `litellm/db_scripts/create_views.py`.
@@ -246,7 +246,7 @@ async def create_missing_views(db: _db):
         await create_view_tolerating_race(db, "Last30dTopEndUsersSpend", sql_query)
 
 
-async def should_create_missing_views(db: _db) -> bool:
+async def should_create_missing_views(db: SupportsRawQueries) -> bool:
     """
     Run only on first time startup.
 

@@ -1,11 +1,13 @@
 """Trace-context + Baggage helpers."""
 
+import os
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
+from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import (
     Link,
     NonRecordingSpan,
@@ -17,6 +19,11 @@ from opentelemetry.trace import (
 from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
+
+from litellm.integrations.otel.model.semconv import HTTP
+
+if TYPE_CHECKING:
+    from litellm.integrations.otel.model.destination import OtelDestination
 
 _PROPAGATOR: Final = TraceContextTextMapPropagator()
 
@@ -55,10 +62,29 @@ def request_root_span() -> "Span | None":
     return span if is_recordable_span(span) else None
 
 
+def request_root_http_route() -> str | None:
+    """``http.route`` exactly as the request's root SERVER span reports it.
+
+    Read off the span rather than re-derived, so the LLM call span cannot disagree
+    with its own parent about which endpoint served the request: the template the
+    instrumentation matched, or the literal path where
+    ``mount._passthrough_span_name_hook`` rewrote it, are already in the attribute.
+    An MCP call anchors that same server span, so it reports the ``/mcp`` mount
+    point the instrumentation matched. Attributes stay readable after a span ends,
+    so this answers just as well from the async logging callback.
+
+    None when no server span is anchored, which is the SDK path and any deployment
+    where the FastAPI instrumentation did not mount.
+    """
+    span: Final = request_root_span()
+    route: Final = span.attributes.get(HTTP.ROUTE) if isinstance(span, ReadableSpan) and span.attributes else None
+    return route if isinstance(route, str) and route else None
+
+
 # The W3C trace-context carrier (``traceparent``/``tracestate``/``baggage``) the
 # MCP client propagated in the current request's ``params._meta``. The MCP gateway
-# sets it per message so the MCP span can parent to the client's span rather than
-# to the transport. A ``ContextVar`` because, like the root-span anchor, it must
+# sets it per message so the MCP span can record the client's span as a span
+# link. A ``ContextVar`` because, like the root-span anchor, it must
 # ride the request task and be readable by the inline success-logging callback.
 _mcp_message_trace_carrier: Final["ContextVar[Mapping[str, str] | None]"] = ContextVar(
     "litellm_otel_mcp_message_trace_carrier", default=None
@@ -148,10 +174,10 @@ def _mcp_transport_span_context() -> "SpanContext | None":
 
     Prefers the transport the gateway published for this specific message; falls
     back to the ambient request anchor for paths that emit an MCP span on the
-    request task itself (the REST MCP endpoints, the SDK). Parenting and linking
-    only need the immutable context, and unlike ``mcp_message_transport_span`` they
-    stay correct against a transport that has already finished, so this does not
-    require the span to still be recording.
+    request task itself (the REST MCP endpoints). Parenting needs only the
+    immutable context, and unlike ``mcp_message_transport_span`` it stays correct
+    against a transport that has already finished, so this does not require the
+    span to still be recording.
     """
     published: Final = _mcp_message_transport_span.get()
     if published is not None:
@@ -222,25 +248,31 @@ def resolve_mcp_span_context(
 ) -> "tuple[Context, tuple[Link, ...]]":
     """Parent context + links for an MCP message span.
 
+    The span always nests under the transport span of the request carrying this
+    message, so a tool call and the ``POST`` that carried it stay in one trace.
+    The transport comes from :func:`_mcp_transport_span_context`, which is the
+    *current message's* POST rather than whatever request happened to open the
+    session, so a long-lived session does not glue every message under its first
+    request.
+
     When the client propagates W3C trace context in the request's ``params._meta``
-    (SEP-414), MCP and the underlying transport are independent lifecycles — one
-    streamable-HTTP session multiplexes many messages, and the client's own span is
-    the truthful parent. So, per the OTel GenAI MCP semconv:
+    (SEP-414), that remote context is recorded as a span *link*, never the parent.
+    The OTel GenAI MCP semconv prefers the inverse (remote parent, transport link),
+    but the gateway's tracing backend only ever receives the gateway's half of such
+    a trace: parenting into the client's trace id roots the span in a trace whose
+    root span never reaches the backend, so the span is unreachable from the trace
+    view and the transport transaction shows a dangling link (observed with
+    clients that propagate synthetic trace ids). Anchoring to the gateway's own
+    request and linking the client's context keeps every trace renderable while
+    preserving the client-side correlation.
 
-    * parent to the trace context the client propagated (a *remote* parent), and
-    * record the transport span as a *link*, never the parent.
-
-    Almost no client implements SEP-414 yet, so in practice nothing is propagated.
-    Rooting the span there splits a single tool call into two disconnected traces
-    joined only by a link, which is how it surfaces in APM: the ``POST`` transaction
-    and the ``tools/call`` span share no trace. With no remote parent to honor,
-    parent to the transport span of the request carrying this message instead, so
-    the call stays in one trace; no link is added since the transport is now the
-    real parent. The transport comes from :func:`_mcp_transport_span_context`, which
-    is the *current message's* POST rather than whatever request happened to open
-    the session, so a long-lived session does not glue every message under its
-    first request. With neither a remote parent nor a transport the returned context
-    carries no span and the span legitimately starts its own root trace.
+    With no transport at all the span starts its own root trace, still carrying
+    the link — the client context is only ever a link, so this event keeps one
+    shape everywhere. Both returned contexts are built on an explicitly empty
+    base, so ambient (stale session) state can never leak in, and the span
+    inherits the transport's sampling decision exactly like every other
+    request-level span — a client's sampled flag neither forces nor suppresses
+    recording.
 
     Only trace context (``traceparent``/``tracestate``) is extracted, never the
     client's W3C Baggage: ``params._meta`` is caller-controlled, and the otel
@@ -251,13 +283,12 @@ def resolve_mcp_span_context(
     never fall through to the ambient (stale session) span.
     """
     source: Final = carrier if carrier is not None else _mcp_message_trace_carrier.get()
-    parent: Final = _PROPAGATOR.extract(dict(source or {}), context=Context())
+    propagated: Final = get_current_span(_PROPAGATOR.extract(dict(source or {}), context=Context()))
+    links: Final = (Link(propagated.get_span_context()),) if is_recordable_span(propagated) else ()
     transport: Final = _mcp_transport_span_context()
-    if is_recordable_span(get_current_span(parent)):
-        return parent, (Link(transport),) if transport is not None else ()
-    if transport is not None:
-        return context_from_span(NonRecordingSpan(transport)), ()
-    return parent, ()
+    if transport is None:
+        return Context(), links
+    return context_from_span(NonRecordingSpan(transport), context=Context()), links
 
 
 def is_recordable_span(obj: object) -> bool:
@@ -277,3 +308,65 @@ def extract_traceparent(headers: Mapping[str, str]) -> Context | None:
         return None
     carrier: Final = {str(key).lower(): value for key, value in headers.items()}
     return _PROPAGATOR.extract(carrier)
+
+
+# The OTLP destinations this request's key or team pointed its traces at, resolved
+# once during auth. A ``ContextVar`` for the same reason the root span above is one:
+# it rides the request task's context into the ``asyncio.create_task`` children that
+# close the LLM span, and it is visible to every ``SpanProcessor.on_end`` that fires
+# on the request task. Stateful MCP handlers set and reset it per message; the
+# request-task value otherwise dies with that task.
+_request_destinations: Final['ContextVar[tuple["OtelDestination", ...]]'] = ContextVar(
+    "litellm_otel_request_destinations", default=()
+)
+
+
+def set_request_destinations(destinations: 'tuple["OtelDestination", ...]') -> "Token[tuple[OtelDestination, ...]]":
+    """Anchor the destinations this request exports to and return a reset token."""
+    return _request_destinations.set(destinations)
+
+
+def reset_request_destinations(token: "Token[tuple[OtelDestination, ...]]") -> None:
+    _request_destinations.reset(token)
+
+
+def request_destinations() -> 'tuple["OtelDestination", ...]':
+    """The destinations resolved for this request, empty outside a proxy request."""
+    return _request_destinations.get()
+
+
+#: ``litellm_settings: otel_tenant_destination_mode`` and its env equivalent.
+ADDITIVE_DESTINATION_MODE: Final = "additive"
+OTEL_TENANT_DESTINATION_MODE_ENV: Final = "LITELLM_OTEL_TENANT_DESTINATION_MODE"
+
+
+def tenant_destinations_are_additive() -> bool:
+    """Whether a tenant destination exports alongside the operator's own exporter.
+
+    Override is the default: the tenant's traffic reaches the tenant's account and
+    nowhere else. Operators running one org-wide backend across every team set this
+    to ``additive`` so the same trace lands in both places.
+    """
+    import litellm
+
+    configured: Final = litellm.otel_tenant_destination_mode or os.environ.get(OTEL_TENANT_DESTINATION_MODE_ENV)
+    return isinstance(configured, str) and configured.strip().lower() == ADDITIVE_DESTINATION_MODE
+
+
+def destination_backends() -> frozenset[str]:
+    """Backends this request resolved a tenant destination for.
+
+    The fan-out already carries the whole trace to those destinations, so the
+    per-request tracer route must never send a second copy, in either mode.
+    """
+    return frozenset(d.callback_name for d in _request_destinations.get() if d.callback_name)
+
+
+def suppressed_backends() -> frozenset[str]:
+    """Backends whose operator-level exporters this request must NOT reach.
+
+    Empty under ``additive``, where the operator keeps its copy of every span.
+    """
+    if tenant_destinations_are_additive():
+        return frozenset()
+    return destination_backends()

@@ -93,7 +93,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
               {toolsEvent.item?.tools?.map((tool, index) => (
                 <div
                   key={index}
-                  className="relative z-[1] bg-card font-mono text-[13px] leading-[18px] text-muted-foreground"
+                  className="relative z-raised bg-card font-mono text-[13px] leading-[18px] text-muted-foreground"
                 >
                   {tool.name}
                 </div>
@@ -113,7 +113,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
               onOpenChange={(open) => toggleKey(key, open)}
             >
               <div>
-                <div className="relative z-[1] mb-3 bg-card last:mb-0">
+                <div className="relative z-raised mb-3 bg-card last:mb-0">
                   <div className="mb-1 text-[13px] font-medium text-muted-foreground">Request</div>
                   <div className="rounded-md border border-border bg-muted p-2 text-xs">
                     {callEvent.item?.arguments && (
@@ -124,7 +124,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
                   </div>
                 </div>
 
-                <div className="relative z-[1] mb-3 bg-card last:mb-0">
+                <div className="relative z-raised mb-3 bg-card last:mb-0">
                   <div className="flex items-center text-[13px] text-muted-foreground">
                     <span className="mr-1.5 font-bold text-success" aria-hidden="true">
                       ✓
@@ -134,7 +134,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents, defaultOpenKeys }: MCPEven
                 </div>
 
                 {callEvent.item?.output && (
-                  <div className="relative z-[1] mb-3 bg-card last:mb-0">
+                  <div className="relative z-raised mb-3 bg-card last:mb-0">
                     <div className="mb-1 text-[13px] font-medium text-muted-foreground">Response</div>
                     <div className="whitespace-pre-wrap font-mono text-[13px] leading-normal text-foreground">
                       {callEvent.item.output}
