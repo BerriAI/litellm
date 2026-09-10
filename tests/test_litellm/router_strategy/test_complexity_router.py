@@ -7625,6 +7625,102 @@ _CODEX_ENVELOPES: Final = (
 class TestContextAwareClassifier:
     """Test the new classifier context window and trajectory signals."""
 
+    @pytest.mark.parametrize(
+        "tail,expected",
+        (
+            ([{"role": "user", "content": [{"type": "text", "text": _CODEX_ENVELOPES[0]}]}], True),
+            ([{"role": "assistant", "content": _CODEX_ENVELOPES[0]}], False),
+            ([{"role": "tool", "content": _CODEX_ENVELOPES[0]}], False),
+            ([{"role": "user", "content": " "}], False),
+            (
+                [{"role": "user", "content": [_TOOL_RESULT, {"type": "text", "text": _CODEX_ENVELOPES[0]}]}],
+                False,
+            ),
+            (
+                [{"role": "user", "content": [{"type": "image_url"}, {"type": "text", "text": _CODEX_ENVELOPES[0]}]}],
+                False,
+            ),
+        ),
+    )
+    def test_only_text_reminder_tails_are_ignored_for_new_asks(self, tail: list[dict[str, object]], expected: bool) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import (
+            _CODEX_REMINDER_MARKERS,
+            _newest_turn_is_human_ask,
+        )
+
+        assert _newest_turn_is_human_ask([_ASKED, *tail], _CODEX_REMINDER_MARKERS) is expected
+        assert _newest_turn_is_human_ask(tail, _CODEX_REMINDER_MARKERS) is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("new_ask", (_CODEX_NEW_TASK, "Now design cache invalidation"))
+    @pytest.mark.parametrize("responses_api", (False, True))
+    @pytest.mark.parametrize("session_affinity", (False, True))
+    async def test_codex_tail_preserves_new_ask_and_tool_continuation_boundaries(
+        self, new_ask: str, responses_api: bool, session_affinity: bool
+    ) -> None:
+        completion: Final = AsyncMock(
+            side_effect=[_llm_response('{"tier":"SIMPLE"}'), _llm_response('{"tier":"COMPLEX"}')]
+        )
+        router: Final = ComplexityRouter(
+            model_name="router",
+            litellm_router_instance=MagicMock(acompletion=completion, cache=DualCache()),
+            complexity_router_config={
+                "tiers": {"SIMPLE": "simple-model", "COMPLEX": "task-model"},
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "classifier-model"},
+                "classification_mode": "user_turn",
+                "session_affinity": session_affinity,
+                "escalation_keywords": [],
+            },
+        )
+        metadata: Final = {"user_agent": "codex-tui", "session_id": "codex-tail-session"}
+        first_messages: Final = [{"role": "user", "content": "Hello"}]
+        tail: Final = [{"role": "user", "content": envelope} for envelope in _CODEX_ENVELOPES]
+        new_messages: Final = [
+            *first_messages,
+            {"role": "assistant", "content": "Hello"},
+            {"role": "user", "content": new_ask},
+            *tail,
+        ]
+        continuation: Final = [
+            *new_messages,
+            {"role": "assistant", "content": "Working on it"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "read-cache", "content": "cache source"},
+                    {"type": "text", "text": _CODEX_ENVELOPES[0]},
+                ],
+            },
+            *tail,
+        ]
+        results: Final = [
+            await router.async_pre_routing_hook(
+                model="router",
+                request_kwargs=(
+                    {"input": messages, "litellm_metadata": {**metadata, "user_api_key_request_route": "/v1/responses"}}
+                    if responses_api
+                    else {"metadata": metadata}
+                ),
+                messages=None if responses_api else messages,
+                input=messages if responses_api else None,
+            )
+            for messages in (first_messages, new_messages, continuation)
+        ]
+
+        assert [result.model for result in results] == (
+            ["simple-model", "simple-model", "simple-model"]
+            if session_affinity
+            else ["simple-model", "task-model", "task-model"]
+        )
+        assert completion.await_count == (1 if session_affinity else 2)
+        assert results[-1].routing_decision["cause"] == (
+            "session_affinity_pin" if session_affinity else "user_turn_continuation"
+        )
+        if not session_affinity:
+            assert completion.call_args.kwargs["messages"][1]["content"].endswith(f"Classify this message:\n{new_ask}")
+        assert results[1].messages == (None if responses_api else new_messages)
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("envelope", _CODEX_ENVELOPES)
     @pytest.mark.parametrize("user_agent", (None, "curl/8.7.1", "codexify/1.0"))

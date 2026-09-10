@@ -452,6 +452,8 @@ The proxy records the incoming user agent in request metadata. SDK callers can s
 
 The Codex `Message Type: NEW_TASK` wrapper and its delegated-task payload remain available for classification. Cleanup applies to the current ask and quoted prior turns; the routed request retains its original content
 
+In `classification_mode: user_turn`, complete text-only reminder tails leave the preceding fresh ask eligible for classification. Assistant turns and tool results still mark continuations, including tool results carried alongside reminder text
+
 `reminder_markers` replaces these defaults with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
 
 ```yaml
