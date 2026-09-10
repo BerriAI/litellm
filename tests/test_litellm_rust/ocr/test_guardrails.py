@@ -10,7 +10,7 @@ from litellm.types.guardrails import BlockedWord, ContentFilterAction, Guardrail
 from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_aocr
+from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_native_aocr
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -35,7 +35,7 @@ class ReplaceOCRMarkdown(CustomGuardrail):
 
 
 @pytest.mark.asyncio
-async def test_public_aocr_post_call_content_filter_blocks_matching_markdown(
+async def test_native_aocr_post_call_content_filter_blocks_matching_markdown(
     ocr_server: RecordingServer,
 ) -> None:
     guardrail: Final = ContentFilterGuardrail(
@@ -46,21 +46,21 @@ async def test_public_aocr_post_call_content_filter_blocks_matching_markdown(
     litellm.callbacks.append(guardrail)
 
     with pytest.raises(HTTPException, match="Content blocked") as blocked:
-        await call_aocr(ocr_server, guardrails=[guardrail.guardrail_name])
+        await call_native_aocr(ocr_server, guardrails=[guardrail.guardrail_name])
 
     assert blocked.value.status_code == 400
     assert len(ocr_server.requests) == 1
 
 
 @pytest.mark.asyncio
-async def test_public_aocr_post_call_replacement_reaches_caller_and_success_callback(
+async def test_native_aocr_post_call_replacement_reaches_caller_and_success_callback(
     ocr_server: RecordingServer,
 ) -> None:
     guardrail: Final = ReplaceOCRMarkdown()
     recorder: Final = RecordingLogger()
     litellm.callbacks.append(guardrail)
 
-    response: Final = await call_aocr(
+    response: Final = await call_native_aocr(
         ocr_server,
         callbacks=[recorder],
         guardrails=[guardrail.guardrail_name],
