@@ -25,7 +25,7 @@ from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, TypeAdapter, create_model
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import (
@@ -56,6 +56,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
+    ResponsesAPIResponse,
 )
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
@@ -364,7 +365,7 @@ def _parent_session_kwargs(request_kwargs: Mapping[str, Any] | None) -> Mapping[
     return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
 
 
-def _response_cost_or_none(response: ModelResponse) -> float | None:
+def _response_cost_or_none(response: ModelResponse | ResponsesAPIResponse) -> float | None:
     hidden_params: Final = response._hidden_params
     if not isinstance(hidden_params, dict):
         return None
@@ -484,6 +485,36 @@ def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DE
     model and therefore the spend. An unclosed tag is not a block and is left intact.
     """
     return _strip_reminder_blocks(_message_text(content), marker_pairs)
+
+
+def _encrypted_classifier_task(
+    request_kwargs: Mapping[str, object] | None,
+    marker_pairs: tuple[tuple[str, str], ...],
+) -> dict[str, object] | None:
+    from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
+
+    raw_input: Final = (request_kwargs or EMPTY_MAPPING).get("input")
+    if not isinstance(raw_input, list) or (request_kwargs or EMPTY_MAPPING).get("messages"):
+        return None
+    items: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(raw_input)
+    current: Final = next(
+        (
+            item
+            for item in reversed(items)
+            if (messages := resolve_structured_messages(messages=None, request_kwargs={"input": [item]}))
+            and any(_iter_human_asks_newest_first(messages, marker_pairs))
+        ),
+        None,
+    )
+    if current is None or current.get("type") != "agent_message" or not isinstance(current.get("content"), list):
+        return None
+    parts: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(current["content"])
+    if not any(part.get("type") == "encrypted_content" and part.get("encrypted_content") for part in parts):
+        return None
+    return {
+        **current,
+        "content": [part for part in parts if part.get("type") in ("input_text", "encrypted_content")],
+    }
 
 
 def _iter_human_asks_newest_first(
@@ -1630,6 +1661,10 @@ class ComplexityRouter(CustomLogger):
             return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
+        if self.config.classifier_type in ("heuristic_first", "hybrid") and _encrypted_classifier_task(
+            request_kwargs, self._reminder_markers
+        ):
+            return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
             return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
@@ -1970,8 +2005,9 @@ class ComplexityRouter(CustomLogger):
             > 1
         )
 
+        encrypted_task: Final = _encrypted_classifier_task(request_kwargs, self._reminder_markers)
         user_payload: Final = self._build_classifier_user_payload(
-            prompt=prompt,
+            prompt="The delegated task in the following agent_message." if encrypted_task is not None else prompt,
             system_prompt=system_prompt,
             prior_turns=prior_turns,
             messages=messages,
@@ -2004,34 +2040,37 @@ class ComplexityRouter(CustomLogger):
         if llm_config.reasoning_effort is not None:
             classifier_call_params = MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
 
-        proxy_server_request: Final = {
-            "body": {
-                "model": llm_config.model,
-                "messages": messages_for_call,
-                "response_format": response_format,
-                **classifier_call_params,
-            }
-        }
+        payload: Final = (
+            self._native_classifier_payload(llm_config.model, messages_for_call, response_format, encrypted_task)
+            if encrypted_task is not None
+            else {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
+        )
+        proxy_server_request: Final = {"body": {"model": llm_config.model, **payload}}
+        classify: Final = (
+            self.litellm_router_instance.aresponses
+            if encrypted_task is not None
+            else self.litellm_router_instance.acompletion
+        )
 
         classifier_timeout_s: Final[float] = llm_config.timeout_ms / 1000
-        response: Final[ModelResponse] = await asyncio.wait_for(
-            self.litellm_router_instance.acompletion(
+        response: Final[ModelResponse | ResponsesAPIResponse] = await asyncio.wait_for(
+            classify(
                 model=llm_config.model,
-                messages=messages_for_call,
                 stream=False,
-                response_format=response_format,
                 timeout=classifier_timeout_s,
                 num_retries=0,
                 disable_fallbacks=True,
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
                 turn_off_message_logging=turn_off_message_logging,
-                **classifier_call_params,
+                **payload,
                 **_parent_session_kwargs(request_kwargs),
             ),
             timeout=classifier_timeout_s,
         )
-        content: Final = response.choices[0].message.content
+        content: Final = (
+            response.output_text if isinstance(response, ResponsesAPIResponse) else response.choices[0].message.content
+        )
         if not content:
             raise ValueError("LLM classifier returned empty content")
         raw_tier: Final = _LabeledTierClassification.model_validate_json(content).tier
@@ -2039,6 +2078,52 @@ class ComplexityRouter(CustomLogger):
         if tier is None:
             raise ValueError(f"LLM classifier returned an unrecognized tier: {raw_tier!r}")
         return tier, _response_cost_or_none(response)
+
+    def _native_classifier_payload(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: existing transformation accepts the SDK message list
+        response_format: Mapping[str, object],
+        encrypted_task: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
+        from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
+        from litellm.types.router import LiteLLM_Params
+
+        deployments: Final = self._group_deployments(model)
+        if not deployments:
+            raise ValueError("Encrypted task classification requires a native OpenAI Responses classifier deployment")
+        for params in (LiteLLM_Params.model_validate(deployment.get("litellm_params")) for deployment in deployments):
+            if declared_authenticating_provider(params.model, params.custom_llm_provider):
+                raise ValueError(
+                    "Encrypted task classification requires a native OpenAI Responses classifier deployment"
+                )
+            _, provider, _, _ = get_llm_provider(model=params.model, litellm_params=params)
+            if (
+                provider not in ("openai", "azure")
+                or params.use_chat_completions_api
+                or params.model.startswith("openai/chat_completions/")
+            ):
+                raise ValueError(
+                    "Encrypted task classification requires a native OpenAI Responses classifier deployment"
+                )
+        transformation: Final = LiteLLMResponsesTransformationHandler()
+        input_items, instructions = transformation.convert_chat_completion_messages_to_responses_api(messages)
+        llm_config: Final = self.config.classifier_llm_config
+        reasoning: Final = (
+            {"reasoning": {"effort": llm_config.reasoning_effort}}
+            if llm_config is not None and llm_config.reasoning_effort is not None
+            else {}
+        )
+        return {
+            "input": [*input_items, encrypted_task],
+            "instructions": instructions,
+            "text": transformation.transform_response_format_to_text_format(dict(response_format)),
+            "store": False,
+            **reasoning,
+        }
 
     @staticmethod
     def _build_classifier_user_payload(
