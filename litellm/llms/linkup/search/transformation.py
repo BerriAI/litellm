@@ -143,6 +143,9 @@ class LinkupSearchConfig(BaseSearchConfig):
         if "end_date" in remaining:
             request_data["toDate"] = remaining.pop("end_date")
 
+        if "max_tokens_per_page" in remaining:
+            remaining.pop("max_tokens_per_page")
+
         # Convert to dict before dynamic key assignments
         result_data: Final = dict(request_data)
 
@@ -198,7 +201,7 @@ class LinkupSearchConfig(BaseSearchConfig):
             elif result_type == "image":
                 # For image results, use the URL as both title and snippet if name not provided
                 search_result = SearchResult(
-                    title=result.get("name", result.get("url", "")),
+                    title=result.get("name") or result.get("url", ""),
                     url=result.get("url", ""),
                     snippet=result.get("content", ""),
                     date=None,
