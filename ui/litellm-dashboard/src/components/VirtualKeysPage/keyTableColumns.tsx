@@ -16,6 +16,8 @@ import {
   StatusBadge,
   type StatusTone,
 } from "@/components/shared/table_cells";
+import { teamDetailHref, userDetailHref } from "@/utils/entityLinks";
+import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
@@ -26,6 +28,8 @@ interface KeyStatus {
   label: string;
   tooltip?: string;
 }
+
+const ENTITY_CELL_TITLE_CLASSES = "font-mono text-xs font-normal";
 
 const SPEND_BUDGET_SORT_FIELDS: DataTableSortField[] = [
   { id: "spend", label: "Spend" },
@@ -74,7 +78,7 @@ const UserPopoverCell = ({
   width: number;
 }) => {
   const displayValue = userAlias || userEmail || userId;
-  const isDefaultAdmin = userId === "default_user_id";
+  const isDefaultAdmin = userId === DEFAULT_PROXY_ADMIN_USER_ID;
 
   const popoverContent = (
     <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
@@ -95,28 +99,21 @@ const UserPopoverCell = ({
     </div>
   );
 
-  if (isDefaultAdmin && !userAlias && !userEmail) {
-    return (
-      <HoverCard>
-        <HoverCardTrigger render={<span className="cursor-default" />}>
-          <DefaultProxyAdminTag userId={userId} />
-        </HoverCardTrigger>
-        <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-      </HoverCard>
+  const trigger =
+    isDefaultAdmin && !userAlias && !userEmail ? (
+      <DefaultProxyAdminTag userId={userId} />
+    ) : (
+      <IdentityCell
+        title={displayValue || "-"}
+        titleClassName={ENTITY_CELL_TITLE_CLASSES}
+        href={userId ? userDetailHref(userId) : undefined}
+      />
     );
-  }
 
   return (
     <HoverCard>
-      <HoverCardTrigger
-        render={
-          <span
-            className="font-mono text-xs truncate block cursor-default"
-            style={{ maxWidth: width, overflow: "hidden" }}
-          />
-        }
-      >
-        {displayValue || "-"}
+      <HoverCardTrigger render={<span className="block" style={{ maxWidth: width, overflow: "hidden" }} />}>
+        {trigger}
       </HoverCardTrigger>
       <HoverCardContent align="start">{popoverContent}</HoverCardContent>
     </HoverCard>
@@ -201,12 +198,12 @@ export const getKeyTableColumns = ({
       const teamId = info.getValue() as string | null;
       if (!teamId) return "-";
       const team = allTeams.find((t) => t.team_id === teamId);
-      const displayValue = team?.team_alias || teamId;
-      const width = info.cell.column.getSize();
       return (
-        <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-          {displayValue}
-        </span>
+        <IdentityCell
+          title={team?.team_alias || teamId}
+          titleClassName={ENTITY_CELL_TITLE_CLASSES}
+          href={teamDetailHref(teamId)}
+        />
       );
     },
   },
