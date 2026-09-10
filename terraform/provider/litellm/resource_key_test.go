@@ -394,6 +394,94 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 	}
 }
 
+func TestGetKeyReadsFieldsStoredInMetadata(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"key": "hash-1",
+			"info": {
+				"models": ["gpt-4o-mini"],
+				"metadata": {
+					"team": "core-infra",
+					"model_rpm_limit": {"gpt-4o-mini": 7},
+					"model_tpm_limit": {"gpt-4o-mini": 10000},
+					"guardrails": ["pii-guard"],
+					"tags": ["prod"],
+					"enforced_params": ["user"],
+					"allowed_passthrough_routes": ["/v1/foo"],
+					"rpm_limit_type": "guaranteed_throughput",
+					"tpm_limit_type": "dynamic",
+					"prompts": ["p1"]
+				}
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	key, err := client.GetKey("hash-1")
+	if err != nil {
+		t.Fatalf("GetKey returned error: %v", err)
+	}
+	if got, ok := key.ModelRPMLimit["gpt-4o-mini"].(float64); !ok || got != 7 {
+		t.Errorf("ModelRPMLimit = %v, want gpt-4o-mini=7 read from metadata", key.ModelRPMLimit)
+	}
+	if got, ok := key.ModelTPMLimit["gpt-4o-mini"].(float64); !ok || got != 10000 {
+		t.Errorf("ModelTPMLimit = %v, want gpt-4o-mini=10000 read from metadata", key.ModelTPMLimit)
+	}
+	if len(key.Guardrails) != 1 || key.Guardrails[0] != "pii-guard" {
+		t.Errorf("Guardrails = %v, want [pii-guard]", key.Guardrails)
+	}
+	if len(key.Tags) != 1 || key.Tags[0] != "prod" {
+		t.Errorf("Tags = %v, want [prod]", key.Tags)
+	}
+	if len(key.EnforcedParams) != 1 || key.EnforcedParams[0] != "user" {
+		t.Errorf("EnforcedParams = %v, want [user]", key.EnforcedParams)
+	}
+	if len(key.AllowedPassthroughRoutes) != 1 || key.AllowedPassthroughRoutes[0] != "/v1/foo" {
+		t.Errorf("AllowedPassthroughRoutes = %v, want [/v1/foo]", key.AllowedPassthroughRoutes)
+	}
+	if key.RPMLimitType != "guaranteed_throughput" || key.TPMLimitType != "dynamic" {
+		t.Errorf("limit types = %q/%q, want guaranteed_throughput/dynamic", key.RPMLimitType, key.TPMLimitType)
+	}
+	if len(key.Prompts) != 1 || key.Prompts[0] != "p1" {
+		t.Errorf("Prompts = %v, want [p1]", key.Prompts)
+	}
+	if key.Metadata["team"] != "core-infra" {
+		t.Errorf("Metadata = %v, want team=core-infra preserved", key.Metadata)
+	}
+}
+
+func TestGetKeyPrefersTopLevelOverMetadataCopy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"key": "hash-1",
+			"info": {
+				"tags": ["top-level"],
+				"guardrails": null,
+				"metadata": {
+					"tags": ["from-metadata"],
+					"guardrails": ["from-metadata"]
+				}
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	key, err := client.GetKey("hash-1")
+	if err != nil {
+		t.Fatalf("GetKey returned error: %v", err)
+	}
+	if len(key.Tags) != 1 || key.Tags[0] != "top-level" {
+		t.Errorf("Tags = %v, want [top-level]", key.Tags)
+	}
+	if len(key.Guardrails) != 1 || key.Guardrails[0] != "from-metadata" {
+		t.Errorf("Guardrails = %v, want [from-metadata] (null top-level must not shadow)", key.Guardrails)
+	}
+}
+
 func TestResourceKeyReadDropsMissingKeyFromState(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
