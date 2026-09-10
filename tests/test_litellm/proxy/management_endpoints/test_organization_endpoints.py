@@ -1226,3 +1226,57 @@ def test_v2_update_organization_is_in_openapi_schema():
     v2_path = app.openapi()["paths"]["/v2/organization/{organization_id}"]
     assert v2_path["patch"]["tags"] == ["organization management"]
     assert "OrganizationUpdateRequestV2" in json.dumps(v2_path["patch"]["requestBody"])
+
+
+def _organization_route_targets() -> list[tuple[str, str]]:
+    from fastapi.routing import APIRoute
+
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+
+    return [
+        (method, route.path.replace("{organization_id}", "org-under-test"))
+        for route in router.routes
+        if isinstance(route, APIRoute)
+        for method in sorted(route.methods - {"HEAD", "OPTIONS"})
+    ]
+
+
+def _organization_test_client() -> TestClient:
+    from fastapi import FastAPI
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.mark.parametrize(("method", "path"), _organization_route_targets())
+def test_organization_routes_are_blocked_without_enterprise_license(monkeypatch, method, path):
+    """Every /organization route is enterprise-only, even for a proxy admin."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", False, raising=False)
+
+    response = _organization_test_client().request(method, path, json={})
+
+    assert response.status_code == 403
+    assert "Organizations" in response.json()["detail"]["error"]
+
+
+@pytest.mark.parametrize(("method", "path"), _organization_route_targets())
+def test_organization_routes_pass_the_license_gate_with_enterprise_license(monkeypatch, method, path):
+    """With a license the gate is transparent: whatever fails next, it is not the license check."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
+
+    response = _organization_test_client().request(method, path, json={})
+
+    assert "LiteLLM Enterprise" not in response.text
