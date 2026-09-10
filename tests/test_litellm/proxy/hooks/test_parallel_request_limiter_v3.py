@@ -6238,17 +6238,28 @@ async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
     assert response == {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
 
 
-@pytest.mark.asyncio
-async def test_an_open_circuit_breaker_falls_back_to_the_pipeline_without_a_warning(caplog):
-    from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
-    from litellm.types.caching import RedisPipelineIncrementOperation
+class _OpenBreakerRedis:
+    def async_register_script(self, script: str):
+        async def refused(keys, args):
+            from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+            raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
 
-    async def refused_script(keys, args):
+        return refused
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
         raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
 
-    handler.token_increment_script = refused_script
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_falls_back_to_the_pipeline_without_a_warning(caplog):
+    from litellm.types.caching import RedisPipelineIncrementOperation
+
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis()))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
         await handler.async_increment_tokens_with_ttl_preservation(
@@ -6261,14 +6272,9 @@ async def test_an_open_circuit_breaker_falls_back_to_the_pipeline_without_a_warn
 
 @pytest.mark.asyncio
 async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_a_warning(caplog):
-    from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
-
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
-
-    async def refused_script(keys, args):
-        raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
-
-    handler.batch_rate_limiter_script = refused_script
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis()))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
         values = await handler._execute_redis_batch_rate_limiter_script(
