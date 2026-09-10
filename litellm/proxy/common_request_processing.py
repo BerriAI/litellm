@@ -190,6 +190,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
 )
+from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -1849,7 +1850,6 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
             )
-
         # Calculate request queue time after add_litellm_data_to_request
         # which sets arrival_time in proxy_server_request. Ends at start_time
         # (not a freshly captured time.time() here) so this window is exactly
@@ -1997,6 +1997,12 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             call_type=route_type,
         )
+        if route_type == "aget_responses":
+            attach_post_call_pipelines_to_retrieval(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
 
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
@@ -3294,9 +3300,10 @@ class ProxyBaseLLMRequestProcessing:
         has completed.
 
         Guardrails routed through unified_guardrail are skipped, since they already ran
-        via its streaming iterator.  Guardrails that override
-        async_post_call_success_hook directly run here, including those that implement
-        apply_guardrail but keep their native lifecycle hooks.
+        via its streaming iterator, and so are guardrails a post_call policy pipeline
+        manages, since the pipeline ran them against the buffered stream.  Guardrails
+        that override async_post_call_success_hook directly run here, including those
+        that implement apply_guardrail but keep their native lifecycle hooks.
 
         This is audit-only — content has already been delivered to the client.
 
@@ -3306,11 +3313,17 @@ class ProxyBaseLLMRequestProcessing:
         _response = assembled_response
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
-            from litellm.proxy.utils import _check_and_merge_model_level_guardrails
+            from litellm.proxy.utils import (
+                _check_and_merge_model_level_guardrails,
+                stream_gated_guardrail_names,
+            )
 
             guardrail_data = _check_and_merge_model_level_guardrails(data=captured_data, llm_router=_global_llm_router)
+            stream_gated: Final = stream_gated_guardrail_names(captured_data, captured_user_api_key_dict)
             for cb in litellm.callbacks:
                 if not isinstance(cb, CustomGuardrail):
+                    continue
+                if cb.guardrail_name in stream_gated:
                     continue
                 if not cb.should_run_guardrail(
                     data=guardrail_data,

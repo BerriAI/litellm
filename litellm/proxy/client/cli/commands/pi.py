@@ -10,6 +10,7 @@ import os
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -20,11 +21,28 @@ from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 PI_CONFIG_DIR_ENV: Final = "PI_CODING_AGENT_DIR"
 PI_PROVIDER_NAME: Final = "litellm"
 LITELLM_PROXY_API_KEY_ENV: Final = "LITELLM_PROXY_API_KEY"
+_REJECTED_STATUSES: Final = frozenset((401, 403))
+
+
+class ListingFailure(StrEnum):
+    """Why a proxy could not be listed, decided once where the HTTP outcome is classified.
+
+    `unreachable` means no response at all; the other kinds prove the proxy answered, so callers
+    must not suggest checking whether it is running.
+    """
+
+    UNREACHABLE = "unreachable"
+    REJECTED = "rejected"
+    BAD_BODY = "bad_body"
+    EMPTY = "empty"
+    OTHER = "other"
 
 
 @dataclass(frozen=True, slots=True)
 class PiSyncError:
     message: str
+    status: int | None = None
+    kind: ListingFailure | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,16 +83,20 @@ def fetch_model_ids(
             timeout=10,
         )
     except requests.RequestException as e:
-        return PiSyncError(f"Could not list models from the proxy: {e}")
+        return PiSyncError(f"Could not list models from the proxy: {e}", kind=ListingFailure.UNREACHABLE)
     if resp.status_code != 200:
-        return PiSyncError(f"The proxy returned HTTP {resp.status_code} for /v1/models; cannot build pi's model list.")
+        return PiSyncError(
+            f"The proxy returned HTTP {resp.status_code} for /v1/models; cannot list models.",
+            resp.status_code,
+            ListingFailure.REJECTED if resp.status_code in _REJECTED_STATUSES else ListingFailure.OTHER,
+        )
     try:
         listing: Final = _ModelList.model_validate(resp.json())
     except (ValueError, ValidationError) as e:
-        return PiSyncError(f"Unexpected /v1/models response from the proxy: {e}")
+        return PiSyncError(f"Unexpected /v1/models response from the proxy: {e}", kind=ListingFailure.BAD_BODY)
     ids: Final = tuple(dict.fromkeys(model.id for model in listing.data))
     if not ids:
-        return PiSyncError("The proxy returned no models for your key, so pi would have nothing to run.")
+        return PiSyncError("The proxy returned no models for your key.", kind=ListingFailure.EMPTY)
     return ids
 
 
@@ -200,6 +222,7 @@ __all__ = (
     "LITELLM_PROXY_API_KEY_ENV",
     "PI_CONFIG_DIR_ENV",
     "PI_PROVIDER_NAME",
+    "ListingFailure",
     "ModelLimits",
     "PiSyncError",
     "fetch_model_ids",

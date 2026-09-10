@@ -25871,6 +25871,11 @@ export interface components {
              */
             disable_budget_reservation?: boolean | null;
             /**
+             * Disable Env Credential Login
+             * @description If True, disables signing in to the Admin UI with the environment credentials: UI_USERNAME/UI_PASSWORD, or the master key when UI_PASSWORD is unset (that fallback means env-credential login is always live by default). Database users with passwords are unaffected. LOCKOUT RISK: create at least one proxy admin user with a password before enabling, or nobody can sign in to the UI. A locked-out admin can still administer the proxy over the API with the master key, and can unset this setting and restart the proxy to restore env-credential login. Default is False.
+             */
+            disable_env_credential_login?: boolean | null;
+            /**
              * Disable Password Login When Sso Enabled
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
@@ -29736,6 +29741,8 @@ export interface components {
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
+            /** Output Cost Per Second 720P */
+            output_cost_per_second_720p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -39927,6 +39934,8 @@ export interface components {
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
+            /** Output Cost Per Second 720P */
+            output_cost_per_second_720p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */

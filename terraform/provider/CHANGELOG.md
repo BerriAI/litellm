@@ -16,6 +16,7 @@ longer signal it.
 
 ### Added
 
+- **team**: Optional `team_id` argument on `litellm_team`, so teams can be created with a stable, human-readable ID instead of a provider-generated UUID; changing it forces replacement
 - **jwt_key_mapping**: New `litellm_jwt_key_mapping` resource for the proxy's JWT to virtual key mappings, so JWT clients identified by a claim (`client_id`, `azp`, `sub`) map to virtual keys and inherit their models, budgets and rate limits. Supports `description` and `is_active`, rotating the mapped key in place, and forces replacement when the claim name or value changes
 - **team**: `soft_budget`, `tags`, and `soft_budget_alerting_emails` attributes on `litellm_team`, matching what `/team/new` and `/team/update` already accept; `soft_budget_alerting_emails` is sent under `metadata`, where the proxy reads it
 - **user**: New `litellm_user` resource and `litellm_user` / `litellm_users` data sources for managing internal users
@@ -44,6 +45,7 @@ longer signal it.
 
 ### Changed
 
+- **key** (breaking): `model_max_budget` on `litellm_key` is now a JSON string of per-model budget objects (`jsonencode({"gpt-4o-mini" = {budget_limit = 50, time_period = "30d"}})`), matching `litellm_user`, `litellm_budget` and `litellm_tag`. The old `map(number)` form sent bare numbers to `/key/generate`, which the proxy rejects with a 500 (`'int' object is not iterable`), so every key with a non-empty `model_max_budget` failed to apply. Existing state upgrades automatically (schema version 1) and the attribute is refilled from the proxy on the next read; configurations still using the map form must be rewritten
 - **Versioning**: the provider is now published at the LiteLLM version, from the same commit as the proxy, on every LiteLLM release (dev, rc, stable). The `0.x` line ends at `0.4.0`; a `~> 0.4` constraint will not receive further releases, so re-pin to the LiteLLM version your proxy runs (for example `~> 1.99.0`). Existing `0.x` versions remain in the registry and keep verifying
 
 ## [0.4.0] - 2026-08-06
