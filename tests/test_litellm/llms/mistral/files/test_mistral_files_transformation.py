@@ -91,18 +91,28 @@ def test_upload_request_is_multipart_with_batch_purpose(config):
     }
 
 
-@pytest.mark.parametrize(
-    "openai_purpose,mistral_purpose",
-    [("batch", "batch"), ("fine-tune", "fine-tune"), ("ocr", "ocr"), ("assistants", "batch"), ("user_data", "batch")],
-)
-def test_upload_request_maps_purpose_onto_mistral_enum(config, openai_purpose, mistral_purpose):
+@pytest.mark.parametrize("purpose", ["batch", "fine-tune", "ocr"])
+def test_upload_request_passes_mistral_purposes_through(config, purpose):
     body = config.transform_create_file_request(
         model="",
-        create_file_data=CreateFileRequest(file=("f.bin", b"x"), purpose=openai_purpose),
+        create_file_data=CreateFileRequest(file=("f.bin", b"x"), purpose=purpose),
         optional_params={},
         litellm_params={},
     )
-    assert body["purpose"] == (None, mistral_purpose)
+    assert body["purpose"] == (None, purpose)
+
+
+@pytest.mark.parametrize("purpose", ["assistants", "user_data", "vision", "evals"])
+def test_upload_request_rejects_purposes_mistral_lacks(config, purpose):
+    """Regression: these used to be silently rewritten to ``batch``, so an upload that skipped the
+    proxy's batch-only validation and guardrails still landed on Mistral as a batch input file."""
+    with pytest.raises(ValueError, match=f"purpose={purpose!r}"):
+        config.transform_create_file_request(
+            model="",
+            create_file_data=CreateFileRequest(file=("f.bin", b"x"), purpose=purpose),
+            optional_params={},
+            litellm_params={},
+        )
 
 
 def test_upload_request_requires_file(config):
@@ -179,6 +189,11 @@ def test_list_request_filters_by_mapped_purpose(config):
     assert params == {"purpose": "batch"}
     _, no_params = config.transform_list_files_request(purpose=None, optional_params={}, litellm_params={})
     assert no_params == {}
+
+
+def test_list_request_rejects_purposes_mistral_lacks(config):
+    with pytest.raises(ValueError, match="purpose='assistants'"):
+        config.transform_list_files_request(purpose="assistants", optional_params={}, litellm_params={})
 
 
 def test_list_response(config):

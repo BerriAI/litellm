@@ -89,11 +89,14 @@ def _to_openai_purpose(purpose: MistralFilePurpose) -> OpenAIFilesPurpose:
 
 
 def _to_mistral_purpose(purpose: str) -> MistralFilePurpose:
+    """Only Mistral's own purposes pass through. Silently mapping anything else to ``batch``
+    would let an upload skip the proxy's batch-file validation and guardrails, which only
+    run when the caller says ``purpose=batch``."""
     match purpose:
-        case "fine-tune" | "ocr":
+        case "batch" | "fine-tune" | "ocr":
             return purpose
         case _:
-            return "batch"
+            raise ValueError(f"Mistral does not support purpose={purpose!r}. Use one of: batch, fine-tune, ocr")
 
 
 def _api_base_from(litellm_params: Mapping[str, object]) -> str:
@@ -166,7 +169,7 @@ class MistralFilesConfig(BaseFilesConfig):
         content_type: Final = extracted.get("content_type") or "application/octet-stream"
         upload: Final = MistralMultipartUpload(
             file=(filename, extracted["content"], content_type),
-            purpose=(None, _to_mistral_purpose(create_file_data.get("purpose", "batch"))),
+            purpose=(None, _to_mistral_purpose(create_file_data.get("purpose") or "batch")),
         )
         return dict(upload)  # mutable-ok: BaseFilesConfig signature
 
