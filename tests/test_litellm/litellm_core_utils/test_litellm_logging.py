@@ -6804,11 +6804,11 @@ def test_get_error_information_redacts_provider_key_from_upstream_url():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["openai", "anthropic", "bedrock"])
+@pytest.mark.parametrize("provider", ["openai", "azure", "anthropic", "bedrock"])
 async def test_classifier_audit_matches_provider_transport(provider: str) -> None:
     import json
 
-    from openai import AsyncOpenAI
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
 
     from litellm.litellm_core_utils.classifier_logging import classifier_input_snapshot
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -6844,9 +6844,17 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
         handler: Final = AsyncHTTPHandler()
         await handler.close()
         handler.client = http_client
-        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client) if provider == "openai" else handler
+        client: Final = (
+            AsyncAzureOpenAI(
+                api_key="transport-only", azure_endpoint="https://azure.invalid",
+                api_version="2025-04-01-preview", http_client=http_client,
+            )
+            if provider == "azure" else AsyncOpenAI(api_key="transport-only", http_client=http_client)
+            if provider == "openai" else handler
+        )
         model: Final = {
             "openai": "openai/gpt-5.6",
+            "azure": "azure/gpt-5.6",
             "anthropic": "anthropic/claude-haiku-4-5",
             "bedrock": "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
         }[provider]
@@ -6859,8 +6867,9 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
                 metadata={"internal_call_origin": "autorouter_classifier"},
                 proxy_server_request={"body": {}, "originating_request_masked": {"input": f"source-only-{marker}"}},
                 success_callback=[capture], num_retries=0,
+                **({"api_base": "https://azure.invalid", "api_version": "2025-04-01-preview"} if provider == "azure" else {}),
                 **({"extra_body": {"audit_context": "provider-extra"}, "extra_headers": {"X-Audit": "header-only-secret"}}
-                   if provider == "openai" else {}),
+                   if provider in ("openai", "azure") else {}),
             )
 
         await asyncio.gather(run("request-one"), run("request-two"))
@@ -6877,7 +6886,7 @@ async def test_classifier_audit_matches_provider_transport(provider: str) -> Non
             marker: Final = "request-one" if "request-one" in json.dumps(snapshot) else "request-two"
             assert payload["originating_request_masked"] == {"input": f"source-only-{marker}"}
             assert classifier_input_snapshot(snapshot) is not None
-        if provider != "openai":
+        if provider not in ("openai", "azure"):
             assert all("system" in request for request in requests)
 
 
