@@ -22,7 +22,8 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import LiteLLM_ManagedObjectTable
+    from prisma.models import LiteLLM_ManagedObjectTable
+
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
 
@@ -207,7 +208,7 @@ class CheckResponsesCost:
                 model_name = stored_response.get("model", None)
                 
                 # Decrypts rows written before model_object_id held the provider's own id.
-                responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(job.model_object_id)
+                responses_id_security = ResponsesIDSecurity().provider_response_id(job.model_object_id)
                 
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {
