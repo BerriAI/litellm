@@ -1364,6 +1364,7 @@ class RedisCache(BaseCache):
         except Exception:
             return ast.literal_eval(decoded)
 
+    @_redis_circuit_breaker_guard_sync
     def get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):
         try:
             key = self.check_and_fix_namespace(key=key)
@@ -1384,7 +1385,8 @@ class RedisCache(BaseCache):
             return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            verbose_logger.error("litellm.caching.caching: get() - Got exception from REDIS: ", e)
+            verbose_logger.error("litellm.caching.caching: get() - Got exception from REDIS: %s", e)
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     def _run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """

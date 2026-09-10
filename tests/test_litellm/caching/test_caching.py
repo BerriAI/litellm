@@ -252,3 +252,29 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     assert baseline != cache.get_cache_key(
         model="claude-sonnet-4-5", messages=messages, **anthropic_param
     )
+
+
+@pytest.mark.asyncio
+async def test_async_add_cache_treats_an_open_breaker_as_a_quiet_skip(caplog):
+    """The top-level write wrapper logs a full ERROR traceback for any failure. An open Redis
+    breaker fails every write instantly, so under load that wrapper alone was hundreds of
+    stack formats per second per replica. Unexpected failures must still get the traceback.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    cache.cache.async_set_cache = AsyncMock(side_effect=RedisCircuitBreakerOpenError("open"))
+
+    await cache.async_add_cache("result", model="gpt-5.4-nano", messages=[{"role": "user", "content": "hi"}])
+
+    assert [r.levelno for r in caplog.records if "add_cache" in r.getMessage()] == [logging.DEBUG]
+    cache.cache.async_set_cache.assert_awaited_once()
+
+    cache.cache.async_set_cache = AsyncMock(side_effect=OSError("disk full"))
+    await cache.async_add_cache("result", model="gpt-5.4-nano", messages=[{"role": "user", "content": "hi"}])
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1 and errors[0].exc_info is not None

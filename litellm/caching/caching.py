@@ -32,7 +32,7 @@ from .dual_cache import DualCache  # noqa: F401
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
 from .qdrant_semantic_cache import QdrantSemanticCache
-from .redis_cache import RedisCache
+from .redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
@@ -677,6 +677,8 @@ class Cache:
                 return
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
+        except RedisCircuitBreakerOpenError as e:
+            verbose_logger.debug("LiteLLM Cache: skipped add_cache: %s", e)
         except Exception as e:
             verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
@@ -696,6 +698,8 @@ class Cache:
                     await dynamic_cache_object.async_set_cache(cache_key, cached_data, **kwargs)
                 else:
                     await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
+        except RedisCircuitBreakerOpenError as e:
+            verbose_logger.debug("LiteLLM Cache: skipped add_cache: %s", e)
         except Exception as e:
             verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 
@@ -875,6 +879,8 @@ class Cache:
                 await dynamic_cache_object.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
             else:
                 await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
+        except RedisCircuitBreakerOpenError as e:
+            verbose_logger.debug("LiteLLM Cache: skipped add_cache: %s", e)
         except Exception as e:
             verbose_logger.exception("LiteLLM Cache: Excepton add_cache: %s", e)
 

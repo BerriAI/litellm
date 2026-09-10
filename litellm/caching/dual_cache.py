@@ -177,6 +177,8 @@ class DualCache(BaseCache):
 
             print_verbose(f"get cache: cache result: {result}")
             return result
+        except RedisCircuitBreakerOpenError:
+            return None
         except Exception:
             verbose_logger.error(traceback.format_exc())
 

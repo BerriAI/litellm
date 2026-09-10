@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -646,7 +647,6 @@ def test_sync_batch_get_cache_survives_a_service_callback_that_raises(
     from concurrent.futures import ThreadPoolExecutor
 
     import litellm
-
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
     cache, service_logger = sync_batch_cache_with_service_logger
@@ -1141,3 +1141,24 @@ async def test_recovery_probe_still_closes_the_breaker():
     await asyncio.sleep(0.06)
     assert await _run_under_circuit_breaker(breaker, "probe", recovered) == "ok"
     assert breaker.is_open() is False
+
+
+def test_sync_get_cache_failure_feeds_the_breaker_and_logs_a_well_formed_record(sync_batch_redis_cache, caplog):
+    """The sync read used to log with a stray positional arg, so every Redis failure produced a
+    `--- Logging error ---` stack dump on stderr, and it sat outside the breaker so it kept dialing
+    Redis on every request even after the async paths had opened it.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    caplog.set_level(logging.ERROR, logger="LiteLLM")
+    sync_batch_redis_cache.redis_client.get.side_effect = RedisConnectionError("refused")
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        assert sync_batch_redis_cache.get_cache("lit7468") is None
+
+    assert sync_batch_redis_cache._circuit_breaker.is_open() is True
+    assert sync_batch_redis_cache.redis_client.get.call_count == REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+    assert all("refused" in record.getMessage() for record in caplog.records)
+    assert len(caplog.records) == REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
