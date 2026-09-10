@@ -115,7 +115,7 @@ impl IntoResponse for MessagesRouteError {
             | Error::InvalidResponse(_)
             | Error::InvalidType { .. }
             | Error::MissingField(_)
-            | Error::MissingMistralApiKey => (
+            | Error::MissingApiKey { .. } => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider request failed".to_string(),
             ),

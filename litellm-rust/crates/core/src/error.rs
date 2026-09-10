@@ -18,9 +18,9 @@ pub enum Error {
     #[error("{0}")]
     Auth(String),
     #[error(
-        "Missing Mistral API Key - A call is being made to Mistral but no key is set either in the environment variables or via params"
+        "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
     )]
-    MissingMistralApiKey,
+    MissingApiKey { provider: &'static str },
     #[error("upstream request failed with status {status}: {body}")]
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]

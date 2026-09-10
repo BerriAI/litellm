@@ -71,7 +71,9 @@ fn validate_environment(
         .filter(|key| !key.is_empty())
         .map(str::to_string)
         .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or(Error::MissingMistralApiKey)?;
+        .ok_or(Error::MissingApiKey {
+            provider: "Mistral",
+        })?;
     Ok(
         std::iter::once(("Authorization".into(), format!("Bearer {api_key}")))
             .chain(connection.extra_headers.clone())
@@ -133,7 +135,9 @@ mod tests {
     fn environment_rejects_missing_key() {
         assert!(matches!(
             validate_environment(&OcrConnection::default(), &|_| None),
-            Err(OcrError::Public(Error::MissingMistralApiKey))
+            Err(OcrError::Public(Error::MissingApiKey {
+                provider: "Mistral"
+            }))
         ));
     }
 }
