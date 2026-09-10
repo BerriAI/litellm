@@ -1675,3 +1675,50 @@ async def test_bounded_get_closes_stream_on_cancellation(respx_mock, monkeypatch
     finally:
         await handler.close()
     assert closed.is_set()
+
+
+async def _slow_chunked_upstream(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    """Serves a chunked body in two installments, so a stream is on the wire while the handler dies."""
+    await reader.read(4096)
+    writer.write(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+    writer.write(b"5\r\nfirst\r\n")
+    await writer.drain()
+    await asyncio.sleep(0.4)
+    writer.write(b"4\r\nlast\r\n0\r\n\r\n")
+    await writer.drain()
+
+
+@pytest.mark.asyncio
+async def test_collected_handler_never_kills_a_stream_in_flight(monkeypatch):
+    """
+    Regression: a cache-evicted (hence collected) handler's finalizer used to close the
+    owned client while its pool still served live SSE streams, killing every one of them
+    mid-turn once per handler-cache TTL. The finalizer must defer to the evicted-client
+    closer while a connection is in flight, so the stream reads to completion.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+
+    server = await asyncio.start_server(_slow_chunked_upstream, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+
+    handler = AsyncHTTPHandler()
+    async with asyncio.timeout(30):
+        request = handler.client.build_request("GET", f"http://127.0.0.1:{port}/")
+        response = await handler.client.send(request, stream=True)
+        body_iter = response.aiter_raw()
+        first = await body_iter.__anext__()
+        assert b"first" in first
+
+        del handler
+        gc.collect()
+        await asyncio.sleep(0.1)
+
+        remainder = b"".join([chunk async for chunk in body_iter])
+        assert b"last" in remainder
+
+        await response.aclose()
+    # No wait_closed(): the surviving client's pooled keepalive connection is
+    # the point of this test, and on Python >= 3.12.1 wait_closed() waits for
+    # every client transport, parking the suite forever.
+    server.close()

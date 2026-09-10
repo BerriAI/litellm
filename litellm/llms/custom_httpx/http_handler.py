@@ -1102,12 +1102,33 @@ class AsyncHTTPHandler:
                 # here is the cross-loop path the transport refuses.
                 self._dispose_wrapped_aiohttp_session()
                 return
-            task: Final = loop.create_task(self._client.aclose())
+            task: Final = loop.create_task(self._finalizer_close_client(self._client))
             cls: Final = type(self)
             cls._finalizer_close_tasks.add(task)
             task.add_done_callback(cls._on_finalizer_close_done)
         except Exception:
             pass
+
+    @staticmethod
+    async def _finalizer_close_client(client: httpx.AsyncClient) -> None:
+        """Close a finalized handler's client, unless a request is still in flight.
+
+        The sole-referrer refcount guard in ``__del__`` proves nothing else holds the
+        client *object*, but a request in flight references only the pooled connection,
+        so it is invisible to that check: closing here would tear the pool down under
+        every live SSE stream (a cache-evicted handler is finalized the moment the cache
+        drops it — one batch of mid-turn stream deaths per handler-cache TTL per
+        process). A busy client is handed to the evicted-client closer, which closes it
+        once it reports no connection in flight and a grace window has passed; an idle
+        one is closed here so the finalizer keeps its reclamation. The in-flight check
+        runs inside this task, not in ``__del__``, so no closer lock is taken in GC
+        context.
+        """
+        from litellm.caching.evicted_client_closer import default_evicted_client_closer
+
+        if default_evicted_client_closer.defer_if_busy(client):
+            return
+        await client.aclose()
 
     @staticmethod
     def _create_async_transport(

@@ -206,6 +206,36 @@ class EvictedClientCloser:
             )
         )
 
+    def defer_if_busy(self, client: object) -> bool:
+        """Queue a deferred close for a client with a request in flight; no-op when idle.
+
+        For a finalized handler's client the sole-referrer refcount check has already
+        proven nothing else holds the client object, but a request in flight references
+        only the pooled connection, so it is invisible to that check. A busy client is
+        queued and closed by ``reap`` once idle and out of grace; returns True when the
+        close was deferred (the caller must NOT close the client itself), False when the
+        client is idle and the caller may close it directly.
+        """
+        if _close_function(client) is None:
+            return False
+        if not _has_connection_in_flight(client):
+            return False
+        self.mark_owned(client)
+        self.schedule(client)
+        return True
+
+    def close_or_defer(self, client: object) -> None:
+        """Close an unreferenced client now if idle, else queue it for a deferred close.
+
+        Same in-flight rule as ``defer_if_busy``; an idle client is closed immediately,
+        preserving the reclamation the finalizer used to do.
+        """
+        if _close_function(client) is None:
+            return
+        if self.defer_if_busy(client):
+            return
+        self._close(client)
+
     def reap(self) -> None:
         """Close every queued client that is due, idle, and closable from here.
 

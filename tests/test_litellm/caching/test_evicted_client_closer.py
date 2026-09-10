@@ -409,3 +409,57 @@ def test_a_reap_looks_at_what_is_due_rather_than_at_the_whole_queue():
         f"{CountingDeadline.comparisons} deadline comparisons for {evictions} evictions; "
         "a reap is walking the whole queue"
     )
+
+
+@pytest.mark.asyncio
+async def test_close_or_defer_closes_an_idle_client_immediately():
+    clock = FakeClock()
+    closer = make_closer(clock)
+    client = AsyncClient()
+
+    closer.close_or_defer(client)
+    await asyncio.sleep(0.05)
+
+    assert client.closed is True
+    assert closer.pending_count == 0
+
+
+@pytest.mark.asyncio
+async def test_close_or_defer_defers_a_client_with_a_request_on_the_wire():
+    server = await asyncio.start_server(_trickling_upstream, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    clock = FakeClock()
+    closer = make_closer(clock)
+    client = httpx.AsyncClient()
+
+    async with asyncio.timeout(30):
+        async with client.stream("GET", f"http://127.0.0.1:{port}/") as response:
+            body_iter = response.aiter_raw()
+            await body_iter.__anext__()
+
+            closer.close_or_defer(client)
+
+            assert not client.is_closed
+            assert closer.pending_count == 1
+
+            remainder = b"".join([chunk async for chunk in body_iter])
+            assert b"hello" in remainder
+
+        clock.advance(61.0)
+        closer.reap()
+        await asyncio.sleep(0.05)
+
+    assert client.is_closed
+    assert closer.pending_count == 0
+    # No wait_closed(): on Python >= 3.12.1 it waits for every client
+    # transport, and a pooled keepalive connection would park it forever.
+    server.close()
+
+
+def test_close_or_defer_ignores_a_value_without_a_close_function():
+    clock = FakeClock()
+    closer = make_closer(clock)
+
+    closer.close_or_defer(object())
+
+    assert closer.pending_count == 0
