@@ -2064,8 +2064,9 @@ if MCP_AVAILABLE:
             )
         no_servers_denial: Final[_McpDeniedDetail] = {
             "error": (
-                "The key has no MCP servers granted. Grant servers or access groups to the key, its team, "
-                "or its organization (object_permission.mcp_servers) and reconnect."
+                "The key has no MCP servers granted, or none of its granted servers is loaded and allowed for "
+                "this client IP. Grant servers or access groups to the key, its team, or its organization "
+                "(object_permission.mcp_servers), check the server's allowed IPs, and reconnect."
             )
         }
         raise HTTPException(status_code=403, detail=no_servers_denial)

@@ -558,10 +558,31 @@ class TestProxyMcpAuthorizationScope:
             _assert_unauthorized(await _call(ungranted, restricted_id))
 
     @pytest.mark.asyncio
-    async def test_no_mcp_servers_sentinel_rejects_initialize(self, proxy_server_url: str) -> None:
+    async def test_no_mcp_servers_sentinel_rejects_initialize_and_hides_every_tool(self, proxy_server_url: str) -> None:
+        async with _scoped_session(proxy_server_url) as granted:
+            tool_id = (await _search(granted, "add"))["math_stdio-add"]
         response = await _raw_initialize(proxy_server_url, "sk-none")
         assert response.status_code == 403, response.text
         assert "no MCP servers granted" in response.json()["detail"]["error"]
+
+        async def raw_call(name: str, arguments: dict[str, object]) -> dict[str, typing.Any]:
+            call = await _raw_rpc(proxy_server_url, "sk-none", "tools/call", {"name": name, "arguments": arguments})
+            assert call.status_code == 200, call.text
+            return _rpc_result(call)
+
+        listed = await _raw_rpc(proxy_server_url, "sk-none", "tools/list", {})
+        assert listed.status_code == 200, listed.text
+        assert {tool["name"] for tool in _rpc_result(listed)["tools"]} == {"search_tools", "get_tool_schema", "call_tool"}
+        search = await raw_call("search_tools", {"query": "add"})
+        assert search["isError"] is False, search
+        assert json.loads(search["content"][0]["text"]) == []
+        for name, arguments in (
+            ("get_tool_schema", {"tool_id": tool_id}),
+            ("call_tool", {"tool_id": tool_id, "arguments": {"a": 3, "b": 4}}),
+        ):
+            denied = await raw_call(name, arguments)
+            assert denied["isError"] is True, denied
+            assert denied["content"][0]["text"] == "Unknown or unauthorized tool_id"
 
     @pytest.mark.asyncio
     async def test_tool_grant_hides_ungranted_tools_and_blocks_their_ids(self, proxy_server_url: str) -> None:
