@@ -13,3 +13,5 @@ Live before/after evidence and final check logs are attached separately. The fix
 Final tip: 245369764e80d113e80ec8269846e5257692b8bc
 
 Live cases: Basic Auth correction, URL correction with inherited credential, and static-header correction all return echo before Save. Saving the corrected Basic record returns 202; real tool-list and echo tool-call both return 200. See happy-path.json
+
+Additional public MCP happy path: https://learn.microsoft.com/api/mcp returned three tools; microsoft_docs_search with query Azure Functions overview returned 200 and documentation content. See public-happy-path.json
