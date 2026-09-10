@@ -20,9 +20,10 @@ from litellm.llms.chatgpt.codex import (
     build_sideband_request,
     parse_call_response,
 )
+from litellm.llms.chatgpt.realtime import configured_realtime_headers
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import get_api_key, get_api_key_from_custom_header, user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
 
@@ -99,11 +100,26 @@ async def create_codex_realtime_call(request: Request) -> Response:
     auth: Final = await user_api_key_auth(
         request=request,
         api_key=request.headers.get("authorization", ""),
-        azure_api_key_header="",
+        azure_api_key_header=request.headers.get("api-key", ""),
         anthropic_api_key_header=None,
         google_ai_studio_api_key_header=None,
         azure_apim_header=None,
-        custom_litellm_key_header=None,
+        custom_litellm_key_header=request.headers.get("x-litellm-api-key"),
+    )
+    selected_key, _ = get_api_key(
+        request=request,
+        api_key=request.headers.get("authorization", ""),
+        azure_api_key_header=request.headers.get("api-key", ""),
+        custom_litellm_key_header=request.headers.get("x-litellm-api-key"),
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        pass_through_endpoints=None,
+        route="/v1/realtime/calls",
+    )
+    custom_header: Final = server.general_settings.get("litellm_key_header_name")
+    owner_key: Final = (
+        get_api_key_from_custom_header(request, custom_header) if isinstance(custom_header, str) else selected_key
     )
     try:
         await can_key_call_resolved_model(
@@ -132,7 +148,7 @@ async def create_codex_realtime_call(request: Request) -> Response:
             call: Final = parse_call_response(
                 response,
                 alias=model,
-                owner=hashlib.sha256(request.headers.get("authorization", "").encode()).hexdigest(),
+                owner=hashlib.sha256(f"Bearer {owner_key}".encode()).hexdigest(),
                 expires_at=time.time() + 3600,
             )
         except ValueError as exc:
@@ -210,6 +226,12 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
             **{  # mutable-ok: retain processed policy metadata while pinning the existing call's routing
                 **processed,
                 **build_sideband_request(call),
+                "extra_headers": MappingProxyType(
+                    {
+                        **configured_realtime_headers(processed.get("extra_headers")),
+                        **configured_realtime_headers(call.extra_headers),
+                    }
+                ),
                 "websocket": websocket,
                 "user_api_key_dict": auth,
             }
