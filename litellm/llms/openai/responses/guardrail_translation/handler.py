@@ -432,6 +432,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     """
 
     delivers_ended_stream_rewrites = True
+    assembles_streamed_response = True
 
     def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
         """
