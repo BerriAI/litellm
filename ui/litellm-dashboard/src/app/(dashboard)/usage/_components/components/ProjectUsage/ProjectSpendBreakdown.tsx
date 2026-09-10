@@ -1,13 +1,9 @@
 import React from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 
-import { DonutChart } from "@/components/shared/charts";
-import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
-import { ChartLoader } from "@/components/shared/chart_loader";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
 
+import { SpendByCategoryPanel } from "../SpendByCategoryPanel";
 import type { ProjectSpendRow } from "./projectUsageAggregations";
 
 interface ProjectSpendBreakdownProps {
@@ -48,37 +44,16 @@ const columns: ColumnDef<ProjectSpendRow>[] = [
 ];
 
 const ProjectSpendBreakdown: React.FC<ProjectSpendBreakdownProps> = ({ loading, isDateChanging, projectSpend }) => (
-  <Card className="h-full">
-    <CardHeader>
-      <CardTitle>Spend by Project</CardTitle>
-    </CardHeader>
-    <CardContent>
-      {loading ? (
-        <ChartLoader isDateChanging={isDateChanging} />
-      ) : (
-        <div className="grid grid-cols-2">
-          <DonutChart
-            className="mt-4 h-40"
-            data={projectSpend}
-            index="project_alias"
-            category="spend"
-            valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
-            colors={["cyan"]}
-            showLabel
-            startAngle={90}
-            endAngle={-270}
-          />
-          <DataTable
-            columns={columns}
-            data={projectSpend}
-            getRowId={(row) => row.project_id}
-            noDataMessage="No project usage data"
-            size="compact"
-          />
-        </div>
-      )}
-    </CardContent>
-  </Card>
+  <SpendByCategoryPanel
+    title="Spend by Project"
+    loading={loading}
+    isDateChanging={isDateChanging}
+    data={projectSpend}
+    indexKey="project_alias"
+    columns={columns}
+    getRowId={(row) => row.project_id}
+    noDataMessage="No project usage data"
+  />
 );
 
 export default ProjectSpendBreakdown;
