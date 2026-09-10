@@ -541,3 +541,93 @@ def test_v2_model_info_access_group_paginates_over_the_filtered_set(client, auth
     assert _model_names(payload) == ["openai/*"]
     assert payload["total_count"] == 2
     assert payload["total_pages"] == 2
+
+
+# ---------------------------------------------------------------------------
+# GET /v2/model/info — created_by/updated_by masking for non-admin callers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def audit_field_router(monkeypatch):
+    """Router with one audited deployment and one whose model_info isn't a dict."""
+    model_list = [
+        {
+            "model_name": "gpt-4-audited",
+            "litellm_params": {"model": "openai/gpt-4"},
+            "model_info": {
+                "id": "audited-1",
+                "db_model": True,
+                "created_by": "alice@example.com",
+                "updated_by": "bob@example.com",
+            },
+        },
+        {
+            "model_name": "legacy-model",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo"},
+            "model_info": None,
+        },
+    ]
+    from unittest.mock import AsyncMock
+
+    router = MagicMock()
+    router.model_list = model_list
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        proxy_server,
+        "_apply_search_filter_to_models",
+        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    )
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
+
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+    yield router
+
+
+def _model_by_name(payload, name):
+    return next(m for m in payload["data"] if m["model_name"] == name)
+
+
+def test_v2_model_info_non_admin_masks_created_by_updated_by(client, auth_as, audit_field_router):
+    """A non-admin caller must not see who created/last touched a model."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    with auth_as(role=LitellmUserRoles.INTERNAL_USER):
+        response = client.get("/v2/model/info")
+    assert response.status_code == 200
+    model = _model_by_name(response.json(), "gpt-4-audited")
+    assert model["model_info"]["created_by"] is None
+    assert model["model_info"]["updated_by"] is None
+
+
+@pytest.mark.parametrize(
+    "role",
+    ["PROXY_ADMIN", "PROXY_ADMIN_VIEW_ONLY"],
+)
+def test_v2_model_info_admin_sees_created_by_updated_by(client, auth_as, audit_field_router, role):
+    """Both admin roles are exempt from the redaction and see the real audit trail."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    with auth_as(role=getattr(LitellmUserRoles, role)):
+        response = client.get("/v2/model/info")
+    assert response.status_code == 200
+    model = _model_by_name(response.json(), "gpt-4-audited")
+    assert model["model_info"]["created_by"] == "alice@example.com"
+    assert model["model_info"]["updated_by"] == "bob@example.com"
+
+
+def test_v2_model_info_non_admin_skips_non_dict_model_info(client, auth_as, audit_field_router):
+    """A row whose model_info isn't a dict must pass through untouched instead of crashing."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    with auth_as(role=LitellmUserRoles.INTERNAL_USER):
+        response = client.get("/v2/model/info")
+    assert response.status_code == 200
+    model = _model_by_name(response.json(), "legacy-model")
+    assert model["model_info"] is None
