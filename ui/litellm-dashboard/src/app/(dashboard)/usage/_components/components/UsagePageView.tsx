@@ -121,12 +121,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
-  // Org-admin membership is read from the server, so unlike the other usage
-  // views this one can be revoked while the page is open. Derive the view in
-  // render rather than storing it, so the fallback lands on the same paint and
-  // the selector never holds a value it no longer offers.
-  const usageView: UsageOption =
-    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+  const stillHasAccessToSelectedView =
+    (selectedUsageView !== "organization" || canViewOrganizationUsage) &&
+    (selectedUsageView !== "project" || canViewProjectUsage);
+  const usageView: UsageOption = stillHasAccessToSelectedView ? selectedUsageView : "global";
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);

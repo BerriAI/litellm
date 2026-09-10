@@ -84,4 +84,71 @@ describe("ProjectUsage", () => {
     expect(screen.getAllByText("4").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Project Alpha").length).toBeGreaterThan(0);
   });
+
+  it("shows an error instead of silently rendering zeros when the request fails", async () => {
+    mockProjectDailyActivityCall.mockRejectedValue(new Error("Project management is an enterprise feature"));
+
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ProjectUsage accessToken="test-token" projectList={PROJECT_LIST} dateValue={DATE_VALUE} premiumUser={true} />,
+    );
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(screen.getByRole("option", { name: "Project Alpha" }));
+
+    expect(await screen.findByText("Could not load project usage")).toBeInTheDocument();
+    expect(screen.getByText("Project management is an enterprise feature")).toBeInTheDocument();
+    expect(screen.queryByText("No project usage data")).not.toBeInTheDocument();
+  });
+
+  it("shows a loading indicator while fetching data for a newly-added project", async () => {
+    let resolveSecondCall: (value: unknown) => void = () => {};
+    mockProjectDailyActivityCall
+      .mockResolvedValueOnce({
+        start_date: "2026-09-01",
+        end_date: "2026-09-08",
+        results: [
+          {
+            date: "2026-09-01",
+            project_id: "project-alpha",
+            project_alias: "Project Alpha",
+            spend: 12.5,
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            api_requests: 4,
+            successful_requests: 3,
+            failed_requests: 1,
+          },
+        ],
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecondCall = resolve;
+          }),
+      );
+
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ProjectUsage accessToken="test-token" projectList={PROJECT_LIST} dateValue={DATE_VALUE} premiumUser={true} />,
+    );
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(screen.getByRole("option", { name: "Project Alpha" }));
+    await waitFor(() => expect(screen.getAllByText("$12.50").length).toBeGreaterThan(0));
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(screen.getByRole("option", { name: "Project Beta" }));
+
+    await waitFor(() => expect(screen.getAllByText("Loading chart data...").length).toBeGreaterThan(0));
+
+    resolveSecondCall({
+      start_date: "2026-09-01",
+      end_date: "2026-09-08",
+      results: [],
+    });
+
+    await waitFor(() => expect(screen.queryAllByText("Loading chart data...").length).toBe(0));
+  });
 });

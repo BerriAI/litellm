@@ -1632,14 +1632,6 @@ export const projectDailyActivityCall = async (
   endTime: Date,
   projectIds: string[],
 ): Promise<ProjectDailySpendResponse> => {
-  /**
-   * Get daily spend per project from /project/daily/activity.
-   *
-   * Unlike team/user/tag/agent, there is no daily-aggregated project spend
-   * table, so this scans spend logs directly and returns the whole range in
-   * one response instead of paginating. project_ids is comma-joined because
-   * the endpoint takes a single string, not repeated query params.
-   */
   try {
     return await apiClient.get<ProjectDailySpendResponse>(`/project/daily/activity`, {
       accessToken,

@@ -10,12 +10,18 @@ import type { DateRangePickerValue } from "@/components/shared/date_picker_types
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { projectDailyActivityCall } from "@/components/networking";
+import { extractProxyErrorMessage } from "@/lib/http/client";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 
 import { buildSummaryTiles, type SummaryTile } from "../EntityUsage/entityUsageSummary";
 import type { EntityList } from "../EntityUsage/EntityUsage";
 import ProjectSpendBreakdown from "./ProjectSpendBreakdown";
-import { buildDailySpendSeries, buildProjectSpendBreakdown, summarizeProjectUsage } from "./projectUsageAggregations";
+import {
+  buildDailySpendSeries,
+  buildProjectSpendBreakdown,
+  humanizeBackendListMessage,
+  summarizeProjectUsage,
+} from "./projectUsageAggregations";
 
 interface ProjectUsageProps {
   accessToken: string | null;
@@ -55,7 +61,7 @@ const ProjectUsage: React.FC<ProjectUsageProps> = ({ accessToken, projectList, d
     enabled,
     placeholderData: keepPreviousData,
   };
-  const { data, isFetching, isPlaceholderData } = useQuery(queryOptions);
+  const { data, isPending, isFetching, isPlaceholderData, isError, error } = useQuery(queryOptions);
 
   if (!premiumUser) {
     return (
@@ -76,7 +82,79 @@ const ProjectUsage: React.FC<ProjectUsageProps> = ({ accessToken, projectList, d
   const summary = summarizeProjectUsage(rows);
   const dailySpend = buildDailySpendSeries(rows);
   const projectBreakdown = buildProjectSpendBreakdown(rows);
-  const isLoadingRows = isFetching && !isPlaceholderData;
+  const isLoadingRows = isPending || (isFetching && isPlaceholderData);
+
+  const renderResultsPanel = () => {
+    if (!hasSelection) {
+      return (
+        <div className="col-span-2">
+          <ShadcnCard>
+            <CardContent>
+              <p className="text-sm text-muted-foreground py-8 text-center">
+                Select at least one project above to view its usage.
+              </p>
+            </CardContent>
+          </ShadcnCard>
+        </div>
+      );
+    }
+
+    if (isError) {
+      return (
+        <div className="col-span-2">
+          <Alert variant="error">
+            <AlertTitle>Could not load project usage</AlertTitle>
+            <AlertDescription>{humanizeBackendListMessage(extractProxyErrorMessage(error))}</AlertDescription>
+          </Alert>
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <div className="col-span-2">
+          <ShadcnCard>
+            <CardContent>
+              <h3 className="text-lg font-medium text-foreground">Project Spend Overview</h3>
+              {isLoadingRows ? (
+                <ChartLoader isDateChanging={false} />
+              ) : (
+                <div className="grid grid-cols-5 gap-4 mt-4">
+                  {buildSummaryTiles(summary, false).map(renderSummaryTile)}
+                </div>
+              )}
+            </CardContent>
+          </ShadcnCard>
+        </div>
+
+        <div className="col-span-2">
+          <ShadcnCard>
+            <CardHeader>
+              <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {isLoadingRows ? (
+                <ChartLoader isDateChanging={false} />
+              ) : (
+                <BarChart
+                  data={dailySpend}
+                  index="date"
+                  categories={["spend"]}
+                  colors={["cyan"]}
+                  valueFormatter={valueFormatterSpend}
+                  yAxisWidth={100}
+                />
+              )}
+            </CardContent>
+          </ShadcnCard>
+        </div>
+
+        <div className="col-span-2">
+          <ProjectSpendBreakdown loading={isLoadingRows} isDateChanging={false} projectSpend={projectBreakdown} />
+        </div>
+      </>
+    );
+  };
 
   return (
     <div className="grid grid-cols-2 gap-2 w-full">
@@ -101,56 +179,7 @@ const ProjectUsage: React.FC<ProjectUsageProps> = ({ accessToken, projectList, d
         </ShadcnCard>
       </div>
 
-      {!hasSelection ? (
-        <div className="col-span-2">
-          <ShadcnCard>
-            <CardContent>
-              <p className="text-sm text-muted-foreground py-8 text-center">
-                Select at least one project above to view its usage.
-              </p>
-            </CardContent>
-          </ShadcnCard>
-        </div>
-      ) : (
-        <>
-          <div className="col-span-2">
-            <ShadcnCard>
-              <CardContent>
-                <h3 className="text-lg font-medium text-foreground">Project Spend Overview</h3>
-                <div className="grid grid-cols-5 gap-4 mt-4">
-                  {buildSummaryTiles(summary, false).map(renderSummaryTile)}
-                </div>
-              </CardContent>
-            </ShadcnCard>
-          </div>
-
-          <div className="col-span-2">
-            <ShadcnCard>
-              <CardHeader>
-                <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoadingRows ? (
-                  <ChartLoader isDateChanging={false} />
-                ) : (
-                  <BarChart
-                    data={dailySpend}
-                    index="date"
-                    categories={["spend"]}
-                    colors={["cyan"]}
-                    valueFormatter={valueFormatterSpend}
-                    yAxisWidth={100}
-                  />
-                )}
-              </CardContent>
-            </ShadcnCard>
-          </div>
-
-          <div className="col-span-2">
-            <ProjectSpendBreakdown loading={isLoadingRows} isDateChanging={false} projectSpend={projectBreakdown} />
-          </div>
-        </>
-      )}
+      {renderResultsPanel()}
     </div>
   );
 };

@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { ProjectDailySpendRow } from "@/components/networking";
 
-import { buildDailySpendSeries, buildProjectSpendBreakdown, summarizeProjectUsage } from "./projectUsageAggregations";
+import {
+  buildDailySpendSeries,
+  buildProjectSpendBreakdown,
+  humanizeBackendListMessage,
+  summarizeProjectUsage,
+} from "./projectUsageAggregations";
 
 const row = (overrides: Partial<ProjectDailySpendRow> = {}): ProjectDailySpendRow => ({
   date: "2026-09-01",
@@ -102,5 +107,42 @@ describe("buildProjectSpendBreakdown", () => {
     const rows = [row({ project_id: "project-untitled", project_alias: null })];
 
     expect(buildProjectSpendBreakdown(rows)[0].project_alias).toBe("project-untitled");
+  });
+
+  it("disambiguates two projects that share the same human-set alias", () => {
+    const rows = [
+      row({ project_id: "project-one", project_alias: "Production" }),
+      row({ project_id: "project-two", project_alias: "Production" }),
+    ];
+
+    const aliases = buildProjectSpendBreakdown(rows).map((r) => r.project_alias);
+    expect(new Set(aliases).size).toBe(2);
+    expect(aliases.every((alias) => alias.includes("Production"))).toBe(true);
+  });
+
+  it("leaves a unique alias untouched", () => {
+    const rows = [row({ project_id: "project-alpha", project_alias: "Project Alpha" })];
+
+    expect(buildProjectSpendBreakdown(rows)[0].project_alias).toBe("Project Alpha");
+  });
+});
+
+describe("humanizeBackendListMessage", () => {
+  it("strips a single-quoted Python list down to plain text", () => {
+    expect(humanizeBackendListMessage("Project(s) not found: ['proj-123']")).toBe(
+      "Project(s) not found: proj-123",
+    );
+  });
+
+  it("comma-joins a multi-item Python list", () => {
+    expect(humanizeBackendListMessage("Project(s) not found: ['proj-1', 'proj-2']")).toBe(
+      "Project(s) not found: proj-1, proj-2",
+    );
+  });
+
+  it("leaves a message with no trailing list untouched", () => {
+    expect(humanizeBackendListMessage("Not authorized to view this project")).toBe(
+      "Not authorized to view this project",
+    );
   });
 });
