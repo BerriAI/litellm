@@ -494,6 +494,7 @@ def _closed_port() -> int:
         pytest.param(lambda c: c.async_batch_get_cache(["lit4930"]), id="async_batch_get_cache"),
         pytest.param(lambda c: c.async_set_cache("lit4930", "v"), id="async_set_cache"),
         pytest.param(lambda c: c.async_get_ttl("lit4930"), id="async_get_ttl"),
+        pytest.param(lambda c: c.async_set_cache_sadd("lit4930", ["v"], ttl=None), id="async_set_cache_sadd"),
     ],
 )
 async def test_circuit_breaker_opens_when_method_swallows_redis_failure(call_method):
@@ -505,6 +506,7 @@ async def test_circuit_breaker_opens_when_method_swallows_redis_failure(call_met
     breaker could never open. An unreachable Redis then stayed in the pool and every
     request kept paying the full socket timeout on it.
     """
+    from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
     cache = await asyncio.to_thread(RedisCache, host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
@@ -512,8 +514,71 @@ async def test_circuit_breaker_opens_when_method_swallows_redis_failure(call_met
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
         await call_method(cache)
 
-    with pytest.raises(Exception, match="circuit breaker is open"):
+    with pytest.raises(RedisCircuitBreakerOpenError):
         await call_method(cache)
+
+
+@pytest.mark.asyncio
+async def test_nested_guarded_flush_failures_still_open_the_breaker():
+    """A guarded method that delegates to another guarded method is one Redis call, not two.
+
+    batch_cache_write is guarded and flushes through the guarded async_set_cache_pipeline,
+    which swallows the pipeline error. If the inner guard consumes that failure, the outer
+    guard sees a clean run and records a success, so the streak resets on every write and
+    a dead Redis keeps receiving flushes instead of tripping the breaker.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    cache = await asyncio.to_thread(
+        RedisCache, host="127.0.0.1", port=_closed_port(), socket_timeout=0.5, redis_flush_size=1
+    )
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        await cache.batch_cache_write("lit7468", "v")
+
+    with pytest.raises(RedisCircuitBreakerOpenError):
+        await cache.batch_cache_write("lit7468", "v")
+    assert cache._circuit_breaker._failure_count == REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_nested_guard_that_raises_counts_one_failure_for_the_outer_call():
+    """An inner guarded call that raises through the outer one is a single Redis failure, and a
+    swallowed inner failure followed by an outer raise is two, so the count follows what Redis
+    actually refused rather than how many guard frames the error crossed.
+    """
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _record_swallowed_redis_failure,
+        _run_under_circuit_breaker,
+    )
+
+    breaker = RedisCircuitBreaker(failure_threshold=10, recovery_timeout=60)
+
+    async def refused():
+        raise RedisConnectionError("refused")
+
+    async def outer_delegating_to_inner():
+        return await _run_under_circuit_breaker(breaker, "inner", refused)
+
+    async def outer_swallowing_then_raising():
+        async def inner_swallowing():
+            _record_swallowed_redis_failure(RedisConnectionError("refused"))
+            return {}
+
+        await _run_under_circuit_breaker(breaker, "inner", inner_swallowing)
+        raise RedisConnectionError("refused")
+
+    with pytest.raises(RedisConnectionError):
+        await _run_under_circuit_breaker(breaker, "outer", outer_delegating_to_inner)
+    assert breaker._failure_count == 1
+
+    with pytest.raises(RedisConnectionError):
+        await _run_under_circuit_breaker(breaker, "outer", outer_swallowing_then_raising)
+    assert breaker._failure_count == 3
 
 
 def test_sync_batch_get_cache_swallowed_failures_open_the_breaker_and_then_fast_fail(sync_batch_redis_cache):
@@ -1106,12 +1171,13 @@ async def test_success_admitted_before_the_breaker_opened_cannot_close_it():
 
 
 @pytest.mark.asyncio
-async def test_swallowed_failure_admitted_before_the_breaker_opened_cannot_delay_recovery():
-    """A stale in-flight call that swallows its Redis error must not restart the open timer.
+@pytest.mark.parametrize("stale_call_raises", [False, True], ids=["swallows", "raises"])
+async def test_failure_admitted_before_the_breaker_opened_cannot_delay_recovery(stale_call_raises: bool):
+    """A stale in-flight call that fails after the breaker opened must not restart the open timer.
 
-    Guarded methods that return a default instead of raising still report their failure to
-    the breaker on exit. If that report landed against a newer breaker generation, every
-    slow call that was already dialing Redis when the breaker opened would push recovery
+    Whether the method swallows its Redis error and returns a default or lets it propagate,
+    the failure is reported on exit. If that report landed against a newer breaker generation,
+    every slow call that was already dialing Redis when the breaker opened would push recovery
     back by its own socket timeout, and knock out the HALF_OPEN probe if it landed then.
     """
     from redis.exceptions import ConnectionError as RedisConnectionError
@@ -1125,8 +1191,10 @@ async def test_swallowed_failure_admitted_before_the_breaker_opened_cannot_delay
     breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=0.05)
     release_stale_call = asyncio.Event()
 
-    async def stale_call_that_swallows_its_failure():
+    async def stale_call():
         await release_stale_call.wait()
+        if stale_call_raises:
+            raise RedisConnectionError("refused")
         _record_swallowed_redis_failure(RedisConnectionError("refused"))
         return {}
 
@@ -1136,7 +1204,7 @@ async def test_swallowed_failure_admitted_before_the_breaker_opened_cannot_delay
     async def recovered():
         return "ok"
 
-    in_flight = asyncio.create_task(_run_under_circuit_breaker(breaker, "stale", stale_call_that_swallows_its_failure))
+    in_flight = asyncio.create_task(_run_under_circuit_breaker(breaker, "stale", stale_call))
     await asyncio.sleep(0)
     for _ in range(breaker.failure_threshold):
         with pytest.raises(RedisConnectionError):
@@ -1145,7 +1213,11 @@ async def test_swallowed_failure_admitted_before_the_breaker_opened_cannot_delay
 
     await asyncio.sleep(0.04)
     release_stale_call.set()
-    assert await in_flight == {}
+    if stale_call_raises:
+        with pytest.raises(RedisConnectionError):
+            await in_flight
+    else:
+        assert await in_flight == {}
     await asyncio.sleep(0.03)
 
     assert await _run_under_circuit_breaker(breaker, "probe", recovered) == "ok"
