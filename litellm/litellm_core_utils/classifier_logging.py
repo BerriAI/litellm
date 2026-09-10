@@ -13,13 +13,13 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def classifier_input_snapshot(value: object, *, openai_sdk: bool = False) -> Mapping[str, JsonValue] | None:
-    if openai_sdk and isinstance(value, Mapping):
-        body: Final = {
-            key: item for key, item in value.items() if key not in ("extra_headers", "extra_query", "extra_body")
-        }
-        extra_body: Final = value.get("extra_body")
-        return classifier_input_snapshot({**body, **extra_body} if isinstance(extra_body, Mapping) else body)
     try:
+        if openai_sdk and isinstance(value, Mapping):
+            body: Final = {
+                key: item for key, item in value.items() if key not in ("extra_headers", "extra_query", "extra_body")
+            }
+            extra_body: Final = value.get("extra_body")
+            return _JSON_OBJECT.validate_python({**body, **extra_body} if isinstance(extra_body, Mapping) else body)
         return (
             _JSON_OBJECT.validate_json(value)
             if isinstance(value, (str, bytes))
