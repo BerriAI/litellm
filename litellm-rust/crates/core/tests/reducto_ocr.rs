@@ -165,16 +165,16 @@ fn response_normalization_groups_blocks_and_distinguishes_null_result() {
 }
 
 #[tokio::test]
-async fn facade_preserves_native_response_and_auth_priority() {
+async fn facade_omits_native_response_by_default_and_preserves_auth_priority() {
     let raw = json!({"job_id":"job-1","result":{"chunks":[]}});
-    let (base, seen, server) = mock_server(vec![MockResponse::json(raw.clone())]).await;
+    let (base, seen, server) = mock_server(vec![MockResponse::json(raw)]).await;
     let mut request = wire_request("reducto/parse-v3", &base, json!({}));
     request.document = request.document.with_source("reducto://ready.pdf".into());
     request.connection.extra_headers = vec![("authorization".into(), "Bearer existing".into())];
 
     let response = perform_ocr(request).await.unwrap();
     server.await.unwrap();
-    assert_eq!(response.provider_native_response, Some(raw));
+    assert_eq!(response.provider_native_response, None);
     assert!(
         seen.lock().unwrap()[0]
             .to_ascii_lowercase()

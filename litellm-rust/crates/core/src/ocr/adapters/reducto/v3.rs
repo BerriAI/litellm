@@ -7,7 +7,6 @@ use crate::ocr::prepare::{
 };
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
-use crate::ocr::wire::DecodedOcrResponse;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ReductoV3Adapter;
@@ -38,16 +37,5 @@ impl OcrAdapter for ReductoV3Adapter {
         response: Self::ProviderResponse,
     ) -> Result<LiteLLMOcrResponse, OcrResponseError> {
         reducto::transform_ocr_response(&request.model, response)
-    }
-
-    async fn read_response(
-        &self,
-        _client: &OcrClient,
-        response: reqwest::Response,
-        _url: &str,
-        _headers: &[(String, String)],
-        _request: &LiteLLMOcrRequest,
-    ) -> Result<DecodedOcrResponse<Self::ProviderResponse>, OcrError> {
-        crate::ocr::client::read_json_response(response, true).await
     }
 }
