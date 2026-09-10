@@ -6449,7 +6449,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         mock_router = MagicMock()
         mock_router.fallbacks = None
 
-        with patch("litellm.proxy.common_request_processing.independent_snapshot") as snapshot_mock:
+        with patch(  # test-quality-ok: spying the snapshot seam is the only observable check that the no-fallback path skips it
+            "litellm.proxy.common_request_processing.independent_snapshot"
+        ) as snapshot_mock:
             with patch.object(
                 processor,
                 "common_processing_pre_call_logic",
