@@ -245,7 +245,16 @@ class SpendCounterReseed:
                         value=current_value,
                     )
                 else:
-                    await spend_counter_cache.async_increment_cache(key=counter_key, value=db_spend, refresh_ttl=True)
+                    # Repair/reservations can populate the counter during the DB read.
+                    # Seed a floor without adding the database balance again.
+                    # No await between read/compare/write: atomic within this worker.
+                    cached = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                    current_value = float(db_spend)
+                    if cached is not None:
+                        current_value = max(current_value, float(cached))
+                    spend_counter_cache.in_memory_cache.set_cache(
+                        key=counter_key, value=current_value
+                    )
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced: failed to warm counter %s",
@@ -438,11 +447,20 @@ class SpendCounterReseed:
                         value=current_value,
                     )
                 else:
-                    await spend_counter_cache.async_increment_cache(key=counter_key, value=window_spend)
+                    # Repair/reservations can populate the counter during the DB read.
+                    # Seed a floor without adding the database balance again.
+                    # No await between read/compare/write: atomic within this worker.
+                    cached = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                    current_value = float(window_spend)
+                    if cached is not None:
+                        current_value = max(current_value, float(cached))
+                    spend_counter_cache.in_memory_cache.set_cache(
+                        key=counter_key, value=current_value
+                    )
             except Exception:
                 verbose_proxy_logger.exception(
                     "SpendCounterReseed.coalesced_window: failed to warm counter %s",
                     counter_key,
                 )
                 raise
-            return window_spend
+            return current_value
