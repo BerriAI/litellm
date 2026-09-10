@@ -153,6 +153,20 @@ def test_deployment_root_api_base_is_not_repeated_when_the_relay_carries_the_dep
     assert base == "https://my-resource.openai.azure.com"
 
 
+def test_deployment_named_like_the_first_native_segment_keeps_its_deployment_root():
+    url, base = AzureAIPassthroughConfig().get_complete_url(
+        api_base="https://my-resource.openai.azure.com/openai/deployments/chat",
+        api_key="key",
+        model="chat",
+        endpoint="aoai-chat/chat/completions",
+        request_query_params={"api-version": "2024-10-21"},
+        litellm_params={"litellm_metadata": {"model_group": "aoai-chat"}},
+    )
+
+    assert str(url) == "https://my-resource.openai.azure.com/openai/deployments/chat/chat/completions?api-version=2024-10-21"
+    assert base == "https://my-resource.openai.azure.com/openai/deployments/chat"
+
+
 def test_parse_relay_under_a_models_api_base_targets_the_foundry_root():
     url, _ = AzureAIPassthroughConfig().get_complete_url(
         api_base=f"{FOUNDRY_BASE}/models",

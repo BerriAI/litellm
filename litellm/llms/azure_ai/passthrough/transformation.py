@@ -62,6 +62,10 @@ def foundry_root(api_base: str) -> str:
     return str(url.copy_with(path="/" + "/".join(root_segments), query=None)).rstrip("/")
 
 
+def is_repeated_native_prefix(native_segments: tuple[str, ...], overlap: int) -> bool:
+    return overlap == len(native_segments) or native_segments[0] == "openai"
+
+
 def without_repeated_native_prefix(root: str, native_endpoint: str) -> str:
     url: Final = httpx.URL(root)
     root_segments: Final = tuple(segment for segment in url.path.split("/") if segment)
@@ -71,6 +75,7 @@ def without_repeated_native_prefix(root: str, native_endpoint: str) -> str:
             length
             for length in range(min(len(root_segments), len(native_segments)), 0, -1)
             if tuple(segment.casefold() for segment in root_segments[-length:]) == native_segments[:length]
+            and is_repeated_native_prefix(native_segments, length)
         ),
         0,
     )
