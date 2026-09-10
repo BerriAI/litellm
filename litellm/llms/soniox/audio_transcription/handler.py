@@ -22,6 +22,7 @@ from collections.abc import Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -36,6 +37,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.soniox.audio_transcription.transformation import (
     SonioxAudioTranscriptionConfig,
+    decode_soniox_form_params,
 )
 from litellm.llms.soniox.common_utils import (
     SONIOX_DEFAULT_CLEANUP,
@@ -56,6 +58,13 @@ if TYPE_CHECKING:
     )
 else:
     LiteLLMLoggingObj = Any
+
+
+_CLEANUP_TARGETS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _optional_str(value: object) -> str | None:
+    return None if value is None else str(value)
 
 
 class _TranscriptionMeta(TypedDict, total=False):
@@ -198,25 +207,26 @@ class SonioxAudioTranscriptionHandler:
 
         base_url: Final = get_soniox_api_base(api_base)
 
-        # Operate on a local copy so we don't mutate the caller's dict
+        # Decoded copy so the caller's dict is never mutated
         # (the caller may reuse `optional_params` for retries or logging).
-        params: Final = dict(optional_params)
+        params: Final = dict(decode_soniox_form_params(optional_params))
 
         # Pull handler-only kwargs out of params so they aren't sent
         # to Soniox.
-        poll_interval = float(params.pop("soniox_polling_interval", SONIOX_DEFAULT_POLL_INTERVAL))
+        poll_interval = float(str(params.pop("soniox_polling_interval", SONIOX_DEFAULT_POLL_INTERVAL)))
         try:
-            max_attempts = int(params.pop("soniox_max_polling_attempts", SONIOX_DEFAULT_MAX_POLL_ATTEMPTS))
+            max_attempts = int(str(params.pop("soniox_max_polling_attempts", SONIOX_DEFAULT_MAX_POLL_ATTEMPTS)))
         except (ValueError, OverflowError):
             max_attempts = SONIOX_DEFAULT_MAX_POLL_ATTEMPTS
         cleanup_raw: Final = params.pop("soniox_cleanup", SONIOX_DEFAULT_CLEANUP)
-        if cleanup_raw is None:
-            cleanup: list[str] = []
-        elif isinstance(cleanup_raw, str):
-            cleanup = [cleanup_raw]
-        else:
-            cleanup = list(cleanup_raw)
-        filename_override: Final = params.pop("filename", None)
+        cleanup: Final[tuple[str, ...]] = (
+            ()
+            if cleanup_raw is None
+            else (cleanup_raw,)
+            if isinstance(cleanup_raw, str)
+            else _CLEANUP_TARGETS.validate_python(cleanup_raw)
+        )
+        filename_override: Final = _optional_str(params.pop("filename", None))
 
         # Server-side clamps. Caller-supplied poll settings (from request kwargs)
         # are bounded so an authenticated caller cannot force a worker into a
@@ -234,9 +244,9 @@ class SonioxAudioTranscriptionHandler:
             "max_attempts": clamped_max_attempts,
             "cleanup": cleanup,
             "filename_override": filename_override,
-            "audio_url": params.pop("audio_url", None),
-            "file_id": params.pop("file_id", None),
-            "response_format": params.pop("response_format", None),
+            "audio_url": _optional_str(params.pop("audio_url", None)),
+            "file_id": _optional_str(params.pop("file_id", None)),
+            "response_format": _optional_str(params.pop("response_format", None)),
         }
 
         # Soniox does not accept `language` directly; map_openai_params should
