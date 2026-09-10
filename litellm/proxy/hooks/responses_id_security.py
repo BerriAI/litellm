@@ -178,6 +178,11 @@ class ResponsesIDSecurity(CustomLogger):
             return True
         return False
 
+    def provider_response_id(self, response_id: str) -> str:
+        """The provider's own id behind an advertised one, returned unchanged when it is not encrypted."""
+        original_response_id: Final = self._decrypt_response_id(response_id)[0]
+        return original_response_id
+
     def _decrypt_response_id(self, response_id: str) -> tuple[str, str | None, str | None]:
         """
         Returns:

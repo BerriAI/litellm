@@ -67,7 +67,7 @@ async def store_background_response_object(
         )
         return
 
-    provider_response_id, _, _ = ResponsesIDSecurity()._decrypt_response_id(response.id)
+    provider_response_id: Final = ResponsesIDSecurity().provider_response_id(response.id)
     await managed_files_obj.store_unified_object_id(
         unified_object_id=response.id,
         file_object=response,

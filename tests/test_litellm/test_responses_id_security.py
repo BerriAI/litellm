@@ -855,3 +855,50 @@ class TestAsyncPostCallSuccessHook:
         )
 
         assert result == mock_response
+
+
+class TestProviderResponseId:
+    """The provider's own id behind an advertised one, for callers that only need that."""
+
+    def test_a_real_encrypted_id_round_trips_to_the_provider_id(
+        self, responses_id_security, monkeypatch
+    ):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
+
+        advertised_id = "resp_" + str(
+            encrypt_value_helper(
+                value=SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+                    "resp_provider_abc", "user-1", "team-1"
+                )
+            )
+        )
+
+        assert advertised_id != "resp_provider_abc"
+        assert responses_id_security.provider_response_id(advertised_id) == "resp_provider_abc"
+
+    def test_two_encryptions_of_one_generation_resolve_to_the_same_provider_id(
+        self, responses_id_security, monkeypatch
+    ):
+        """Each advertised id carries a fresh nonce, so only the decrypted id can key a stored row."""
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
+
+        payload = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+            "resp_provider_abc", "user-1", "team-1"
+        )
+        first = "resp_" + str(encrypt_value_helper(value=payload))
+        second = "resp_" + str(encrypt_value_helper(value=payload))
+
+        assert first != second
+        assert responses_id_security.provider_response_id(first) == "resp_provider_abc"
+        assert responses_id_security.provider_response_id(second) == "resp_provider_abc"
+
+    def test_a_raw_provider_id_is_returned_unchanged(self, responses_id_security, monkeypatch):
+        """Rows written before the provider id was stored hold an encrypted id, so both shapes
+        have to survive the same call."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
+
+        assert responses_id_security.provider_response_id("resp_provider_abc") == "resp_provider_abc"
