@@ -250,7 +250,23 @@ class MCPServer(BaseModel):
     @property
     def advertises_gateway_authorization_server(self) -> bool:
         """Whether named discovery should advertise the aggregate gateway authorization server."""
-        return self.is_gateway_managed_oauth2 and not self.uses_per_server_oauth_relay
+        if self.auth_type == MCPAuth.oauth2:
+            return self.is_gateway_managed_oauth2 and not self.uses_per_server_oauth_relay
+        if self.auth_type not in (
+            None,
+            MCPAuth.none,
+            MCPAuth.api_key,
+            MCPAuth.bearer_token,
+            MCPAuth.basic,
+            MCPAuth.authorization,
+            MCPAuth.token,
+            MCPAuth.aws_sigv4,
+        ):
+            return False
+        return not any(
+            header.lower() in ("authorization", "x-api-key", "api-key", "apikey")
+            for header in (self.extra_headers or ())
+        )
 
     @property
     def is_true_passthrough(self) -> bool:
