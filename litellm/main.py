@@ -5398,6 +5398,14 @@ def completion(
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
+        bridges_to_responses_api: Final = (
+            responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
+        )
+        allowed_openai_params: Final[list[str] | None] = (
+            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+            if bridges_to_responses_api
+            else kwargs.get("allowed_openai_params")
+        )
         optional_param_args: Final = {
             "functions": functions,
             "function_call": function_call,
@@ -5442,7 +5450,7 @@ def completion(
             "service_tier": service_tier,
             "store": store,
             "prompt_cache_key": prompt_cache_key,
-            "allowed_openai_params": kwargs.get("allowed_openai_params"),
+            "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
         optional_params = get_optional_params(**optional_param_args, **non_default_params)

@@ -3,7 +3,7 @@ import json
 import re
 import time
 import traceback
-from collections.abc import Iterable, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal, cast
 
 import litellm
@@ -151,6 +151,16 @@ def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
         del choice.enhancements
 
 
+def _invalid_choices_message(response_object: Mapping[str, object]) -> str:
+    raw_keys: Final = list(response_object.keys())
+    if "choices" not in response_object:
+        return f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {raw_keys}"
+    return (
+        f"LiteLLM: provider returned 'choices' that is not a list ({type(response_object['choices']).__name__}). "
+        f"Raw keys: {raw_keys}"
+    )
+
+
 async def convert_to_streaming_response_async(
     response_object: dict | None = None,
 ):
@@ -179,14 +189,12 @@ async def convert_to_streaming_response_async(
 
     choice_list: Final[list[StreamingChoices]] = []
 
-    if not response_object.get("choices"):
+    if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
         raise APIError(
             status_code=500,
-            message=(
-                f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(response_object.keys())}"
-            ),
+            message=_invalid_choices_message(response_object),
             llm_provider="",
             model="",
         )
@@ -287,14 +295,12 @@ def convert_to_streaming_response(
     model_response_object: Final = ModelResponseStream()
     choice_list: Final[list[StreamingChoices]] = []
 
-    if not response_object.get("choices"):
+    if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
         raise APIError(
             status_code=500,
-            message=(
-                f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {list(response_object.keys())}"
-            ),
+            message=_invalid_choices_message(response_object),
             llm_provider="",
             model="",
         )
@@ -623,15 +629,12 @@ def convert_to_model_response_object(
                 return convert_to_streaming_response(response_object=response_object)
             choice_list: Final[list[Choices]] = []
 
-            if not response_object.get("choices") or not isinstance(response_object["choices"], Iterable):
+            if not isinstance(response_object.get("choices"), list):
                 from litellm.exceptions import APIError
 
                 raise APIError(
                     status_code=500,
-                    message=(
-                        "LiteLLM: provider returned a response with no 'choices'. "
-                        f"Raw keys: {list(response_object.keys())}"
-                    ),
+                    message=_invalid_choices_message(response_object),
                     llm_provider="",
                     model="",
                 )

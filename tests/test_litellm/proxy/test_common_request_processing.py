@@ -417,7 +417,7 @@ class TestProxyBaseLLMRequestProcessing:
         )
 
         fake_llm_router = MagicMock()
-        fake_llm_router.get_model_list.return_value = [
+        fake_llm_router.deployments_for_request.return_value = [
             {
                 "model_name": "smart-router",
                 "litellm_params": {
