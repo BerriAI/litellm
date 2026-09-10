@@ -15,6 +15,7 @@ azure_core.workspace = true
 azure_identity.workspace = true
 base64.workspace = true
 data-url = "0.3.2"
+gcp_auth.workspace = true
 moka.workspace = true
 rand.workspace = true
 reqwest.workspace = true
