@@ -1398,9 +1398,10 @@ class TestLoginConfigClaude:
     def setup_method(self):
         self.runner = CliRunner()
 
-    def _run_login(self, tmp_path, args, base_url="https://test.example.com"):
+    def _run_login(self, tmp_path, args, base_url="https://test.example.com", *, config_dir_env=None):
         settings_path = tmp_path / "claude" / "settings.json"
         backup_path = tmp_path / "claude_settings_backup.json"
+        env = {"CLAUDE_CONFIG_DIR": str(settings_path.parent)} if config_dir_env is None else config_dir_env
         poll_response = Mock()
         poll_response.status_code = 200
         poll_response.json.return_value = {
@@ -1417,17 +1418,19 @@ class TestLoginConfigClaude:
             patch("litellm.proxy.client.cli.commands.auth.save_cli_token"),
             patch("litellm.proxy.client.cli.interface.show_commands"),
             patch(
-                "litellm.proxy.client.cli.commands.auth.SETTINGS_FILE_OWNERS",
+                "litellm.proxy.client.cli.commands.claude_settings.SETTINGS_FILE_OWNERS",
                 (SettingsFileOwner(backup_path, "lite up", "lite down"),),
+            ),
+            patch(
+                "litellm.proxy.client.cli.commands.claude_settings.CLAUDE_SETTINGS_PATH",
+                tmp_path / "default-home" / ".claude" / "settings.json",
             ),
             patch(
                 "litellm.proxy.client.cli.commands.claude_settings.shutil.which",
                 return_value="/usr/local/bin/lite",
             ),
         ):
-            result = self.runner.invoke(
-                login, args, obj={"base_url": base_url}, env={"CLAUDE_CONFIG_DIR": str(settings_path.parent)}
-            )
+            result = self.runner.invoke(login, args, obj={"base_url": base_url}, env=env)
         return result, settings_path, backup_path
 
     def test_default_login_does_not_touch_claude_settings(self, tmp_path):
@@ -1459,6 +1462,30 @@ class TestLoginConfigClaude:
         written = json.loads(settings_path.read_text())
         assert written["theme"] == "dark"
         assert written["env"]["KEEP"] == "me"
+
+    def test_flag_refuses_while_lite_up_holds_the_default_settings_file(self, tmp_path):
+        default_settings_path = tmp_path / "default-home" / ".claude" / "settings.json"
+        (tmp_path / "claude_settings_backup.json").write_text("{}")
+
+        result, _settings_path, _backup_path = self._run_login(
+            tmp_path, ["--config-claude"], config_dir_env={"CLAUDE_CONFIG_DIR": ""}
+        )
+
+        assert result.exit_code != 0
+        assert "Login successful!" in result.output
+        assert "`lite up` is currently managing" in result.output
+        assert "Run `lite down` first" in result.output
+        assert not default_settings_path.exists()
+
+    def test_flag_writes_an_alternate_config_dir_even_while_lite_up_holds_the_default_file(self, tmp_path):
+        (tmp_path / "claude_settings_backup.json").write_text("{}")
+
+        result, settings_path, _backup_path = self._run_login(tmp_path, ["--config-claude"])
+
+        assert result.exit_code == 0, result.output
+        written = json.loads(settings_path.read_text())
+        assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://test.example.com auth print-token"
+        assert f"Configured Claude Code: {settings_path} now routes through https://test.example.com." in result.output
 
     def test_settings_failure_is_reported_without_claiming_login_failed(self, tmp_path):
         settings_path = tmp_path / "claude" / "settings.json"
