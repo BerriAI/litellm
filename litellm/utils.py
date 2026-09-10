@@ -2293,15 +2293,7 @@ def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: st
     dict: A dictionary with the tokenizer and its type.
     """
 
-    try:
-        tokenizer = Tokenizer.from_pretrained(
-            identifier,
-            revision=revision,
-            auth_token=auth_token,
-        )
-    except Exception as e:
-        verbose_logger.error("Error creating pretrained tokenizer: %s. Defaulting to version without 'auth_token'.", e)
-        tokenizer = Tokenizer.from_pretrained(identifier, revision=revision)
+    tokenizer: Final = Tokenizer.from_pretrained(identifier, revision=revision, token=auth_token)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -3412,7 +3404,7 @@ def get_optional_params_image_gen(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model or "",
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=litellm.drop_params is True or drop_params is True,
         )
     elif (
         custom_llm_provider == "openai"
@@ -5913,6 +5905,7 @@ def _get_model_info_helper(
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
                 output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
+                output_cost_per_second_720p=_model_info.get("output_cost_per_second_720p", None),
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
@@ -8859,6 +8852,12 @@ class ProviderConfigManager:
             )
 
             return AzurePassthroughConfig()
+        elif LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.passthrough.transformation import (
+                AzureAIPassthroughConfig,
+            )
+
+            return AzureAIPassthroughConfig()
         elif LlmProviders.GIGACHAT == provider:
             from litellm.llms.gigachat.passthrough.transformation import (
                 GigaChatPassthroughConfig,
@@ -9251,6 +9250,10 @@ class ProviderConfigManager:
             from litellm.llms.openai.image_edit import get_openai_image_edit_config
 
             return get_openai_image_edit_config(model=model)
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
+
+            return get_hosted_vllm_image_edit_config(model=model)
         elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,

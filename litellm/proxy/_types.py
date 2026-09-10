@@ -2836,6 +2836,18 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "UI username/password login. Default is False."
         ),
     )
+    disable_env_credential_login: bool | None = Field(
+        None,
+        description=(
+            "If True, disables signing in to the Admin UI with the environment credentials: "
+            "UI_USERNAME/UI_PASSWORD, or the master key when UI_PASSWORD is unset (that fallback "
+            "means env-credential login is always live by default). Database users with passwords "
+            "are unaffected. LOCKOUT RISK: create at least one proxy admin user with a password "
+            "before enabling, or nobody can sign in to the UI. A locked-out admin can still "
+            "administer the proxy over the API with the master key, and can unset this setting "
+            "and restart the proxy to restore env-credential login. Default is False."
+        ),
+    )
     disable_budget_reservation: bool | None = Field(
         None,
         description=(
@@ -3711,6 +3723,15 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="New Relic",
         litellm_callback_params=[
             "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
+        ],
+    )
+
+    pointfive: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="pointfive",
+        ui_callback_name="PointFive",
+        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+            "POINTFIVE_API_KEY",
+            "POINTFIVE_API_URL",
         ],
     )
 
