@@ -245,7 +245,7 @@ export async function makeOpenAIChatCompletionRequest(
 
         // Extract cost from usage object if available
         if (chunkWithUsage.usage.cost !== undefined && chunkWithUsage.usage.cost !== null) {
-          const parsedCost = parseFloat(chunkWithUsage.usage.cost);
+          const parsedCost = Number(chunkWithUsage.usage.cost);
           if (Number.isFinite(parsedCost)) {
             usageData.cost = parsedCost;
           }
