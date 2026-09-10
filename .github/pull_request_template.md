@@ -49,7 +49,7 @@ After: the same request comes back with real token counts, so the dashboard show
 
 ## Affected release
 
-<!-- Only for a fix to a perf, memory, or crash regression: name the released or rc version it regressed in, e.g. "regression in v1.100.0" or "since v1.101.0-rc.1", and add the `backport-stable` label so the fix is cherry-picked onto the rc line before the stable is tagged. Leave the section blank otherwise -->
+<!-- Only for a fix to a regression in a released or rc version (perf, memory, crash, or behavior): name the version it regressed in, e.g. "regression in v1.100.0" or "since v1.101.0-rc.1", and add the `backport-stable` label so the fix is cherry-picked onto the rc line before the stable is tagged. Leave the section blank otherwise -->
 
 ## Linear ticket
 
@@ -156,3 +156,4 @@ Example checklists:
 ## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
+
