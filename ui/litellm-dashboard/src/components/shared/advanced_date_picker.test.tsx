@@ -76,6 +76,46 @@ describe("AdvancedDatePicker", () => {
     expect(screen.getByText("Year to date")).toBeInTheDocument();
   });
 
+  it("renders and applies additional options after the built-in presets", async () => {
+    const from = new Date("2025-02-01T00:00:00.000Z");
+    const to = new Date("2025-02-28T23:59:59.999Z");
+    const user = userEvent.setup();
+    const { container } = render(
+      <AdvancedDatePicker
+        value={defaultValue}
+        onValueChange={mockOnValueChange}
+        additionalOptions={[
+          {
+            label: "Since last budget reset",
+            shortLabel: "budget",
+            getValue: () => ({ from, to }),
+          },
+        ]}
+      />,
+    );
+
+    openDropdown(container);
+
+    const presets = container.querySelectorAll('[data-slot="advanced-date-picker-preset"]');
+    expect(presets).toHaveLength(6);
+    expect(screen.getByText("Since last budget reset")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Since last budget reset"));
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenCalledWith({ from, to });
+    });
+  });
+
+  it("renders only the built-in presets without additional options", () => {
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+    openDropdown(container);
+
+    expect(container.querySelectorAll('[data-slot="advanced-date-picker-preset"]')).toHaveLength(5);
+  });
+
   it("anchors the panel to the trigger edge named by align", () => {
     const { container, unmount } = render(
       <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} align="left" />,

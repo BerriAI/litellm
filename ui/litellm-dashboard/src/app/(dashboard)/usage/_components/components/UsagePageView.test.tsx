@@ -77,6 +77,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
         "data-testid": "usage-view-select",
       },
       React.createElement("option", { value: "global" }, "Global Usage"),
+      React.createElement("option", { value: "my-usage" }, "Your Usage"),
       React.createElement("option", { value: "team" }, "Team Usage"),
       React.createElement("option", { value: "organization" }, "Organization Usage"),
       React.createElement("option", { value: "customer" }, "Customer Usage"),
@@ -92,9 +93,13 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
 
 vi.mock("@/components/shared/advanced_date_picker", async () => {
   const React = await import("react");
-  // The button is how a test drives a range change; the real picker's own UI is
-  // not what any test here is asserting on.
-  const AdvancedDatePicker = ({ onValueChange }: { onValueChange?: (value: unknown) => void }) =>
+  const AdvancedDatePicker = ({
+    onValueChange,
+    additionalOptions = [],
+  }: {
+    onValueChange?: (value: unknown) => void;
+    additionalOptions?: readonly { label: string; getValue: () => unknown }[];
+  }) =>
     React.createElement(
       "div",
       { "data-testid": "advanced-date-picker" },
@@ -107,6 +112,17 @@ vi.mock("@/components/shared/advanced_date_picker", async () => {
             onValueChange?.({ from: new Date("2024-01-01T00:00:00Z"), to: new Date("2024-01-08T00:00:00Z") }),
         },
         "pick",
+      ),
+      ...additionalOptions.map((option) =>
+        React.createElement(
+          "button",
+          {
+            key: option.label,
+            type: "button",
+            onClick: () => onValueChange?.(option.getValue()),
+          },
+          option.label,
+        ),
       ),
     );
   AdvancedDatePicker.displayName = "AdvancedDatePicker";
@@ -369,6 +385,8 @@ describe("UsagePage", () => {
       data: {
         user_id: "user-123",
         max_budget: null,
+        budget_duration: null,
+        budget_reset_at: null,
       },
       isLoading: false,
       error: null,
@@ -583,6 +601,73 @@ describe("UsagePage", () => {
     await waitFor(() => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("shows the last budget reset option in my usage view", async () => {
+    mockUseCurrentUser.mockReturnValue({
+      data: {
+        user_id: "user-123",
+        max_budget: null,
+        budget_duration: "30d",
+        budget_reset_at: "2026-10-01T00:00:00Z",
+      },
+      isLoading: false,
+      error: null,
+    } as any);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "my-usage" } });
+
+    expect(await screen.findByRole("button", { name: "Since last budget reset" })).toBeInTheDocument();
+  });
+
+  it("shows the last budget reset option for non-admin users", async () => {
+    mockUseAuthorized.mockReturnValue({
+      isLoading: false,
+      isAuthorized: true,
+      token: "mock-token",
+      accessToken: "test-token",
+      userId: "user-123",
+      userEmail: "test@example.com",
+      userRole: "Internal User",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    } as any);
+    mockUseCurrentUser.mockReturnValue({
+      data: {
+        user_id: "user-123",
+        max_budget: null,
+        budget_duration: "30d",
+        budget_reset_at: "2026-10-01T00:00:00Z",
+      },
+      isLoading: false,
+      error: null,
+    } as any);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    expect(await screen.findByRole("button", { name: "Since last budget reset" })).toBeInTheDocument();
+  });
+
+  it("does not show the last budget reset option without a budget duration", async () => {
+    mockUseCurrentUser.mockReturnValue({
+      data: {
+        user_id: "user-123",
+        max_budget: null,
+        budget_duration: null,
+        budget_reset_at: "2026-10-01T00:00:00Z",
+      },
+      isLoading: false,
+      error: null,
+    } as any);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Since last budget reset" })).not.toBeInTheDocument();
     });
   });
 

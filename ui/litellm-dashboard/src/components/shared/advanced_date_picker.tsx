@@ -3,7 +3,9 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import type { DateRangePickerValue } from "./date_picker_types";
 import moment from "moment";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+const emptyAdditionalOptions: readonly RelativeTimeOption[] = [];
 
 interface AdvancedDatePickerProps {
   value: DateRangePickerValue;
@@ -12,9 +14,10 @@ interface AdvancedDatePickerProps {
   className?: string;
   showTimeRange?: boolean;
   align?: "left" | "right";
+  additionalOptions?: readonly RelativeTimeOption[];
 }
 
-interface RelativeTimeOption {
+export interface RelativeTimeOption {
   label: string;
   shortLabel: string;
   getValue: () => { from: Date; to: Date };
@@ -73,10 +76,12 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   className,
   showTimeRange = true,
   align = "right",
+  additionalOptions = emptyAdditionalOptions,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [tempValue, setTempValue] = useState<DateRangePickerValue>(value);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const options = useMemo(() => [...relativeTimeOptions, ...additionalOptions], [additionalOptions]);
 
   // Custom date inputs only - removed time inputs
   const [startDate, setStartDate] = useState("");
@@ -88,7 +93,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   const getMatchingOption = useCallback((currentValue: DateRangePickerValue): string | null => {
     if (!currentValue.from || !currentValue.to) return null;
 
-    for (const option of relativeTimeOptions) {
+    for (const option of options) {
       const optionRange = option.getValue();
 
       // Compare dates with some tolerance (to account for time differences)
@@ -101,7 +106,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     }
 
     return null;
-  }, []);
+  }, [options]);
 
   // Update selected option when value changes
   useEffect(() => {
@@ -322,7 +327,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
                   <span className="text-sm font-semibold text-foreground">Relative time</span>
                 </div>
                 <div className="h-[350px] overflow-y-auto">
-                  {relativeTimeOptions.map((option) => {
+                  {options.map((option) => {
                     const isSelected = selectedOption === option.shortLabel;
                     return (
                       <button

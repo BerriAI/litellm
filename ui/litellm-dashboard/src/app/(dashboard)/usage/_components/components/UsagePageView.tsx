@@ -7,6 +7,7 @@
  */
 
 import { ChevronDown, ChevronRight, Download, Info, Sparkles, X } from "lucide-react";
+import moment from "moment";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -39,6 +40,7 @@ import {
   userDailyActivityCall,
 } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
+import type { RelativeTimeOption } from "@/components/shared/advanced_date_picker";
 import { ChartLoader } from "@/components/shared/chart_loader";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
@@ -64,6 +66,7 @@ import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import { lastBudgetResetAt } from "../budgetWindow";
 
 interface UsagePageProps {
   teams: Team[];
@@ -137,6 +140,23 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : selectedUserId;
+  const budgetWindowOptions = useMemo<RelativeTimeOption[]>(() => {
+    if (!(usageView === "my-usage" || !isAdmin)) return [];
+
+    const lastReset = lastBudgetResetAt(currentUser?.budget_reset_at, currentUser?.budget_duration);
+    if (!lastReset) return [];
+
+    return [
+      {
+        label: "Since last budget reset",
+        shortLabel: "budget",
+        getValue: () => ({
+          from: lastReset,
+          to: moment().endOf("day").toDate(),
+        }),
+      },
+    ];
+  }, [currentUser?.budget_duration, currentUser?.budget_reset_at, isAdmin, usageView]);
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
@@ -483,7 +503,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               canViewTagUsage={canViewTagUsage}
               isOrgAdmin={isOrgAdmin}
             />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            <AdvancedDatePicker
+              value={dateValue}
+              onValueChange={handleDateChange}
+              additionalOptions={budgetWindowOptions}
+            />
           </div>
           <PaginationStatusAlerts
             isFetchingMore={paginatedResult.isFetchingMore}
