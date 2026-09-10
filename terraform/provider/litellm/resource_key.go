@@ -223,6 +223,7 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 		return nil
 	}
 
+	key.Metadata = declaredKeyMetadata(key.Metadata, d.Get("metadata").(map[string]interface{}))
 	mapKeyToResourceData(d, key)
 	return nil
 }
@@ -232,13 +233,69 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	key := &Key{Key: d.Id()}
 	mapResourceDataToKey(d, key)
+	key.ModelRPMLimit = changedMap(d, "model_rpm_limit")
+	key.ModelTPMLimit = changedMap(d, "model_tpm_limit")
 
-	_, err := c.UpdateKey(key)
+	metadata, err := plannedKeyMetadata(c, d)
 	if err != nil {
+		return diag.FromErr(fmt.Errorf("error updating key: %s", err))
+	}
+	key.Metadata = metadata
+
+	if _, err := c.UpdateKey(key); err != nil {
 		return diag.FromErr(fmt.Errorf("error updating key: %s", err))
 	}
 
 	return resourceKeyRead(ctx, d, m)
+}
+
+func changedMap(d *schema.ResourceData, name string) map[string]interface{} {
+	if !d.HasChange(name) {
+		return nil
+	}
+	return d.Get(name).(map[string]interface{})
+}
+
+func plannedKeyMetadata(c *Client, d *schema.ResourceData) (map[string]interface{}, error) {
+	if !d.HasChange("metadata") {
+		return nil, nil
+	}
+	current, err := c.GetKey(d.Id())
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, fmt.Errorf("key %s no longer exists", d.Id())
+	}
+	oldDeclared, newDeclared := d.GetChange("metadata")
+	return mergeKeyMetadata(current.Metadata, oldDeclared.(map[string]interface{}), newDeclared.(map[string]interface{})), nil
+}
+
+func declaredKeyMetadata(server, declared map[string]interface{}) map[string]interface{} {
+	if server == nil {
+		return nil
+	}
+	result := make(map[string]interface{}, len(declared))
+	for k := range declared {
+		if v, ok := server[k]; ok {
+			result[k] = v
+		}
+	}
+	return result
+}
+
+func mergeKeyMetadata(server, oldDeclared, newDeclared map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{}, len(server)+len(newDeclared))
+	for k, v := range server {
+		result[k] = v
+	}
+	for k := range oldDeclared {
+		delete(result, k)
+	}
+	for k, v := range newDeclared {
+		result[k] = v
+	}
+	return result
 }
 
 func resourceKeyDelete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
