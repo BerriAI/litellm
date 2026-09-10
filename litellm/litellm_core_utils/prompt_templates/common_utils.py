@@ -2314,6 +2314,35 @@ def _attempt_json_repair(s: str) -> object | None:
     return None
 
 
+def _split_complete_json_objects(raw: str) -> list[dict[str, object]] | None:
+    """
+    Split *raw* into JSON objects, requiring the entire string to be consumed.
+
+    Unlike :func:`split_concatenated_json_objects`, which deliberately salvages
+    whatever prefix it can before a malformed tail, this returns ``None`` unless
+    *raw* is exactly a sequence of complete JSON objects.  Tool call arguments
+    are executed, so a truncated or trailing-garbage payload must keep failing
+    rather than invoke a tool with partial input.
+    """
+    import json
+
+    decoder: Final = json.JSONDecoder()
+    objects: list[dict[str, object]] = []
+    index = 0
+    while index < len(raw):
+        if raw[index].isspace():
+            index += 1
+            continue
+        try:
+            obj, index = decoder.raw_decode(raw, index)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        objects.append(obj)
+    return objects or None
+
+
 def parse_tool_call_arguments(
     arguments: str | None,
     tool_name: str | None = None,
@@ -2364,21 +2393,20 @@ def parse_tool_call_arguments(
         # arguments string, which ``json.loads`` reports as "Extra data" and
         # ``_attempt_json_repair`` cannot fix because nothing is truncated.
         # This is the same provider behaviour already repaired on the Bedrock
-        # request path (see ``_convert_to_bedrock_tool_call_invoke``), so the
-        # helper is reused here rather than dropping the call: returning ``{}``
-        # is indistinguishable from the model asking for nothing.
-        concatenated: Final = split_concatenated_json_objects(arguments)
-        if concatenated:
+        # request path (see ``_convert_to_bedrock_tool_call_invoke``), so it is
+        # salvaged here too rather than dropping the call: returning ``{}`` is
+        # indistinguishable from the model asking for nothing.
+        concatenated: Final = _split_complete_json_objects(arguments)
+        if concatenated is not None and len(concatenated) > 1:
+            # Structural metadata only - the arguments themselves may carry
+            # PII or credentials and must not reach warning logs.
             verbose_logger.warning(
-                "Recovered %d concatenated JSON object(s) from tool call arguments for tool '%s' (%s); "
-                "using the first and discarding %d. Original (%d chars): %.200s%s",
+                "Recovered %d concatenated JSON objects from tool call arguments "
+                "for tool '%s' (%s); using the first and discarding %d.",
                 len(concatenated),
                 tool_name or "<unknown>",
                 context or "unknown context",
                 len(concatenated) - 1,
-                len(arguments),
-                arguments,
-                "..." if len(arguments) > 200 else "",
             )
             # Mirrors factory.py, where the first parsed object keeps the
             # original tool call id.

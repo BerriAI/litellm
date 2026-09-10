@@ -309,6 +309,24 @@ def test_parse_tool_call_arguments_concatenated_is_not_dropped_silently():
     assert result == {"a": 1}
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"a": 1}{"b":',  # truncated tail
+        '{"a": 1} garbage',  # trailing garbage
+        '{"a": 1}{"b": 2} x',  # complete objects followed by junk
+    ],
+)
+def test_parse_tool_call_arguments_rejects_incomplete_concatenation(raw):
+    """
+    Salvage is restricted to input wholly consumed as complete JSON objects.
+    Tool call arguments are executed, so a truncated or trailing-garbage
+    payload must keep failing rather than invoke a tool with partial input.
+    """
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        parse_tool_call_arguments(raw, tool_name="demo", context="chat completions")
+
+
 # ---------------------------------------------------------------------------
 # Regression tests for non-OpenAI file content blocks.
 #
