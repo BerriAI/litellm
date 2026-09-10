@@ -1962,11 +1962,11 @@ class TestResponsesInputTokens:
 
 
 class TestBackgroundResponseManagedObjectId:
-    """The managed row for a background response must be keyed by the provider's own id.
+    """The managed row for a background response is keyed by the provider's own id.
 
     The advertised ``response.id`` is encrypted with a fresh nonce per call, so storing it
-    in ``model_object_id`` leaves the row with no stable lookup key and every later read
-    of the same generation looks like a new object.
+    in ``model_object_id`` leaves the row with no stable handle on the generation and every
+    later read of the same generation looks like a new object.
     """
 
     @staticmethod
@@ -1979,15 +1979,9 @@ class TestBackgroundResponseManagedObjectId:
         )
         return f"resp_{encrypt_value_helper(value=managed_id)}"
 
-    async def _store_call_for(self, provider_response_id: str) -> dict:
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.response_api_endpoints.endpoints import responses_api
+    @staticmethod
+    def _queued_response(advertised_id: str, model_id: str | None = "deployment-1"):
         from litellm.types.llms.openai import ResponsesAPIResponse
-
-        advertised_id = self._encrypted_id(provider_response_id)
-        assert advertised_id != self._encrypted_id(provider_response_id), (
-            "advertised ids must be nonce-encrypted, otherwise this regression cannot occur"
-        )
 
         response = ResponsesAPIResponse(
             id=advertised_id,
@@ -2000,50 +1994,60 @@ class TestBackgroundResponseManagedObjectId:
             tools=[],
             status="queued",
         )
-        response._hidden_params = {"model_id": "deployment-1"}
+        response._hidden_params = {"model_id": model_id} if model_id else {}
+        return response
+
+    async def _stored_kwargs(self, advertised_id: str, model_id: str | None = "deployment-1"):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            store_background_response_object,
+        )
 
         managed_files_obj = MagicMock()
         managed_files_obj.store_unified_object_id = AsyncMock()
-        proxy_logging_obj = MagicMock()
-        proxy_logging_obj.get_proxy_hook = MagicMock(return_value=managed_files_obj)
 
-        with patch(
-            "litellm.proxy.proxy_server._read_request_body",
-            AsyncMock(return_value={"model": "gpt-4o", "input": "hi", "background": True}),
-        ), patch("litellm.proxy.proxy_server.polling_via_cache_enabled", False), patch(
-            "litellm.proxy.proxy_server.llm_router", MagicMock()
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
-        ), patch(
-            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
-            AsyncMock(return_value=response),
-        ):
-            await responses_api(
-                request=MagicMock(),
-                fastapi_response=MagicMock(),
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1", team_id="t-1"),
-            )
-
-        managed_files_obj.store_unified_object_id.assert_awaited_once()
-        return managed_files_obj.store_unified_object_id.await_args.kwargs
+        await store_background_response_object(
+            response=self._queued_response(advertised_id, model_id),
+            managed_files_obj=managed_files_obj,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1", team_id="t-1"),
+        )
+        return managed_files_obj.store_unified_object_id
 
     @pytest.mark.asyncio
     async def test_model_object_id_is_the_provider_response_id(self, monkeypatch):
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
         provider_response_id = "resp_provider68abc123"
+        advertised_id = self._encrypted_id(provider_response_id)
+        assert advertised_id != self._encrypted_id(provider_response_id), (
+            "advertised ids must be nonce-encrypted, otherwise this regression cannot occur"
+        )
 
-        kwargs = await self._store_call_for(provider_response_id)
+        store = await self._stored_kwargs(advertised_id)
 
+        store.assert_awaited_once()
+        kwargs = store.await_args.kwargs
         assert kwargs["model_object_id"] == provider_response_id
-        assert kwargs["unified_object_id"] != provider_response_id
-        assert kwargs["unified_object_id"] == kwargs["file_object"].id
+        assert kwargs["unified_object_id"] == advertised_id
+        assert kwargs["file_object"].id == advertised_id
 
     @pytest.mark.asyncio
-    async def test_two_background_creates_are_distinguishable_by_provider_id(self, monkeypatch):
+    async def test_two_creates_of_one_generation_share_a_provider_id(self, monkeypatch):
+        """Re-encrypting the same generation must not look like a second object."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+        provider_response_id = "resp_provider_same_gen"
+
+        first = (await self._stored_kwargs(self._encrypted_id(provider_response_id))).await_args.kwargs
+        second = (await self._stored_kwargs(self._encrypted_id(provider_response_id))).await_args.kwargs
+
+        assert first["unified_object_id"] != second["unified_object_id"]
+        assert first["model_object_id"] == second["model_object_id"] == provider_response_id
+
+    @pytest.mark.asyncio
+    async def test_distinct_generations_keep_distinct_provider_ids(self, monkeypatch):
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
 
-        first = await self._store_call_for("resp_providerAAA")
-        second = await self._store_call_for("resp_providerBBB")
+        first = (await self._stored_kwargs(self._encrypted_id("resp_providerAAA"))).await_args.kwargs
+        second = (await self._stored_kwargs(self._encrypted_id("resp_providerBBB"))).await_args.kwargs
 
         assert first["model_object_id"] == "resp_providerAAA"
         assert second["model_object_id"] == "resp_providerBBB"
@@ -2051,45 +2055,17 @@ class TestBackgroundResponseManagedObjectId:
     @pytest.mark.asyncio
     async def test_unencrypted_advertised_id_is_stored_as_is(self, monkeypatch):
         """With response-id security disabled the advertised id is already the provider's."""
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.response_api_endpoints.endpoints import responses_api
-        from litellm.types.llms.openai import ResponsesAPIResponse
-
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
-        response = ResponsesAPIResponse(
-            id="resp_rawprovider999",
-            created_at=0,
-            model="gpt-4o",
-            object="response",
-            output=[],
-            parallel_tool_calls=False,
-            tool_choice="auto",
-            tools=[],
-            status="queued",
-        )
-        response._hidden_params = {"model_id": "deployment-1"}
 
-        managed_files_obj = MagicMock()
-        managed_files_obj.store_unified_object_id = AsyncMock()
-        proxy_logging_obj = MagicMock()
-        proxy_logging_obj.get_proxy_hook = MagicMock(return_value=managed_files_obj)
+        store = await self._stored_kwargs("resp_rawprovider999")
 
-        with patch(
-            "litellm.proxy.proxy_server._read_request_body",
-            AsyncMock(return_value={"model": "gpt-4o", "input": "hi", "background": True}),
-        ), patch("litellm.proxy.proxy_server.polling_via_cache_enabled", False), patch(
-            "litellm.proxy.proxy_server.llm_router", MagicMock()
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
-        ), patch(
-            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.base_process_llm_request",
-            AsyncMock(return_value=response),
-        ):
-            await responses_api(
-                request=MagicMock(),
-                fastapi_response=MagicMock(),
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1", team_id="t-1"),
-            )
+        assert store.await_args.kwargs["model_object_id"] == "resp_rawprovider999"
 
-        kwargs = managed_files_obj.store_unified_object_id.await_args.kwargs
-        assert kwargs["model_object_id"] == "resp_rawprovider999"
+    @pytest.mark.asyncio
+    async def test_response_without_a_deployment_is_not_stored(self, monkeypatch):
+        """No model_id means the poller could never route the read, so no row is written."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-regression-salt")
+
+        store = await self._stored_kwargs(self._encrypted_id("resp_no_deployment"), model_id=None)
+
+        store.assert_not_awaited()
