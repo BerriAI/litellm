@@ -222,14 +222,8 @@ class OllamaChatConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        if api_base is None:
-            api_base = "http://localhost:11434"
-        if api_base.endswith("/api/chat"):
-            url = api_base
-        else:
-            url = f"{api_base}/api/chat"
-
-        return url
+        base: Final = (api_base or "http://localhost:11434").rstrip("/").removesuffix("/api/generate")
+        return base if base.endswith("/api/chat") else f"{base}/api/chat"
 
     def transform_request(
         self,

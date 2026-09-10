@@ -5309,8 +5309,6 @@ def completion(
         )
         if custom_llm_provider == "ollama" and (tools or functions):
             custom_llm_provider = "ollama_chat"  # rebind-ok: /api/generate has no native tool calling
-            if api_base is not None:
-                api_base = api_base.rstrip("/").removesuffix("/api/generate")  # rebind-ok: chat path
         elif custom_llm_provider == "ollama":
             tools = None  # rebind-ok: empty tools must not change plain completion behavior
             functions = None  # rebind-ok: empty functions must not change plain completion behavior
