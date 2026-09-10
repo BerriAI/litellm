@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package xds.core.v3;
+
+import "xds/annotations/v3/status.proto";
+
+option java_outer_classname = "ContextParamsProto";
+option java_multiple_files = true;
+option java_package = "com.github.xds.core.v3";
+option go_package = "github.com/cncf/xds/go/xds/core/v3";
+
+option (xds.annotations.v3.file_status).work_in_progress = true;
+
+// Additional parameters that can be used to select resource variants. These include any
+// global context parameters, per-resource type client feature capabilities and per-resource
+// type functional attributes. All per-resource type attributes will be `xds.resource.`
+// prefixed and some of these are documented below:
+//
+// `xds.resource.listening_address`: The value is "IP:port" (e.g. "10.1.1.3:8080") which is
+//   the listening address of a Listener. Used in a Listener resource query.
+message ContextParams {
+    map<string, string> params = 1;
+}

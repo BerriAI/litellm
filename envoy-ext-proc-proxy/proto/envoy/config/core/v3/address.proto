@@ -1,0 +1,233 @@
+syntax = "proto3";
+
+package envoy.config.core.v3;
+
+import "envoy/config/core/v3/extension.proto";
+import "envoy/config/core/v3/socket_option.proto";
+
+import "google/protobuf/wrappers.proto";
+
+import "envoy/annotations/deprecation.proto";
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.config.core.v3";
+option java_outer_classname = "AddressProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/config/core/v3;corev3";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: Network addresses]
+
+message Pipe {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.Pipe";
+
+  // Unix Domain Socket path. On Linux, paths starting with '@' will use the
+  // abstract namespace. The starting '@' is replaced by a null byte by Envoy.
+  // Paths starting with '@' will result in an error in environments other than
+  // Linux.
+  string path = 1 [(validate.rules).string = {min_len: 1}];
+
+  // The mode for the Pipe. Not applicable for abstract sockets.
+  uint32 mode = 2 [(validate.rules).uint32 = {lte: 511}];
+}
+
+// The address represents an envoy internal listener.
+// [#comment: TODO(asraa): When address available, remove workaround from test/server/server_fuzz_test.cc:30.]
+message EnvoyInternalAddress {
+  oneof address_name_specifier {
+    option (validate.required) = true;
+
+    // Specifies the :ref:`name <envoy_v3_api_field_config.listener.v3.Listener.name>` of the
+    // internal listener.
+    string server_listener_name = 1;
+  }
+
+  // Specifies an endpoint identifier to distinguish between multiple endpoints for the same internal listener in a
+  // single upstream pool. Only used in the upstream addresses for tracking changes to individual endpoints. This, for
+  // example, may be set to the final destination IP for the target internal listener.
+  string endpoint_id = 2;
+}
+
+// [#next-free-field: 8]
+message SocketAddress {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.SocketAddress";
+
+  enum Protocol {
+    TCP = 0;
+    UDP = 1;
+  }
+
+  Protocol protocol = 1 [(validate.rules).enum = {defined_only: true}];
+
+  // The address for this socket. :ref:`Listeners <config_listeners>` will bind
+  // to the address. An empty address is not allowed. Specify ``0.0.0.0`` or ``::``
+  // to bind to any address. [#comment:TODO(zuercher) reinstate when implemented:
+  // It is possible to distinguish a Listener address via the prefix/suffix matching
+  // in :ref:`FilterChainMatch <envoy_v3_api_msg_config.listener.v3.FilterChainMatch>`.] When used
+  // within an upstream :ref:`BindConfig <envoy_v3_api_msg_config.core.v3.BindConfig>`, the address
+  // controls the source address of outbound connections. For :ref:`clusters
+  // <envoy_v3_api_msg_config.cluster.v3.Cluster>`, the cluster type determines whether the
+  // address must be an IP (``STATIC`` or ``EDS`` clusters) or a hostname resolved by DNS
+  // (``STRICT_DNS`` or ``LOGICAL_DNS`` clusters). Address resolution can be customized
+  // via :ref:`resolver_name <envoy_v3_api_field_config.core.v3.SocketAddress.resolver_name>`.
+  string address = 2 [(validate.rules).string = {min_len: 1}];
+
+  oneof port_specifier {
+    option (validate.required) = true;
+
+    uint32 port_value = 3 [(validate.rules).uint32 = {lte: 65535}];
+
+    // This is only valid if :ref:`resolver_name
+    // <envoy_v3_api_field_config.core.v3.SocketAddress.resolver_name>` is specified below and the
+    // named resolver is capable of named port resolution.
+    string named_port = 4;
+  }
+
+  // The name of the custom resolver. This must have been registered with Envoy. If
+  // this is empty, a context dependent default applies. If the address is a concrete
+  // IP address, no resolution will occur. If address is a hostname this
+  // should be set for resolution other than DNS. Specifying a custom resolver with
+  // ``STRICT_DNS`` or ``LOGICAL_DNS`` will generate an error at runtime.
+  string resolver_name = 5;
+
+  // When binding to an IPv6 address above, this enables `IPv4 compatibility
+  // <https://tools.ietf.org/html/rfc3493#page-11>`_. Binding to ``::`` will
+  // allow both IPv4 and IPv6 connections, with peer IPv4 addresses mapped into
+  // IPv6 space as ``::FFFF:<IPv4-address>``.
+  bool ipv4_compat = 6;
+
+  // Filepath that specifies the Linux network namespace this socket will be created in (see ``man 7
+  // network_namespaces``). If this field is set, Envoy will create the socket in the specified
+  // network namespace.
+  //
+  // .. note::
+  //    Setting this parameter requires Envoy to run with the ``CAP_SYS_ADMIN`` capability.
+  //
+  // .. attention::
+  //     Network namespaces are only configurable on Linux. Otherwise, this field has no effect.
+  string network_namespace_filepath = 7;
+}
+
+message TcpKeepalive {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.TcpKeepalive";
+
+  // Maximum number of keepalive probes to send without response before deciding
+  // the connection is dead. Default is to use the OS level configuration (unless
+  // overridden, Linux defaults to 9.) Setting this to ``0`` disables TCP keepalive.
+  google.protobuf.UInt32Value keepalive_probes = 1;
+
+  // The number of seconds a connection needs to be idle before keep-alive probes
+  // start being sent. Default is to use the OS level configuration (unless
+  // overridden, Linux defaults to 7200s (i.e., 2 hours.) Setting this to ``0`` disables
+  // TCP keepalive.
+  google.protobuf.UInt32Value keepalive_time = 2;
+
+  // The number of seconds between keep-alive probes. Default is to use the OS
+  // level configuration (unless overridden, Linux defaults to 75s.) Setting this to
+  // ``0`` disables TCP keepalive.
+  google.protobuf.UInt32Value keepalive_interval = 3;
+}
+
+message ExtraSourceAddress {
+  // The additional address to bind.
+  SocketAddress address = 1 [(validate.rules).message = {required: true}];
+
+  // Additional socket options that may not be present in Envoy source code or
+  // precompiled binaries. If specified, this will override the
+  // :ref:`socket_options <envoy_v3_api_field_config.core.v3.BindConfig.socket_options>`
+  // in the BindConfig. If specified with no
+  // :ref:`socket_options <envoy_v3_api_field_config.core.v3.SocketOptionsOverride.socket_options>`
+  // or an empty list of :ref:`socket_options <envoy_v3_api_field_config.core.v3.SocketOptionsOverride.socket_options>`,
+  // it means no socket option will apply.
+  SocketOptionsOverride socket_options = 2;
+}
+
+// [#next-free-field: 8]
+message BindConfig {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.BindConfig";
+
+  // The address to bind to when creating a socket.
+  SocketAddress source_address = 1;
+
+  // Whether to set the ``IP_FREEBIND`` option when creating the socket. When this
+  // flag is set to true, allows the :ref:`source_address
+  // <envoy_v3_api_field_config.core.v3.BindConfig.source_address>` to be an IP address
+  // that is not configured on the system running Envoy. When this flag is set
+  // to false, the option ``IP_FREEBIND`` is disabled on the socket. When this
+  // flag is not set (default), the socket is not modified, i.e. the option is
+  // neither enabled nor disabled.
+  google.protobuf.BoolValue freebind = 2;
+
+  // Additional socket options that may not be present in Envoy source code or
+  // precompiled binaries.
+  repeated SocketOption socket_options = 3;
+
+  // Extra source addresses appended to the address specified in the ``source_address``
+  // field. This enables to specify multiple source addresses.
+  // The source address selection is determined by :ref:`local_address_selector
+  // <envoy_v3_api_field_config.core.v3.BindConfig.local_address_selector>`.
+  repeated ExtraSourceAddress extra_source_addresses = 5;
+
+  // Deprecated by
+  // :ref:`extra_source_addresses <envoy_v3_api_field_config.core.v3.BindConfig.extra_source_addresses>`
+  repeated SocketAddress additional_source_addresses = 4
+      [deprecated = true, (envoy.annotations.deprecated_at_minor_version) = "3.0"];
+
+  // Custom local address selector to override the default (i.e.
+  // :ref:`DefaultLocalAddressSelector
+  // <envoy_v3_api_msg_config.upstream.local_address_selector.v3.DefaultLocalAddressSelector>`).
+  // [#extension-category: envoy.upstream.local_address_selector]
+  TypedExtensionConfig local_address_selector = 6;
+
+  // If set to true, the :ref:`network_namespace_filepath
+  // <envoy_v3_api_field_config.core.v3.SocketAddress.network_namespace_filepath>` of every source
+  // address in this bind config is validated when the configuration is loaded, and the
+  // configuration is rejected if a referenced network namespace cannot be opened.
+  //
+  // By default no such validation is performed: a network namespace that does not exist when the
+  // configuration is loaded may be created later, before connections are actually established, so
+  // eager validation would wrongly reject such configurations. If a namespace is unavailable when
+  // a connection is created, the connection attempt fails gracefully.
+  //
+  // Listener addresses do not need an equivalent option: a listener creates and binds its socket
+  // in the configured network namespace when the listener configuration is loaded, so an
+  // unavailable namespace always rejects the listener configuration.
+  //
+  // .. attention::
+  //     Network namespaces are only configurable on Linux. Otherwise, this field has no effect.
+  bool validate_network_namespaces = 7;
+}
+
+// Addresses specify either a logical or physical address and port, which are
+// used to tell Envoy where to bind/listen, connect to upstream and find
+// management servers.
+message Address {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.Address";
+
+  // [#comment: Keep this list of address types in sync with UpstreamConnectionOptions.FirstAddressFamilyVersion in api/envoy/config/cluster/v3/cluster.proto.]
+  oneof address {
+    option (validate.required) = true;
+
+    SocketAddress socket_address = 1;
+
+    Pipe pipe = 2;
+
+    // Specifies a user-space address handled by :ref:`internal listeners
+    // <envoy_v3_api_field_config.listener.v3.Listener.internal_listener>`.
+    EnvoyInternalAddress envoy_internal_address = 3;
+  }
+}
+
+// CidrRange specifies an IP Address and a prefix length to construct
+// the subnet mask for a `CIDR <https://tools.ietf.org/html/rfc4632>`_ range.
+message CidrRange {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.CidrRange";
+
+  // IPv4 or IPv6 address, e.g. ``192.0.0.0`` or ``2001:db8::``.
+  string address_prefix = 1 [(validate.rules).string = {min_len: 1}];
+
+  // Length of prefix, e.g. 0, 32. Defaults to 0 when unset.
+  google.protobuf.UInt32Value prefix_len = 2 [(validate.rules).uint32 = {lte: 128}];
+}

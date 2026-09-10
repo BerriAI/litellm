@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package xds.annotations.v3;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/cncf/xds/go/xds/annotations/v3";
+
+// Magic number in this file derived from top 28bit of SHA256 digest of
+// "xds.annotations.v3.status".
+extend google.protobuf.FileOptions {
+  FileStatusAnnotation file_status = 226829418;
+}
+
+extend google.protobuf.MessageOptions {
+  MessageStatusAnnotation message_status = 226829418;
+}
+
+extend google.protobuf.FieldOptions {
+  FieldStatusAnnotation field_status = 226829418;
+}
+
+message FileStatusAnnotation {
+  // The entity is work-in-progress and subject to breaking changes.
+  bool work_in_progress = 1;
+}
+
+message MessageStatusAnnotation {
+  // The entity is work-in-progress and subject to breaking changes.
+  bool work_in_progress = 1;
+}
+
+message FieldStatusAnnotation {
+  // The entity is work-in-progress and subject to breaking changes.
+  bool work_in_progress = 1;
+}
+
+enum PackageVersionStatus {
+  // Unknown package version status.
+  UNKNOWN = 0;
+
+  // This version of the package is frozen.
+  FROZEN = 1;
+
+  // This version of the package is the active development version.
+  ACTIVE = 2;
+
+  // This version of the package is the candidate for the next major version. It
+  // is typically machine generated from the active development version.
+  NEXT_MAJOR_VERSION_CANDIDATE = 3;
+}
+
+message StatusAnnotation {
+  // The entity is work-in-progress and subject to breaking changes.
+  bool work_in_progress = 1;
+
+  // The entity belongs to a package with the given version status.
+  PackageVersionStatus package_version_status = 2;
+}

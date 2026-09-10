@@ -169,6 +169,10 @@ proxy-runtime = [
     "detect-secrets>=1.5.0,<2.0",
 ]
 
+ext-proc = [
+    "envoy-ext-proc-proxy==1.0.0",
+]
+
 [project.scripts]
 litellm = "litellm:run_server"
 lite = "litellm.proxy.client.cli:cli"
@@ -320,9 +324,10 @@ exclude-newer = "3 days"
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }
 litellm-enterprise = { workspace = true }
+envoy-ext-proc-proxy = { workspace = true }
 
 [tool.uv.workspace]
-members = ["enterprise", "litellm-proxy-extras"]
+members = ["enterprise", "litellm-proxy-extras", "envoy-ext-proc-proxy"]
 
 [tool.isort]
 profile = "black"

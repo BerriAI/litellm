@@ -1,0 +1,199 @@
+syntax = "proto3";
+
+package envoy.type.v3;
+
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.type.v3";
+option java_outer_classname = "HttpStatusProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/type/v3;typev3";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: HTTP status codes]
+
+// HTTP response codes supported in Envoy.
+// For more details: https://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml
+enum StatusCode {
+  // Empty - This code not part of the HTTP status code specification, but it is needed for proto
+  // `enum` type.
+  Empty = 0;
+
+  // Continue - ``100`` status code.
+  Continue = 100;
+
+  // OK - ``200`` status code.
+  OK = 200;
+
+  // Created - ``201`` status code.
+  Created = 201;
+
+  // Accepted - ``202`` status code.
+  Accepted = 202;
+
+  // NonAuthoritativeInformation - ``203`` status code.
+  NonAuthoritativeInformation = 203;
+
+  // NoContent - ``204`` status code.
+  NoContent = 204;
+
+  // ResetContent - ``205`` status code.
+  ResetContent = 205;
+
+  // PartialContent - ``206`` status code.
+  PartialContent = 206;
+
+  // MultiStatus - ``207`` status code.
+  MultiStatus = 207;
+
+  // AlreadyReported - ``208`` status code.
+  AlreadyReported = 208;
+
+  // IMUsed - ``226`` status code.
+  IMUsed = 226;
+
+  // MultipleChoices - ``300`` status code.
+  MultipleChoices = 300;
+
+  // MovedPermanently - ``301`` status code.
+  MovedPermanently = 301;
+
+  // Found - ``302`` status code.
+  Found = 302;
+
+  // SeeOther - ``303`` status code.
+  SeeOther = 303;
+
+  // NotModified - ``304`` status code.
+  NotModified = 304;
+
+  // UseProxy - ``305`` status code.
+  UseProxy = 305;
+
+  // TemporaryRedirect - ``307`` status code.
+  TemporaryRedirect = 307;
+
+  // PermanentRedirect - ``308`` status code.
+  PermanentRedirect = 308;
+
+  // BadRequest - ``400`` status code.
+  BadRequest = 400;
+
+  // Unauthorized - ``401`` status code.
+  Unauthorized = 401;
+
+  // PaymentRequired - ``402`` status code.
+  PaymentRequired = 402;
+
+  // Forbidden - ``403`` status code.
+  Forbidden = 403;
+
+  // NotFound - ``404`` status code.
+  NotFound = 404;
+
+  // MethodNotAllowed - ``405`` status code.
+  MethodNotAllowed = 405;
+
+  // NotAcceptable - ``406`` status code.
+  NotAcceptable = 406;
+
+  // ProxyAuthenticationRequired - ``407`` status code.
+  ProxyAuthenticationRequired = 407;
+
+  // RequestTimeout - ``408`` status code.
+  RequestTimeout = 408;
+
+  // Conflict - ``409`` status code.
+  Conflict = 409;
+
+  // Gone - ``410`` status code.
+  Gone = 410;
+
+  // LengthRequired - ``411`` status code.
+  LengthRequired = 411;
+
+  // PreconditionFailed - ``412`` status code.
+  PreconditionFailed = 412;
+
+  // PayloadTooLarge - ``413`` status code.
+  PayloadTooLarge = 413;
+
+  // URITooLong - ``414`` status code.
+  URITooLong = 414;
+
+  // UnsupportedMediaType - ``415`` status code.
+  UnsupportedMediaType = 415;
+
+  // RangeNotSatisfiable - ``416`` status code.
+  RangeNotSatisfiable = 416;
+
+  // ExpectationFailed - ``417`` status code.
+  ExpectationFailed = 417;
+
+  // MisdirectedRequest - ``421`` status code.
+  MisdirectedRequest = 421;
+
+  // UnprocessableEntity - ``422`` status code.
+  UnprocessableEntity = 422;
+
+  // Locked - ``423`` status code.
+  Locked = 423;
+
+  // FailedDependency - ``424`` status code.
+  FailedDependency = 424;
+
+  // UpgradeRequired - ``426`` status code.
+  UpgradeRequired = 426;
+
+  // PreconditionRequired - ``428`` status code.
+  PreconditionRequired = 428;
+
+  // TooManyRequests - ``429`` status code.
+  TooManyRequests = 429;
+
+  // RequestHeaderFieldsTooLarge - ``431`` status code.
+  RequestHeaderFieldsTooLarge = 431;
+
+  // InternalServerError - ``500`` status code.
+  InternalServerError = 500;
+
+  // NotImplemented - ``501`` status code.
+  NotImplemented = 501;
+
+  // BadGateway - ``502`` status code.
+  BadGateway = 502;
+
+  // ServiceUnavailable - ``503`` status code.
+  ServiceUnavailable = 503;
+
+  // GatewayTimeout - ``504`` status code.
+  GatewayTimeout = 504;
+
+  // HTTPVersionNotSupported - ``505`` status code.
+  HTTPVersionNotSupported = 505;
+
+  // VariantAlsoNegotiates - ``506`` status code.
+  VariantAlsoNegotiates = 506;
+
+  // InsufficientStorage - ``507`` status code.
+  InsufficientStorage = 507;
+
+  // LoopDetected - ``508`` status code.
+  LoopDetected = 508;
+
+  // NotExtended - ``510`` status code.
+  NotExtended = 510;
+
+  // NetworkAuthenticationRequired - ``511`` status code.
+  NetworkAuthenticationRequired = 511;
+}
+
+// HTTP status.
+message HttpStatus {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.type.HttpStatus";
+
+  // Supplies HTTP response code.
+  StatusCode code = 1 [(validate.rules).enum = {defined_only: true not_in: 0}];
+}

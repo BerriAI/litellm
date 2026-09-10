@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package envoy.type.v3;
+
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.type.v3";
+option java_outer_classname = "PercentProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/type/v3;typev3";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: Percent]
+
+// Identifies a percentage, in the range [0.0, 100.0].
+message Percent {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.type.Percent";
+
+  double value = 1 [(validate.rules).double = {lte: 100.0 gte: 0.0}];
+}
+
+// A fractional percentage is used in cases in which for performance reasons performing floating
+// point to integer conversions during randomness calculations is undesirable. The message includes
+// both a numerator and denominator that together determine the final fractional value.
+//
+// * **Example**: 1/100 = 1%.
+// * **Example**: 3/10000 = 0.03%.
+message FractionalPercent {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.type.FractionalPercent";
+
+  // Fraction percentages support several fixed denominator values.
+  enum DenominatorType {
+    // 100.
+    //
+    // **Example**: 1/100 = 1%.
+    HUNDRED = 0;
+
+    // 10,000.
+    //
+    // **Example**: 1/10000 = 0.01%.
+    TEN_THOUSAND = 1;
+
+    // 1,000,000.
+    //
+    // **Example**: 1/1000000 = 0.0001%.
+    MILLION = 2;
+  }
+
+  // Specifies the numerator. Defaults to 0.
+  uint32 numerator = 1;
+
+  // Specifies the denominator. If the denominator specified is less than the numerator, the final
+  // fractional percentage is capped at 1 (100%).
+  DenominatorType denominator = 2 [(validate.rules).enum = {defined_only: true}];
+}

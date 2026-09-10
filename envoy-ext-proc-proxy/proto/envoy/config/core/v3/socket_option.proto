@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package envoy.config.core.v3;
+
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.config.core.v3";
+option java_outer_classname = "SocketOptionProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/config/core/v3;corev3";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: Socket option]
+
+// Generic socket option message. This would be used to set socket options that
+// might not exist in upstream kernels or precompiled Envoy binaries.
+//
+// For example:
+//
+// .. code-block:: json
+//
+//  {
+//    "description": "support tcp keep alive",
+//    "state": 0,
+//    "level": 1,
+//    "name": 9,
+//    "int_value": 1,
+//  }
+//
+// 1 means SOL_SOCKET and 9 means SO_KEEPALIVE on Linux.
+// With the above configuration, `TCP Keep-Alives <https://www.freesoft.org/CIE/RFC/1122/114.htm>`_
+// can be enabled in socket with Linux, which can be used in
+// :ref:`listener's<envoy_v3_api_field_config.listener.v3.Listener.socket_options>` or
+// :ref:`admin's <envoy_v3_api_field_config.bootstrap.v3.Admin.socket_options>` socket_options etc.
+//
+// It should be noted that the name or level may have different values on different platforms.
+// [#next-free-field: 9]
+message SocketOption {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.SocketOption";
+
+  enum SocketState {
+    // Socket options are applied after socket creation but before binding the socket to a port
+    STATE_PREBIND = 0;
+
+    // Socket options are applied after binding the socket to a port but before calling listen()
+    STATE_BOUND = 1;
+
+    // Socket options are applied after calling listen()
+    STATE_LISTENING = 2;
+  }
+
+  // The `socket IP version <https://linux.die.net/man/2/socket>`_ to apply the
+  // socket option to.
+  enum SocketIpVersion {
+    // Apply the socket option to all socket IP versions.
+    SOCKET_IP_VERSION_UNSPECIFIED = 0;
+
+    // Apply the socket option to the IPv4 socket type.
+    SOCKET_IP_VERSION_IPV4 = 1;
+
+    // Apply the socket option to the IPv6 socket type.
+    SOCKET_IP_VERSION_IPV6 = 2;
+  }
+
+  // The `socket type <https://linux.die.net/man/2/socket>`_ to apply the socket option to.
+  // Only one field should be set. If multiple fields are set, the precedence order will determine
+  // the selected one. If none of the fields is set, the socket option will be applied to all socket types.
+  //
+  // For example:
+  // If :ref:`stream <envoy_v3_api_field_config.core.v3.SocketOption.SocketType.stream>` is set,
+  // it takes precedence over :ref:`datagram <envoy_v3_api_field_config.core.v3.SocketOption.SocketType.datagram>`.
+  message SocketType {
+    // The stream socket type.
+    message Stream {
+    }
+
+    // The datagram socket type.
+    message Datagram {
+    }
+
+    // Apply the socket option to the stream socket type.
+    Stream stream = 1;
+
+    // Apply the socket option to the datagram socket type.
+    Datagram datagram = 2;
+  }
+
+  // An optional name to give this socket option for debugging, etc.
+  // Uniqueness is not required and no special meaning is assumed.
+  string description = 1;
+
+  // Corresponding to the level value passed to setsockopt, such as IPPROTO_TCP
+  int64 level = 2;
+
+  // The numeric name as passed to setsockopt
+  int64 name = 3;
+
+  oneof value {
+    option (validate.required) = true;
+
+    // Because many sockopts take an int value.
+    int64 int_value = 4;
+
+    // Otherwise it's a byte buffer.
+    bytes buf_value = 5;
+  }
+
+  // The state in which the option will be applied. When used in BindConfig
+  // STATE_PREBIND is currently the only valid value.
+  SocketState state = 6 [(validate.rules).enum = {defined_only: true}];
+
+  // Apply the socket option to the specified `socket type <https://linux.die.net/man/2/socket>`_.
+  // If not specified, the socket option will be applied to all socket types.
+  SocketType type = 7;
+
+  // Apply the socket option to the specified `socket Ip version
+  // <https://linux.die.net/man/2/socket>`_. If not specified, the socket option
+  // will be applied to all socket ip versions.
+  SocketIpVersion ip_version = 8;
+}
+
+message SocketOptionsOverride {
+  repeated SocketOption socket_options = 1;
+}

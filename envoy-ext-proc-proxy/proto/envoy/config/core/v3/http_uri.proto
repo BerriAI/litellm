@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package envoy.config.core.v3;
+
+import "google/protobuf/duration.proto";
+
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.config.core.v3";
+option java_outer_classname = "HttpUriProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/config/core/v3;corev3";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: HTTP service URI ]
+
+// Envoy external URI descriptor
+message HttpUri {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.HttpUri";
+
+  // The HTTP server URI. It should be a full FQDN with protocol, host and path.
+  //
+  // Example:
+  //
+  // .. code-block:: yaml
+  //
+  //    uri: https://www.googleapis.com/oauth2/v1/certs
+  //
+  string uri = 1 [(validate.rules).string = {min_len: 1}];
+
+  // Specify how ``uri`` is to be fetched. Today, this requires an explicit
+  // cluster, but in the future we may support dynamic cluster creation or
+  // inline DNS resolution. See `issue
+  // <https://github.com/envoyproxy/envoy/issues/1606>`_.
+  oneof http_upstream_type {
+    option (validate.required) = true;
+
+    // A cluster is created in the Envoy "cluster_manager" config
+    // section. This field specifies the cluster name.
+    //
+    // Example:
+    //
+    // .. code-block:: yaml
+    //
+    //    cluster: jwks_cluster
+    //
+    string cluster = 2 [(validate.rules).string = {min_len: 1}];
+  }
+
+  // Sets the maximum duration in milliseconds that a response can take to arrive upon request.
+  google.protobuf.Duration timeout = 3 [(validate.rules).duration = {
+    required: true
+    lt {seconds: 4294967296}
+    gte {}
+  }];
+}

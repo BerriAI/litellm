@@ -1,0 +1,763 @@
+syntax = "proto3";
+
+package envoy.service.ext_proc.v3;
+
+import "envoy/config/core/v3/base.proto";
+import "envoy/extensions/filters/http/ext_proc/v3/processing_mode.proto";
+import "envoy/type/v3/http_status.proto";
+
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+
+import "xds/annotations/v3/status.proto";
+
+import "envoy/annotations/deprecation.proto";
+import "udpa/annotations/status.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.service.ext_proc.v3";
+option java_outer_classname = "ExternalProcessorProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3;ext_procv3";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: External processing service]
+
+// A service that can access and modify HTTP requests and responses as part of a filter chain.
+// The overall external processing protocol works like this:
+//
+// 1. The data plane sends to the service information about the HTTP request.
+// 2. The service sends back a ``ProcessingResponse`` message that directs the data plane to either
+//    stop processing, continue without it, or send it the next chunk of the message body.
+// 3. If so requested, the data plane sends the server the message body in chunks, or the entire
+//    body at once. In either case, the server may send back a ``ProcessingResponse`` for each
+//    message it receives, or wait for a certain amount of body chunks to be received before
+//    streaming back the ``ProcessingResponse`` messages.
+// 4. If so requested, the data plane sends the server the HTTP trailers, and the server sends back
+//    a ``ProcessingResponse``.
+// 5. At this point, request processing is done, and we pick up again at step 1 when the data plane
+//    receives a response from the upstream server.
+// 6. At any point above, if the server closes the gRPC stream cleanly, then the data plane
+//    proceeds without consulting the server.
+// 7. At any point above, if the server closes the gRPC stream with an error, then the data plane
+//    returns a ``500`` error to the client, unless the filter was configured to ignore errors.
+//
+// In other words, the process is a request/response conversation, but using a gRPC stream to make
+// it easier for the server to maintain state.
+service ExternalProcessor {
+  // This begins the bidirectional stream that the data plane will use to
+  // give the server control over what the filter does. The actual
+  // protocol is described by the ``ProcessingRequest`` and ``ProcessingResponse``
+  // messages below.
+  rpc Process(stream ProcessingRequest) returns (stream ProcessingResponse) {
+  }
+}
+
+// This message specifies the filter protocol configurations which will be sent to the ext_proc
+// server in a :ref:`ProcessingRequest <envoy_v3_api_msg_service.ext_proc.v3.ProcessingRequest>`.
+// If the server does not support these protocol configurations, it may choose to close the gRPC
+// stream. If the server supports these protocol configurations, it should respond based on the
+// API specifications.
+message ProtocolConfiguration {
+  // Specifies the filter configuration
+  // :ref:`request_body_mode <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ProcessingMode.request_body_mode>`.
+  envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendMode request_body_mode = 1
+      [(validate.rules).enum = {defined_only: true}];
+
+  // Specifies the filter configuration
+  // :ref:`response_body_mode <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ProcessingMode.response_body_mode>`.
+  envoy.extensions.filters.http.ext_proc.v3.ProcessingMode.BodySendMode response_body_mode = 2
+      [(validate.rules).enum = {defined_only: true}];
+
+  // Specifies the filter configuration
+  // :ref:`send_body_without_waiting_for_header_response <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.send_body_without_waiting_for_header_response>`.
+  // If the client is waiting for a header response from the server, setting to ``true`` means the
+  // client will send the body to the server as it arrives. Setting to ``false`` means the client
+  // will buffer the arrived data and not send it to the server immediately.
+  bool send_body_without_waiting_for_header_response = 3;
+}
+
+// This represents the different types of messages that the data plane can send
+// to an external processing server.
+// [#next-free-field: 14]
+message ProcessingRequest {
+  // Initial flow control window sizes for ``FULL_DUPLEX_STREAMED`` and
+  // ``GRPC`` body send modes.
+  //
+  // A sender starts with this amount of flow control window. Whenever
+  // it sends body data, it must decrement its flow control window by
+  // the number of bytes that it has sent. When its flow control
+  // window is less than or equal to the amount of body data it wishes
+  // to send, it may not send until it receives a window update causing
+  // its flow control window to be large enough.
+  //
+  // However, note that in ``GRPC`` body send mode, whenever the flow
+  // control window is greater than zero, a sender may send a single
+  // message, even if the size of that message exceeds the available flow
+  // control window. At that point, the flow control window will be negative
+  // and the sender must not send the next message until it becomes positive.
+  //
+  // Note that the initial size for the to-sidestream windows are set by
+  // the sender, not the receiver. This is because each sidestream may be
+  // routed to a different ext_proc server instance, but there is no
+  // connection-level handshake to set a default for that server
+  // instance, so the only alternative here would be to have the
+  // ext_proc server instance set this on a per-stream basis, which
+  // would require an additional round-trip and therefore hurt latency.
+  // This unfortunately means that the ext_proc server instance has a
+  // bit less control: as soon as it receives these initial values, it can
+  // immediately send a window update that reduces the window, but it
+  // must be prepared to handle any data that the sender has already sent.
+  // The initial sizes for the to-sidestream windows are generally
+  // expected to be in the range of 32K to 64K.
+  //
+  // [#not-implemented-hide:]
+  message FlowControlInit {
+    // Downstream-to-sidestream initial window size.
+    int64 initial_window_downstream_to_sidestream = 1;
+
+    // Sidestream-to-upstream initial window size.
+    int64 initial_window_sidestream_to_upstream = 2;
+
+    // Upstream-to-sidestream initial window size.
+    int64 initial_window_upstream_to_sidestream = 3;
+
+    // Sidestream-to-downstream initial window size.
+    int64 initial_window_sidestream_to_downstream = 4;
+  }
+
+  // Flow control window update. Values may be positive or negative. The
+  // sender must immediately add these values to its flow control window,
+  // which governs how much data can be sent.
+  //
+  // [#not-implemented-hide:]
+  message ClientWindowUpdate {
+    // Window update for sidestream-to-upstream.
+    int64 window_increment_sidestream_to_upstream = 1;
+
+    // Window update for sidestream-to-downstream.
+    int64 window_increment_sidestream_to_downstream = 2;
+  }
+
+  reserved 1;
+
+  reserved "async_mode";
+
+  // Each request message will include one of the following sub-messages. Which
+  // ones are set for a particular HTTP request/response depend on the
+  // processing mode.
+  oneof request {
+    // Information about the HTTP request headers, as well as peer info and additional
+    // properties. Unless ``observability_mode`` is ``true``, the server must send back a
+    // ``HeaderResponse`` message, an ``ImmediateResponse`` message, or close the stream.
+    HttpHeaders request_headers = 2;
+
+    // Information about the HTTP response headers, as well as peer info and additional
+    // properties. Unless ``observability_mode`` is ``true``, the server must send back a
+    // ``HeaderResponse`` message or close the stream.
+    HttpHeaders response_headers = 3;
+
+    // A chunk of the HTTP request body. Unless ``observability_mode`` is ``true``, the server must
+    // send back a ``BodyResponse`` message, an ``ImmediateResponse`` message, or close the stream.
+    HttpBody request_body = 4;
+
+    // A chunk of the HTTP response body. Unless ``observability_mode`` is ``true``, the server must
+    // send back a ``BodyResponse`` message or close the stream.
+    HttpBody response_body = 5;
+
+    // The HTTP trailers for the request path. Unless ``observability_mode`` is ``true``, the server
+    // must send back a ``TrailerResponse`` message or close the stream.
+    //
+    // This message is only sent if the trailers processing mode is set to ``SEND`` and
+    // the original downstream request has trailers.
+    HttpTrailers request_trailers = 6;
+
+    // The HTTP trailers for the response path. Unless ``observability_mode`` is ``true``, the server
+    // must send back a ``TrailerResponse`` message or close the stream.
+    //
+    // This message is only sent if the trailers processing mode is set to ``SEND`` and
+    // the original upstream response has trailers.
+    HttpTrailers response_trailers = 7;
+  }
+
+  // Dynamic metadata associated with the request.
+  config.core.v3.Metadata metadata_context = 8;
+
+  // The values of properties selected by the ``request_attributes``
+  // or ``response_attributes`` list in the configuration. Each entry
+  // in the list is populated from the standard
+  // :ref:`attributes <arch_overview_attributes>` supported in the data plane.
+  map<string, google.protobuf.Struct> attributes = 9;
+
+  // Specifies whether the filter that sent this request is running in
+  // :ref:`observability_mode <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.observability_mode>`.
+  //
+  // * A value of ``false`` indicates that the server must respond to this message by either
+  //   sending back a matching ``ProcessingResponse`` message, or by closing the stream.
+  // * A value of ``true`` indicates that the server should not respond to this message, as any
+  //   responses will be ignored. However, it may still close the stream to indicate that no more
+  //   messages are needed.
+  //
+  // Defaults to ``false``.
+  bool observability_mode = 10;
+
+  // Specify the filter protocol configurations to be sent to the server.
+  // ``protocol_config`` is only encoded in the first ``ProcessingRequest`` message from the client to the server.
+  ProtocolConfiguration protocol_config = 11;
+
+  // Flow control initialization for ``FULL_DUPLEX_STREAMED`` and
+  // ``GRPC`` body send modes.
+  //
+  // Must be set in the initial message on the stream. Not used in
+  // subsequent messages.
+  //
+  // [#not-implemented-hide:]
+  FlowControlInit flow_control_init = 12;
+
+  // Flow control updates for ``FULL_DUPLEX_STREAMED`` and ``GRPC`` body
+  // send modes.
+  //
+  // This message may be included in a request message that also
+  // populates one of the fields in the ``request`` oneof above, or it
+  // may be sent in a request message that does not set the
+  // ``request`` oneof.
+  //
+  // In ``FULL_DUPLEX_STREAMED`` body send mode, for backward
+  // compatibility with data planes that do not yet support flow control,
+  // the data plane must not send a message containing only this field
+  // (i.e., not setting the ``request`` oneof) unless the ext_proc server
+  // has sent a window update, thus indicating that it supports flow control.
+  //
+  // [#not-implemented-hide:]
+  ClientWindowUpdate client_window_update = 13;
+}
+
+// This represents the different types of messages the server may send back to the data plane
+// when the ``observability_mode`` field in the received ``ProcessingRequest`` is set to ``false``.
+//
+// * If the corresponding ``BodySendMode`` in the
+//   :ref:`processing_mode <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.processing_mode>`
+//   is not set to ``FULL_DUPLEX_STREAMED``, then for every received ``ProcessingRequest``,
+//   the server must send back exactly one ``ProcessingResponse`` message.
+// * If it is set to ``FULL_DUPLEX_STREAMED``, the server must follow the API defined
+//   for this mode to send the ``ProcessingResponse`` messages.
+// [#next-free-field: 17]
+message ProcessingResponse {
+  // Flow control window update. Values may be positive or negative. The
+  // sender must immediately add these values to its flow control window,
+  // which governs how much data can be sent.
+  //
+  // [#not-implemented-hide:]
+  message ServerWindowUpdate {
+    // Window update for downstream-to-sidestream.
+    int64 window_increment_downstream_to_sidestream = 1;
+
+    // Window update for upstream-to-sidestream.
+    int64 window_increment_upstream_to_sidestream = 2;
+  }
+
+  // The response type that is sent by the server.
+  oneof response {
+    // The server must send back this message in response to a message with the
+    // ``request_headers`` field set.
+    HeadersResponse request_headers = 1;
+
+    // The server must send back this message in response to a message with the
+    // ``response_headers`` field set.
+    HeadersResponse response_headers = 2;
+
+    // The server must send back this message in response to a message with
+    // the ``request_body`` field set.
+    BodyResponse request_body = 3;
+
+    // The server must send back this message in response to a message with
+    // the ``response_body`` field set.
+    BodyResponse response_body = 4;
+
+    // The server must send back this message in response to a message with
+    // the ``request_trailers`` field set.
+    TrailersResponse request_trailers = 5;
+
+    // The server must send back this message in response to a message with
+    // the ``response_trailers`` field set.
+    TrailersResponse response_trailers = 6;
+
+    // If specified, attempt to create a locally generated response, send it
+    // downstream, and stop processing additional filters and ignore any
+    // additional messages received from the remote server for this request or
+    // response. If a response has already started -- for example, if this
+    // message is sent response to a ``response_body`` message -- then
+    // this will either ship the reply directly to the downstream codec,
+    // or reset the stream.
+    ImmediateResponse immediate_response = 7;
+
+    // The server sends back this message to initiate or continue local response streaming.
+    // The server must initiate local response streaming with the ``headers_response`` in response
+    // to a ``ProcessingRequest`` with the ``request_headers`` only.
+    // The server may follow up with multiple messages containing ``body_response``. The server must
+    // indicate end of stream by setting ``end_of_stream`` to ``true`` in the ``headers_response``
+    // or ``body_response`` message or by sending a ``trailers_response`` message.
+    // The client may send a ``request_body`` or ``request_trailers`` to the server depending on
+    // configuration.
+    // The streaming local response can only be sent when the ``request_header_mode`` in the filter
+    // :ref:`processing_mode <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.processing_mode>`
+    // is set to ``SEND``. The ext_proc server should not send ``StreamedImmediateResponse`` if it
+    // did not observe request headers, as it will result in a race with the upstream server
+    // response and reset of the client request.
+    // Presently only the ``FULL_DUPLEX_STREAMED`` or ``NONE`` body modes are supported.
+    StreamedImmediateResponse streamed_immediate_response = 11;
+  }
+
+  // Optional metadata that will be emitted as dynamic metadata to be consumed by
+  // following filters. This metadata will be placed in the namespace(s) specified by the top-level
+  // field name(s) of the struct.
+  google.protobuf.Struct dynamic_metadata = 8;
+
+  // Optional typed metadata that will be emitted as dynamic metadata to be consumed by
+  // following filters. This metadata will be placed in the namespace(s) specified by the
+  // keys of the map.
+  //
+  // Typed dynamic metadata should be preferred over untyped dynamic metadata (``dynamic_metadata``)
+  // because it is more efficient and more type-safe.
+  map<string, google.protobuf.Any> typed_dynamic_metadata = 13;
+
+  // Override how parts of the HTTP request and response are processed for the duration of this
+  // particular request/response only. Servers may use this to intelligently control how requests
+  // are processed based on the headers and other metadata that they see.
+  //
+  // This field is applicable when servers are responding to the header requests. If it is set
+  // in the response to the body or trailer requests, it will be ignored by the data plane.
+  // It is also ignored by the data plane when the ext_proc filter config
+  // :ref:`allow_mode_override <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.allow_mode_override>`
+  // is set to ``false``, or
+  // :ref:`send_body_without_waiting_for_header_response <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.send_body_without_waiting_for_header_response>`
+  // is set to ``true``.
+  //
+  // The external processing server can override the processing mode by returning a standalone ``mode_override``
+  // in the ``ProcessingResponse`` after receiving a ``ProcessingRequest`` for request headers. This standalone
+  // override must be sent before the request headers response is sent.
+  // Subsequent messages will adhere to this new mode.
+  //
+  // Constraints:
+  //
+  // 1. Request Path: A standalone ``mode_override`` only supports transitioning the body processing mode
+  //    from other mode to ``FULL_DUPLEX_STREAMED``, and the trailer mode must be set to ``SEND``.
+  // 2. Response Path: There are no restrictions on processing mode changes in this case.
+  //
+  envoy.extensions.filters.http.ext_proc.v3.ProcessingMode mode_override = 9;
+
+  // [#not-implemented-hide:]
+  // Deprecated and not implemented. This field has been replaced with
+  // the request_drain_requests and request_drain_responses fields.
+  bool request_drain = 12
+      [deprecated = true, (envoy.annotations.deprecated_at_minor_version) = "3.0"];
+
+  // [#not-implemented-hide:]
+  // Initiates a drain of request body data. Used only in
+  // ``FULL_DUPLEX_STREAMED`` and ``GRPC`` body send modes.
+  //
+  // The expected sequence for a drain is as follows:
+  //
+  // 1. The ext_proc server sends a message to the data plane with this
+  //    field set to true.
+  // 2. The data plane pauses reading from the downstream client, applying
+  //    any necessary flow control push-back.
+  // 3. The data plane sends a
+  //    :ref:`request_body <envoy_v3_api_field_service.ext_proc.v3.ProcessingRequest.request_body>`
+  //    with the
+  //    :ref:`drain_complete <envoy_v3_api_field_service.ext_proc.v3.HttpBody.drain_complete>`
+  //    field set to true.
+  // 4. The ext_proc server continues processing all subsequent request body
+  //    chunks until it sees the body chunk with the
+  //    :ref:`drain_complete <envoy_v3_api_field_service.ext_proc.v3.HttpBody.drain_complete>`
+  //    field set to true.  When sending back its response to that last body
+  //    chunk, the ext_proc server will set the
+  //    :ref:`drain_complete <envoy_v3_api_field_service.ext_proc.v3.StreamedBodyResponse.drain_complete>`
+  //    field to true to let the data plane know that it has finished draining.
+  // 5. When the data plane sees the response with the
+  //    :ref:`drain_complete <envoy_v3_api_field_service.ext_proc.v3.StreamedBodyResponse.drain_complete>`
+  //    field set to true, it will resume reading from the downstream
+  //    client, passing all data directly to the upstream server,
+  //    without going through the ext_proc sidestream.
+  //
+  // This procedure provides a safe way for the ext_proc server to indicate
+  // that it does not need to see the rest of the request body.
+  //
+  // Note that if the data plane is sending request body data and the
+  // ext_proc server wants to terminate the stream with an OK status, it
+  // must perform this drain before doing so.
+  //
+  // Note that the data plane may have either sent a body chunk with
+  // :ref:`end_of_stream <envoy_v3_api_field_service.ext_proc.v3.StreamedBodyResponse.end_of_stream>`
+  // set to true or may have sent trailers before it received the drain
+  // request from the ext_proc server. In these cases, the data plane will
+  // ignore the drain request, and the ext_proc will consider the drain
+  // complete when it sees the end-of-stream or trailers.
+  bool request_drain_requests = 15;
+
+  // [#not-implemented-hide:]
+  // Initiates a drain of response body data. Used only in
+  // ``FULL_DUPLEX_STREAMED`` and ``GRPC`` body send modes.
+  //
+  // The expected sequence for a drain is as follows:
+  //
+  // 1. The ext_proc server sends a message to the data plane with this
+  //    field set to true.
+  // 2. The data plane pauses reading from the upstream server, applying
+  //    any necessary flow control push-back.
+  // 3. The data plane sends a
+  //    :ref:`response_body <envoy_v3_api_field_service.ext_proc.v3.ProcessingRequest.response_body>`
+  //    with the
+  //    :ref:`drain_complete <envoy_v3_api_field_service.ext_proc.v3.HttpBody.drain_complete>`
+  //    field set to true.
+  // 4. The ext_proc server continues processing all subsequent response body
+  //    chunks until it sees the body chunk with the
+  //    :ref:`drain_complete <envoy_v3_api_field_service.ext_proc.v3.HttpBody.drain_complete>`
+  //    field set to true.  When sending back its response to that last body
+  //    chunk, the ext_proc server will set the
+  //    :ref:`drain_complete <envoy_v3_api_field_service.ext_proc.v3.StreamedBodyResponse.drain_complete>`
+  //    field to true to let the data plane know that it has finished draining.
+  // 5. When the data plane sees the response with the
+  //    :ref:`drain_complete <envoy_v3_api_field_service.ext_proc.v3.StreamedBodyResponse.drain_complete>`
+  //    field set to true, it will resume reading from the upstream
+  //    server, passing all data directly to the downstream client,
+  //    without going through the ext_proc sidestream.
+  //
+  // This procedure provides a safe way for the ext_proc server to indicate
+  // that it does not need to see the rest of the response body.
+  //
+  // Note that if the data plane is sending response body data and the
+  // ext_proc server wants to terminate the stream with an OK status, it
+  // must perform this drain before doing so.
+  //
+  // Note that the data plane may have either sent a body chunk with
+  // :ref:`end_of_stream <envoy_v3_api_field_service.ext_proc.v3.StreamedBodyResponse.end_of_stream>`
+  // set to true or may have sent trailers before it received the drain
+  // request from the ext_proc server. In these cases, the data plane will
+  // ignore the drain request, and the ext_proc will consider the drain
+  // complete when it sees the end-of-stream or trailers.
+  bool request_drain_responses = 16;
+
+  // When the ext_proc server receives a request message and needs more time to process it, it
+  // sends back a ``ProcessingResponse`` message with a new timeout value. When the data plane
+  // receives this response message, it ignores other fields in the response, stops the original
+  // timer (which has the timeout value specified in
+  // :ref:`message_timeout <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.message_timeout>`),
+  // and starts a new timer with this ``override_message_timeout`` value while keeping the data
+  // plane ext_proc filter state machine intact.
+  //
+  // The value must be >= 1ms and <=
+  // :ref:`max_message_timeout <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.max_message_timeout>`.
+  // Such a message can be sent at most once in a particular data plane ext_proc filter processing
+  // state. To enable this API, ``max_message_timeout`` must be set to a value >= 1ms.
+  google.protobuf.Duration override_message_timeout = 10;
+
+  // Flow control updates for ``FULL_DUPLEX_STREAMED`` and ``GRPC`` body
+  // send modes.
+  //
+  // This message may be included in a response message that also
+  // populates one of the fields in the ``response`` oneof above, or it
+  // may be sent in a response message that does not set the
+  // ``response`` oneof.
+  //
+  // In ``FULL_DUPLEX_STREAMED`` body send mode, for backward
+  // compatibility with data planes that do not yet support flow control,
+  // the ext_proc server must not set this field unless the data plane
+  // sent initial window sizes in its initial message on the stream.
+  // Conversely, if the data plane did send initial window sizes in its
+  // initial message on the stream, the ext_proc server must send a
+  // window update immediately to let the data plane know that it also
+  // supports flow control. If the ext_proc server is sending a message
+  // immediately anyway (e.g., for a header or body chunk), it can include
+  // this field in that same message; otherwise, the ext_proc server must
+  // send a message containing only this field.
+  //
+  // [#not-implemented-hide:]
+  ServerWindowUpdate server_window_update = 14;
+}
+
+// The following are messages that are sent to the server.
+
+// This message is sent to the external server when the HTTP request and response headers
+// are first received.
+message HttpHeaders {
+  // The HTTP request headers. All header keys will be lower-cased, because HTTP header keys are
+  // case-insensitive. The header value is encoded in the
+  // :ref:`raw_value <envoy_v3_api_field_config.core.v3.HeaderValue.raw_value>` field.
+  config.core.v3.HeaderMap headers = 1;
+
+  // [#not-implemented-hide:]
+  // This field is deprecated and not implemented. Attributes will be sent in the top-level
+  // :ref:`attributes <envoy_v3_api_field_service.ext_proc.v3.ProcessingRequest.attributes>` field.
+  map<string, google.protobuf.Struct> attributes = 2
+      [deprecated = true, (envoy.annotations.deprecated_at_minor_version) = "3.0"];
+
+  // If ``true``, then there is no message body associated with this request or response.
+  bool end_of_stream = 3;
+}
+
+// This message is sent to the external server when the HTTP request and response bodies are
+// received.
+// [#next-free-field: 6]
+message HttpBody {
+  // The contents of the body in the HTTP request/response. Note that in streaming mode multiple
+  // ``HttpBody`` messages may be sent.
+  //
+  // In ``GRPC`` body send mode, a separate ``HttpBody`` message will be sent for each message in
+  // the gRPC stream.
+  bytes body = 1;
+
+  // If ``true``, this will be the last ``HttpBody`` message that will be sent and no trailers
+  // will be sent for the current request/response.
+  bool end_of_stream = 2;
+
+  // This field is used only in ``GRPC`` body send mode. It is not used in any other body send
+  // mode.
+  //
+  // This field is used only when ``end_of_stream`` is true and ``body`` is empty.
+  // Normally, in ``GRPC`` body send mode, an empty ``body`` field indicates an empty message on
+  // the gRPC stream. However, it is possible that the gRPC client sends a half-close without
+  // actually sending a message on the stream, so we need a way to differentiate between
+  // an empty message being sent and no message being sent. If this field is true, then it
+  // indicates that no message has been sent; if it is false, then it indicates that an empty
+  // message has been sent.
+  // [#not-implemented-hide:]
+  bool end_of_stream_without_message = 3;
+
+  // This field is used in ``GRPC`` body send mode to indicate whether the message is compressed.
+  // This will never be set to ``true`` by gRPC but may be set to ``true`` by a proxy like Envoy.
+  bool grpc_message_compressed = 4;
+
+  // [#not-implemented-hide:]
+  // In ``FULL_DUPLEX_STREAMED`` or ``GRPC`` body send modes, if the
+  // data plane has seen the
+  // :ref:`request_drain_requests <envoy_v3_api_field_service.ext_proc.v3.ProcessingResponse.request_drain_requests>`
+  // or :ref:`request_drain_responses <envoy_v3_api_field_service.ext_proc.v3.ProcessingResponse.request_drain_responses>`
+  // field, it will populate this field to indicate that it has finished
+  // sending data to the ext_proc server.
+  bool drain_complete = 5;
+}
+
+// This message is sent to the external server when the HTTP request and
+// response trailers are received.
+message HttpTrailers {
+  // The header value is encoded in the
+  // :ref:`raw_value <envoy_v3_api_field_config.core.v3.HeaderValue.raw_value>` field.
+  config.core.v3.HeaderMap trailers = 1;
+}
+
+// The following are messages that may be sent back by the server.
+
+// This message is sent by the external server to the data plane after ``HttpHeaders`` was
+// sent to it.
+message HeadersResponse {
+  // Details the modifications (if any) to be made by the data plane to the current
+  // request/response.
+  CommonResponse response = 1;
+}
+
+// This message is sent by the external server to the data plane after ``HttpBody`` was
+// sent to it.
+message BodyResponse {
+  // Details the modifications (if any) to be made by the data plane to the current
+  // request/response.
+  CommonResponse response = 1;
+}
+
+// This message is sent by the external server to the data plane after ``HttpTrailers`` was
+// sent to it.
+message TrailersResponse {
+  // Details the modifications (if any) to be made by the data plane to the current
+  // request/response trailers.
+  HeaderMutation header_mutation = 1;
+}
+
+// This message is sent by the external server to the data plane after ``HttpHeaders`` to initiate
+// local response streaming. The server may follow up with multiple messages containing
+// ``body_response``. The server must indicate end of stream by setting ``end_of_stream`` to
+// ``true`` in the ``headers_response`` or ``body_response`` message or by sending a
+// ``trailers_response`` message.
+message StreamedImmediateResponse {
+  oneof response {
+    // Response headers to be sent downstream. The ``:status`` header must be set.
+    HttpHeaders headers_response = 1;
+
+    // Response body to be sent downstream.
+    StreamedBodyResponse body_response = 2;
+
+    // Response trailers to be sent downstream.
+    config.core.v3.HeaderMap trailers_response = 3;
+  }
+}
+
+// This message contains common fields between header and body responses.
+// [#next-free-field: 6]
+message CommonResponse {
+  // The status of the response.
+  enum ResponseStatus {
+    // Apply the mutation instructions in this message to the
+    // request or response, and then continue processing the filter
+    // stream as normal. This is the default.
+    CONTINUE = 0;
+
+    // Apply the specified header mutation, replace the body with the body
+    // specified in the body mutation (if present), and do not send any
+    // further messages for this request or response even if the processing
+    // mode is configured to do so.
+    //
+    // When used in response to a ``request_headers`` or ``response_headers`` message,
+    // this status makes it possible to either completely replace the body
+    // while discarding the original body, or to add a body to a message that
+    // formerly did not have one.
+    //
+    // In other words, this response makes it possible to turn an HTTP GET
+    // into a POST, PUT, or PATCH.
+    //
+    // Not supported if the body send mode is ``GRPC``.
+    CONTINUE_AND_REPLACE = 1;
+  }
+
+  // If set, provide additional direction on how the data plane should
+  // handle the rest of the HTTP filter chain.
+  ResponseStatus status = 1 [(validate.rules).enum = {defined_only: true}];
+
+  // Instructions on how to manipulate the headers. When responding to an
+  // ``HttpBody`` request, header mutations will only take effect if the current processing mode
+  // for the body is ``BUFFERED``.
+  HeaderMutation header_mutation = 2;
+
+  // Replace the body of the last message sent to the remote server on this stream. If responding
+  // to an ``HttpBody`` request, simply replace or clear the body chunk that was sent with that
+  // request. Body mutations may take effect in response either to ``header`` or ``body`` messages.
+  // When it is in response to ``header`` messages, it only takes effect if the
+  // :ref:`status <envoy_v3_api_field_service.ext_proc.v3.CommonResponse.status>`
+  // is set to ``CONTINUE_AND_REPLACE``.
+  BodyMutation body_mutation = 3;
+
+  // [#not-implemented-hide:]
+  // Add new trailers to the message. This may be used when responding to either an
+  // ``HttpHeaders`` or ``HttpBody`` message, but only if this message is returned
+  // along with the ``CONTINUE_AND_REPLACE`` status.
+  // The header value is encoded in the
+  // :ref:`raw_value <envoy_v3_api_field_config.core.v3.HeaderValue.raw_value>` field.
+  config.core.v3.HeaderMap trailers = 4;
+
+  // Clear the route cache for the current client request. This is necessary
+  // if the remote server modified headers that are used to calculate the route.
+  // This field is ignored in the response direction. This field is also ignored
+  // if the data plane ext_proc filter is in the upstream filter chain.
+  bool clear_route_cache = 5;
+}
+
+// This message causes the filter to attempt to create a locally generated response, send it
+// downstream, stop processing additional filters, and ignore any additional messages received
+// from the remote server for this request or response. If a response has already started, then
+// this will either ship the reply directly to the downstream codec, or reset the stream.
+// [#next-free-field: 6]
+message ImmediateResponse {
+  // The response code to return.
+  type.v3.HttpStatus status = 1 [(validate.rules).message = {required: true}];
+
+  // Apply changes to the default headers, which will include ``content-type``.
+  HeaderMutation headers = 2;
+
+  // The message body to return with the response which is sent using the
+  // ``text/plain`` content type, or encoded in the ``grpc-message`` header.
+  bytes body = 3;
+
+  // If set, then include a gRPC status trailer.
+  GrpcStatus grpc_status = 4;
+
+  // A string detailing why this local reply was sent, which may be included
+  // in log and debug output (e.g., this populates the ``%RESPONSE_CODE_DETAILS%``
+  // command operator field for use in access logging).
+  string details = 5;
+}
+
+// This message specifies a gRPC status for an ``ImmediateResponse`` message.
+message GrpcStatus {
+  // The actual gRPC status.
+  uint32 status = 1;
+}
+
+// Change HTTP headers or trailers by appending, replacing, or removing
+// headers.
+message HeaderMutation {
+  // Add or replace HTTP headers. Attempts to set the value of
+  // any ``x-envoy`` header, and attempts to set the ``:method``,
+  // ``:authority``, ``:scheme``, or ``host`` headers will be ignored.
+  // The header value is encoded in the
+  // :ref:`raw_value <envoy_v3_api_field_config.core.v3.HeaderValue.raw_value>` field.
+  repeated config.core.v3.HeaderValueOption set_headers = 1;
+
+  // Remove these HTTP headers. Attempts to remove system headers --
+  // any header starting with ``:``, plus ``host`` -- will be ignored.
+  repeated string remove_headers = 2;
+}
+
+// The body response message corresponding to ``FULL_DUPLEX_STREAMED`` or ``GRPC`` body modes.
+// [#next-free-field: 6]
+message StreamedBodyResponse {
+  // In ``FULL_DUPLEX_STREAMED`` body send mode, contains the body response chunk that will be
+  // passed to the upstream/downstream by the data plane. In ``GRPC`` body send mode, contains
+  // a serialized gRPC message to be passed to the upstream/downstream by the data plane.
+  bytes body = 1;
+
+  // The server sets this flag to ``true`` if it has received a body request with
+  // :ref:`end_of_stream <envoy_v3_api_field_service.ext_proc.v3.HttpBody.end_of_stream>` set to
+  // ``true``, and this is the last chunk of body responses.
+  //
+  // Note that in ``GRPC`` body send mode, this allows the ext_proc server to tell the data plane
+  // to send a half close after a client message, which will result in discarding any other
+  // messages sent by the client application.
+  bool end_of_stream = 2;
+
+  // This field is used in ``GRPC`` body send mode when ``end_of_stream`` is ``true`` and ``body``
+  // is empty. Those values would normally indicate an empty message on the stream with the
+  // end-of-stream bit set. However, if the half-close happens after the last message on the stream
+  // was already sent, then this field will be ``true`` to indicate an end-of-stream with *no*
+  // message (as opposed to an empty message).
+  bool end_of_stream_without_message = 3;
+
+  // This field is used in ``GRPC`` body send mode to indicate whether the message is compressed.
+  // This will never be set to ``true`` by gRPC but may be set to ``true`` by a proxy like Envoy.
+  bool grpc_message_compressed = 4;
+
+  // [#not-implemented-hide:]
+  // In ``FULL_DUPLEX_STREAMED`` or ``GRPC`` body send modes, if the
+  // ext_proc server has seen the
+  // :ref:`drain_complete <envoy_v3_api_field_service.ext_proc.v3.HttpBody.drain_complete>`
+  // field, it will populate this field to indicate that it has finished
+  // sending data back to the data plane.
+  //
+  // If the data plane receives a message with this field set to true
+  // before it has sent a drain-complete message to the ext_proc server,
+  // the data plane will treat that as if the ext_proc stream has failed
+  // with a non-OK status.
+  bool drain_complete = 5;
+}
+
+// This message specifies the body mutation the server sends to the data plane.
+message BodyMutation {
+  // The type of mutation for the body.
+  oneof mutation {
+    // The entire body to replace.
+    // Should only be used when the corresponding ``BodySendMode`` in the
+    // :ref:`processing_mode <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.processing_mode>`
+    // is not set to ``FULL_DUPLEX_STREAMED`` or ``GRPC``.
+    bytes body = 1;
+
+    // Clear the corresponding body chunk. Should only be used when the corresponding
+    // ``BodySendMode`` in the
+    // :ref:`processing_mode <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.processing_mode>`
+    // is not set to ``FULL_DUPLEX_STREAMED`` or ``GRPC``.
+    bool clear_body = 2;
+
+    // Must be used when the corresponding ``BodySendMode`` in the
+    // :ref:`processing_mode <envoy_v3_api_field_extensions.filters.http.ext_proc.v3.ExternalProcessor.processing_mode>`
+    // is set to ``FULL_DUPLEX_STREAMED`` or ``GRPC``.
+    StreamedBodyResponse streamed_response = 3
+        [(xds.annotations.v3.field_status).work_in_progress = true];
+  }
+}
