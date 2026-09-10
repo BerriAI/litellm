@@ -658,6 +658,25 @@ def test_get_model_from_request_includes_fine_tuning_target_model_query():
     )
 
 
+def test_get_model_from_request_includes_video_query_model_for_plain_id():
+    result = get_model_from_request(
+        request_data={"video_id": "plain-xai-id"},
+        route="/v1/videos/{video_id}",
+        request_query_params={"model": "grok-imagine-video-1.5"},
+    )
+    assert result == "grok-imagine-video-1.5"
+
+
+def test_get_model_from_request_includes_video_query_model_on_content_route():
+    result = get_model_from_request(
+        request_data={"video_id": "plain-xai-id"},
+        route="/v1/videos/{video_id}/content",
+        request_query_params={"model": "restricted-xai-model"},
+        request_headers={"x-litellm-model": "also-restricted"},
+    )
+    assert result == ["restricted-xai-model", "also-restricted"]
+
+
 def test_get_model_from_request_extracts_video_id_model():
     from litellm.types.videos.utils import encode_video_id_with_provider
 

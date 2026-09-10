@@ -1684,6 +1684,7 @@ _MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS: Final = (
     "/batches",
     "/skills",
     "/evals",
+    "/videos",
 )
 _MODEL_ROUTING_QUERY_TARGET_MODEL_ROUTE_MARKERS: Final = (
     "/files",
