@@ -1,10 +1,10 @@
 import { rust } from '@codemirror/lang-rust';
 import { languageServerExtensions, LSPClient } from '@codemirror/lsp-client';
-import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView, basicSetup } from 'codemirror';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
 import { commandClickDefinition, connectTransport, PlaygroundWorkspace } from './lsp';
+import { playgroundEditorTheme } from './editor-theme';
 import type { PlaygroundExample, PlaygroundInfo, StoredFiles } from './types';
 
 export type CodeEditorsHandle = {
@@ -99,7 +99,7 @@ export const CodeEditors = forwardRef<CodeEditorsHandle, CodeEditorsProps>(funct
           doc: file.source,
           extensions: [
             basicSetup,
-            oneDark,
+            playgroundEditorTheme,
             languageExtensions,
             EditorView.lineWrapping,
             EditorView.updateListener.of(update => {

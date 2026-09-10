@@ -1,8 +1,8 @@
 import { markdown } from '@codemirror/lang-markdown';
-import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView, basicSetup } from 'codemirror';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 
+import { playgroundEditorTheme } from './editor-theme';
 import { markdownFileNavigation, playgroundLinkDecorations } from './markdown-navigation';
 import type { PlaygroundGuide } from './types';
 
@@ -38,7 +38,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       extensions: [
         basicSetup,
         markdown(),
-        oneDark,
+        playgroundEditorTheme,
         playgroundLinkDecorations,
         markdownFileNavigation(target => callbacks.current.onOpenTarget(target)),
         EditorView.lineWrapping,

@@ -30,7 +30,10 @@ const ErrorScreen = ({ message, retry }: { message: string; retry: () => void })
 const initialFile = (example: PlaygroundExample) =>
   example.files.find(file => file.path === 'src/main.rs') ?? example.files[0];
 
-const DOCS_WIDTH = 336;
+const defaultDocsWidth = () => Math.min(
+  Math.max(280, Math.round(window.innerWidth * 0.48)),
+  Math.max(280, window.innerWidth - 440),
+);
 const FILE_TREE_WIDTH = 200;
 const OUTPUT_HEIGHT = 220;
 
@@ -56,7 +59,7 @@ const Playground = ({ info }: { info: PlaygroundInfo }) => {
   const [diagnostics, setDiagnostics] = useState('Diagnostics pending');
   const [diagnosticState, setDiagnosticState] = useState<'ready' | 'warning'>('ready');
   const [saveError, setSaveError] = useState('');
-  const [docsWidth, setDocsWidth] = useState(DOCS_WIDTH);
+  const [docsWidth, setDocsWidth] = useState(defaultDocsWidth);
   const [fileTreeWidth, setFileTreeWidth] = useState(FILE_TREE_WIDTH);
   const [outputHeight, setOutputHeight] = useState(OUTPUT_HEIGHT);
   const codeEditors = useRef<CodeEditorsHandle>(null);
@@ -175,8 +178,8 @@ const Playground = ({ info }: { info: PlaygroundInfo }) => {
           axis="x"
           width={docsWidth}
           height={0}
-          minConstraints={[240, 0]}
-          maxConstraints={[Math.min(640, Math.max(240, window.innerWidth - 440)), 0]}
+          minConstraints={[280, 0]}
+          maxConstraints={[Math.max(280, window.innerWidth - 440), 0]}
           resizeHandles={['e']}
           handle={resizeHandle('Resize Markdown panel', 'vertical')}
           onResize={(_event, { size }) => setDocsWidth(size.width)}
