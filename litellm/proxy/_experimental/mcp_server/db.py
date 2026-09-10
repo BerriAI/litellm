@@ -6,10 +6,17 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
 
+from typing_extensions import ReadOnly
+
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
+    RefreshTokenPresented,
+    credential_binding_matches,
+    enforce_oauth_identity_binding,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -117,6 +124,7 @@ class _OAuthCredentialAccessToken(TypedDict):
 
 
 class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
+    identity_binding_proof: ReadOnly[str]
     type: str
     refresh_token: str
     expires_at: str
@@ -1393,6 +1401,7 @@ async def store_user_oauth_credential(
     expires_in: int | None = None,
     scopes: list[str] | None = None,
     skip_byok_guard: bool = False,
+    identity_binding_proof: str | None = None,
 ) -> None:
     """Persist an OAuth2 access token for a user+server pair.
 
@@ -1409,6 +1418,7 @@ async def store_user_oauth_credential(
         "type": "oauth2",
         "access_token": access_token,
         "connected_at": datetime.now(timezone.utc).isoformat(),
+        **({"identity_binding_proof": identity_binding_proof} if identity_binding_proof else {}),
     }
     if refresh_token:
         payload["refresh_token"] = refresh_token
@@ -1628,6 +1638,11 @@ async def refresh_user_oauth_token(
     warning and returns ``None`` — the caller is responsible for clearing the
     stale credential and triggering re-authentication.
     """
+    binding: Final = server.oauth_identity_binding
+    if binding is not None and binding.mode == "enforce":
+        if not await credential_binding_matches(binding, user_id, server.server_id, cred):
+            return None
+
     refresh_token: Final[str | None] = cred.get("refresh_token")
     token_url: Final[str | None] = getattr(server, "effective_token_url", None) or getattr(server, "token_url", None)
     server_id: Final[str] = getattr(server, "server_id", "")
@@ -1677,6 +1692,14 @@ async def refresh_user_oauth_token(
         )
         return None
 
+    binding_proof: Final = await enforce_oauth_identity_binding(
+        server=server,
+        token_response=body,
+        litellm_user_id=user_id,
+        grant_type="refresh_token",
+        refresh_ownership=RefreshTokenPresented(refresh_token),
+    )
+
     access_token: Final[str | None] = body.get("access_token")
     if not access_token:
         verbose_proxy_logger.warning(
@@ -1709,6 +1732,7 @@ async def refresh_user_oauth_token(
         refresh_token=new_refresh_token,
         expires_in=expires_in,
         scopes=scopes,
+        identity_binding_proof=binding_proof,
         skip_byok_guard=True,  # Row is already OAuth2; skip the extra find_unique check
     )
 
@@ -1742,6 +1766,10 @@ async def resolve_valid_user_oauth_token(
     grant: Final = oauth_grant_state(cred)
     if cred is None or grant == "absent":
         return None
+    binding: Final = server.oauth_identity_binding
+    if binding is not None and binding.mode == "enforce":
+        if not await credential_binding_matches(binding, user_id, server.server_id, cred):
+            return None
     if grant == "valid":
         return cred
     if prisma_client is None:
@@ -1782,7 +1810,11 @@ async def resolve_user_oauth_access_token(
             mcp_per_user_token_cache,
         )
 
-        if prefetched_creds is None:
+        binding: Final = server.oauth_identity_binding
+        enforce_binding: Final = binding is not None and binding.mode == "enforce"
+        if enforce_binding:
+            await mcp_per_user_token_cache.delete(user_id, server_id)
+        if prefetched_creds is None and not enforce_binding:
             cached_token: Final = await mcp_per_user_token_cache.get(user_id, server_id)
             if cached_token is not None:
                 return cached_token

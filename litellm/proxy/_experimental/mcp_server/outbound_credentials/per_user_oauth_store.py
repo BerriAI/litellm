@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.oauth_identity_binding import credential_binding_matches
 from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
 )
@@ -38,6 +39,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_cache_cod
     OAuthTokenCacheCodec,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.v2_token_store import (
+    CredentialReader,
     V2PerUserTokenStore,
 )
 
@@ -69,6 +71,7 @@ async def _persist_credential(
     refresh_token: str | None,
     expires_in: int | None,
     scopes: tuple[str, ...] | None,
+    identity_binding_proof: str | None = None,
 ) -> None:
     from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
         store_user_oauth_credential,
@@ -86,6 +89,7 @@ async def _persist_credential(
         expires_in=expires_in,
         scopes=list(scopes) if scopes else None,
         skip_byok_guard=True,
+        identity_binding_proof=identity_binding_proof,
     )
 
 
@@ -172,8 +176,10 @@ class LazyPerUserOAuthTokenStore:
         *,
         store_builder: StoreBuilder = _build_per_user_oauth_token_store,
         redis_available: Callable[[], bool] = _redis_cache_is_available,
+        credential_reader: CredentialReader = _read_credential,
     ) -> None:
         self._server_lookup = server_lookup
+        self._credential_reader = credential_reader
         self._store_builder = store_builder
         self._redis_available = redis_available
         self._store: InvalidatableOAuthTokenStore | None = None
@@ -182,6 +188,13 @@ class LazyPerUserOAuthTokenStore:
         self._local_fetches = 0
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+        server: Final = self._server_lookup(server_id)
+        binding: Final = server.oauth_identity_binding if server else None
+        if binding is not None and binding.mode == "enforce":
+            credential: Final = await self._credential_reader(user_id, server_id)
+            await self.invalidate(user_id, server_id)
+            if credential is None or not await credential_binding_matches(binding, user_id, server_id, credential):
+                return None
         if self._uses_redis:
             store = self._store
             if store is not None:
