@@ -3251,25 +3251,30 @@ async def test_sign_request_off_loop_if_aws_keeps_the_loop_serving_while_credent
     assert probe.served_during_refresh is True
 
 
-async def test_run_aws_signing_leaves_the_default_executor_free_for_other_providers():
+def test_run_aws_signing_leaves_the_default_executor_free_for_other_providers():
     """A signing parked on botocore's refresh lock must not hold a default-executor thread, since every
-    other provider's async entry point hops through that same executor."""
-    loop = asyncio.get_running_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
-    signing_parked = asyncio.Event()
-    refresh_done = threading.Event()
+    other provider's async entry point hops through that same executor. The scenario runs on its own loop
+    so the one-thread default executor it pins never leaks into the session loop."""
 
-    def sign() -> str:
-        loop.call_soon_threadsafe(signing_parked.set)
-        refresh_done.wait()
-        return threading.current_thread().name
+    async def scenario() -> tuple[str, str]:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        signing_parked = asyncio.Event()
+        refresh_done = threading.Event()
 
-    signing = asyncio.create_task(run_aws_signing(sign))
-    try:
-        await asyncio.wait_for(signing_parked.wait(), timeout=5)
-        other_provider = await asyncio.wait_for(loop.run_in_executor(None, threading.current_thread), timeout=5)
-    finally:
-        refresh_done.set()
+        def sign() -> str:
+            loop.call_soon_threadsafe(signing_parked.set)
+            refresh_done.wait()
+            return threading.current_thread().name
 
-    assert other_provider.name != await signing
-    assert (await signing).startswith("aws-signing")
+        signing = asyncio.create_task(run_aws_signing(sign))
+        try:
+            await asyncio.wait_for(signing_parked.wait(), timeout=5)
+            other_provider = await asyncio.wait_for(loop.run_in_executor(None, threading.current_thread), timeout=5)
+        finally:
+            refresh_done.set()
+        return other_provider.name, await signing
+
+    other_provider, signing_thread = asyncio.run(scenario())
+    assert other_provider != signing_thread
+    assert signing_thread.startswith("aws-signing")

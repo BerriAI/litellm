@@ -20,6 +20,7 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.bedrock.base_aws_llm import SignsRequestsWithAWS
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
@@ -3431,6 +3432,26 @@ async def test_completion_signs_and_logs_off_the_event_loop_after_the_async_tran
     assert captured["body"] == {"transformed_by": "async"}
     assert config.sign_threads and all(thread is not loop_thread for thread in config.sign_threads)
     assert pre_call_threads and all(thread is not loop_thread for thread in pre_call_threads)
+    assert not any(thread.name.startswith("aws-signing") for thread in config.sign_threads + pre_call_threads)
+
+
+class _AWSTransformRecordingConfig(SignsRequestsWithAWS, _TransformRecordingConfig):
+    pass
+
+
+async def test_completion_signs_aws_configs_on_the_aws_signing_pool_after_the_async_transform():
+    config = _AWSTransformRecordingConfig(transform_async=True)
+    pre_call_threads = []
+    logging_obj = Mock(dynamic_success_callbacks=None, model_call_details={})
+    logging_obj.pre_call.side_effect = lambda **kwargs: pre_call_threads.append(threading.current_thread())
+
+    pending, captured = _start_async_completion(config, logging_obj)
+    response = await pending
+
+    assert response.choices[0].message.content == "async"
+    assert captured["body"] == {"transformed_by": "async"}
+    assert config.sign_threads and all(thread.name.startswith("aws-signing") for thread in config.sign_threads)
+    assert pre_call_threads and all(thread.name.startswith("aws-signing") for thread in pre_call_threads)
 
 
 async def test_completion_keeps_sync_transform_request_before_returning_by_default():
