@@ -1,6 +1,6 @@
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
-use crate::ocr::types::{OcrRequestData, OcrResponseData};
+use crate::ocr::types::{LiteLLMOcrResponse, OcrRequestData};
 use serde_json::{Map, Value, json};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
@@ -226,7 +226,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> Result<OcrResponseData, Error> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
     }
 
@@ -301,7 +301,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> Result<OcrResponseData, Error> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         let response = response_json
             .as_object()
             .ok_or_else(|| Error::InvalidType {
@@ -339,7 +339,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
             .get("usage_info")
             .cloned()
             .or_else(|| response.get("usage").cloned());
-        Ok(OcrResponseData {
+        Ok(LiteLLMOcrResponse {
             pages,
             model: object
                 .get("model")
