@@ -34,6 +34,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -53,6 +54,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
     get_form_data,
     get_request_body,
+    is_json_content_type,
 )
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
@@ -78,6 +80,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+from litellm.types.router import LiteLLMParamsTypedDict
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
@@ -118,6 +121,24 @@ def is_passthrough_request_using_router_model(request_body: dict, llm_router: li
         return is_known_model(model, llm_router)
     except Exception:
         return False
+
+
+class RelayRejection(TypedDict):
+    error: ReadOnly[str]
+
+
+def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
+    model: Final = litellm_params.get("model", "")
+    try:
+        return get_llm_provider(model=model, custom_llm_provider=litellm_params.get("custom_llm_provider"))[0]
+    except litellm.BadRequestError:
+        return model
+
+
+def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> frozenset[str]:
+    return frozenset(
+        _deployment_model_name(row["litellm_params"]) for row in llm_router.get_model_list(model_name=model_group) or ()
+    )
 
 
 def is_passthrough_request_streaming(request_body: object) -> bool:
@@ -412,7 +433,7 @@ async def vllm_proxy_route(
                 content=None,
                 data=None,
                 files=None,
-                json=(request_body if request.headers.get("content-type") == "application/json" else None),
+                json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
                 params=None,
                 headers=None,
                 cookies=None,
@@ -1499,6 +1520,14 @@ async def _relay_upstream_bytes(upstream: AsyncGenerator[bytes, bytes]) -> Async
         await upstream.aclose()
 
 
+async def _relay_upstream_response(upstream: httpx.Response) -> Response:
+    return Response(
+        content=await upstream.aread(),
+        status_code=upstream.status_code,
+        headers=HttpPassThroughEndpointHelpers.get_response_headers(headers=upstream.headers, custom_headers=None),
+    )
+
+
 async def _relay_azure_router_model(
     llm_router: litellm.Router,
     model: str,
@@ -1508,30 +1537,37 @@ async def _relay_azure_router_model(
     is_streaming_request: bool,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
-    result: Final = await llm_router.allm_passthrough_route(
-        model=model,
-        method=request.method,
-        endpoint=endpoint,
-        request_query_params=request.query_params,
-        request_headers=_safe_get_request_headers(request),
-        stream=is_streaming_request,
-        content=None,
-        data=None,
-        files=None,
-        json=(request_body if request.headers.get("content-type") == "application/json" else None),
-        params=None,
-        headers=None,
-        cookies=None,
-        litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+    foreign_deployment: Final = foreign_azure_deployment(
+        endpoint, model, lambda: _models_served_by_group(llm_router, model)
     )
+    if foreign_deployment is not None:
+        rejection: Final[RelayRejection] = {
+            "error": f"deployment '{foreign_deployment}' in the path is not served by model group '{model}'; "
+            "put the model group name in the deployments segment"
+        }
+        raise HTTPException(status_code=400, detail=rejection)
+    try:
+        result: Final = await llm_router.allm_passthrough_route(
+            model=model,
+            method=request.method,
+            endpoint=endpoint,
+            request_query_params=request.query_params,
+            request_headers=_safe_get_request_headers(request),
+            stream=is_streaming_request,
+            content=None,
+            data=None,
+            files=None,
+            json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
+            params=None,
+            headers=None,
+            cookies=None,
+            litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+        )
+    except httpx.HTTPStatusError as upstream_error:
+        return await _relay_upstream_response(upstream_error.response)
 
     if not is_streaming_request:
-        upstream: Final = cast(httpx.Response, result)
-        return Response(
-            content=await upstream.aread(),
-            status_code=upstream.status_code,
-            headers=HttpPassThroughEndpointHelpers.get_response_headers(headers=upstream.headers, custom_headers=None),
-        )
+        return await _relay_upstream_response(cast(httpx.Response, result))
 
     if inspect.isasyncgen(result):
         sse_headers: Final = {"content-type": "text/event-stream"}

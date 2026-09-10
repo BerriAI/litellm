@@ -620,14 +620,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return event_pydantic_model.model_construct(**parsed_chunk)
 
     @staticmethod
-    def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+    def parse_terminal_event_from_stream_chunks(all_chunks: Sequence[str]) -> ResponsesTerminalEvent | None:
         for chunk_str in reversed(all_chunks):
             for event_model in (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent):
                 try:
-                    return event_model.model_validate_json(chunk_str.removeprefix("data: ")).response
+                    return event_model.model_validate_json(chunk_str.removeprefix("data: "))
                 except ValueError:
                     continue
         return None
+
+    @staticmethod
+    def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+        terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks)
+        return None if terminal_event is None else terminal_event.response
 
     @staticmethod
     def get_event_model_class(event_type: str) -> type[BaseLiteLLMOpenAIResponseObject]:
