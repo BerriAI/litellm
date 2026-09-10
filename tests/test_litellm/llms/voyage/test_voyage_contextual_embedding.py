@@ -74,15 +74,11 @@ class TestVoyageContextualEmbeddings:
         assert headers == {"Authorization": "Bearer test-key"}
 
     def test_validate_environment_secret_fallback(self, monkeypatch):
-        import litellm.llms.voyage.embedding.transformation_contextual as module
         from litellm.llms.voyage.embedding.transformation_contextual import (
             VoyageContextualEmbeddingConfig,
         )
 
-        def fake_get_secret(name):
-            return "secret-key" if name == "VOYAGE_API_KEY" else None
-
-        monkeypatch.setattr(module, "get_secret_str", fake_get_secret)
+        monkeypatch.setenv("VOYAGE_API_KEY", "secret-key")
         config = VoyageContextualEmbeddingConfig()
         headers = config.validate_environment(
             {}, "voyage-context-4", [], {}, {}, api_key=None
@@ -141,6 +137,51 @@ class TestVoyageContextualEmbeddings:
         )
         assert transformed["input_type"] == "document"
         assert transformed["enable_auto_chunking"] is True
+
+    def test_flat_list_str_caller_chunk_params_win(self):
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+        transformed = config.transform_embedding_request(
+            "voyage-context-4",
+            ["Hello", "world"],
+            {"input_type": "document", "chunk_size": 512, "chunk_overlap": 32},
+            {},
+        )
+        assert transformed["enable_auto_chunking"] is True
+        assert transformed["chunk_size"] == 512
+        assert transformed["chunk_overlap"] == 32
+        assert transformed["input_type"] == "document"
+
+    def test_flat_list_str_caller_can_disable_auto_chunking(self):
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", ["Hello"], {"enable_auto_chunking": False}, {}
+        )
+        assert transformed["enable_auto_chunking"] is False
+        assert transformed["input_type"] == "document"
+
+    def test_nested_list_keeps_caller_params(self):
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", [["Hello", "world"]], {"input_type": "document", "output_dimension": 512}, {}
+        )
+        assert transformed == {
+            "inputs": [["Hello", "world"]],
+            "model": "voyage-context-4",
+            "input_type": "document",
+            "output_dimension": 512,
+        }
 
     def test_single_string_auto_chunked(self):
         from litellm.llms.voyage.embedding.transformation_contextual import (
