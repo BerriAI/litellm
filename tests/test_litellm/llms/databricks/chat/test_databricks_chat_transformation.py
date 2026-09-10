@@ -255,6 +255,19 @@ def test_transform_messages_sanitizes_empty_content():
     assert result[1]["content"] == "Hi"
 
 
+def test_transform_request_preserves_unity_model_service_name():
+    config = DatabricksConfig()
+    result = config.transform_request(
+        model="system.ai.kimi-k3",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["model"] == "system.ai.kimi-k3"
+
+
 def test_transform_request_strips_thinking_blocks_and_reasoning_content():
     """Regression for LIT-6762: replaying an assistant turn that litellm decorated with
     `thinking_blocks` / `reasoning_content` made Databricks 400 with
