@@ -63,6 +63,7 @@ async fn rejects_invalid_pages_features_and_format() {
             custom_llm_provider: None,
             extra_headers: None,
             optional_params: options.as_object().unwrap().clone(),
+            input_sources: Default::default(),
             timeout_seconds: None,
         });
         let rejected = match result {

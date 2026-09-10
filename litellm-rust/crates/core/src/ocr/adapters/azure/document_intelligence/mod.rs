@@ -1,6 +1,7 @@
 use super::super::OcrAdapter;
 use crate::Error;
 use crate::auth::azure::AzureAuthInputs;
+use crate::auth::{InputSource, Sourced};
 use crate::constants::{AZURE_DI_API_VERSION, AZURE_DI_SUBSCRIPTION_HEADER};
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::document_intelligence::{
@@ -33,8 +34,11 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
         let params = map_ocr_params(request)?;
-        let config =
-            AzureAuthInputs::from_optional_params(&request.optional_params).map_err(Error::from)?;
+        let config = AzureAuthInputs::from_sourced_optional_params(
+            &request.optional_params,
+            &request.input_sources,
+        )
+        .map_err(Error::from)?;
         let headers = validate_environment(&request.connection, &config, &credential_env).await?;
         let endpoint = nonblank(request.connection.api_base.clone())
             .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))
@@ -119,20 +123,29 @@ async fn validate_environment(
     if crate::http_utils::has_header(&connection.extra_headers, "authorization")
         || crate::http_utils::has_header(&connection.extra_headers, AZURE_DI_SUBSCRIPTION_HEADER)
     {
+        super::validate_destination(connection, connection.extra_headers_source)?;
         return Ok(connection.extra_headers.clone());
     }
-    if let Some(key) =
-        nonblank(connection.api_key.clone()).or_else(|| nonblank(env_lookup(AZURE_DI_API_KEY_ENV)))
-    {
-        return Ok(std::iter::once((AZURE_DI_SUBSCRIPTION_HEADER.into(), key))
-            .chain(connection.extra_headers.clone())
-            .collect());
+    let key = nonblank(connection.api_key.clone())
+        .map(|value| Sourced::new(value, connection.api_key_source))
+        .or_else(|| {
+            nonblank(env_lookup(AZURE_DI_API_KEY_ENV))
+                .map(|value| Sourced::new(value, InputSource::Environment))
+        });
+    if let Some(key) = key {
+        super::validate_destination(connection, key.source())?;
+        return Ok(
+            std::iter::once((AZURE_DI_SUBSCRIPTION_HEADER.into(), key.into_value()))
+                .chain(connection.extra_headers.clone())
+                .collect(),
+        );
     }
     let token = super::resolve_entra(config, env_lookup)
         .await?
         .ok_or(Error::MissingAzureDocumentIntelligenceCredentials)?;
+    super::validate_destination(connection, token.source())?;
     Ok(
-        std::iter::once(("Authorization".into(), format!("Bearer {token}")))
+        std::iter::once(("Authorization".into(), format!("Bearer {}", token.value())))
             .chain(connection.extra_headers.clone())
             .collect(),
     )
@@ -150,4 +163,50 @@ fn nonblank(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn request_endpoint_cannot_receive_environment_key() {
+        let connection = OcrConnection {
+            api_base: Some("https://request.example".into()),
+            api_base_source: InputSource::Request,
+            ..Default::default()
+        };
+
+        let error = validate_environment(&connection, &Default::default(), &|name| {
+            (name == AZURE_DI_API_KEY_ENV).then(|| "environment-key".into())
+        })
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("request-controlled Azure endpoint")
+        );
+    }
+
+    #[tokio::test]
+    async fn request_endpoint_accepts_request_owned_key() {
+        let connection = OcrConnection {
+            api_key: Some("request-key".into()),
+            api_key_source: InputSource::Request,
+            api_base: Some("https://request.example".into()),
+            api_base_source: InputSource::Request,
+            ..Default::default()
+        };
+
+        let headers = validate_environment(&connection, &Default::default(), &|_| None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            headers[0],
+            (AZURE_DI_SUBSCRIPTION_HEADER.into(), "request-key".into())
+        );
+    }
 }

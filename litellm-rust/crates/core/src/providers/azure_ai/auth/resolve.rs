@@ -67,19 +67,6 @@ impl Default for AzureAuthService {
 
 impl AzureAuthService {
     #[cfg(test)]
-    pub(crate) fn with_transport(
-        cache_capacity: u64,
-        transport: azure_core::http::Transport,
-    ) -> Self {
-        Self {
-            native: Arc::new(NativeAzureTokenAcquirer::with_transport(
-                cache_capacity,
-                transport,
-            )),
-        }
-    }
-
-    #[cfg(test)]
     fn with_acquirer(native: Arc<dyn AzureTokenAcquirer>) -> Self {
         Self { native }
     }

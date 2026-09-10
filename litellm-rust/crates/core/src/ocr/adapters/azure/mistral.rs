@@ -1,8 +1,5 @@
-use std::sync::OnceLock;
-
 use super::super::OcrAdapter;
 use crate::Error;
-use crate::auth::error::AuthConfigurationError;
 use crate::auth::{InputSource, Sourced};
 use crate::constants::AZURE_AI_OCR_PATH;
 use crate::ocr::OcrClient;
@@ -92,7 +89,7 @@ async fn validate_environment(
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, OcrError> {
     if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
-        validate_destination(connection, connection.extra_headers_source)?;
+        super::validate_destination(connection, connection.extra_headers_source)?;
         return Ok(connection.extra_headers.clone());
     }
     let key = nonblank(connection.api_key.clone())
@@ -102,39 +99,14 @@ async fn validate_environment(
                 .map(|value| Sourced::new(value, InputSource::Environment))
         });
     if let Some(key) = key {
-        validate_destination(connection, key.source())?;
+        super::validate_destination(connection, key.source())?;
         return Ok(bearer_headers(connection, key.value()));
     }
-    static SERVICE: OnceLock<AzureAuthService> = OnceLock::new();
-    let key = SERVICE
-        .get_or_init(AzureAuthService::default)
-        .get_azure_ad_token(config, env_lookup)
-        .await
-        .map_err(Error::from)?
-        .map(|credential| {
-            let source = credential.source();
-            let value = credential.value().secret().expose().to_string();
-            Sourced::new(value, source)
-        })
+    let key = super::resolve_entra(config, env_lookup)
+        .await?
         .ok_or(Error::MissingAzureAiCredentials)?;
-    validate_destination(connection, key.source())?;
+    super::validate_destination(connection, key.source())?;
     Ok(bearer_headers(connection, key.value()))
-}
-
-fn validate_destination(
-    connection: &OcrConnection,
-    credential_source: InputSource,
-) -> Result<(), OcrError> {
-    if connection.api_base.is_some()
-        && connection.api_base_source == InputSource::Request
-        && credential_source != InputSource::Request
-    {
-        return Err(Error::from(crate::AuthError::Configuration(
-            AuthConfigurationError::RequestAzureCredentialDestination,
-        ))
-        .into());
-    }
-    Ok(())
 }
 
 fn bearer_headers(connection: &OcrConnection, key: &str) -> Vec<(String, String)> {
