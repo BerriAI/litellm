@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,20 @@ type Client struct {
 	APIKey             string
 	httpClient         *http.Client
 	InsecureSkipVerify bool
+}
+
+type apiError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("API request failed with status code %d: %s", e.StatusCode, e.Body)
+}
+
+func isNotFound(err error) bool {
+	var apiErr *apiError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
 func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
@@ -57,6 +72,9 @@ func (c *Client) CreateKey(key *Key) (*Key, error) {
 
 func (c *Client) GetKey(keyID string) (*Key, error) {
 	resp, err := c.sendRequest("GET", fmt.Sprintf("/key/info?key=%s", keyID), nil)
+	if isNotFound(err) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +148,9 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	// send it when set.
 	if key.BudgetDuration != "" {
 		updateData["budget_duration"] = key.BudgetDuration
+	}
+	if key.Duration != "" {
+		updateData["duration"] = key.Duration
 	}
 
 	// Only add pointer fields if they are explicitly set
@@ -402,7 +423,7 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 	log.Printf("Response body: %s", c.redactSensitiveData(string(bodyBytes)))
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status code %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, &apiError{StatusCode: resp.StatusCode, Body: string(bodyBytes)}
 	}
 
 	var result map[string]interface{}

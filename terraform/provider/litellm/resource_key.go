@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -88,8 +89,9 @@ func resourceKey() *schema.Resource {
 				Optional: true,
 			},
 			"duration": {
-				Type:     schema.TypeString,
-				Optional: true,
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "How long the key stays valid, e.g. \"30d\" or \"12h\". Changing it resets the expiry to the time of the update plus the new duration; removing it leaves the current expiry in place",
 			},
 			"aliases": {
 				Type:     schema.TypeMap,
@@ -296,6 +298,7 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 	}
 
 	if key == nil {
+		log.Printf("[WARN] Key %s not found, removing from state", d.Id())
 		d.SetId("")
 		return nil
 	}
@@ -310,6 +313,9 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	key := &Key{Key: d.Id()}
 	mapResourceDataToKey(d, key)
+	if !d.HasChange("duration") {
+		key.Duration = ""
+	}
 	key.ModelRPMLimit = changedMap(d, "model_rpm_limit")
 	key.ModelTPMLimit = changedMap(d, "model_tpm_limit")
 
