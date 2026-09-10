@@ -638,3 +638,18 @@ async def test_open_breaker_is_a_quiet_cache_miss(dual_cache_with_open_breaker, 
 
     noisy = [r for r in caplog.records if r.levelno > logging.DEBUG]
     assert noisy == [], f"an open breaker must be silent per call, got {[r.getMessage() for r in noisy]}"
+
+
+def test_open_breaker_is_a_quiet_cache_miss_on_the_sync_read_path(dual_cache_with_open_breaker, caplog):
+    """The sync read runs in the request thread pool for /v1/messages and /v1/responses, so it
+    must short-circuit on an open breaker like the async path instead of dialing Redis per call.
+    """
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    redis_client = dual_cache_with_open_breaker.redis_cache.redis_client
+    redis_client.get.side_effect = AssertionError("an open breaker must not touch Redis")
+
+    for _ in range(50):
+        assert dual_cache_with_open_breaker.get_cache("lit7468") is None
+
+    noisy = [r for r in caplog.records if r.levelno > logging.DEBUG]
+    assert noisy == [], f"an open breaker must be silent per call, got {[r.getMessage() for r in noisy]}"
