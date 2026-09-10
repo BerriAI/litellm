@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "used by the OCR architecture in the next stacked PR"
-)]
-
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;

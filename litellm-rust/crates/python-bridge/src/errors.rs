@@ -1,4 +1,4 @@
-use litellm_core::error::Error;
+use litellm_core::error::{Error, ErrorKind};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
@@ -17,13 +17,18 @@ pyo3::create_exception!(
 );
 
 pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
-    match err {
-        Error::Auth(message) => PyValueError::new_err(message),
-        Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_) => PyValueError::new_err(err.to_string()),
-        other => PyRuntimeError::new_err(other.to_string()),
+    match err.kind() {
+        ErrorKind::Auth
+        | ErrorKind::InvalidProvider
+        | ErrorKind::InvalidRequest
+        | ErrorKind::InvalidType
+        | ErrorKind::MissingField => PyValueError::new_err(err.to_string()),
+        ErrorKind::InvalidResponse
+        | ErrorKind::Http
+        | ErrorKind::Network
+        | ErrorKind::Connect
+        | ErrorKind::Routing
+        | ErrorKind::Unsupported => PyRuntimeError::new_err(err.to_string()),
     }
 }
 
@@ -34,22 +39,20 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
 /// on its own path; anything after it is not, because the provider has already
 /// done the work and billed for it.
 pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
-    match err {
-        Error::Unsupported(_)
-        | Error::Auth(_)
-        | Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_)
-        | Error::Routing(_)
-        // Nothing reached the provider, so serving it on Python cannot double
-        // bill and is the only way the caller gets an answer at all.
-        | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
-        Error::Http { status, body } => {
-            RustUpstreamError::new_err((status, format!("{status}: {body}")))
-        }
-        Error::Network(message) | Error::InvalidResponse(message) => {
-            RustUpstreamError::new_err((0u16, message))
+    if let Error::Http { status, body } = err {
+        return RustUpstreamError::new_err((status, format!("{status}: {body}")));
+    }
+    match err.kind() {
+        ErrorKind::Unsupported
+        | ErrorKind::Auth
+        | ErrorKind::InvalidProvider
+        | ErrorKind::InvalidRequest
+        | ErrorKind::InvalidType
+        | ErrorKind::MissingField
+        | ErrorKind::Routing
+        | ErrorKind::Connect => RustBridgeDeclined::new_err(err.to_string()),
+        ErrorKind::Http | ErrorKind::Network | ErrorKind::InvalidResponse => {
+            RustUpstreamError::new_err((0u16, err.to_string()))
         }
     }
 }
@@ -73,6 +76,7 @@ pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
 #[cfg(test)]
 mod ocr_error_tests {
     use super::*;
+    use litellm_core::error::TransportError;
 
     #[test]
     fn ocr_errors_preserve_python_validation_and_provider_details() {
@@ -83,10 +87,13 @@ mod ocr_error_tests {
                 assert!(mapped.is_instance_of::<PyValueError>(py));
                 assert_eq!(mapped.value(py).to_string(), "Document URL is required");
             }
-            let mapped = ocr_error_to_pyerr(Error::Http {
-                status: 429,
-                body: r#"{"message":"rate limited"}"#.to_string(),
-            });
+            let mapped = ocr_error_to_pyerr(
+                TransportError::Http {
+                    status: 429,
+                    body: r#"{"message":"rate limited"}"#.to_string(),
+                }
+                .into(),
+            );
             assert!(mapped.is_instance_of::<RustUpstreamError>(py));
             let args: (u16, String) = mapped
                 .value(py)

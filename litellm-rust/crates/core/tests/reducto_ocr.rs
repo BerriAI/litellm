@@ -1,0 +1,181 @@
+use crate::ocr::integrations::{ReductoLegacy as REDUCTO_LEGACY, ReductoV3 as REDUCTO_V3};
+use crate::ocr::test_support::{
+    MockResponse, body, mock_server, perform_ocr, transform, wire_request,
+};
+use rstest::rstest;
+use serde_json::json;
+
+#[tokio::test]
+async fn test_parse_v3_reducto_id_passthrough_skips_upload() {
+    let result=body(&REDUCTO_V3,"parse-v3",json!({"type":"document_url","document_url":"reducto://already.pdf"}),json!({"formatting":{"table_output_format":"html"},"retrieval":{"chunk_mode":"section"},"settings":{"ocr_system":"standard"}})).await.unwrap();
+    assert_eq!(result["input"], "reducto://already.pdf");
+    assert_eq!(result["formatting"]["table_output_format"], "html");
+}
+#[tokio::test]
+async fn test_parse_legacy_wraps_enhance_under_options() {
+    let doc = json!({"type":"document_url","document_url":"reducto://legacy.pdf"});
+    let result = body(
+        &REDUCTO_LEGACY,
+        "parse-legacy",
+        doc.clone(),
+        json!({"enhance":{"agentic":[{"type":"table"}]}}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result,
+        json!({"document_url":"reducto://legacy.pdf","options":{"enhance":{"agentic":[{"type":"table"}]}}})
+    );
+    assert!(
+        body(&REDUCTO_LEGACY, "parse-legacy", doc, json!({}))
+            .await
+            .unwrap()
+            .get("options")
+            .is_none()
+    );
+}
+#[rstest]
+#[case("http://example.com/a.pdf")]
+#[case("https://example.com/a.pdf")]
+#[case("data:application/pdf;base64")]
+#[case("data:application/pdf;base64,INVALID!")]
+#[tokio::test]
+async fn test_parse_v3_rejects_plain_http_urls(#[case] source: &str) {
+    assert!(
+        body(
+            &REDUCTO_V3,
+            "parse-v3",
+            json!({"type":"document_url","document_url":source}),
+            json!({})
+        )
+        .await
+        .is_err()
+    );
+}
+#[test]
+fn reducto_groups_blocks_and_preserves_native_response() {
+    let raw = json!({"job_id":"job-1","usage":{"num_pages":2,"credits":3},"result":{"chunks":[
+        {"blocks":[{"content":"B","bbox":{"page":2},"kind":"table"}]},
+        {"blocks":[{"content":"A","bbox":{"page":1},"kind":"text"},{"content":"C","bbox":{"page":1},"kind":"text"}]}]}});
+    let response = transform(&REDUCTO_V3, "parse-v3", raw.clone(), json!({})).unwrap();
+    assert_eq!(response["pages"][0]["markdown"], "A\n\nC");
+    assert_eq!(response["pages"][1]["markdown"], "B");
+    assert_eq!(response["pages"][1]["blocks"][0]["kind"], "table");
+    assert_eq!(response["provider_native_response"], raw);
+    assert_eq!(response["usage_info"]["credits"], 3.0);
+}
+#[test]
+fn reducto_missing_result_and_null_result_are_distinct() {
+    let flat = transform(
+        &REDUCTO_V3,
+        "parse-v3",
+        json!({"chunks":[{"content":"text"}]}),
+        json!({}),
+    )
+    .unwrap();
+    assert_eq!(flat["pages"][0]["markdown"], "text");
+    let null = transform(
+        &REDUCTO_V3,
+        "parse-v3",
+        json!({"result":null,"chunks":[{"content":"ignored"}]}),
+        json!({}),
+    )
+    .unwrap();
+    assert_eq!(null["pages"], json!([]));
+}
+#[rstest]
+#[case("parse-v3")]
+#[case("parse-legacy")]
+#[tokio::test]
+async fn test_parse_v3_file_upload_and_response_mapping(
+    #[case] model: &str,
+    #[values(
+        "data:application/pdf;base64,YWJj",
+        "data:application/pdf,abc",
+        "DATA:application/pdf;BASE64,YWJj#page"
+    )]
+    source: &str,
+) {
+    let (base, seen, server) = mock_server(vec![
+        MockResponse::json(json!({"file_id":"reducto://uploaded.pdf"})),
+        MockResponse::json(
+            json!({"result":{"chunks":[{"content":"hello"}]},"usage":{"num_pages":1}}),
+        ),
+    ])
+    .await;
+    let mut request = wire_request(&format!("reducto/{model}"), &base, json!({}));
+    request.document = request.document.with_source(source.to_string());
+    request.connection.extra_headers = vec![
+        ("Content-Type".into(), "application/json".into()),
+        ("X-Trace".into(), "upload-test".into()),
+    ];
+    let response = perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(response.pages[0].markdown, "hello");
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(seen[0].starts_with("POST /upload "));
+    assert!(seen[0].contains("content-type: multipart/form-data; boundary="));
+    assert!(seen[0].contains("x-trace: upload-test"));
+    assert!(seen[0].contains("application/pdf"));
+    assert!(seen[0].contains("abc"));
+    assert!(seen[1].starts_with("POST /parse "));
+    assert!(seen[1].contains("reducto://uploaded.pdf"));
+}
+
+#[rstest]
+#[case("parse-v3")]
+#[case("parse-legacy")]
+#[tokio::test]
+async fn upload_rejects_empty_file_id_before_parsing(#[case] model: &str) {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"file_id":""}))]).await;
+    let error = perform_ocr(wire_request(&format!("reducto/{model}"), &base, json!({})))
+        .await
+        .unwrap_err();
+    server.await.unwrap();
+    assert_eq!(error.kind(), crate::error::ErrorKind::InvalidResponse);
+    assert!(error.to_string().contains("file_id"));
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[rstest]
+#[case("parse-v3")]
+#[case("parse-legacy")]
+#[tokio::test]
+async fn guardrail_rewrites_document_before_upload(#[case] model: &str) {
+    use crate::ocr::hooks::{OcrDuringCallRequest, OcrHookFuture, OcrHooks};
+
+    struct RewriteDocument;
+    impl OcrHooks for RewriteDocument {
+        fn has_guardrails(&self) -> bool {
+            true
+        }
+
+        fn during_call(
+            &self,
+            request: OcrDuringCallRequest,
+        ) -> OcrHookFuture<'_, OcrDuringCallRequest> {
+            Box::pin(async move {
+                assert_eq!(
+                    request.body["document_url"],
+                    "data:application/pdf;base64,YWJj"
+                );
+                Ok(OcrDuringCallRequest {
+                    body: json!({"type":"document_url","document_url":"reducto://guarded.pdf"}),
+                    ..request
+                })
+            })
+        }
+    }
+
+    let (base, seen, server) =
+        mock_server(vec![MockResponse::json(json!({"result":{"chunks":[]}}))]).await;
+    let mut request = wire_request(&format!("reducto/{model}"), &base, json!({}));
+    request.hooks = std::sync::Arc::new(RewriteDocument);
+    perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("POST /parse "));
+    assert!(seen[0].contains("reducto://guarded.pdf"));
+}

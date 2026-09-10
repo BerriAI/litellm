@@ -1,26 +1,41 @@
 use litellm_core::Error;
-use litellm_core::call_lifecycle::CallLifecycle;
+use litellm_core::ocr::{
+    OcrClient,
+    wire::{OcrWireRequest, decode_request},
+};
 use serde_json::Value;
+use std::sync::Arc;
 
-mod common_utils;
-mod handler;
 mod hooks;
-mod prepare;
 mod types;
-
 pub use types::OcrRequest;
 
-use handler::execute_ocr_provider_call;
-use prepare::{PreparedOcrCall, prepare_ocr_call};
-
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
-    let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
-    CallLifecycle::default()
-        .run_request(request, &hooks, |request| {
-            execute_ocr_provider_call(request, &hooks)
-        })
+pub async fn ocr(client: &OcrClient, request: OcrRequest<'_>) -> Result<Value, Error> {
+    let mut core_request = decode_request(OcrWireRequest {
+        model: request.model.into(),
+        document: request.document,
+        api_key: request.api_key.map(str::to_string),
+        api_base: request.api_base.map(str::to_string),
+        custom_llm_provider: request.custom_llm_provider.map(str::to_string),
+        extra_headers: request.extra_headers,
+        optional_params: request.optional_params,
+        timeout_seconds: request.timeout.map(|timeout| timeout.as_secs_f64()),
+    })?;
+    core_request.connection.max_download_bytes = litellm_core::ocr::types::download_limit_bytes(
+        std::env::var("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB")
+            .ok()
+            .as_deref(),
+    );
+    core_request.litellm_call_id = request.litellm_call_id.map(str::to_string);
+    core_request.hooks = Arc::new(hooks::OcrGatewayHooks::new(
+        request.callbacks,
+        request.guardrails,
+        request.request_metadata,
+    ));
+    client
+        .perform(core_request)
         .await
+        .map(|response| response.into_json())
 }
 
 #[cfg(test)]
@@ -29,8 +44,13 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    use super::{OcrRequest, ocr};
+    use super::{OcrRequest, ocr as run_ocr};
     use crate::integrations::types::RequestMetadata;
+
+    async fn ocr(request: OcrRequest<'_>) -> Result<serde_json::Value, litellm_core::Error> {
+        let client = litellm_core::ocr::OcrClient::new(reqwest::Client::new())?;
+        run_ocr(&client, request).await
+    }
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
         let mut request = Vec::new();
@@ -150,7 +170,7 @@ mod tests {
         assert_eq!(response["pages"][1]["markdown"], "Page 2 block A");
         assert_eq!(response["pages"][2]["markdown"], "Page 3 block A");
         assert_eq!(response["usage_info"]["pages_processed"], 3);
-        assert_eq!(response["usage_info"]["credits"], 3);
+        assert_eq!(response["usage_info"]["credits"], 3.0);
         assert_eq!(response["provider_native_response"]["job_id"], "job_123");
         let (upload_request, parse_request) = server.await.expect("server task completes");
         assert!(

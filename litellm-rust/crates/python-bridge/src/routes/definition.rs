@@ -222,11 +222,7 @@ mod tests {
             let module = PyModule::new(py, "routes").expect("module should be created");
             crate::routes::register(&module).expect("routes should register");
             let routes = [
-                (
-                    "ocr",
-                    "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
-                ),
+                ("ocr", "aocr", "(request)"),
                 (
                     "transcription",
                     "atranscription",
@@ -311,7 +307,27 @@ mod tests {
                 .expect("kwargs should accept extra_headers");
             let document = PyDict::new(py);
 
-            for (sync_name, async_name) in [("ocr", "aocr"), ("transcription", "atranscription")] {
+            let ocr_request = PyDict::new(py);
+            ocr_request.set_item("model", "model").expect("sets model");
+            ocr_request
+                .set_item("document", &document)
+                .expect("sets document");
+            ocr_request
+                .set_item("extra_headers", &invalid_headers)
+                .expect("sets headers");
+            let sync_ocr_error = module
+                .getattr("ocr")
+                .and_then(|function| function.call1((&ocr_request,)))
+                .expect_err("sync OCR should reject non-dict extra_headers");
+            let async_ocr_error = module
+                .getattr("aocr")
+                .and_then(|function| function.call1((&ocr_request,)))
+                .expect_err("async OCR should reject non-dict extra_headers");
+            assert!(sync_ocr_error.to_string().contains("invalid OCR request"));
+            assert_eq!(async_ocr_error.to_string(), sync_ocr_error.to_string());
+
+            {
+                let (sync_name, async_name) = ("transcription", "atranscription");
                 let sync_error = module
                     .getattr(sync_name)
                     .and_then(|function| function.call(("model", &document), Some(&kwargs)))

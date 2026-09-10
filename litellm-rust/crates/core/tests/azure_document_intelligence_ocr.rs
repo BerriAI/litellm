@@ -1,0 +1,415 @@
+use crate::ocr::formats::OcrFormat;
+use crate::ocr::integrations::AzureDocumentIntelligence as AZURE_DOCUMENT_INTELLIGENCE;
+use crate::ocr::integrations::OcrIntegration;
+use crate::ocr::prepare::OcrIntegrationKind;
+use crate::ocr::registry::decode_integration_request;
+use crate::ocr::test_support::perform_ocr;
+use crate::ocr::test_support::{MockResponse, body, mock_server, params, transform, wire_request};
+use crate::ocr::types::OcrConnection;
+use rstest::{fixture, rstest};
+use serde_json::{Value, json};
+
+fn connection() -> OcrConnection {
+    OcrConnection {
+        api_base: Some("https://example.com".into()),
+        api_key: Some("key".into()),
+        ..Default::default()
+    }
+}
+#[fixture]
+fn operation() -> Value {
+    json!({"status":"succeeded","operationExtension":42,"analyzeResult":{
+        "content":"A\n\nB","tables":[{"cells":[]}],"keyValuePairs":[{"key":{"content":"A"}}],
+        "pages":[{"pageNumber":1,"width":8.5,"height":11,"unit":"inch","lines":[{"content":"A"},{"content":null},{"content":"B"}],"words":[{"content":"A","confidence":0.99}]}]}})
+}
+
+async fn prepared_url(
+    model: &str,
+    params: &<crate::ocr::formats::document_intelligence::AzureDocumentIntelligenceOcrFormat as OcrFormat>::MappedParams,
+) -> Result<String, crate::ocr::error::OcrError> {
+    AZURE_DOCUMENT_INTELLIGENCE
+        .prepare(&connection(), &Default::default(), model, params, &|_| None)
+        .await
+        .map(|prepared| prepared.url)
+}
+
+fn query_value(url: &str, key: &str) -> Option<String> {
+    url::Url::parse(url)
+        .expect("prepared URL parses")
+        .query_pairs()
+        .find_map(|(name, value)| (name == key).then(|| value.into_owned()))
+}
+
+#[rstest]
+#[case(json!([2,0,0,1]), "1,2,3")]
+#[case(json!("1-3, 5"), "1-3,5")]
+#[case(json!(["1","3-5"]), "1,3-5")]
+#[case(json!("0,3-1"), "0,3-1")]
+#[tokio::test]
+async fn document_intelligence_url_normalizes_zero_based_pages(
+    #[case] pages: Value,
+    #[case] expected: &str,
+) {
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({"pages":pages}));
+    let url = prepared_url("prebuilt-read", &mapped).await.unwrap();
+    assert_eq!(query_value(&url, "pages").as_deref(), Some(expected));
+}
+#[rstest]
+#[case(json!([true]))]
+#[case(json!([1,"2"]))]
+#[case(json!([18446744073709551615u64]))]
+fn invalid_page_types_return_typed_errors(#[case] pages: Value) {
+    assert!(
+        decode_integration_request(
+            OcrIntegrationKind::AzureDocumentIntelligence,
+            json!({"pages":pages}).as_object().unwrap().clone()
+        )
+        .is_err()
+    );
+}
+#[rstest]
+#[case(json!([-1]))]
+#[case(json!([i64::MAX]))]
+#[case(json!("1&&features=bad"))]
+#[case(json!(""))]
+#[case(json!(["1-2-3"]))]
+fn invalid_page_values_never_panic(#[case] pages: Value) {
+    let input = serde_json::from_value(json!({"pages":pages})).unwrap();
+    assert!(
+        crate::ocr::formats::document_intelligence::AzureDocumentIntelligenceOcrFormat::map_params(
+            input
+        )
+        .is_err()
+    );
+}
+#[tokio::test]
+async fn document_intelligence_page_mapping_omits_empty_list() {
+    let mapped = params(
+        &AZURE_DOCUMENT_INTELLIGENCE,
+        json!({"pages":[],"features":[]}),
+    );
+    assert!(
+        !prepared_url("prebuilt-read", &mapped)
+            .await
+            .unwrap()
+            .contains("&pages")
+    );
+}
+#[rstest]
+#[case(json!(["keyValuePairs","languages"]), "keyValuePairs,languages")]
+#[case(json!("keyValuePairs, languages"), "keyValuePairs,languages")]
+#[tokio::test]
+async fn document_intelligence_maps_features(#[case] features: Value, #[case] expected: &str) {
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({"features":features}));
+    let url = prepared_url("prebuilt-read", &mapped).await.unwrap();
+    assert_eq!(query_value(&url, "features").as_deref(), Some(expected));
+}
+#[rstest]
+#[case(json!(["languages,ocr"]))]
+#[case(json!("languages&pages=1"))]
+#[case(json!(""))]
+fn document_intelligence_rejects_invalid_features(#[case] features: Value) {
+    assert!(
+        crate::ocr::formats::document_intelligence::AzureDocumentIntelligenceOcrFormat::map_params(
+            serde_json::from_value(json!({"features":features})).unwrap()
+        )
+        .is_err()
+    );
+}
+#[tokio::test]
+async fn document_intelligence_mistral_pages_flow_to_query_only() {
+    let result = body(
+        &AZURE_DOCUMENT_INTELLIGENCE,
+        "model",
+        json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
+        json!({"pages":[0,1],"features":"languages"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, json!({"urlSource":"https://example.com/doc.pdf"}));
+}
+#[rstest]
+#[case("data:application/pdf;base64,YWJj", "YWJj")]
+#[case("data:application/pdf,abc", "YWJj")]
+#[case("data:application/pdf;base64,", "")]
+#[case("data:application/pdf;version=1.7;base64,YWJj", "YWJj")]
+#[case("DATA:;BASE64,YQ%3D%3D#page", "YQ==")]
+#[tokio::test]
+async fn document_intelligence_request_uses_base64_source_for_data_uri(
+    #[case] source: &str,
+    #[case] expected: &str,
+) {
+    assert_eq!(
+        body(
+            &AZURE_DOCUMENT_INTELLIGENCE,
+            "model",
+            json!({"type":"image_url","image_url":source}),
+            json!({})
+        )
+        .await
+        .unwrap(),
+        json!({"base64Source":expected})
+    );
+}
+#[tokio::test]
+async fn azure_document_intelligence_model_id_is_encoded() {
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({}));
+    assert!(
+        prepared_url("azure_ai/doc-intelligence/a ?#é", &mapped)
+            .await
+            .unwrap()
+            .contains("a%20%3F%23%C3%A9:analyze")
+    );
+}
+#[tokio::test]
+async fn azure_document_intelligence_dot_segment_model_id_is_rejected() {
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({}));
+    for model in [".", "..", "azure_ai/doc-intelligence/.."] {
+        assert!(prepared_url(model, &mapped).await.is_err());
+    }
+}
+#[rstest]
+fn document_intelligence_response_normalizes_pages(operation: Value) {
+    let result = transform(
+        &AZURE_DOCUMENT_INTELLIGENCE,
+        "model",
+        operation.clone(),
+        json!({}),
+    )
+    .unwrap();
+    assert_eq!(result["pages"][0]["markdown"], "A\n\nB");
+    assert_eq!(
+        result["pages"][0]["dimensions"],
+        json!({"width":816,"height":1056,"dpi":96})
+    );
+    assert_eq!(result["usage_info"]["pages_processed"], 1);
+    assert_eq!(result["tables"], operation["analyzeResult"]["tables"]);
+}
+#[test]
+fn document_intelligence_response_tolerates_missing_native_fields() {
+    for value in [
+        json!({"status":"succeeded"}),
+        json!({"status":"succeeded","analyzeResult":null}),
+    ] {
+        let result = transform(&AZURE_DOCUMENT_INTELLIGENCE, "model", value, json!({})).unwrap();
+        assert_eq!(result["pages"], json!([]));
+        assert_eq!(result["tables"], Value::Null);
+    }
+    let result = transform(
+        &AZURE_DOCUMENT_INTELLIGENCE,
+        "model",
+        json!({"status":"succeeded","analyzeResult":{"pages":[{}]}}),
+        json!({}),
+    )
+    .unwrap();
+    assert_eq!(result["pages"][0]["dimensions"]["width"], 816);
+}
+#[rstest]
+#[case(json!({"pages":null}), "pages")]
+#[case(json!({"pages":[null]}), "pages[0]")]
+#[case(json!({"pages":[{"lines":null}]}), "lines")]
+#[case(json!({"pages":[{"lines":[{"content":42}]}]}), "content")]
+#[case(json!({"pages":[{"width":"bad"}]}), "width")]
+fn malformed_pages_are_rejected_with_paths(#[case] analysis: Value, #[case] path: &str) {
+    let error = transform(
+        &AZURE_DOCUMENT_INTELLIGENCE,
+        "model",
+        json!({"status":"succeeded","analyzeResult":analysis}),
+        json!({}),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains(path), "{error}");
+}
+#[test]
+fn page_coercions_and_overflow_are_explicit() {
+    let result = transform(&AZURE_DOCUMENT_INTELLIGENCE,"model",json!({"status":"succeeded","analyzeResult":{"pages":[{"pageNumber":"2","width":"8.5","height":11.0}]}}),json!({})).unwrap();
+    assert_eq!(result["pages"][0]["index"], 1);
+    for page in [json!({"pageNumber":i64::MIN}), json!({"width":1e100})] {
+        let error = transform(
+            &AZURE_DOCUMENT_INTELLIGENCE,
+            "model",
+            json!({"status":"succeeded","analyzeResult":{"pages":[page]}}),
+            json!({}),
+        )
+        .expect_err("provider page overflows");
+        let error = crate::Error::from(error);
+        assert_eq!(error.kind(), crate::error::ErrorKind::InvalidResponse);
+        assert!(error.to_string().contains("numeric value"));
+    }
+}
+#[test]
+fn document_intelligence_non_succeeded_status_is_rejected() {
+    for status in [
+        json!("failed"),
+        json!("running"),
+        json!("unknown"),
+        Value::Null,
+    ] {
+        assert!(
+            transform(
+                &AZURE_DOCUMENT_INTELLIGENCE,
+                "model",
+                json!({"status":status}),
+                json!({})
+            )
+            .is_err()
+        );
+    }
+}
+#[rstest]
+fn document_intelligence_native_format_carries_raw_operation(operation: Value) {
+    let response = transform(
+        &AZURE_DOCUMENT_INTELLIGENCE,
+        "model",
+        operation.clone(),
+        json!({"req_format":"native"}),
+    )
+    .unwrap();
+    assert_eq!(response["provider_native_response"], operation);
+    assert!(
+        transform(
+            &AZURE_DOCUMENT_INTELLIGENCE,
+            "model",
+            operation.clone(),
+            json!({"req_format":"litellm"})
+        )
+        .unwrap()
+        .get("provider_native_response")
+        .is_none()
+    );
+}
+#[tokio::test]
+async fn document_intelligence_url_omits_req_format() {
+    let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({"req_format":"native"}));
+    assert!(
+        !prepared_url("model", &mapped)
+            .await
+            .unwrap()
+            .contains("req_format")
+    );
+}
+#[test]
+fn document_intelligence_rejects_unknown_req_format() {
+    assert!(
+        decode_integration_request(
+            OcrIntegrationKind::AzureDocumentIntelligence,
+            json!({"req_format":"azure"}).as_object().unwrap().clone()
+        )
+        .is_err()
+    );
+}
+#[rstest]
+#[case(false)]
+#[case(true)]
+#[tokio::test]
+async fn polling_forwards_subscription_or_bearer_and_preserves_native(
+    operation: Value,
+    #[case] bearer: bool,
+) {
+    let (base, requests, server) = mock_server(vec![
+        MockResponse {
+            status: 202,
+            headers: vec![("Operation-Location", "{base}/operation".into())],
+            body: json!({}),
+        },
+        MockResponse {
+            status: 200,
+            headers: vec![("Retry-After", "0".into())],
+            body: json!({"status":"running"}),
+        },
+        MockResponse::json(operation.clone()),
+    ])
+    .await;
+    let mut request = wire_request(
+        "azure_ai/doc-intelligence/prebuilt-read",
+        &base,
+        json!({"req_format":"native","pages":[0,2]}),
+    );
+    if bearer {
+        request.connection.api_key = None;
+        request.connection.extra_headers = vec![("Authorization".into(), "Bearer token".into())];
+    }
+    request
+        .connection
+        .extra_headers
+        .push(("X-Trace".into(), "initial-request-only".into()));
+    let result = perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(
+        result.provider_native_response,
+        Some(operation.as_object().unwrap().clone())
+    );
+    let seen = requests.lock().unwrap();
+    assert!(seen[0].contains("&pages=1%2C3"));
+    assert!(seen[0].contains("x-trace: initial-request-only"));
+    for poll in &seen[1..] {
+        assert!(!poll.to_ascii_lowercase().contains("x-trace:"));
+        assert!(poll.to_ascii_lowercase().contains(if bearer {
+            "authorization: bearer token"
+        } else {
+            "ocp-apim-subscription-key: test-key"
+        }));
+    }
+}
+#[tokio::test]
+async fn polling_rejects_cross_origin_location() {
+    let (base, requests, server) = mock_server(vec![MockResponse {
+        status: 202,
+        headers: vec![("Operation-Location", "http://example.com/operation".into())],
+        body: json!({}),
+    }])
+    .await;
+    let error = perform_ocr(wire_request(
+        "azure_ai/doc-intelligence/prebuilt-read",
+        &base,
+        json!({}),
+    ))
+    .await
+    .unwrap_err();
+    server.await.unwrap();
+    assert!(error.to_string().contains("cross-origin"));
+    assert_eq!(requests.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn polling_deadline_bounds_retry_after() {
+    let (base, _, server) = mock_server(vec![
+        MockResponse {
+            status: 202,
+            headers: vec![("Operation-Location", "{base}/operation".into())],
+            body: json!({}),
+        },
+        MockResponse {
+            status: 200,
+            headers: vec![("Retry-After", "9999".into())],
+            body: json!({"status":"notStarted"}),
+        },
+    ])
+    .await;
+    let mut request = wire_request("azure_ai/doc-intelligence/prebuilt-read", &base, json!({}));
+    request.connection.poll_timeout = std::time::Duration::from_millis(100);
+    let error = tokio::time::timeout(std::time::Duration::from_secs(1), perform_ocr(request))
+        .await
+        .unwrap()
+        .unwrap_err();
+    server.await.unwrap();
+    assert!(error.to_string().contains("timed out"));
+}
+
+#[rstest]
+#[case("data:application/pdf;base64")]
+#[case("data:application/pdf;base64,INVALID!")]
+#[tokio::test]
+async fn document_intelligence_rejects_invalid_data_uri(#[case] source: &str) {
+    let error = body(
+        &AZURE_DOCUMENT_INTELLIGENCE,
+        "model",
+        json!({"type":"document_url","document_url":source}),
+        json!({}),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::ocr::error::OcrError::Request(crate::ocr::error::OcrRequestError::InvalidDataUri)
+    ));
+}

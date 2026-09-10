@@ -5,6 +5,7 @@ mod execution;
 mod function_trace;
 mod marshal;
 mod routes;
+mod transport;
 
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::prelude::*;

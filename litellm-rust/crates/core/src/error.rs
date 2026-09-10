@@ -38,10 +38,6 @@ pub enum Error {
     Unsupported(&'static str),
 }
 
-#[allow(
-    dead_code,
-    reason = "used by the OCR architecture in the next stacked PR"
-)]
 #[derive(Debug, ThisError)]
 pub(crate) enum MediaError {
     #[error("media URL rejected by network policy")]
@@ -89,6 +85,79 @@ impl TransportError {
 impl From<reqwest::Error> for TransportError {
     fn from(error: reqwest::Error) -> Self {
         Self::Network(error.without_url().to_string())
+    }
+}
+
+impl From<AuthError> for Error {
+    fn from(error: AuthError) -> Self {
+        Self::Auth(error.to_string())
+    }
+}
+
+impl From<crate::ocr::error::OcrRequestError> for Error {
+    fn from(error: crate::ocr::error::OcrRequestError) -> Self {
+        match error {
+            crate::ocr::error::OcrRequestError::MissingField(field) => Self::MissingField(field),
+            error => Self::InvalidRequest(error.to_string()),
+        }
+    }
+}
+
+impl From<crate::ocr::error::OcrResponseError> for Error {
+    fn from(error: crate::ocr::error::OcrResponseError) -> Self {
+        Self::InvalidResponse(error.to_string())
+    }
+}
+
+impl From<crate::ocr::error::OcrPollingError> for Error {
+    fn from(error: crate::ocr::error::OcrPollingError) -> Self {
+        match error {
+            crate::ocr::error::OcrPollingError::PollTimeout => Self::Network(error.to_string()),
+            error => Self::InvalidResponse(error.to_string()),
+        }
+    }
+}
+
+impl From<TransportError> for Error {
+    fn from(error: TransportError) -> Self {
+        match error {
+            TransportError::Http { status, body } => Self::Http { status, body },
+            TransportError::Network(message) => Self::Network(message),
+            TransportError::Connect(message) => Self::Connect(message),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorKind {
+    InvalidType,
+    MissingField,
+    InvalidRequest,
+    InvalidResponse,
+    InvalidProvider,
+    Auth,
+    Http,
+    Network,
+    Connect,
+    Routing,
+    Unsupported,
+}
+
+impl Error {
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::InvalidType { .. } => ErrorKind::InvalidType,
+            Self::MissingField(_) => ErrorKind::MissingField,
+            Self::InvalidRequest(_) => ErrorKind::InvalidRequest,
+            Self::InvalidResponse(_) => ErrorKind::InvalidResponse,
+            Self::InvalidProvider(_) => ErrorKind::InvalidProvider,
+            Self::Auth(_) => ErrorKind::Auth,
+            Self::Http { .. } => ErrorKind::Http,
+            Self::Network(_) => ErrorKind::Network,
+            Self::Connect(_) => ErrorKind::Connect,
+            Self::Routing(_) => ErrorKind::Routing,
+            Self::Unsupported(_) => ErrorKind::Unsupported,
+        }
     }
 }
 

@@ -5,20 +5,12 @@ use serde_json::{Map, Value};
 use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;
 use crate::error::{Error, json_type_name};
 
-#[allow(
-    dead_code,
-    reason = "used by the OCR architecture in the next stacked PR"
-)]
 pub(crate) enum HeaderPolicy<'a> {
     All,
     Only(&'a [&'a str]),
     Except(&'a [&'a str]),
 }
 
-#[allow(
-    dead_code,
-    reason = "used by the OCR architecture in the next stacked PR"
-)]
 pub(crate) fn with_headers(
     builder: reqwest::RequestBuilder,
     headers: &[(String, String)],
@@ -94,20 +86,6 @@ pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
             && value[..7].eq_ignore_ascii_case("bearer ")
             && !value[7..].trim().is_empty()
     })
-}
-
-#[allow(
-    dead_code,
-    reason = "used by the OCR architecture in the next stacked PR"
-)]
-pub(crate) fn deserialize_optional_param<'de, D, T>(
-    deserializer: D,
-) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
 #[cfg(test)]

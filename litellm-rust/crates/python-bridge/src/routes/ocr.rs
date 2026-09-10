@@ -1,51 +1,29 @@
-use litellm_core::Error;
 use std::future::Future;
 
-use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
+use crate::errors::ocr_error_to_pyerr;
+use litellm_core::Error;
+use litellm_core::ocr::wire::{OcrWireRequest, decode_request};
 use pyo3::prelude::*;
 use serde_json::Value;
-
-use crate::errors::ocr_error_to_pyerr;
-use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 fn prepare_ocr(
     inputs: OcrInputs,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
-    let document = inputs.document;
-    let options = RouteOptions::from_python(RouteOptionsInputs {
-        model: inputs.model,
-        api_key: inputs.api_key,
-        api_base: inputs.api_base,
-        custom_llm_provider: inputs.custom_llm_provider,
-        extra_headers: inputs.extra_headers,
-        timeout_seconds: inputs.timeout_seconds,
-    })?;
-    let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
-
+    let client = crate::transport::ocr_client().map_err(ocr_error_to_pyerr)?;
+    let wire: OcrWireRequest =
+        litellm_core::ocr::wire::decode_request_value(inputs.request, "request")
+            .map_err(|error| ocr_error_to_pyerr(error.into()))?;
+    let mut request = decode_request(wire).map_err(ocr_error_to_pyerr)?;
+    request.connection.max_download_bytes = litellm_core::ocr::types::download_limit_bytes(
+        std::env::var("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB")
+            .ok()
+            .as_deref(),
+    );
     Ok(async move {
-        let RouteOptions {
-            model,
-            api_key,
-            api_base,
-            custom_llm_provider,
-            extra_headers,
-            timeout,
-        } = options;
-        run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        })
-        .await
+        client
+            .perform(request)
+            .await
+            .map(|response| response.into_json())
     })
 }
 
@@ -54,20 +32,10 @@ bridge_route! {
     asynchronous = aocr,
     inputs = OcrInputs,
     required = {
-        model: String,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        document: serde_json::Value,
+        request: serde_json::Value,
     },
-    optional = {
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        extra_headers: Option<serde_json::Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        optional_params: Option<serde_json::Value>,
-        timeout_seconds: Option<f64>,
-    },
+    optional = {},
     prepare = prepare_ocr,
     errors = ocr_error_to_pyerr,
 }
