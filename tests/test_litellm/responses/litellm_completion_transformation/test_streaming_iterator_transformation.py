@@ -19,8 +19,16 @@ import pytest
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.llms.openai import (
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
+    ResponseCompletedEvent,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.utils import (
     Delta,
     ModelResponse,
@@ -705,3 +713,111 @@ def test_streamed_unrecognized_tool_choice_is_echoed_as_auto() -> None:
     ]
 
     assert [event.response.tool_choice for event in response_events] == ["auto", "auto", "auto"]
+
+
+def _signed_thinking_chunks(cumulative: bool) -> tuple[ModelResponseStream, ...]:
+    blocks: Final = [
+        ChatCompletionThinkingBlock(type="thinking", thinking="One plus one equals two.", signature="test-signature"),
+        ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data="test-redacted-data"),
+    ]
+    deltas: Final = (
+        Delta(
+            reasoning_content="One plus ",
+            thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="One plus ")],
+        ),
+        Delta(
+            reasoning_content="one equals two.",
+            thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="one equals two.")],
+        ),
+        Delta(
+            thinking_blocks=blocks
+            if cumulative
+            else [
+                ChatCompletionThinkingBlock(type="thinking", thinking="", signature="test-signature"),
+                ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data="test-redacted-data"),
+            ],
+            provider_specific_fields={"thinking_blocks": blocks} if cumulative else None,
+        ),
+        Delta(content="2"),
+    )
+    return tuple(
+        ModelResponseStream(
+            id=CHAT_COMPLETION_ID,
+            model="test-model",
+            choices=[StreamingChoices(index=0, delta=delta, finish_reason="stop" if index == 3 else None)],
+        )
+        for index, delta in enumerate(deltas)
+    )
+
+
+@pytest.mark.parametrize("cumulative", [True, False], ids=["cumulative-provider-blocks", "delta-blocks"])
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["async", "sync"])
+async def test_completed_response_replays_signed_thinking_unchanged(cumulative: bool, asynchronous: bool) -> None:
+    iterator: Final = _build_iterator(_signed_thinking_chunks(cumulative))
+    events: Final = [event async for event in iterator] if asynchronous else list(iterator)
+    completed: Final = next(event for event in events if isinstance(event, ResponseCompletedEvent))
+    reasoning: Final = next(item for item in completed.response.output if item.type == "reasoning")
+
+    assert reasoning.encrypted_content is not None
+    assert json.loads(reasoning.encrypted_content) == [
+        {"type": "thinking", "thinking": "One plus one equals two.", "signature": "test-signature"},
+        {"type": "redacted_thinking", "data": "test-redacted-data"},
+    ]
+    messages: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+        input_item=reasoning.model_dump(exclude_none=True), replay_reasoning=True
+    )
+    assert len(messages) == 1
+    assert messages[0]["thinking_blocks"] == [
+        {"type": "thinking", "thinking": "One plus one equals two.", "signature": "test-signature"},
+        {"type": "redacted_thinking", "data": "test-redacted-data"},
+    ]
+
+
+@pytest.mark.parametrize("cumulative", [True, False], ids=["cumulative-provider-blocks", "delta-blocks"])
+async def test_reasoning_done_preserves_the_replay_payload(cumulative: bool) -> None:
+    iterator: Final = _build_iterator(_signed_thinking_chunks(cumulative))
+    events: Final = [event async for event in iterator]
+    done: Final = next(
+        event for event in events if event.type == "response.output_item.done" and event.item.type == "reasoning"
+    )
+    completed: Final = next(event for event in events if isinstance(event, ResponseCompletedEvent))
+    reasoning: Final = next(item for item in completed.response.output if item.type == "reasoning")
+    payload: Final = done.item.model_dump().get("encrypted_content")
+
+    assert payload is not None
+    assert json.loads(payload) == [
+        {"type": "thinking", "thinking": "One plus one equals two.", "signature": "test-signature"},
+        {"type": "redacted_thinking", "data": "test-redacted-data"},
+    ]
+    assert payload == reasoning.encrypted_content
+
+
+@pytest.mark.parametrize("asynchronous", [True, False], ids=["async", "sync"])
+async def test_streamed_signature_only_thinking_is_replayable(asynchronous: bool) -> None:
+    block: Final = ChatCompletionThinkingBlock(type="thinking", thinking="", signature="opaque-signature")
+    chunks: Final = [
+        ModelResponseStream(
+            id=CHAT_COMPLETION_ID,
+            model="test-model",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(thinking_blocks=[block], provider_specific_fields={"thinking_blocks": [block]}),
+                )
+            ],
+        ),
+        _tool_call_chunk(finish_reason="tool_calls"),
+    ]
+    iterator: Final = _build_iterator(chunks)
+    events: Final = [event async for event in iterator] if asynchronous else list(iterator)
+    completed: Final = next(event for event in events if isinstance(event, ResponseCompletedEvent))
+    reasoning: Final = next(item for item in completed.response.output if item.type == "reasoning")
+    assert json.loads(reasoning.encrypted_content) == [block]
+
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=[item.model_dump(exclude_none=True) for item in completed.response.output],
+        responses_api_request={},
+        replay_reasoning=True,
+    )
+    tool_message: Final = next(message for message in messages if message.get("tool_calls"))
+    assert tool_message["thinking_blocks"] == [block]

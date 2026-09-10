@@ -1384,7 +1384,7 @@ class LiteLLMCompletionResponsesConfig:
         input_item: Mapping[str, object],
     ) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None:
         """
-        Decode ``encrypted_content`` written by ``_encode_thinking_blocks`` back
+        Decode ``encrypted_content`` written by ``encode_thinking_blocks`` back
         into the signed thinking blocks it serialized.
 
         LiteLLM writes this field itself for providers whose reasoning is signed
@@ -2403,7 +2403,7 @@ class LiteLLMCompletionResponsesConfig:
         return output_items
 
     @staticmethod
-    def _encode_thinking_blocks(message: Message) -> str | None:
+    def encode_thinking_blocks(message: Message) -> str | None:
         thinking_blocks: Final[Sequence[Mapping[str, object]]] = getattr(message, "thinking_blocks", None) or ()
         preserved: Final = tuple(block for block in thinking_blocks if block.get("signature") or block.get("data"))
         return json.dumps(preserved, separators=(",", ":")) if preserved else None
@@ -2417,7 +2417,7 @@ class LiteLLMCompletionResponsesConfig:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
                 reasoning_content: str = getattr(message, "reasoning_content", None) or ""
-                encrypted_content = LiteLLMCompletionResponsesConfig._encode_thinking_blocks(message)
+                encrypted_content = LiteLLMCompletionResponsesConfig.encode_thinking_blocks(message)
                 if reasoning_content or encrypted_content:
                     # Only check the first choice for reasoning content
                     return [

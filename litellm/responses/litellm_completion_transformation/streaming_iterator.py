@@ -547,6 +547,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
         return response
 
+    def _encoded_thinking_blocks(self) -> str | None:
+        response: Final = (
+            self.litellm_model_response
+            if isinstance(self.litellm_model_response, ModelResponse)
+            else self.create_litellm_model_response()
+        )
+        if response is None:
+            return None
+        return LiteLLMCompletionResponsesConfig.encode_thinking_blocks(response.choices[0].message)
+
     @staticmethod
     def _snapshot_chunk_for_stream_chunk_builder(
         chunk: ModelResponseStream,
@@ -746,6 +756,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 **{
                     "id": reasoning_item_id,
                     "type": "reasoning",
+                    "encrypted_content": self._encoded_thinking_blocks(),
                     "summary": [
                         {
                             "type": "summary_text",
