@@ -50,6 +50,9 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.middleware.admission_control_middleware import (
+    get_admission_control_stats,
+)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
@@ -61,6 +64,13 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.secret_managers.main import get_secret_bool
 
 #### Health ENDPOINTS ####
+
+
+class _HealthBacklogResponse(TypedDict):
+    in_flight_requests: ReadOnly[int]
+    admitted_requests: ReadOnly[int]
+    queued_requests: ReadOnly[int]
+    rejected_requests: ReadOnly[int]
 
 
 def _reject_os_environ_references(params: dict) -> None:
@@ -1759,7 +1769,14 @@ async def health_backlog():
     for the event loop to get to them, adding latency before LiteLLM even starts
     its own timer.
     """
-    return {"in_flight_requests": get_in_flight_requests()}
+    stats: Final = get_admission_control_stats()
+    response: Final[_HealthBacklogResponse] = {
+        "in_flight_requests": get_in_flight_requests(),
+        "admitted_requests": stats.admitted,
+        "queued_requests": stats.queued,
+        "rejected_requests": stats.rejected_total,
+    }
+    return response
 
 
 @router.get(

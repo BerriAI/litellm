@@ -32,7 +32,7 @@ class ModelsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def list(self, return_request: bool = False) -> list[dict[str, Any]] | requests.Request:
+    def list(self, return_request: bool = False) -> builtins.list[dict[str, Any]] | requests.Request:
         """
         Get the list of models supported by the server.
 

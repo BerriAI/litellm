@@ -4473,3 +4473,17 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     )
 
     assert selected == expected
+
+
+def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_model_cost_map):
+    """gpt-6-astra batch pricing is 50% off the standard $10 input and $50 output rates per 1M tokens."""
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage, model="gpt-6-astra", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(1000 * 5e-6)
+    assert completion_cost == pytest.approx(500 * 2.5e-5)

@@ -1718,6 +1718,8 @@ class TestResponsesSurfaceSharesTheEffortRule:
             ("gpt-5.6-sol", None, False),
             ("gpt-5.6-terra", "none", True),
             ("gpt-5.6-terra", "medium", False),
+            ("gpt-6-astra", None, False),
+            ("gpt-6-astra", "low", False),
         ],
     )
     def test_temperature_follows_the_resolved_effort(

@@ -8,7 +8,9 @@ extensions, path-traversal filenames) regardless of purpose.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Final, NoReturn, assert_never
+from typing import BinaryIO, Final, NoReturn
+
+from typing_extensions import assert_never
 
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.path_utils import safe_filename

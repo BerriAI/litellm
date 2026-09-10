@@ -7,7 +7,7 @@ export interface ModelGroup {
   model_group: string;
   mode?: string;
   supports_reasoning?: boolean;
-  supported_reasoning_efforts?: string[];
+  supported_reasoning_efforts?: string[] | null;
 }
 
 interface AvailableModel {
@@ -25,7 +25,9 @@ const toModelGroup = (item: AvailableModel): ModelGroup => {
     model_group: groupName,
     ...(item.mode && { mode: item.mode }),
     ...(item.supports_reasoning === true && { supports_reasoning: true }),
-    ...(item.supported_reasoning_efforts && { supported_reasoning_efforts: item.supported_reasoning_efforts }),
+    ...(item.supported_reasoning_efforts !== undefined && {
+      supported_reasoning_efforts: item.supported_reasoning_efforts,
+    }),
   };
 };
 

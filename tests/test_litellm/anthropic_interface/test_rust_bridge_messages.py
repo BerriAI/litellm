@@ -121,23 +121,25 @@ def _reset_rust_flag():
 
 def test_load_rust_messages_returns_injected_impl():
     bridge = RecordingMessages()
-    litellm.use_litellm_rust(True, messages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(messages=bridge)
     assert rust_messages.load_rust_messages() is bridge
 
 
-def test_bare_use_litellm_rust_still_toggles_ocr():
+def test_bare_rust_still_toggles_ocr():
     from litellm.rust_bridge.ocr import rust_ocr_enabled
 
-    litellm.use_litellm_rust(True)
+    litellm.rust(True)
     assert rust_ocr_enabled() is True
 
-    litellm.use_litellm_rust(False)
+    litellm.rust(False)
     assert rust_ocr_enabled() is False
 
 
 def test_load_rust_amessages_returns_injected_impl():
     bridge = RecordingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
     assert rust_messages.load_rust_amessages() is bridge
 
 
@@ -147,7 +149,7 @@ def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
         "get_native_bridge",
         lambda: None,
     )
-    litellm.use_litellm_rust(True)
+    litellm.rust(True)
     assert rust_messages.load_rust_messages() is None
     result = rust_messages.messages(
         model="claude",
@@ -163,7 +165,8 @@ def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
 
 def test_messages_wrapper_forwards_args_and_converts_timeout():
     bridge = RecordingMessages()
-    litellm.use_litellm_rust(True, messages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(messages=bridge)
 
     response = rust_messages.messages(
         model="claude-sonnet-4-5",
@@ -190,7 +193,8 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
 @pytest.mark.asyncio
 async def test_amessages_wrapper_forwards_args():
     bridge = RecordingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
 
     response = await rust_messages.amessages(
         model="claude-sonnet-4-5",
@@ -226,7 +230,8 @@ def _gate(**overrides):
 @pytest.mark.asyncio
 async def test_gate_invokes_rust_and_marks_response_header():
     bridge = RecordingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
 
     response = await _gate()
 
@@ -245,7 +250,8 @@ async def test_gate_invokes_rust_and_marks_response_header():
 @pytest.mark.asyncio
 async def test_gate_falls_back_to_python_when_bridge_raises():
     bridge = RaisingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
 
     response = await _gate()
 
@@ -268,7 +274,7 @@ async def test_gate_skips_rust_when_flag_absent():
 async def test_gate_uses_process_enable_without_request_override():
     bridge = RecordingAsyncMessages()
     rust_messages.set_rust_messages(amessages=bridge)
-    litellm.use_litellm_rust(True)
+    litellm.rust(True)
 
     response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure"))
 
@@ -279,7 +285,8 @@ async def test_gate_uses_process_enable_without_request_override():
 @pytest.mark.asyncio
 async def test_gate_skips_rust_when_flag_false():
     bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
 
     response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure", rust=False))
 
@@ -290,7 +297,8 @@ async def test_gate_skips_rust_when_flag_false():
 @pytest.mark.asyncio
 async def test_gate_invokes_rust_for_native_anthropic_provider():
     bridge = RecordingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
 
     response = await _gate(
         custom_llm_provider="anthropic",
@@ -339,7 +347,8 @@ async def test_gate_env_var_falsey_does_not_enable(monkeypatch):
 @pytest.mark.asyncio
 async def test_gate_skips_rust_for_unsupported_provider():
     bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
 
     response = await _gate(custom_llm_provider="openai")
 
@@ -350,7 +359,8 @@ async def test_gate_skips_rust_for_unsupported_provider():
 @pytest.mark.asyncio
 async def test_gate_skips_rust_for_agentic_hook():
     bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
 
     response = await _gate(has_agentic_hook=True)
 
@@ -361,7 +371,8 @@ async def test_gate_skips_rust_for_agentic_hook():
 @pytest.mark.asyncio
 async def test_gate_streams_through_rust_when_eligible_and_strips_stream_flag():
     bridge = RecordingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
 
     streaming_body = {**REQUEST_BODY, "stream": True}
     response = await _gate(
@@ -398,7 +409,7 @@ async def test_gate_falls_back_when_bridge_unavailable(monkeypatch):
         "get_native_bridge",
         lambda: None,
     )
-    litellm.use_litellm_rust(True)
+    litellm.rust(True)
 
     response = await _gate()
 

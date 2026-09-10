@@ -187,6 +187,12 @@ model_list:
 
         # Replace a routed model that cannot take image input (default: false)
         modality_routing: true
+
+        # Let that replacement also override a kept session pin, for image turns only (default: false)
+        modality_pin_override: true
+
+        # Refreshes on every pin reuse, so this is idle time rather than total session length (default: 3600)
+        session_affinity_ttl_seconds: 300
 ```
 
 ## Usage
@@ -227,8 +233,19 @@ vision model sits below the decided tier gets the 400 and an actionable message 
 A same-tier re-pick keeps the decision's cause and adds `modality:image` to `signals`; a tier
 change or default takeover records `cause: modality_escalation` with the displaced placement
 (`modality_escalated_from:<TIER>` or `modality_displaced_default_model`). Escalations are never
-pinned by session affinity, and a KEPT session pin bypasses the gate entirely: a session pinned
+pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
 to a text-only model keeps it even when an image arrives.
+
+Add `modality_pin_override: true` to lift that last exemption. The image turn is then re-placed
+the same way every other decision is, and records `cause: modality_pin_override` whether or not
+the tier moved, since the model left the pin either way. The pin itself is untouched: the session
+affinity write happens upstream of the gate and stores the session's own model, so the next text
+turn replays the original pin and the override is never pinned in its place. It does nothing
+unless `modality_routing` is also on.
+
+### Session pin retention
+
+`session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
 
 ### Heuristic-first chaining
 
@@ -245,13 +262,18 @@ model_list:
         classifier_type: heuristic_first
         heuristic_first_max_tier: SIMPLE
         classifier_llm_config:
-          model: gpt-4o-mini
+          model: gpt-5-mini
+          reasoning_effort: low
         tiers:
           SIMPLE: gpt-4o-mini
           MEDIUM: gpt-4o
           COMPLEX: claude-sonnet-4
           REASONING: o1-preview
 ```
+
+`classifier_llm_config.reasoning_effort` applies only to the internal classifier call. Omit it to
+keep the classifier deployment or provider default, or set a supported value such as `none` or
+`low` to override that call.
 
 A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least

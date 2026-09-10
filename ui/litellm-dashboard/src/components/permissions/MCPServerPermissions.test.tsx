@@ -406,4 +406,55 @@ describe("MCPServerPermissions", () => {
     );
     await waitFor(() => expect(screen.getByText("Blocked")).toHaveAttribute("data-variant", "destructive"));
   });
+
+  it("lists servers inherited from access groups, counts them, and names the group on hover", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId1, server_name: mockServerName1, alias: mockServerName1 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        inheritedMcpServers={[{ id: mockServerId1, accessGroupNames: ["platform-tools"] }]}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    const row = await screen.findByText(/DW_MCP/);
+    expect(screen.getByText("1")).toBeInTheDocument();
+    expect(screen.queryByText("No MCP servers, access groups, or toolsets configured")).not.toBeInTheDocument();
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken);
+
+    await user.hover(row);
+    expect(
+      await screen.findByText(`Granted via access group platform-tools. Full ID: ${mockServerId1}`),
+    ).toBeInTheDocument();
+  });
+
+  it("does not double-list a server that is both granted directly and inherited", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId2, server_name: mockServerName2, alias: mockServerName2 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId2]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        inheritedMcpServers={[{ id: mockServerId2, accessGroupNames: ["platform-tools"] }]}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    const row = await screen.findByText(/Test Server/);
+    expect(screen.getAllByText(/Test Server/)).toHaveLength(1);
+    expect(screen.getByText("1")).toBeInTheDocument();
+
+    await user.hover(row);
+    expect(await screen.findByText(`Full ID: ${mockServerId2}`)).toBeInTheDocument();
+  });
 });

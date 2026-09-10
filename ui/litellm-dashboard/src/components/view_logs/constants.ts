@@ -12,6 +12,9 @@ export const ERROR_CODE_OPTIONS: { label: string; value: string }[] = [
   { label: "529 - Overloaded", value: "529" },
 ];
 
+/** Page sizes the logs tables offer; the first entry is the default. */
+export const LOGS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
 /** Call types that represent MCP tool invocations (shared across columns, index, drawer). */
 export const MCP_CALL_TYPES = ["call_mcp_tool", "list_mcp_tools"];
 

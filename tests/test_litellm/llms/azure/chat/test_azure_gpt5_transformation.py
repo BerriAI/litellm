@@ -336,3 +336,15 @@ class TestAzureResolvesTheDeclaredDefaultEffort:
             drop_params=True,
         )
         assert ("temperature" in mapped) is temperature_survives
+
+
+def test_azure_gpt_6_astra_takes_the_reasoning_series_request_shape():
+    params = litellm.get_optional_params(
+        model="gpt-6-astra",
+        custom_llm_provider="azure",
+        max_tokens=100,
+        reasoning_effort="max",
+    )
+    assert params["max_completion_tokens"] == 100
+    assert "max_tokens" not in params
+    assert params["reasoning_effort"] == "max"

@@ -312,3 +312,121 @@ def test_mask_credentials_in_payload_masks_only_sensitive_string_leaves():
     assert masked != plaintext
     assert masked.startswith(plaintext[:4])
     assert masked.endswith(plaintext[-4:])
+
+
+def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
+    """A payload rendered straight to stdout cannot afford the partial reveal
+    mask_credentials_in_payload leaves, so every credential-named value is replaced
+    whole, nested header dicts included, while ordinary params survive verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    fake_key = "sk-fake-lit6823-0000000000000000"
+    fake_token = "fake-azure-ad-token-0000"
+    result = redact_credentials_in_payload(
+        {
+            "api_key": fake_key,
+            "azure_ad_token": fake_token,
+            "aws_secret_access_key": "fake-aws-secret-0000",
+            "vertex_credentials": {"private_key": "fake-pem"},
+            "extra_headers": {"Authorization": "Bearer fake-bearer-0000", "x-request-id": "abc123"},
+            "model": "gpt-4o-mini",
+            "max_tokens": 17,
+            "temperature": 0.25,
+            "api_base": None,
+        }
+    )
+
+    assert fake_key not in str(result)
+    assert fake_token not in str(result)
+    assert "fake-aws-secret-0000" not in str(result)
+    assert "fake-pem" not in str(result)
+    assert "fake-bearer-0000" not in str(result)
+    assert result["api_key"] == "REDACTED"
+    assert result["extra_headers"]["Authorization"] == "REDACTED"
+    assert result["extra_headers"]["x-request-id"] == "abc123"
+    assert result["model"] == "gpt-4o-mini"
+    assert result["max_tokens"] == 17
+    assert result["temperature"] == 0.25
+    assert result["api_base"] is None
+
+
+def test_redact_credentials_in_payload_reaches_credentials_nested_in_sequences():
+    """Free-form kwargs like extra_body and metadata routinely carry lists of dicts, so a
+    credential hiding one level inside a list or tuple must be replaced too, while the
+    surrounding container keeps its type and every ordinary element stays verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    result = redact_credentials_in_payload(
+        {
+            "extra_body": {"providers": [{"name": "openai", "api_key": "sk-fake-lit6823-in-a-list"}]},
+            "metadata": {"upstreams": ({"aws_secret_access_key": "fake-aws-in-a-tuple"},)},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+
+    assert "sk-fake-lit6823-in-a-list" not in str(result)
+    assert "fake-aws-in-a-tuple" not in str(result)
+    assert result["extra_body"]["providers"][0]["api_key"] == "REDACTED"
+    assert result["extra_body"]["providers"][0]["name"] == "openai"
+    assert isinstance(result["extra_body"]["providers"], list)
+    assert result["metadata"]["upstreams"][0]["aws_secret_access_key"] == "REDACTED"
+    assert isinstance(result["metadata"]["upstreams"], tuple)
+    assert result["messages"] == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.parametrize("wrap", ["mapping", "sequence"])
+def test_redact_credentials_in_payload_hides_containers_at_the_recursion_limit(wrap):
+    """The recursion limit exists to bound the walk, not to grant an exemption, so a caller who
+    buries a credential deeper than the limit must get the container hidden rather than handed
+    back verbatim. Nesting through lists costs depth twice as fast as nesting through mappings,
+    so both shapes are pushed well past the limit here."""
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    fake_key = "sk-fake-lit6835-past-the-limit"
+    node = {"api_key": fake_key}
+    for _ in range(2 * DEFAULT_MAX_RECURSE_DEPTH + 1):
+        node = {"extra_body": node} if wrap == "mapping" else {"providers": [node]}
+
+    result = redact_credentials_in_payload({**node, "max_tokens": 17})
+
+    assert fake_key not in str(result)
+    assert "REDACTED" in str(result)
+    assert result["max_tokens"] == 17
+
+
+def test_redact_credentials_in_payload_leaves_a_realistic_tool_schema_intact():
+    """The bound must not eat ordinary payloads: a tool whose JSON schema nests an array of
+    objects inside a nested object is what agent traffic looks like, and the verbose line is
+    useless if those leaves come back as REDACTED."""
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "search_orders",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "items": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {"sku": {"type": "string"}, "qty": {"type": "integer"}},
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+        },
+    }
+
+    result = redact_credentials_in_payload({"model": "gpt-4o-mini", "tools": [tool], "api_key": "sk-fake-lit6835"})
+
+    assert "REDACTED" not in str(result["tools"])
+    assert result["tools"][0] == tool
+    assert result["api_key"] == "REDACTED"

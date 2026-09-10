@@ -176,6 +176,10 @@ class PolicyAttachmentRepository(PrismaTableRepository["prisma_models.LiteLLM_Po
     table_name = "litellm_policyattachmenttable"
 
 
+class TeamRepository(PrismaTableRepository["prisma_models.LiteLLM_TeamTable"]):
+    table_name = "litellm_teamtable"
+
+
 class DeletedTeamRepository(PrismaTableRepository["prisma_models.LiteLLM_DeletedTeamTable"]):
     table_name = "litellm_deletedteamtable"
 

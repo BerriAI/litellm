@@ -1,16 +1,43 @@
-from typing import Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
+
+import httpx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import (
+    ResponseAPIUsage,
+    ResponseCompletedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging as _LiteLLMLoggingObj,
+    )
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
+
+
+def _usage_restated_from_xai_ticks(usage: ResponseAPIUsage | None) -> ResponseAPIUsage | None:
+    reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
+    if usage is None or reported_cost is None:
+        return None
+    return usage.model_copy(update=MappingProxyType({"cost": reported_cost}))
 
 
 class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -249,6 +276,41 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/responses"
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        response: Final = super().transform_response_api_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        restated_usage: Final = _usage_restated_from_xai_ticks(response.usage)
+        if restated_usage is not None:
+            response.usage = restated_usage
+        return response
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,  # mutable-ok: overrides the base class signature
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        event: Final = super().transform_streaming_response(
+            model=model,
+            parsed_chunk=parsed_chunk,
+            logging_obj=logging_obj,
+        )
+        if not isinstance(event, (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent)):
+            return event
+        restated_usage: Final = _usage_restated_from_xai_ticks(event.response.usage)
+        if restated_usage is not None:
+            event.response.usage = restated_usage
+        return event
 
     def supports_native_websocket(self) -> bool:
         """XAI does not support native WebSocket for Responses API"""

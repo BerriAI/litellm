@@ -26,7 +26,12 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 from pydantic import BaseModel, create_model
 
 from litellm._logging import verbose_router_logger
-from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import (
+    EMPTY_MAPPING,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
@@ -38,6 +43,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierSuccessPredictor,
     resolve_tier_artifact,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -747,7 +753,8 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
 
     A modality escalation is transient the same way: it describes what this one call carries (an
     image), not what the session's traffic looks like, and pinning it would hold every following
-    text turn on the vision-capable model the image forced.
+    text turn on the vision-capable model the image forced. A modality pin override is the same
+    fact on a session that already holds a pin, so it must not overwrite the pin it displaced.
     """
     return decision is None or (
         decision.get("cause")
@@ -756,6 +763,7 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "plan_mode",
             "housekeeping",
             "modality_escalation",
+            "modality_pin_override",
         )
         and not decision.get("context_escalated")
     )
@@ -1662,20 +1670,27 @@ class ComplexityRouter(CustomLogger):
         )
 
         request_metadata = (request_kwargs or {}).get("litellm_metadata") or (request_kwargs or {}).get("metadata")
-        metadata: Final = forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN)
+        metadata: Final = {  # mutable-ok: SDK metadata kwarg is enriched by the request pipeline
+            **forwarded_internal_call_metadata(request_metadata, AUTOROUTER_CLASSIFIER_CALL_ORIGIN),
+            INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+        }
         turn_off_message_logging: Final = _effective_turn_off_message_logging(request_kwargs)
 
-        messages_for_call: Final = [
+        messages_for_call: Final[list[AllMessageValues]] = [  # mutable-ok: SDK request payload list is built once
             {"role": "system", "content": classifier_system_prompt},
             {"role": "user", "content": user_payload},
         ]
         response_format: Final = classifier_response_format
+        classifier_call_params: Mapping[str, str] = EMPTY_MAPPING
+        if llm_config.reasoning_effort is not None:
+            classifier_call_params = MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
 
         proxy_server_request: Final = {
             "body": {
                 "model": llm_config.model,
                 "messages": messages_for_call,
                 "response_format": response_format,
+                **classifier_call_params,
             }
         }
 
@@ -1687,6 +1702,7 @@ class ComplexityRouter(CustomLogger):
             metadata=metadata,
             proxy_server_request=proxy_server_request,
             turn_off_message_logging=turn_off_message_logging,
+            **classifier_call_params,
             **_parent_session_kwargs(request_kwargs),
         )
         content: Final = response.choices[0].message.content
@@ -2389,8 +2405,11 @@ class ComplexityRouter(CustomLogger):
         """Replace a routed model that cannot accept this request's image input.
 
         The single modality owner, applied to the decided response at the hook's exits so every
-        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause);
-        replacement picks and every other path are just responses. The re-placement walks
+        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause)
+        unless modality_pin_override is set, in which case the image turn is re-placed and reported
+        as modality_pin_override while the stored pin, written upstream from the session's own
+        model, is left for the next text turn; replacement picks and every other path are just
+        responses. The re-placement walks
         UPWARD-ONLY from the decision's tier (so a plan-mode floor can never be undercut), picks
         through `_pick_model_for_tier` so routing plugins still apply, then falls to
         default_model (never on plugin routers, and never on a plan-floored decision, since
@@ -2403,7 +2422,11 @@ class ComplexityRouter(CustomLogger):
             not self.config.modality_routing
             or not resolved_messages
             or response.model is None
-            or (decision is not None and decision.get("cause") == "session_affinity_pin")
+            or (
+                decision is not None
+                and decision.get("cause") == "session_affinity_pin"
+                and not self.config.modality_pin_override
+            )
             or not request_contains_image_content(resolved_messages)
             or self._model_accepts_image_input(response.model)
         ):
@@ -2445,6 +2468,10 @@ class ComplexityRouter(CustomLogger):
         self._restamp_adaptive_choice(request_kwargs, response.model, new_model)
         same_tier: Final = capable is not None and decided == capable
         base_cause: Final = (decision.get("cause") if decision is not None else None) or "default_fallback"
+        # Reaching here on a kept pin means modality_pin_override is on, since the guard above
+        # returns otherwise. The model moved off the pin even on a same-tier repick, so reporting
+        # the pin's own cause would claim the session's model served a request it did not.
+        displaced_pin: Final = base_cause == "session_affinity_pin"
         displaced_default: Final = decided is None and response.model == self.config.default_model
         markers: Final = (
             "modality:image",
@@ -2454,7 +2481,7 @@ class ComplexityRouter(CustomLogger):
         old_signals: Final = tuple(decision.get("signals") or ()) if decision is not None else ()
         new_decision: Final = self._build_routing_decision(
             routed_model=new_model,
-            cause=base_cause if same_tier else "modality_escalation",
+            cause="modality_pin_override" if displaced_pin else (base_cause if same_tier else "modality_escalation"),
             tier=new_tier,
             score=decision.get("score") if decision is not None else None,
             signals=(*old_signals, *markers),
@@ -2712,7 +2739,7 @@ class ComplexityRouter(CustomLogger):
         """Resolve a client-supplied session_id."""
         for metadata in ComplexityRouter._iter_metadata_dicts(request_kwargs):
             session_id = metadata.get("session_id")
-            if session_id is not None:
+            if session_id is not None and not metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
                 return str(session_id)
         return None
 

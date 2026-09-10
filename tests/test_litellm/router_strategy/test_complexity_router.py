@@ -6,6 +6,7 @@ Tests the rule-based complexity scoring and tier assignment logic.
 
 import asyncio
 import logging
+import sys
 from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,9 +15,10 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import Router
+from litellm.router_utils.auto_router_model_naming import count_heuristic_v2_routers
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -46,6 +48,11 @@ from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
     TaggedPreRoutingStrategy,
+)
+
+
+requires_semantic_router = pytest.mark.skipif(
+    sys.version_info >= (3, 14), reason="The semantic-router extra excludes Python 3.14"
 )
 
 
@@ -1085,6 +1092,165 @@ class TestRouterComplexityDeploymentMethods:
         router.init_complexity_router_deployment(deployment)
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
+    @staticmethod
+    def _router_row(model_name: str, model_id: str, classifier_type: str) -> dict[str, object]:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": classifier_type,
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                },
+            },
+            "model_info": {"id": model_id},
+        }
+
+    _POOL: dict[str, object] = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "k"},
+    }
+
+    def test_heuristic_v2_ceiling_keeps_the_first_router_and_drops_the_rest(self) -> None:
+        """The proxy runs with ignore_invalid_deployments, so the second heuristic_v2 router is dropped
+        at registration while a heuristic (v1) sibling and the first v2 router stay routable."""
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+                self._router_row("v1-c", "id-c", "heuristic"),
+            ],
+            heuristic_v2_router_limit=lambda: 1,
+            ignore_invalid_deployments=True,
+        )
+
+        assert sorted(router.complexity_routers) == ["v1-c", "v2-a"]
+        assert router.get_deployment(model_id="id-b") is None
+
+    def test_heuristic_v2_ceiling_raises_without_ignore_invalid_deployments(self) -> None:
+        with pytest.raises(ValueError, match="At most 1 auto-router"):
+            Router(
+                model_list=[
+                    self._POOL,
+                    self._router_row("v2-a", "id-a", "heuristic_v2"),
+                    self._router_row("v2-b", "id-b", "heuristic_v2"),
+                ],
+                heuristic_v2_router_limit=lambda: 1,
+            )
+
+    def test_heuristic_v2_limit_is_resolved_on_every_registration(self) -> None:
+        """The Router never caches the limit: when the resolver's answer moves (the proxy re-verified
+        its license), the next registration and the next limit query see the new value."""
+        limits = {"value": None}
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ],
+            heuristic_v2_router_limit=lambda: limits["value"],
+            ignore_invalid_deployments=True,
+        )
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        assert router.heuristic_v2_router_limit_violation() is None
+
+        limits["value"] = 1
+        assert router.heuristic_v2_router_limit_violation() is not None
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-c", "id-c", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+
+    def test_heuristic_v2_ceiling_tightening_refuses_the_edit_and_keeps_the_live_router(self) -> None:
+        """Two heuristic_v2 routers registered under an unlimited ceiling, then the ceiling drops to one:
+        an edit to either must be refused before its live row is popped, or the failed re-add and
+        the failed restore would drop a serving router while the write reports success."""
+        limits = {"value": None}
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ],
+            heuristic_v2_router_limit=lambda: limits["value"],
+            ignore_invalid_deployments=True,
+        )
+        limits["value"] = 1
+
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-a-renamed", "id-a", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        assert router.get_deployment(model_id="id-a") is not None
+
+        assert router.upsert_deployment(Deployment(**self._router_row("v1-a", "id-a", "heuristic"))) is not None
+        assert sorted(router.complexity_routers) == ["v1-a", "v2-b"]
+
+    def test_config_deployments_excludes_db_rows(self) -> None:
+        """The proxy counts config.yaml routers from here and DB rows from the database, so a DB-loaded
+        row (``model_info.db_model``) must not show up twice."""
+        router = Router(model_list=[self._POOL, self._router_row("v2-a", "id-a", "heuristic_v2")])
+        db_row = self._router_row("v2-db", "id-db", "heuristic_v2")
+        db_row["model_info"] = {"id": "id-db", "db_model": True}
+        assert router.upsert_deployment(Deployment(**db_row)) is not None
+
+        assert sorted(str(row["model_name"]) for row in router.config_deployments()) == ["gpt-4o-mini", "v2-a"]
+        assert count_heuristic_v2_routers(router.config_deployments()) == 1
+
+    def test_failed_edit_of_a_live_v2_router_rolls_back_without_the_ceiling(self) -> None:
+        """A rollback after a failed upsert re-admits state that was already serving, so it must not be
+        judged by a ceiling that tightened since: converting one of two live heuristic_v2 routers to a
+        config whose registration fails must leave it serving its previous v2 configuration."""
+        limits = {"value": None}
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ],
+            heuristic_v2_router_limit=lambda: limits["value"],
+            ignore_invalid_deployments=True,
+        )
+        limits["value"] = 1
+
+        broken = self._router_row("v1-a", "id-a", "heuristic")
+        broken["litellm_params"]["complexity_router_config"]["tiers"] = {}
+        assert router.upsert_deployment(Deployment(**broken)) is None
+
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        live = router.get_deployment(model_id="id-a")
+        assert live is not None and live.litellm_params.complexity_router_config["classifier_type"] == "heuristic_v2"
+        assert router.heuristic_v2_router_limit_violation() is not None
+
+    def test_heuristic_v2_routers_are_unlimited_by_default(self) -> None:
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._router_row("v2-b", "id-b", "heuristic_v2"),
+            ]
+        )
+
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        assert router.heuristic_v2_router_limit_violation() is None
+
+    def test_heuristic_v2_router_limit_violation_frees_the_slot_of_the_router_being_edited(self) -> None:
+        """A DB reload upserts the existing heuristic_v2 router again; that edit must keep its own slot
+        while a different deployment switching to heuristic_v2 is refused."""
+        router = Router(
+            model_list=[self._POOL, self._router_row("v2-a", "id-a", "heuristic_v2")],
+            heuristic_v2_router_limit=lambda: 1,
+            ignore_invalid_deployments=True,
+        )
+
+        assert router.heuristic_v2_router_limit_violation() is not None
+
+        edited = self._router_row("v2-a-renamed", "id-a", "heuristic_v2")
+        assert router.upsert_deployment(Deployment(**edited)) is not None
+        assert sorted(router.complexity_routers) == ["v2-a-renamed"]
+
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-b", "id-b", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["v2-a-renamed"]
+        assert router.upsert_deployment(Deployment(**self._router_row("v1-c", "id-c", "heuristic"))) is not None
+        assert sorted(router.complexity_routers) == ["v1-c", "v2-a-renamed"]
+
     def test_hybrid_initialization_waits_for_later_pool_deployments(self):
         router = Router(
             model_list=[
@@ -1558,6 +1724,14 @@ class TestLLMClassifierConfig:
         assert config.classifier_type == "heuristic"
         assert config.classifier_llm_config is None
 
+    @pytest.mark.parametrize("reasoning_effort", ["", "ultra"])
+    def test_classifier_reasoning_effort_rejects_unsupported_values(self, reasoning_effort):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(
+                classifier_type="llm",
+                classifier_llm_config={"model": "haiku-classifier", "reasoning_effort": reasoning_effort},
+            )
+
 
 CUSTOM_TIER_LABELS: Dict[str, str] = {
     "SIMPLE": "Cheap",
@@ -1872,6 +2046,19 @@ class TestLLMClassifier:
         assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
 
     @pytest.mark.asyncio
+    async def test_aclassify_stamps_internal_origin_without_caller_metadata(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """Fallback handling must still recognize the classifier when an SDK caller supplied no metadata."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+
+        await llm_complexity_router.aclassify("hi")
+
+        assert mock_router_instance.acompletion.call_args.kwargs["metadata"] == {
+            "internal_call_origin": "autorouter_classifier"
+        }
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "request_kwargs",
         [
@@ -1947,6 +2134,33 @@ class TestLLMClassifier:
             "COMPLEX",
             "REASONING",
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reasoning_effort", [None, "none", "low"], ids=["omitted", "none", "low"])
+    async def test_classifier_reasoning_effort_reaches_only_classifier_call(
+        self, mock_router_instance, llm_classifier_config, reasoning_effort
+    ):
+        classifier_llm_config = {
+            **llm_classifier_config["classifier_llm_config"],
+            **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
+        }
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**llm_classifier_config, "classifier_llm_config": classifier_llm_config},
+        )
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}'))
+
+        await router.aclassify("explain quantum tunneling in depth")
+
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        body = call_kwargs["proxy_server_request"]["body"]
+        if reasoning_effort is None:
+            assert "reasoning_effort" not in call_kwargs
+            assert "reasoning_effort" not in body
+        else:
+            assert call_kwargs["reasoning_effort"] == reasoning_effort
+            assert body["reasoning_effort"] == reasoning_effort
 
     @pytest.mark.asyncio
     async def test_aclassify_propagates_top_level_turn_off_message_logging(
@@ -3479,6 +3693,7 @@ class FakeEmbeddingRouter:
 class TestSemanticKeywordTierRules:
     """Test embedding-based keyword_tier_rules matching."""
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_match_routes_to_rule_tier(self, basic_config):
         """A paraphrase (no literal keyword) still routes via embedding similarity."""
@@ -3507,6 +3722,7 @@ class TestSemanticKeywordTierRules:
         assert result.model == "o1-preview"  # REASONING via semantic match
         assert fake_router.async_embedding_calls, "expected an embedding call for the prompt"
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_tier_matches_on_best_utterance_not_diluted_by_others(self, basic_config):
         """A tier with several keywords must match if the query is close to ANY of them,
@@ -3541,6 +3757,7 @@ class TestSemanticKeywordTierRules:
         assert result is not None
         assert result.model == "o1-preview"  # REASONING via best-utterance semantic match
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_carries_caller_metadata(self, basic_config):
         """The query embedding call must carry the caller's metadata/litellm_metadata
@@ -3573,6 +3790,7 @@ class TestSemanticKeywordTierRules:
         assert fake_router.async_embedding_kwargs[0]["metadata"] == {**caller_metadata, **origin}
         assert fake_router.async_embedding_kwargs[0]["litellm_metadata"] == {**caller_litellm_metadata, **origin}
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_captures_request_body_in_proxy_server_request(self, basic_config):
         """The query embedding call must supply proxy_server_request so its request is logged.
@@ -3606,6 +3824,7 @@ class TestSemanticKeywordTierRules:
         assert body["model"] == "fake-embed"
         assert body["input"] == ["roll out my k8s cluster"]
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_propagates_turn_off_message_logging(self, basic_config):
         """A caller's turn_off_message_logging must reach the query embedding call.
@@ -3636,6 +3855,7 @@ class TestSemanticKeywordTierRules:
         assert fake_router.async_embedding_kwargs, "expected an embedding call for the prompt"
         assert fake_router.async_embedding_kwargs[0]["turn_off_message_logging"] is True
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_embedding_call_strips_budget_reservation(self, basic_config):
         """The embedding call must not carry the parent request's budget reservation.
@@ -3689,6 +3909,7 @@ class TestSemanticKeywordTierRules:
             "budget_reservation": {"reserved_cost": 1.0},
         }
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_routelayer_build_runs_off_event_loop(self, basic_config):
         """Building the SemanticRouter embeds route utterances via a synchronous provider
@@ -3720,6 +3941,7 @@ class TestSemanticKeywordTierRules:
         # ...and none of it ran on the event-loop thread.
         assert all(tid != loop_thread_id for tid in fake_router.sync_embedding_thread_ids)
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_concurrent_cold_start_builds_routelayer_once(self, basic_config):
         """Concurrent first requests must not each construct the route index (which would
@@ -3783,6 +4005,7 @@ class TestSemanticKeywordTierRules:
         assert result is not None
         assert result.model == "gpt-4o-mini"  # SIMPLE via scoring fallback
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_route_embeddings_cached_across_requests(self, basic_config):
         """The route layer is built once and reused on subsequent requests."""
@@ -3998,6 +4221,7 @@ class TestKeywordOverrideEdgeCases:
         )
         assert router._lexical_tier_override("deploy to k8s and reason step by step") is None
 
+    @requires_semantic_router
     def test_semantic_routelayer_requires_embedding_model(self, mock_router_instance, basic_config):
         """Building the route layer without an embedding model raises (defensive invariant)."""
         config = {**basic_config, "keyword_tier_rules": [{"keywords": ["k8s"], "tier": "REASONING"}]}
@@ -4010,6 +4234,7 @@ class TestKeywordOverrideEdgeCases:
         with pytest.raises(ValueError, match="embedding_model is required"):
             router._get_or_create_semantic_routelayer()
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_override_maps_first_of_list(self, mock_router_instance, basic_config):
         """A list RouteChoice result maps to the first entry's tier."""
@@ -4019,6 +4244,7 @@ class TestKeywordOverrideEdgeCases:
         router._semantic_routelayer = _StubRouteLayer([RouteChoice(name="COMPLEX"), RouteChoice(name="SIMPLE")])
         assert await router._semantic_tier_override("anything", {}) == ComplexityTier.COMPLEX
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_override_empty_list_returns_none(self, mock_router_instance, basic_config):
         """An empty list result falls through to scoring."""
@@ -4026,6 +4252,7 @@ class TestKeywordOverrideEdgeCases:
         router._semantic_routelayer = _StubRouteLayer([])
         assert await router._semantic_tier_override("anything", {}) is None
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_override_unknown_route_name_returns_none(self, mock_router_instance, basic_config):
         """A matched route whose name is not a ComplexityTier is ignored."""
@@ -4093,6 +4320,7 @@ class TestRoutingDecisionCauseLogging:
         # A literal match must not be mislabelled as semantic.
         assert "cause=semantic_keyword_match" not in router_log_capture.text
 
+    @requires_semantic_router
     @pytest.mark.asyncio
     async def test_semantic_keyword_match_logs_its_cause(self, basic_config, router_log_capture):
         fake_router = FakeEmbeddingRouter()
@@ -4265,6 +4493,26 @@ class TestSessionAffinity:
             complexity_router_config=basic_config,
         )
         request_kwargs = self._request_kwargs("session-1")
+        first = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
+        )
+        second = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs=request_kwargs, messages=self.SIMPLE_MESSAGE
+        )
+        assert first.model == "o1-preview"
+        assert second.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_proxy_generated_session_id_never_pins(self, mock_router_instance, session_affinity_config):
+        """A session id the proxy generated for a request that had none is per request, so
+        it must not create a pin even with session_affinity enabled."""
+        mock_router_instance.cache = DualCache()
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=session_affinity_config,
+        )
+        request_kwargs = {"metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True}}
         first = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=request_kwargs, messages=self.REASONING_MESSAGE
         )
@@ -8715,9 +8963,10 @@ class TestClassificationRubrics:
         [
             {"model": "haiku-classifier", "system_prompt": "Grade the data sensitivity of the request."},
             {"model": "haiku-classifier", "classification_rubric": "chat"},
+            {"model": "haiku-classifier", "reasoning_effort": "low"},
             {"model": "haiku-classifier"},
         ],
-        ids=["custom-prompt", "chat-preset", "neither"],
+        ids=["custom-prompt", "chat-preset", "reasoning-effort", "neither"],
     )
     def test_config_survives_a_dump_and_rebuild(self, classifier_llm_config):
         """/auto_router/test_routing dumps this config and hands the dict straight back to
@@ -10777,6 +11026,9 @@ class TestModalityRouting:
             ("custom_tiers_walk", "premium-model", "modality_escalation"),
             ("pin_kept_bypasses", "text-cheap", "session_affinity_pin"),
             ("pin_replacement_gated", "vision-big", "modality_escalation"),
+            ("pin_override_escalates", "vision-mid", "modality_pin_override"),
+            ("pin_override_same_tier", "vision-cheap", "modality_pin_override"),
+            ("pin_override_inert_without_modality_routing", "text-cheap", "session_affinity_pin"),
             ("adaptive_pick_rewritten", "vision-mid", "modality_escalation"),
         ],
     )
@@ -10827,7 +11079,7 @@ class TestModalityRouting:
             messages = [
                 {"role": "user", "content": [{"type": "text", "text": "quick lookup: what is this?"}, IMG_PART]}
             ]
-        elif path in ("pin_kept_bypasses", "pin_replacement_gated"):
+        elif path.startswith(("pin_kept", "pin_replacement", "pin_override")):
             cache = AsyncMock()
             cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
             mock_router_instance.cache = cache
@@ -10839,6 +11091,13 @@ class TestModalityRouting:
                 messages = [
                     {"role": "user", "content": [{"type": "text", "text": "LITELLM ESCALATE describe this"}, IMG_PART]}
                 ]
+            elif path == "pin_override_same_tier":
+                config["modality_pin_override"] = True
+                config["tiers"]["SIMPLE"] = ["text-cheap", "vision-cheap"]
+                vision["vision-cheap"] = True
+            elif path == "pin_override_inert_without_modality_routing":
+                config["modality_routing"] = False
+            config["modality_pin_override"] = path.startswith("pin_override")
         elif path == "adaptive_pick_rewritten":
             config["adaptive"] = True
             mock_router_instance.model_list = []
@@ -11005,4 +11264,60 @@ class TestModalityRouting:
         from litellm.router_strategy.complexity_router.complexity_router import _decision_is_pinnable
 
         assert _decision_is_pinnable({"cause": "modality_escalation"}) is False
+        assert _decision_is_pinnable({"cause": "modality_pin_override"}) is False
         assert _decision_is_pinnable({"cause": "heuristic_scorer"}) is True
+
+    @pytest.mark.asyncio
+    async def test_pin_override_serves_the_image_turn_without_repinning(self, mock_router_instance):
+        """The override is for one request: the session keeps the model it was pinned to."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        mock_router_instance.cache = cache
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": dict(self.BASE_TIERS),
+                "modality_routing": True,
+                "modality_pin_override": True,
+                "session_affinity": True,
+            },
+            dict(self.BASE_VISION),
+        )
+        request_kwargs = {"metadata": {"session_id": "s1"}}
+
+        image_turn = await router.async_pre_routing_hook(
+            model="m", request_kwargs=request_kwargs, messages=self.IMAGE_MESSAGE
+        )
+        assert image_turn.model == "vision-mid"
+        assert image_turn.routing_decision["cause"] == "modality_pin_override"
+        assert "modality_escalated_from:SIMPLE" in image_turn.routing_decision["signals"]
+
+        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}
+
+        text_turn = await router.async_pre_routing_hook(
+            model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=[{"role": "user", "content": "hi"}]
+        )
+        assert text_turn.model == "text-cheap"
+        assert text_turn.routing_decision["cause"] == "session_affinity_pin"
+
+    @pytest.mark.asyncio
+    async def test_pin_override_with_no_capable_model_rejects_and_keeps_the_pin(self, mock_router_instance):
+        """The clear 400 replaces the provider's, and a rejected turn must not cost the session its pin."""
+        cache = AsyncMock()
+        cache.async_get_cache = AsyncMock(return_value={"model": "text-cheap", "tier": "SIMPLE"})
+        mock_router_instance.cache = cache
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {"SIMPLE": "text-cheap", "COMPLEX": "text-big"},
+                "modality_routing": True,
+                "modality_pin_override": True,
+                "session_affinity": True,
+            },
+            {"text-cheap": False, "text-big": False},
+        )
+        with pytest.raises(litellm.BadRequestError, match="no model"):
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "s1"}}, messages=self.IMAGE_MESSAGE
+            )
+        assert cache.async_set_cache.await_args.kwargs["value"] == {"model": "text-cheap", "tier": "SIMPLE"}

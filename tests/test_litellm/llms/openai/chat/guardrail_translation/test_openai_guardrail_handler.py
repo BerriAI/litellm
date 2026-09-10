@@ -12,6 +12,7 @@ import pytest
 
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
@@ -1643,3 +1644,74 @@ class TestCheckStreamingHasEnded:
             )
         ]
         assert handler._check_streaming_has_ended(chunks) is True
+
+
+class TestStreamingScanKey:
+    """get_streaming_scan_key identifies what a sampled round would scan so the
+    unified hook can skip rounds that would re-scan already-cleared text"""
+
+    @staticmethod
+    def _chunk(content, finish_reason=None, index=0):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            choices=[StreamingChoices(index=index, delta=Delta(content=content), finish_reason=finish_reason)]
+        )
+
+    def test_key_carries_accumulated_text_and_open_stream(self):
+        handler = OpenAIChatCompletionsHandler()
+        key = handler.get_streaming_scan_key([self._chunk("hel"), self._chunk("lo")])
+        assert key == StreamingScanKey(texts=("hello",))
+
+    def test_chunks_without_text_leave_the_key_unchanged(self):
+        handler = OpenAIChatCompletionsHandler()
+        before = handler.get_streaming_scan_key([self._chunk("hel"), self._chunk("lo")])
+        after = handler.get_streaming_scan_key([self._chunk("hel"), self._chunk("lo"), self._chunk(None)])
+        assert after == before
+
+    def test_finish_chunk_without_tool_calls_scans_the_same_payload(self):
+        handler = OpenAIChatCompletionsHandler()
+        open_key = handler.get_streaming_scan_key([self._chunk("hi")])
+        ended_key = handler.get_streaming_scan_key([self._chunk("hi"), self._chunk(None, finish_reason="stop")])
+        assert open_key.stream_ended is False
+        assert ended_key.stream_ended is True
+        assert ended_key == open_key
+
+    def test_tool_calls_only_enter_the_key_once_the_stream_has_ended(self):
+        from litellm.types.utils import (
+            ChatCompletionDeltaToolCall,
+            Delta,
+            Function,
+            ModelResponseStream,
+            StreamingChoices,
+        )
+
+        handler = OpenAIChatCompletionsHandler()
+        tool_call = ChatCompletionDeltaToolCall(
+            id="call_1", index=0, type="function", function=Function(name="get_weather", arguments='{"city": "Paris"}')
+        )
+        tool_chunk = ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=None, tool_calls=[tool_call]), finish_reason=None)]
+        )
+        open_key = handler.get_streaming_scan_key([self._chunk("hi"), tool_chunk])
+        ended_key = handler.get_streaming_scan_key(
+            [self._chunk("hi"), tool_chunk, self._chunk(None, finish_reason="stop")]
+        )
+        assert open_key == StreamingScanKey(texts=("hi",))
+        assert ended_key.texts == ("hi",)
+        assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
+        assert ended_key != open_key
+
+    def test_text_after_the_first_choice_finishes_still_changes_the_key(self):
+        handler = OpenAIChatCompletionsHandler()
+        first_done = [self._chunk("a", index=0), self._chunk("b", finish_reason="stop", index=0)]
+        key_at_first_finish = handler.get_streaming_scan_key(first_done)
+        key_after_more_text = handler.get_streaming_scan_key(first_done + [self._chunk("y", index=1)])
+        assert key_at_first_finish.stream_ended is True
+        assert key_after_more_text.stream_ended is True
+        assert key_after_more_text != key_at_first_finish
+
+    def test_non_stream_items_are_ignored(self):
+        handler = OpenAIChatCompletionsHandler()
+        key = handler.get_streaming_scan_key([self._chunk("hi"), b"data: [DONE]"])
+        assert key.texts == ("hi",)

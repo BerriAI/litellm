@@ -759,3 +759,12 @@ def test_delta_function_tool_call_unchanged_by_custom_support():
     delta = Delta(tool_calls=[{"index": 0, "id": "c2", "type": "function", "function": {"name": "g", "arguments": ""}}])
     assert isinstance(delta.tool_calls[0], ChatCompletionDeltaToolCall)
     assert "custom" not in delta.model_dump()["tool_calls"][0]
+
+
+def test_image_response_keeps_background():
+    """https://github.com/BerriAI/litellm/issues/38649"""
+    from litellm.types.utils import ImageResponse
+
+    response = ImageResponse(created=1, data=[{"b64_json": "aGk="}], background="transparent", output_format="png")
+    assert response.background == "transparent"
+    assert response.model_dump()["background"] == "transparent"

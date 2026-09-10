@@ -165,7 +165,7 @@ export function KeyEditView({
       if (!accessToken) return;
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }
@@ -303,9 +303,9 @@ export function KeyEditView({
     }
   };
 
-  const handleOrganizationChange = (setField: (value: string | undefined) => void, orgId: string | undefined) => {
+  const handleOrganizationChange = (setField: (value: string | null) => void, orgId: string | null) => {
     setField(orgId);
-    setSelectedOrganizationId(orgId || null);
+    setSelectedOrganizationId(orgId);
     form.setValue("team_id", undefined);
   };
 

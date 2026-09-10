@@ -1,4 +1,6 @@
+import io
 import json
+from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -18,9 +20,11 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_parsed_body,
     _safe_get_request_query_params,
     _safe_set_request_parsed_body,
+    coerce_numeric_form_fields,
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
+    numeric_form_fields,
     populate_request_with_path_params,
 )
 
@@ -1029,3 +1033,79 @@ class TestGetRequestBody:
         mock_request = MagicMock()
         mock_request.method = "GET"
         assert await get_request_body(mock_request) == {}
+
+
+class TestNumericFormFields:
+    def test_image_edit_schema_yields_only_n(self):
+        from litellm.types.images.main import ImageEditRequestParams
+
+        assert dict(numeric_form_fields(get_type_hints(ImageEditRequestParams))) == {"n": int}
+
+    def test_qualifiers_and_optionality_are_unwrapped(self):
+        from typing import Optional
+
+        from typing_extensions import Annotated, NotRequired, ReadOnly, Required, TypedDict
+
+        class Schema(TypedDict, total=False):
+            plain: int
+            optional: Optional[int]
+            piped: int | None
+            read_only: ReadOnly[int | None]
+            not_required: NotRequired[ReadOnly[int]]
+            required: Required[ReadOnly[Annotated[float, "meta"]]]
+
+        assert dict(numeric_form_fields(get_type_hints(Schema))) == {
+            "plain": int,
+            "optional": int,
+            "piped": int,
+            "read_only": int,
+            "not_required": int,
+            "required": float,
+        }
+
+    def test_non_scalar_and_bool_fields_are_skipped(self):
+        from typing import Any, Literal, Optional, Union
+
+        from typing_extensions import TypedDict
+
+        class Schema(TypedDict, total=False):
+            flag: bool
+            optional_flag: Optional[bool]
+            text: str
+            choice: Optional[Literal["high", "low"]]
+            numbers: list[int]
+            mapping: Optional[dict[str, Any]]
+            ambiguous: Union[int, str]
+
+        assert dict(numeric_form_fields(get_type_hints(Schema))) == {}
+
+
+class TestCoerceNumericFormFields:
+    numeric_fields = {"n": int, "temperature": float}
+
+    def test_numeric_strings_are_parsed(self):
+        assert coerce_numeric_form_fields(
+            parsed_body={"n": "2", "temperature": "0.5"},
+            numeric_fields=self.numeric_fields,
+        ) == {"n": 2, "temperature": 0.5}
+
+    def test_other_fields_keep_their_string_values(self):
+        result = coerce_numeric_form_fields(
+            parsed_body={"size": "1024x1024", "prompt": "2", "quality": "high"},
+            numeric_fields=self.numeric_fields,
+        )
+        assert result == {"size": "1024x1024", "prompt": "2", "quality": "high"}
+
+    def test_unparseable_value_is_left_for_the_provider_to_reject(self):
+        assert coerce_numeric_form_fields(
+            parsed_body={"n": "two", "temperature": ""},
+            numeric_fields=self.numeric_fields,
+        ) == {"n": "two", "temperature": ""}
+
+    def test_already_typed_and_non_string_values_pass_through(self):
+        buffer = io.BytesIO(b"png")
+        result = coerce_numeric_form_fields(
+            parsed_body={"n": 3, "temperature": None, "image": buffer},
+            numeric_fields=self.numeric_fields,
+        )
+        assert result == {"n": 3, "temperature": None, "image": buffer}

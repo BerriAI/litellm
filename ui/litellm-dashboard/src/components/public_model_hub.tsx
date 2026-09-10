@@ -21,6 +21,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MultiSelect } from "./shared/MultiSelect";
+import { featureLabel } from "./publicModelHub/publicModelHubFilters";
+import { usePublicModelHubFacets } from "./publicModelHub/usePublicModelHubFacets";
+import { usePublicModelHubList } from "./publicModelHub/usePublicModelHubList";
 import { DataTable } from "./shared/DataTable";
 import { toast } from "@/lib/toast";
 import Navbar from "./navbar";
@@ -31,7 +34,6 @@ import {
   getPublicModelHubInfo,
   getUiConfig,
   mcpHubPublicServersCall,
-  modelHubPublicModelsCall,
 } from "./networking";
 import { Plugin } from "./claude_code_plugins/types";
 import SkillHubDashboard from "./AIHub/SkillHubDashboard";
@@ -68,25 +70,19 @@ function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
 
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
   const anchor = useComboboxAnchor();
-  const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
+  const [proxyConfigured, setProxyConfigured] = useState<boolean>(false);
   const [agentHubData, setAgentHubData] = useState<AgentCard[] | null>(null);
   const [mcpHubData, setMcpHubData] = useState<MCPServerData[] | null>(null);
   const [pageTitle, setPageTitle] = useState<string>("LiteLLM Gateway");
   const [customDocsDescription, setCustomDocsDescription] = useState<string | null>(null);
   const [litellmVersion, setLitellmVersion] = useState<string>("");
   const [usefulLinks, setUsefulLinks] = useState<Record<string, string | { url: string; index: number }>>({});
-  const [loading, setLoading] = useState<boolean>(true);
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [mcpLoading, setMcpLoading] = useState<boolean>(true);
-  const [searchTerm, setSearchTerm] = useState<string>("");
   const [agentSearchTerm, setAgentSearchTerm] = useState<string>("");
   const [mcpSearchTerm, setMcpSearchTerm] = useState<string>("");
-  const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
-  const [selectedModes, setSelectedModes] = useState<string[]>([]);
-  const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
   const [selectedAgentSkills, setSelectedAgentSkills] = useState<string[]>([]);
   const [selectedMcpTransports, setSelectedMcpTransports] = useState<string[]>([]);
-  const [serviceStatus, setServiceStatus] = useState<string>("I'm alive! ✓");
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isAgentModalVisible, setIsAgentModalVisible] = useState(false);
   const [isMcpModalVisible, setIsMcpModalVisible] = useState(false);
@@ -106,19 +102,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         console.error("Failed to get UI config:", error);
         // Continue anyway - might work with default proxyBaseUrl
       }
-
-      const fetchPublicData = async () => {
-        try {
-          setLoading(true);
-          const _modelHubData = await modelHubPublicModelsCall();
-          setModelHubData(Array.isArray(_modelHubData) ? _modelHubData : []);
-        } catch (error) {
-          console.error("There was an error fetching the public model data", error);
-          setServiceStatus("Service unavailable");
-        } finally {
-          setLoading(false);
-        }
-      };
+      setProxyConfigured(true);
 
       const fetchAgentData = async () => {
         try {
@@ -166,7 +150,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
       fetchPublicModelHubInfo();
 
-      fetchPublicData();
       fetchAgentData();
       fetchMcpData();
       fetchSkillData();
@@ -174,47 +157,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
     initializeAndFetch();
   }, []);
-
-  // Clear filters when filter values change to avoid confusion
-  useEffect(() => {
-    // This would clear selections if we had any selection functionality
-    // For now, it's just for consistency with the original component
-  }, [searchTerm, selectedProviders, selectedModes, selectedFeatures]);
-
-  const getUniqueProviders = (data: ModelGroupInfo[]) => {
-    const providers = new Set<string>();
-    data.forEach((model) => {
-      (model.providers ?? []).forEach((provider) => providers.add(provider));
-    });
-    return Array.from(providers);
-  };
-
-  const getUniqueModes = (data: ModelGroupInfo[]) => {
-    const modes = new Set<string>();
-    data.forEach((model) => {
-      if (model.mode) modes.add(model.mode);
-    });
-    return Array.from(modes);
-  };
-
-  const getUniqueFeatures = (data: ModelGroupInfo[]) => {
-    const features = new Set<string>();
-    data.forEach((model) => {
-      // Find all properties that start with 'supports_' and are true
-      Object.entries(model)
-        .filter(([key, value]) => key.startsWith("supports_") && value === true)
-        .forEach(([key]) => {
-          // Format the feature name (remove 'supports_' prefix and convert to title case)
-          const featureName = key
-            .replace(/^supports_/, "")
-            .split("_")
-            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(" ");
-          features.add(featureName);
-        });
-    });
-    return Array.from(features).sort();
-  };
 
   const getUniqueAgentSkills = (data: AgentCard[]) => {
     const skills = new Set<string>();
@@ -233,39 +175,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     });
     return Array.from(transports).sort();
   };
-
-  const filteredData = useMemo(() => {
-    if (!modelHubData || !Array.isArray(modelHubData)) return [];
-
-    const searchResults = rankBySearchRelevance(
-      filterBySearchTerm(modelHubData, searchTerm, (model) => [model.model_group]),
-      searchTerm,
-      (model) => model.model_group,
-    );
-
-    // Apply other filters
-    return searchResults.filter((model) => {
-      const matchesProvider =
-        selectedProviders.length === 0 || selectedProviders.some((provider) => model.providers.includes(provider));
-      const matchesMode = selectedModes.length === 0 || selectedModes.includes(model.mode || "");
-
-      // Check if model has any of the selected features
-      const matchesFeature =
-        selectedFeatures.length === 0 ||
-        Object.entries(model)
-          .filter(([key, value]) => key.startsWith("supports_") && value === true)
-          .some(([key]) => {
-            const featureName = key
-              .replace(/^supports_/, "")
-              .split("_")
-              .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-              .join(" ");
-            return selectedFeatures.includes(featureName);
-          });
-
-      return matchesProvider && matchesMode && matchesFeature;
-    });
-  }, [modelHubData, searchTerm, selectedProviders, selectedModes, selectedFeatures]);
 
   const filteredAgentData = useMemo(() => {
     if (!agentHubData || !Array.isArray(agentHubData)) return [];
@@ -356,7 +265,14 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     return `$${(cost * 1_000_000).toFixed(4)}`;
   };
 
-  const [modelSorting, setModelSorting] = useState<SortingState>([{ id: "model_group", desc: false }]);
+  const models = usePublicModelHubList(proxyConfigured);
+  const modelFacets = usePublicModelHubFacets(proxyConfigured);
+  const modeOptions = useMemo(() => modelFacets.modes.map((mode) => ({ label: mode, value: mode })), [modelFacets]);
+  const featureOptions = useMemo(
+    () => modelFacets.features.map((feature) => ({ label: featureLabel(feature), value: feature })),
+    [modelFacets],
+  );
+  const serviceStatus = models.error ? "Service unavailable" : "I'm alive! ✓";
   const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
   const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
 
@@ -367,22 +283,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const hasAgents = Array.isArray(agentHubData) && agentHubData.length > 0;
   const hasMcpServers = Array.isArray(mcpHubData) && mcpHubData.length > 0;
 
-  const providerOptions = useMemo(
-    () => (Array.isArray(modelHubData) ? getUniqueProviders(modelHubData) : []),
-    [modelHubData],
-  );
-  const modeOptions = useMemo(
-    () =>
-      Array.isArray(modelHubData) ? getUniqueModes(modelHubData).map((mode) => ({ label: mode, value: mode })) : [],
-    [modelHubData],
-  );
-  const featureOptions = useMemo(
-    () =>
-      Array.isArray(modelHubData)
-        ? getUniqueFeatures(modelHubData).map((feature) => ({ label: feature, value: feature }))
-        : [],
-    [modelHubData],
-  );
   const agentSkillOptions = useMemo(
     () =>
       Array.isArray(agentHubData)
@@ -495,9 +395,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <Tooltip>
                           <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
                           <TooltipContent side="top">
-                            Smart search with relevance ranking - finds models containing your search terms, ranked by
-                            relevance. Try searching &apos;xai grok-4&apos;, &apos;claude-4&apos;, &apos;gpt-4&apos;, or
-                            &apos;sonnet&apos;
+                            Finds every published model whose name contains what you type, across all pages. Try
+                            &apos;grok&apos;, &apos;claude&apos;, &apos;gpt-4&apos;, or &apos;sonnet&apos;
                           </TooltipContent>
                         </Tooltip>
                       </div>
@@ -505,9 +404,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
                         <input
                           type="text"
-                          placeholder="Search model names... (smart search enabled)"
-                          value={searchTerm}
-                          onChange={(e) => setSearchTerm(e.target.value)}
+                          placeholder="Search model names..."
+                          aria-label="Search model names"
+                          value={models.searchValue}
+                          onChange={(e) => models.onSearchChange(e.target.value)}
                           className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
                         />
                       </div>
@@ -516,9 +416,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <p className="text-sm font-medium mb-3 text-foreground">Provider:</p>
                       <Combobox
                         multiple
-                        items={providerOptions}
-                        value={selectedProviders}
-                        onValueChange={(values: string[]) => setSelectedProviders(values)}
+                        items={modelFacets.providers}
+                        value={models.providerValues}
+                        onValueChange={models.onProvidersChange}
                       >
                         <ComboboxChips render={<div ref={anchor} />} className="min-h-8 w-full py-1 text-sm">
                           <ComboboxValue>
@@ -567,8 +467,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <p className="text-sm font-medium mb-3 text-foreground">Mode:</p>
                       <MultiSelect
                         options={modeOptions}
-                        value={selectedModes}
-                        onValueChange={setSelectedModes}
+                        value={models.modeValues}
+                        onValueChange={models.onModesChange}
                         placeholder="Select modes"
                         className="w-full"
                       />
@@ -577,8 +477,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       <p className="text-sm font-medium mb-3 text-foreground">Features:</p>
                       <MultiSelect
                         options={featureOptions}
-                        value={selectedFeatures}
-                        onValueChange={setSelectedFeatures}
+                        value={models.featureValues}
+                        onValueChange={models.onFeaturesChange}
                         placeholder="Select features"
                         className="w-full"
                       />
@@ -586,19 +486,23 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   </div>
 
                   <DataTable
-                    data={filteredData}
+                    data={models.rows}
                     columns={modelColumns}
                     getRowId={(model, index) => model.model_group || String(index)}
-                    sortingMode="client"
-                    sorting={modelSorting}
-                    onSortingChange={setModelSorting}
-                    isLoading={loading}
+                    sortingMode="server"
+                    sorting={models.sorting}
+                    onSortingChange={models.onSortingChange}
+                    paginationMode="server"
+                    pagination={models.pagination}
+                    onPaginationChange={models.onPaginationChange}
+                    rowCount={models.rowCount}
+                    isLoading={models.isLoading}
                     loadingMessage="Loading models…"
                     noDataMessage={
                       <PublicHubEmptyState
-                        title={modelHubData?.length ? "No matching models" : "No models available"}
+                        title={models.hasActiveQuery ? "No matching models" : "No models available"}
                         body={
-                          modelHubData?.length
+                          models.hasActiveQuery
                             ? "Adjust the search or filters to see more models."
                             : "Models made public by the proxy admin will appear here."
                         }
@@ -606,12 +510,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                     }
                     size="compact"
                   />
-
-                  <div className="mt-8 text-center">
-                    <p className="text-sm text-muted-foreground">
-                      Showing {filteredData.length} of {modelHubData?.length || 0} models
-                    </p>
-                  </div>
                 </TabsContent>
 
                 {/* Agents Tab */}

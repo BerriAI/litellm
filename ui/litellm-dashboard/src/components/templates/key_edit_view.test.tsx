@@ -425,6 +425,22 @@ describe("KeyEditView", () => {
       expect(screen.getByText("Policies")).toBeInTheDocument();
     });
 
+    it("lists a prompt existing in several environments once in the dropdown", async () => {
+      vi.mocked(getPromptsList).mockResolvedValueOnce({
+        prompts: [
+          { prompt_id: "envgreet", litellm_params: {}, prompt_info: { prompt_type: "db" }, environment: "development" },
+          { prompt_id: "envgreet", litellm_params: {}, prompt_info: { prompt_type: "db" }, environment: "production" },
+        ],
+      });
+
+      renderAs("Admin");
+
+      const prompts = await screen.findByLabelText(/Prompts/);
+      await userEvent.type(prompts, "envgreet");
+
+      expect(await screen.findAllByRole("option", { name: "envgreet" })).toHaveLength(1);
+    });
+
     it("should omit both fields and fire neither admin-only request for an internal user", async () => {
       renderAs("Internal User");
 
@@ -1456,6 +1472,32 @@ describe("KeyEditView", () => {
       await waitFor(() => {
         expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
       });
+    });
+
+    it("submits organization_id as null after the organization is cleared", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, organization_id: "org-1" }}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: null }));
+      });
+      expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toHaveProperty("organization_id", null);
     });
   });
 

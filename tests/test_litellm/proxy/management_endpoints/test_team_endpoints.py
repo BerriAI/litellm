@@ -2910,6 +2910,7 @@ async def test_update_team_with_team_member_budget_duration(
             "metadata": {"team_member_budget_id": "budget_123"},
         }
         mock_existing_team.metadata = {"team_member_budget_id": "budget_123"}
+        mock_existing_team.members_with_roles = []
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=mock_existing_team
         )
@@ -9897,11 +9898,11 @@ class TestResolveTeamAccessGroupResources:
         assert resolved.access_group_mcp_server_ids == ["mcp-1"]
         assert resolved.access_group_agent_ids == ["agent-1"]
         assert [
-            (d.access_group_id, d.access_group_name, d.models)
+            (d.access_group_id, d.access_group_name, d.models, d.mcp_server_ids, d.agent_ids)
             for d in (resolved.access_group_details or [])
         ] == [
-            ("ag-1", "shared-models", ("gpt-4", "claude-3")),
-            ("ag-2", "extra-models", ("claude-3", "gemini")),
+            ("ag-1", "shared-models", ("gpt-4", "claude-3"), ("mcp-1",), ()),
+            ("ag-2", "extra-models", ("claude-3", "gemini"), (), ("agent-1",)),
         ]
 
     @pytest.mark.asyncio
@@ -11083,6 +11084,14 @@ async def test_new_team_rejects_reserved_ui_session_team_id():
         mock_prisma.get_data.assert_not_called()
 
 
+@pytest.mark.parametrize("team_id", ["", "   "])
+def test_new_team_request_blank_team_id_is_unset(team_id: str) -> None:
+    from litellm.proxy._types import NewTeamRequest
+
+    assert NewTeamRequest(team_alias="t", team_id=team_id).team_id is None
+    assert NewTeamRequest(team_id="custom").team_id == "custom"
+
+
 # ---------------------------------------------------------------------------
 # PATCH /team/{team_id} — RFC 7386 JSON Merge Patch
 #
@@ -11282,6 +11291,78 @@ async def test_patch_preserves_required_metadata_key_that_post_would_wipe():
     assert patch_meta == {"cost_center": "FINOPS-1", "team_notes": "edited"}  # preserved by PATCH
 
 
+_STORED_METADATA_WITH_BUDGET: Final = {
+    "team_member_budget_id": "budget-existing-123",
+    "team_member_key_duration": "30d",
+    "logging": [{"callback_name": "langfuse", "callback_type": "success"}],
+    "cost_center": "cc-1234",
+}
+
+
+async def _written_metadata_with_budget(kind, body):
+    """Like ``_written_metadata`` but the team already owns a member budget row."""
+    from litellm.proxy._types import LiteLLM_BudgetTable
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(  # test-quality-ok: update_team imports update_budget at call time; the module attribute is its only seam
+            "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+            AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="budget-existing-123")),
+        ),
+    ):
+        return await _written_metadata(kind, dict(_STORED_METADATA_WITH_BUDGET), body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"team_member_budget": 50.0},
+        {"team_member_budget_duration": "1d"},
+        {"team_member_tpm_limit": 500},
+        {"team_member_rpm_limit": 5},
+    ],
+    ids=lambda body: next(iter(body)),
+)
+async def test_team_member_budget_only_update_preserves_stored_metadata(kind, body):
+    """LIT-5150: a budget-only update that omits ``metadata`` must not replace the
+    stored metadata JSON with just ``{"team_member_budget_id": ...}``."""
+    assert await _written_metadata_with_budget(kind, body) == _STORED_METADATA_WITH_BUDGET
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_team_member_key_duration_only_update_preserves_stored_metadata(kind):
+    """LIT-5150: a metadata-backed field sent alone is merged into the stored
+    metadata instead of becoming the whole metadata JSON."""
+    written = await _written_metadata_with_budget(kind, {"team_member_key_duration": "7d"})
+
+    assert written == {**_STORED_METADATA_WITH_BUDGET, "team_member_key_duration": "7d"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_explicit_null_metadata_with_budget_field_still_clears_metadata(kind):
+    """``metadata: null`` is an explicit clear, so only the server-owned budget link survives."""
+    written = await _written_metadata_with_budget(kind, {"metadata": None, "team_member_budget": 7.0})
+
+    assert written == {"team_member_budget_id": "budget-existing-123"}
+
+
+@pytest.mark.asyncio
+async def test_metadata_only_update_keeps_team_member_budget_link():
+    """LIT-5150: rewriting metadata without any team member field must not drop the
+    server-owned ``team_member_budget_id``, or the member budget silently resets."""
+    body = {"metadata": {"cost_center": "cc-9999"}}
+
+    post_meta = await _written_metadata_with_budget("post", body)
+    patch_meta = await _written_metadata_with_budget("patch", body)
+
+    assert post_meta == {"cost_center": "cc-9999", "team_member_budget_id": "budget-existing-123"}
+    assert patch_meta == {**_STORED_METADATA_WITH_BUDGET, "cost_center": "cc-9999"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body, field, expected",
@@ -11310,17 +11391,15 @@ async def test_top_level_fields_identical_post_and_patch(body, field, expected):
 @pytest.mark.asyncio
 async def test_patch_strips_system_managed_metadata_key_like_post():
     """A caller cannot inject/overwrite server-owned keys via PATCH any more than
-    via POST: team_member_budget_id is stripped from the write in both."""
+    via POST: the stored team_member_budget_id wins over the caller's value in both."""
     existing = {"team_member_budget_id": "budget-123", "cost_center": "1234"}
     body = {"metadata": {"team_member_budget_id": "HACKED", "cost_center": "9999"}}
 
     post_meta = await _written_metadata("post", existing, body)
     patch_meta = await _written_metadata("patch", existing, body)
 
-    assert "team_member_budget_id" not in post_meta
-    assert "team_member_budget_id" not in patch_meta
-    assert post_meta == {"cost_center": "9999"}
-    assert patch_meta == {"cost_center": "9999"}
+    assert post_meta == {"cost_center": "9999", "team_member_budget_id": "budget-123"}
+    assert patch_meta == {"cost_center": "9999", "team_member_budget_id": "budget-123"}
 
 
 @pytest.mark.parametrize(
