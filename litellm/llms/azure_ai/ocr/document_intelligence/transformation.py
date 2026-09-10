@@ -12,7 +12,7 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
 import httpx
@@ -40,6 +40,9 @@ from litellm.llms.base_llm.ocr.transformation import (
     parse_ocr_request_format,
 )
 from litellm.secret_managers.main import get_secret_str
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR: Final = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
 
@@ -676,7 +679,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         **kwargs,
     ) -> OCRResponse:
         """
@@ -751,7 +754,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         **kwargs,
     ) -> OCRResponse:
         """

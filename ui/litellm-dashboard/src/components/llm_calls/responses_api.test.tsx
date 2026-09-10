@@ -16,9 +16,15 @@ const mockClient = {
 
 vi.mock("openai", () => ({
   default: {
-    OpenAI: vi.fn(() => mockClient),
+    OpenAI: vi.fn(function () {
+      return mockClient;
+    }),
   },
 }));
+
+const nonStreamingResponse = (data: unknown, headers: Record<string, string> = {}) => ({
+  withResponse: async () => ({ data, response: { headers: new Headers(headers) } }),
+});
 
 describe("responses_api", () => {
   const mockUpdateTextUI = vi.fn();
@@ -71,19 +77,21 @@ describe("responses_api", () => {
   });
 
   it("should send a non-streaming request and render the whole output at once when streaming is disabled", async () => {
-    mockResponsesCreate.mockResolvedValueOnce({
-      id: "resp_456",
-      output: [
-        {
-          type: "message",
-          content: [
-            { type: "output_text", text: "Full " },
-            { type: "output_text", text: "answer" },
-          ],
-        },
-      ],
-      usage: { output_tokens: 3, input_tokens: 4, total_tokens: 7 },
-    });
+    mockResponsesCreate.mockReturnValueOnce(
+      nonStreamingResponse({
+        id: "resp_456",
+        output: [
+          {
+            type: "message",
+            content: [
+              { type: "output_text", text: "Full " },
+              { type: "output_text", text: "answer" },
+            ],
+          },
+        ],
+        usage: { output_tokens: 3, input_tokens: 4, total_tokens: 7 },
+      }),
+    );
 
     const onTimingData = vi.fn();
     const onUsageData = vi.fn();
@@ -162,10 +170,12 @@ describe("responses_api", () => {
     expect(onTotalLatency).toHaveBeenCalledTimes(1);
     expect(onTotalLatency).toHaveBeenLastCalledWith(expect.any(Number));
 
-    mockResponsesCreate.mockResolvedValueOnce({
-      id: "resp_latency",
-      output: [{ type: "message", content: [{ type: "output_text", text: "Answer" }] }],
-    });
+    mockResponsesCreate.mockReturnValueOnce(
+      nonStreamingResponse({
+        id: "resp_latency",
+        output: [{ type: "message", content: [{ type: "output_text", text: "Answer" }] }],
+      }),
+    );
 
     await callWithStreaming(false);
     expect(onTotalLatency).toHaveBeenCalledTimes(2);
@@ -223,15 +233,75 @@ describe("responses_api", () => {
     expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ cost: expect.anything() }), "");
   });
 
+  it("should omit cost when the proxy reports a non-numeric cost", async () => {
+    async function* streamWithNonNumericCost() {
+      yield {
+        type: "response.completed",
+        response: {
+          id: "resp_non_numeric_cost",
+          usage: { output_tokens: 12, input_tokens: 12, total_tokens: 24, cost: "not-a-number" },
+        },
+      };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(streamWithNonNumericCost());
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ cost: expect.anything() }), "");
+  });
+
+  it("should omit cost when the proxy reports a blank cost", async () => {
+    async function* streamWithBlankCost() {
+      yield {
+        type: "response.completed",
+        response: {
+          id: "resp_blank_cost",
+          usage: { output_tokens: 12, input_tokens: 12, total_tokens: 24, cost: "  " },
+        },
+      };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(streamWithBlankCost());
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ cost: expect.anything() }), "");
+  });
+
   it("should replay MCP output items as events for a non-streaming response", async () => {
-    mockResponsesCreate.mockResolvedValueOnce({
-      id: "resp_789",
-      output: [
-        { type: "mcp_call", id: "mcp_1", name: "search_docs", arguments: "{}", output: "found it" },
-        { type: "message", content: [{ type: "output_text", text: "Answer" }] },
-      ],
-      usage: { output_tokens: 1, input_tokens: 1, total_tokens: 2 },
-    });
+    mockResponsesCreate.mockReturnValueOnce(
+      nonStreamingResponse({
+        id: "resp_789",
+        output: [
+          { type: "mcp_call", id: "mcp_1", name: "search_docs", arguments: "{}", output: "found it" },
+          { type: "message", content: [{ type: "output_text", text: "Answer" }] },
+        ],
+        usage: { output_tokens: 1, input_tokens: 1, total_tokens: 2 },
+      }),
+    );
 
     const onMCPEvent = vi.fn();
     const onUsageData = vi.fn();
@@ -399,5 +469,145 @@ describe("responses_api prompt cache usage", () => {
     expect(usageData).not.toHaveProperty("cacheReadTokens");
     expect(usageData).not.toHaveProperty("cacheCreationTokens");
     expect(usageData.promptTokens).toBe(5000);
+  });
+
+  it("surfaces reasoning tokens from Responses-shape output_tokens_details", async () => {
+    await expect(captureUsage({ output_tokens_details: { reasoning_tokens: 42 } })).resolves.toMatchObject({
+      reasoningTokens: 42,
+    });
+  });
+
+  it("falls back to completion_tokens_details reasoning tokens when output_tokens_details is absent", async () => {
+    await expect(captureUsage({ completion_tokens_details: { reasoning_tokens: 17 } })).resolves.toMatchObject({
+      reasoningTokens: 17,
+    });
+  });
+});
+
+describe("responses_api response cache", () => {
+  const mockUpdateTextUI = vi.fn();
+  const messages: MessageType[] = [{ role: "user", content: "Hello" }];
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("flags a non-streaming response-cache hit even though it replays provider prompt-cache usage", async () => {
+    mockResponsesCreate.mockReturnValueOnce(
+      nonStreamingResponse(
+        {
+          id: "resp_replayed",
+          output: [{ type: "message", content: [{ type: "output_text", text: "Full answer" }] }],
+          usage: {
+            output_tokens: 2,
+            input_tokens: 5000,
+            total_tokens: 5002,
+            input_tokens_details: { cached_tokens: 4695 },
+          },
+        },
+        { "x-litellm-cache-key": "cache-key-abc" },
+      ),
+    );
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      onUsageData,
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
+      undefined, // selectedMCPServers
+      undefined, // previousResponseId
+      undefined, // onResponseId
+      undefined, // onMCPEvent
+      undefined, // codeInterpreterEnabled
+      undefined, // onCodeInterpreterResult
+      undefined, // customBaseUrl
+      undefined, // mcpServers
+      undefined, // mcpServerToolRestrictions
+      undefined, // mcpToolsets
+      false, // streamingEnabled
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(
+      expect.objectContaining({ cacheReadTokens: 4695, servedFromResponseCache: true }),
+      "",
+    );
+  });
+
+  it("does not flag a non-streaming response that missed the response cache", async () => {
+    mockResponsesCreate.mockReturnValueOnce(
+      nonStreamingResponse({
+        id: "resp_fresh",
+        output: [{ type: "message", content: [{ type: "output_text", text: "Full answer" }] }],
+        usage: { output_tokens: 2, input_tokens: 5, total_tokens: 7 },
+      }),
+    );
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      onUsageData,
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
+      undefined, // selectedMCPServers
+      undefined, // previousResponseId
+      undefined, // onResponseId
+      undefined, // onMCPEvent
+      undefined, // codeInterpreterEnabled
+      undefined, // onCodeInterpreterResult
+      undefined, // customBaseUrl
+      undefined, // mcpServers
+      undefined, // mcpServerToolRestrictions
+      undefined, // mcpToolsets
+      false, // streamingEnabled
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ servedFromResponseCache: true }), "");
+  });
+
+  it("never flags a streaming response, even when the proxy reports a cache key", async () => {
+    async function* mockStream() {
+      yield {
+        type: "response.completed",
+        response: { id: "resp_stream", usage: { output_tokens: 2, input_tokens: 5, total_tokens: 7 } },
+      };
+    }
+    mockResponsesCreate.mockResolvedValueOnce(mockStream());
+
+    const onUsageData = vi.fn();
+
+    await makeOpenAIResponsesRequest(
+      messages,
+      mockUpdateTextUI,
+      "gpt-4",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onUsageData,
+    );
+
+    expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ servedFromResponseCache: true }), "");
   });
 });

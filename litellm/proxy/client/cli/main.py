@@ -13,7 +13,9 @@ from .commands.auth import auth_group, context_secret_vault, get_stored_api_key,
 from .commands.autoroute.commands import autoroute_group
 from .commands.chat import chat
 from .commands.config import config_commands, get_config_value, hidden_command_names
+from .commands.configure import configure_group, unconfigure_group
 from .commands.credentials import credentials
+from .commands.debug import debug
 from .commands.encryption import encryption
 from .commands.http import http
 from .commands.keys import keys
@@ -143,6 +145,7 @@ cli.add_command(encryption)
 cli.add_command(chat)
 # Add the http command group
 cli.add_command(http)
+cli.add_command(debug)
 # Add the keys command group
 cli.add_command(keys)
 # Add the teams command group
@@ -160,6 +163,9 @@ cli.add_command(model_groups)
 # Add the autoroute command group (QA auto-routing against your real proxy)
 cli.add_command(autoroute_group, name="autoroute")
 cli.add_command(config_commands)
+# Add configure/unconfigure (persistently wire a coding agent to the proxy with a virtual key)
+cli.add_command(configure_group)
+cli.add_command(unconfigure_group)
 
 
 if __name__ == "__main__":

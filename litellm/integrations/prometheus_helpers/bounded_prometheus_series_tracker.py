@@ -60,6 +60,10 @@ class BoundedPrometheusSeriesTracker:
                         break
                     del series[tracked_label_values]
 
+    def remove_series(self, metric: object, label_values: tuple[str | None, ...]) -> bool:
+        """Drop one child series, True when it is gone (removed or never existed)."""
+        return self._remove_metric_child(metric, label_values)
+
     def _should_run_ttl_cleanup(
         self,
         metric_name: str,

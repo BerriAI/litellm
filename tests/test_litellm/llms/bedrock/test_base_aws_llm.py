@@ -1,4 +1,6 @@
+import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 import os
 import threading
 import time
@@ -15,13 +17,17 @@ from unittest.mock import MagicMock, patch
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
 from botocore.auth import SigV4Auth
 from botocore.credentials import Credentials
+from botocore.exceptions import NoCredentialsError
 
 import litellm
 from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
     BaseAWSLLM,
     Boto3CredentialsInfo,
+    run_aws_signing,
+    sign_request_off_loop_if_aws,
 )
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Global variable for the base_aws_llm.py file path
 
@@ -35,6 +41,14 @@ def flush_shared_bedrock_iam_cache():
     """Process-wide IAM cache must not leak static/env credential entries across tests."""
     BaseAWSLLM._shared_iam_cache.flush_cache()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _clean_ssl_env(monkeypatch):
+    """get_ssl_verify reads these, so the sts client's verify= would otherwise depend on
+    the ambient environment. The published images set SSL_CERT_FILE."""
+    for env_var in ("SSL_CERT_FILE", "SSL_VERIFY"):
+        monkeypatch.delenv(env_var, raising=False)
 
 
 def test_base_aws_llm_instances_share_process_wide_iam_cache():
@@ -801,6 +815,23 @@ def test_get_request_headers_with_sigv4():
         assert result == mock_request.prepare.return_value
 
 
+def test_get_request_headers_without_credentials_or_bearer_token_raises_no_credentials():
+    """Bearer-token auth needs no SigV4 principal, so `credentials` may be None.
+    Reaching the SigV4 branch with neither must fail the way botocore always
+    has instead of signing with a missing principal."""
+    llm = BaseAWSLLM()
+
+    with patch.dict(os.environ, {}, clear=True), pytest.raises(NoCredentialsError):
+        llm.get_request_headers(
+            credentials=None,
+            aws_region_name="us-west-2",
+            extra_headers=None,
+            endpoint_url="https://api.example.com",
+            data='{"prompt": "test"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+
 def test_sigv4_matches_rust_golden_vector():
     request = AWSRequest(
         method="POST",
@@ -1223,7 +1254,7 @@ def test_different_roles_without_session_names_should_not_share_cache():
         ({}, {"verify": True}),
         (
             {"aws_region_name": "us-east-1"},
-            {"verify": True},
+            {"verify": True, "region_name": "us-east-1"},
         ),
         (
             {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
@@ -1234,7 +1265,7 @@ def test_different_roles_without_session_names_should_not_share_cache():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "configured_region_is_sts_fallback", "explicit_sts_endpoint"],
 )
 def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
@@ -1416,6 +1447,135 @@ def test_build_sts_client_kwargs(env, aws_sts_endpoint, ssl_verify, expected):
             )
             == expected
         )
+
+
+@pytest.mark.parametrize(
+    "env,aws_sts_endpoint,aws_region_name,expected_region",
+    [
+        ({}, None, "cn-north-1", "cn-north-1"),
+        ({"AWS_REGION": "eu-west-1"}, None, "cn-north-1", "eu-west-1"),
+        ({"AWS_DEFAULT_REGION": "ap-southeast-1"}, None, "cn-north-1", "ap-southeast-1"),
+        ({}, "https://sts.cn-north-1.amazonaws.com.cn", "us-east-1", "cn-north-1"),
+        ({}, None, None, None),
+    ],
+    ids=[
+        "configured_region_fallback",
+        "env_region_beats_configured",
+        "env_default_region_beats_configured",
+        "cn_endpoint_beats_configured",
+        "nothing_configured",
+    ],
+)
+def test_resolve_sts_region_configured_region_fallback(
+    env: dict[str, str],
+    aws_sts_endpoint: str | None,
+    aws_region_name: str | None,
+    expected_region: str | None,
+) -> None:
+    with patch.dict(os.environ, env, clear=True):
+        assert (
+            BaseAWSLLM._resolve_sts_region(
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_region_name=aws_region_name,
+            )
+            == expected_region
+        )
+
+
+def test_build_sts_client_kwargs_configured_region_fallback() -> None:
+    base_aws_llm = BaseAWSLLM()
+    with patch.dict(os.environ, {}, clear=True):
+        assert base_aws_llm._build_sts_client_kwargs(aws_region_name="cn-north-1") == {
+            "verify": True,
+            "region_name": "cn-north-1",
+        }
+    with patch.dict(os.environ, {"AWS_REGION": "eu-west-1"}, clear=True):
+        assert base_aws_llm._build_sts_client_kwargs(aws_region_name="cn-north-1") == {
+            "verify": True,
+            "region_name": "eu-west-1",
+        }
+
+
+def test_assume_role_sts_client_uses_configured_cn_region() -> None:
+    """arn:aws-cn roles must resolve against a cn STS endpoint, not the commercial default."""
+    base_aws_llm = BaseAWSLLM()
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            credentials, ttl = base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws-cn:iam::2222222222222:role/LitellmBedrockRole",
+                aws_session_name="test-session",
+                aws_region_name="cn-north-1",
+            )
+            mock_boto3_client.assert_called_with(
+                "sts",
+                region_name="cn-north-1",
+                verify=True,
+            )
+            assert credentials.access_key == "assumed-access-key"
+            assert credentials.secret_key == "assumed-secret-key"
+            assert credentials.token == "assumed-session-token"
+            assert ttl is not None
+
+
+@pytest.mark.parametrize(
+    "model,expected_region",
+    [
+        (
+            "arn:aws-cn:bedrock:cn-north-1:123456789012:application-inference-profile/p",
+            "cn-north-1",
+        ),
+        (
+            "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:foundation-model/m",
+            "us-gov-west-1",
+        ),
+        (
+            "bedrock/arn:aws-cn:bedrock:cn-northwest-1:123456789012:inference-profile/p",
+            "cn-northwest-1",
+        ),
+        ("anthropic.claude-3", None),
+    ],
+)
+def test_get_aws_region_from_model_arn_partition_arns(model: str, expected_region: str | None) -> None:
+    assert BaseAWSLLM()._get_aws_region_from_model_arn(model) == expected_region
+
+
+@pytest.mark.parametrize(
+    "endpoint_type,region,expected",
+    [
+        ("runtime", "cn-north-1", "https://bedrock-runtime.cn-north-1.amazonaws.com.cn"),
+        ("agent", "cn-north-1", "https://bedrock-agent-runtime.cn-north-1.amazonaws.com.cn"),
+        ("agentcore", "cn-north-1", "https://bedrock-agentcore.cn-north-1.amazonaws.com.cn"),
+        ("runtime", "us-east-1", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        ("agent", "us-east-1", "https://bedrock-agent-runtime.us-east-1.amazonaws.com"),
+        ("agentcore", "us-east-1", "https://bedrock-agentcore.us-east-1.amazonaws.com"),
+        ("runtime", "us-gov-west-1", "https://bedrock-runtime.us-gov-west-1.amazonaws.com"),
+    ],
+)
+def test_select_default_endpoint_url_partitions(endpoint_type: str, region: str, expected: str) -> None:
+    assert (
+        BaseAWSLLM()._select_default_endpoint_url(
+            endpoint_type=endpoint_type, aws_region_name=region
+        )
+        == expected
+    )
 
 
 def test_irsa_cross_account_sts_client_uses_resolved_region():
@@ -1612,6 +1772,7 @@ def test_sts_endpoint_region_matches_bedrock_region_param():
                 "aws_secret_access_key": "explicit-secret-key",
                 "aws_session_token": "assumed-session-token",
                 "verify": True,
+                "region_name": "us-east-1",
             },
         ),
         (
@@ -1626,7 +1787,7 @@ def test_sts_endpoint_region_matches_bedrock_region_param():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "configured_region_is_sts_fallback", "explicit_sts_endpoint"],
 )
 def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kwargs):
     """
@@ -3067,3 +3228,53 @@ class TestGetRequestHeadersResign:
             extra_headers={"Authorization": "Bearer foo"},
         )
         assert prepped.headers["Authorization"] == "Bearer foo"
+
+
+@pytest.mark.asyncio
+async def test_sign_request_off_loop_if_aws_keeps_the_loop_serving_while_credentials_refresh():
+    """Regression for issue #40165: an AWS provider's signing (and the botocore credential refresh
+    inside it) must run off the event loop, so other requests keep being served meanwhile."""
+    probe = EventLoopProbe()
+
+    def sign(headers: dict[str, str]) -> dict[str, str]:
+        request = AWSRequest(
+            method="POST", url="https://bedrock-runtime.us-west-2.amazonaws.com/", data="{}", headers=headers
+        )
+        SigV4Auth(probe.credentials(), "bedrock", "us-west-2").add_auth(request)
+        return dict(request.headers)
+
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+    signed = await sign_request_off_loop_if_aws(BaseAWSLLM(), sign, headers={"Content-Type": "application/json"})
+    await release
+
+    assert "Authorization" in signed
+    assert probe.served_during_refresh is True
+
+
+def test_run_aws_signing_leaves_the_default_executor_free_for_other_providers():
+    """A signing parked on botocore's refresh lock must not hold a default-executor thread, since every
+    other provider's async entry point hops through that same executor. The scenario runs on its own loop
+    so the one-thread default executor it pins never leaks into the session loop."""
+
+    async def scenario() -> tuple[str, str]:
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        signing_parked = asyncio.Event()
+        refresh_done = threading.Event()
+
+        def sign() -> str:
+            loop.call_soon_threadsafe(signing_parked.set)
+            refresh_done.wait()
+            return threading.current_thread().name
+
+        signing = asyncio.create_task(run_aws_signing(sign))
+        try:
+            await asyncio.wait_for(signing_parked.wait(), timeout=5)
+            other_provider = await asyncio.wait_for(loop.run_in_executor(None, threading.current_thread), timeout=5)
+        finally:
+            refresh_done.set()
+        return other_provider.name, await signing
+
+    other_provider, signing_thread = asyncio.run(scenario())
+    assert other_provider != signing_thread
+    assert signing_thread.startswith("aws-signing")

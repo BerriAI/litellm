@@ -255,6 +255,95 @@ def test_transform_messages_sanitizes_empty_content():
     assert result[1]["content"] == "Hi"
 
 
+def test_transform_request_preserves_unity_model_service_name():
+    config = DatabricksConfig()
+    result = config.transform_request(
+        model="system.ai.kimi-k3",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["model"] == "system.ai.kimi-k3"
+
+
+def test_transform_request_strips_thinking_blocks_and_reasoning_content():
+    """Regression for LIT-6762: replaying an assistant turn that litellm decorated with
+    `thinking_blocks` / `reasoning_content` made Databricks 400 with
+    'messages.N.thinking_blocks: Extra inputs are not permitted'."""
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "Hello! How can I help?",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "greet briefly", "signature": "sig_abc", "cache_control": {}}
+            ],
+            "reasoning_content": "greet briefly",
+            "provider_specific_fields": {"foo": "bar"},
+        },
+        {"role": "user", "content": "thanks"},
+    ]
+
+    result = config.transform_request(
+        model="databricks-claude-opus-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert result[1] == {"role": "assistant", "content": "Hello! How can I help?"}
+    assert not any(
+        key in message
+        for message in result
+        for key in ("thinking_blocks", "reasoning_content", "provider_specific_fields")
+    )
+    assert "thinking_blocks" in messages[1]
+
+
+def test_transform_request_drops_thinking_only_assistant_turn_but_keeps_tool_call_turn():
+    """A replayed thinking-only assistant turn has nothing left once `thinking_blocks` are stripped, so it must be
+    dropped instead of being sent as a bare {"role": "assistant"}. A thinking + tool_use turn keeps its tool_calls."""
+    config = DatabricksConfig()
+    tool_call = {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "hmm", "signature": "sig_1"}],
+            "reasoning_content": "hmm",
+        },
+        {"role": "user", "content": "again"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "call f", "signature": "sig_2"}],
+            "reasoning_content": "call f",
+            "tool_calls": [tool_call],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+    ]
+
+    result = config.transform_request(
+        model="databricks-claude-opus-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert result == [
+        {"role": "user", "content": "hi"},
+        {"role": "user", "content": "again"},
+        {"role": "assistant", "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+    ]
+
+
 def _parallel_tool_calls():
     return [
         {
@@ -422,6 +511,27 @@ def test_databricks_config_probes_capabilities_under_databricks_namespace():
     assert DatabricksConfig().custom_llm_provider == "databricks"
 
 
+@pytest.mark.parametrize(
+    "model, expected_thinking, expected_output_config",
+    [
+        ("databricks-claude-opus-4-8", {"type": "adaptive"}, {"effort": "high"}),
+        ("databricks-claude-opus-4-6", {"type": "enabled", "budget_tokens": 4096}, None),
+    ],
+    ids=["adaptive_only_upgrades_to_adaptive", "legacy_capable_forwards_verbatim"],
+)
+def test_map_openai_params_upgrades_legacy_thinking_on_adaptive_only_claude(
+    model, expected_thinking, expected_output_config
+):
+    mapped = DatabricksConfig().map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 4096}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert mapped["thinking"] == expected_thinking
+    assert mapped.get("output_config") == expected_output_config
+
+
 def _streaming_chunk(usage=None, choices=None):
     base = {
         "id": "chatcmpl-test",
@@ -493,3 +603,87 @@ def test_chunk_parser_without_usage_still_parses_content():
     assert result.id == "chatcmpl-test"
     assert result.model == "databricks-claude-sonnet-5"
     assert result.choices[0]["delta"]["content"] == "hi"
+
+
+@pytest.mark.parametrize("reasoning_key", ["reasoning_content", "reasoning"])
+def test_transform_choices_surfaces_top_level_reasoning_content(reasoning_key: str) -> None:
+    config = DatabricksConfig()
+    databricks_choices = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": "391",
+                reasoning_key: "We need answer just number. 17*23=391.",
+            },
+            "index": 0,
+            "finish_reason": "stop",
+        }
+    ]
+
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
+
+    assert choices[0].message.content == "391"
+    assert choices[0].message.reasoning_content == "We need answer just number. 17*23=391."
+    assert getattr(choices[0].message, "thinking_blocks", None) is None
+
+
+def test_transform_choices_parses_think_tags_in_string_content():
+    config = DatabricksConfig()
+    databricks_choices = [
+        {
+            "message": {"role": "assistant", "content": "<think>17 times 23</think>391"},
+            "index": 0,
+            "finish_reason": "stop",
+        }
+    ]
+
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
+
+    assert choices[0].message.content == "391"
+    assert choices[0].message.reasoning_content == "17 times 23"
+
+
+def test_transform_choices_prefers_reasoning_blocks_over_top_level_field():
+    config = DatabricksConfig()
+    databricks_choices = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "reasoning", "summary": [{"type": "summary_text", "text": "from block"}]},
+                    {"type": "text", "text": "391"},
+                ],
+                "reasoning_content": "from field",
+            },
+            "index": 0,
+            "finish_reason": "stop",
+        }
+    ]
+
+    choices = config._transform_dbrx_choices(choices=databricks_choices)
+
+    assert choices[0].message.reasoning_content == "from block"
+    assert choices[0].message.content == "391"
+
+
+@pytest.mark.parametrize("reasoning_key", ["reasoning_content", "reasoning"])
+def test_chunk_parser_surfaces_top_level_reasoning_delta(reasoning_key: str) -> None:
+    iterator = DatabricksChatResponseIterator(None, sync_stream=True)
+    chunk = {
+        "id": "1",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "lit-qa-deepseek-v4-flash",
+        "choices": [
+            {
+                "delta": {"role": "assistant", "content": None, reasoning_key: "We need answer"},
+                "index": 0,
+                "finish_reason": None,
+            }
+        ],
+    }
+
+    parsed = iterator.chunk_parser(chunk)
+
+    assert parsed.choices[0].delta.reasoning_content == "We need answer"
+    assert parsed.choices[0].delta.content is None

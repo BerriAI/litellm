@@ -6,6 +6,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { useWatch } from "react-hook-form";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
+import UpstreamTokenHeaderField from "./UpstreamTokenHeaderField";
 import { requiredRule } from "@/components/common_components/formRules";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
@@ -184,6 +185,7 @@ const TokenExchangeFormFields: React.FC<TokenExchangeFormFieldsProps> = ({ isEdi
           />
         )}
       </MountedFormField>
+      <UpstreamTokenHeaderField />
     </>
   );
 };
