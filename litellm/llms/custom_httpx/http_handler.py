@@ -718,6 +718,7 @@ class AsyncHTTPHandler:
                     params=params,
                     headers=headers,
                     stream=stream,
+                    content=content,  # forward the body: without this, a retry re-sent an empty request
                 )
             finally:
                 await new_client.aclose()

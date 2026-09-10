@@ -28,7 +28,9 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _collect_ws_project_quota_callbacks,
     _maybe_spill_request_body_to_file,
-    _spilled_request_body_iterator,
+    _remove_spilled_request_body,
+    _spilled_request_body_chunks,
+    _SpilledRequestBody,
     _google_genai_streaming_hidden_params,
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
@@ -3660,14 +3662,54 @@ def test_request_body_spill_writes_file_and_returns_size(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_body_spill_iterator_streams_chunks_and_deletes_file(tmp_path):
+async def test_request_body_spill_chunks_stream_the_whole_file(tmp_path):
     path = tmp_path / "spill.json"
     body = os.urandom(700 * 1024)  # more than one 256 KiB chunk
     path.write_bytes(body)
 
     chunks = []
-    async for chunk in _spilled_request_body_iterator(str(path)):
+    async for chunk in _spilled_request_body_chunks(str(path)):
         chunks.append(chunk)
 
     assert b"".join(chunks) == body
+
+
+@pytest.mark.asyncio
+async def test_request_body_spill_body_is_reiterable(tmp_path):
+    """The httpx layer re-sends the same `content` object on a
+    connection-error retry: each __aiter__ must re-read the complete body.
+    """
+    path = tmp_path / "spill.json"
+    body = os.urandom(700 * 1024)
+    path.write_bytes(body)
+
+    content = _SpilledRequestBody(str(path))
+
+    first = []
+    async for chunk in content:
+        first.append(chunk)
+    second = []
+    async for chunk in content:
+        second.append(chunk)
+
+    assert b"".join(first) == body
+    assert b"".join(second) == body
+    # the file survives iterations; the handler's finally owns the cleanup
+    assert path.exists()
+
+
+def test_request_body_spill_cleanup_removes_the_file(tmp_path):
+    path = tmp_path / "spill.json"
+    path.write_bytes(b"{}")
+
+    _remove_spilled_request_body((str(path), 2))
+
     assert not path.exists()
+
+
+def test_request_body_spill_cleanup_without_spill_is_a_no_op():
+    _remove_spilled_request_body(None)  # must not raise
+
+
+def test_request_body_spill_cleanup_ignores_a_missing_file(tmp_path):
+    _remove_spilled_request_body((str(tmp_path / "gone.json"), 2))  # must not raise

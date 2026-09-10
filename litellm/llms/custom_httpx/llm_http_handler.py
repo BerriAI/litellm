@@ -343,13 +343,11 @@ def _maybe_spill_request_body_to_file(data: dict) -> tuple[str, int] | None:
         return None
 
 
-async def _spilled_request_body_iterator(path: str) -> AsyncIterator[bytes]:
+async def _spilled_request_body_chunks(path: str) -> AsyncIterator[bytes]:
     """
-    Stream a spilled request body from disk and delete the file once the
-    body has been fully sent (or the stream is closed on error). Reads run
-    in a thread so large bodies do not block the event loop.
+    Yield a spilled request body from disk in 256 KiB chunks. Reads run in a
+    thread so large bodies do not block the event loop.
     """
-    import os as _os
 
     def _read_chunks() -> Iterator[bytes]:
         with open(path, "rb") as fh:
@@ -359,18 +357,52 @@ async def _spilled_request_body_iterator(path: str) -> AsyncIterator[bytes]:
                     break
                 yield chunk
 
+    chunks = _read_chunks()
+    while True:
+        chunk = await asyncio.to_thread(next, chunks, b"")
+        if not chunk:
+            break
+        yield chunk
+
+
+class _SpilledRequestBody:
+    """Re-iterable async content view over a spilled request-body file.
+
+    The httpx layer re-sends the same ``content`` object when it retries a
+    request on a connection error (``AsyncHTTPHandler.post`` ->
+    ``single_connection_post_request``). httpx builds a fresh request per
+    attempt and calls ``__aiter__()`` once per request, so returning a fresh
+    generator each time re-reads the complete body from disk instead of
+    resuming a consumed iterator (or dropping the body entirely).
+
+    The file itself is owned by the caller: it is removed via
+    ``_remove_spilled_request_body`` once the provider call is over, so it
+    survives failed attempts for the retry to re-read.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+
+    def __aiter__(self) -> AsyncIterator[bytes]:
+        return _spilled_request_body_chunks(self._path)
+
+
+def _remove_spilled_request_body(spilled: tuple[str, int] | None) -> None:
+    """
+    Remove a spilled request-body file; a no-op unless a spill happened.
+
+    Runs in the handler's ``finally`` so the file is unlinked on success, on
+    a provider error, and on an exception raised between the spill and the
+    first send (e.g. an invalid timeout failing request construction).
+    """
+    if spilled is None:
+        return
+    import os as _os
+
     try:
-        chunks = _read_chunks()
-        while True:
-            chunk = await asyncio.to_thread(next, chunks, b"")
-            if not chunk:
-                break
-            yield chunk
-    finally:
-        try:
-            _os.unlink(path)
-        except OSError:
-            pass
+        _os.unlink(spilled[0])
+    except OSError:
+        pass
 
 
 class BaseLLMHTTPHandler:
@@ -2997,16 +3029,15 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
-
-        # Optional request-body spill (LITELLM_REQUEST_SPILL_MB, off by default):
-        # for the whole provider call this frame, the pre-call logging payload
-        # and the streaming iterator's request context all reference `data`, so
-        # large bodies multiply with concurrency on long-running calls. When
-        # enabled, serialize the final body once to a temp file, drop every
-        # in-memory reference and stream the body to the provider from there;
-        # the file deletes itself once the body has been sent, and a retry
-        # re-enters this handler and spills again.
+        # Optional request-body spill (LITELLM_REQUEST_SPILL_MB, off by
+        # default): for the whole provider call this frame, the pre-call
+        # logging payload and the streaming iterator's request context all
+        # reference `data`, so large bodies multiply with concurrency on
+        # long-running calls. When enabled, serialize the final body once to
+        # a temp file, drop every in-memory reference and stream the body to
+        # the provider from there; the `finally` below removes the file once
+        # the provider call is over, and a connection-error retry re-reads it
+        # via the re-iterable content object.
         _spilled = _maybe_spill_request_body_to_file(data)
         if _spilled is not None:
             request_context["input"] = "<spilled-to-disk>"
@@ -3023,8 +3054,6 @@ class BaseLLMHTTPHandler:
                     "headers": headers,
                 },
             )
-            body_kwargs = {"content": _spilled_request_body_iterator(_spilled[0])}
-            data = None
         else:
             ## LOGGING
             logging_obj.pre_call(
@@ -3036,6 +3065,16 @@ class BaseLLMHTTPHandler:
                     "headers": headers,
                 },
             )
+
+        body_kwargs: Final[dict[str, Any]] = (
+            {"content": _SpilledRequestBody(_spilled[0])}
+            if _spilled is not None
+            else {"data": signed_body}
+            if signed_body is not None
+            else {"json": data}
+        )
+        if _spilled is not None:
+            del data  # drop the last in-memory reference to the converted body
 
         try:
             if is_stream_request:
@@ -3085,6 +3124,12 @@ class BaseLLMHTTPHandler:
                 e=e,
                 provider_config=responses_api_provider_config,
             )
+        finally:
+            # Remove the spill file once the provider call is over: on
+            # success, on a provider error, and on an exception raised
+            # between the spill and the first send alike. It must survive
+            # until here so a connection-error retry can re-read it.
+            _remove_spilled_request_body(_spilled)
 
         initial_response: Final = responses_api_provider_config.transform_response_api_response(
             model=model,

@@ -1547,3 +1547,38 @@ def test_sync_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
         handler.close()
 
     assert response.text == "ok-tls"
+
+
+@pytest.mark.asyncio
+async def test_async_post_connection_error_retry_forwards_content(monkeypatch):
+    """Regression: the connection-error retry in AsyncHTTPHandler.post()
+    dropped the `content` kwarg, so a retried request went out with no body
+    at all. The retry must forward `content` like the initial attempt does.
+    """
+    handler = AsyncHTTPHandler()
+    captured: dict = {}
+    sentinel_response = object()
+
+    async def fake_single_connection_post_request(**kwargs):
+        captured.update(kwargs)
+        return sentinel_response
+
+    async def failing_send(request, stream=False):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(handler._client, "send", failing_send)
+    monkeypatch.setattr(
+        handler, "single_connection_post_request", fake_single_connection_post_request
+    )
+    try:
+        response = await handler.post(
+            url="http://upstream.invalid/v1/responses",
+            headers={"Content-Type": "application/json"},
+            timeout=5,
+            content=b"request-body",
+        )
+    finally:
+        await handler.close()
+
+    assert response is sentinel_response
+    assert captured["content"] == b"request-body"
