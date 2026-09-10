@@ -180,7 +180,6 @@ from .litellm_core_utils.prompt_templates.common_utils import (
 )
 from .litellm_core_utils.prompt_templates.factory import (
     custom_prompt,
-    function_call_prompt,
     map_system_message_pt,
     ollama_pt,
     prompt_factory,
@@ -5466,12 +5465,6 @@ def completion(
             add_provider_specific_params=True,
             provider_config=provider_config,
         )
-
-        if litellm.add_function_to_prompt and optional_params.get(
-            "functions_unsupported_model", None
-        ):  # if user opts to add it to prompt, when API doesn't support function calling
-            functions_unsupported_model: Final = optional_params.pop("functions_unsupported_model")
-            messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
 
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(
