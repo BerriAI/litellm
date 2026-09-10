@@ -1,8 +1,8 @@
 import asyncio
 import datetime
 import json
-from datetime import timezone
 from collections.abc import Mapping
+from datetime import timezone
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,12 +15,13 @@ from litellm.constants import (
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -41,7 +42,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_logging_payload,
     get_spend_logs_id,
 )
-from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.utils import hash_token
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
@@ -927,21 +927,40 @@ def test_safe_dumps_complex_metadata_like_object():
 _RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
 
 
+_BEDROCK_INFERENCE_PROFILE_ARN: Final = (
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-sonnet-4-5"
+)
+_OVERLONG_MODEL: Final = "m" * (MAX_SPEND_LOG_MODEL_NAME_LENGTH + 1)
+
+
 @pytest.mark.parametrize(
-    ("rejection", "expected_model"),
+    ("requested_model", "failure", "expected_model"),
     [
         (
+            _RAW_MODEL_WITH_PROMPT,
             ProxyModelNotFoundError(route="acompletion", model_name=_RAW_MODEL_WITH_PROMPT),
             UNKNOWN_MODEL_SPEND_LOG_MODEL,
         ),
-        (ValueError("provider timed out"), _RAW_MODEL_WITH_PROMPT),
+        (
+            _RAW_MODEL_WITH_PROMPT,
+            ValueError("Upstream passthrough request failed with status 404"),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+        ),
+        (_OVERLONG_MODEL, ValueError("provider timed out"), UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        (
+            "gpt-5.2",
+            ProxyModelNotFoundError(route="acompletion", model_name="gpt-5.2"),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+        ),
+        ("gpt-5.2", ValueError("provider timed out"), "gpt-5.2"),
+        (_BEDROCK_INFERENCE_PROFILE_ARN, ValueError("provider timed out"), _BEDROCK_INFERENCE_PROFILE_ARN),
     ],
 )
-def test_get_logging_payload_replaces_model_only_when_router_rejected_it_as_unknown(
-    rejection: Exception, expected_model: str
+def test_get_logging_payload_replaces_rejected_or_prompt_shaped_models_with_the_placeholder(
+    requested_model: str, failure: Exception, expected_model: str
 ):
     kwargs: Final = {
-        "model": _RAW_MODEL_WITH_PROMPT,
+        "model": requested_model,
         "messages": [{"role": "user", "content": "hi"}],
         "call_type": "acompletion",
         "litellm_params": {"metadata": {"user_api_key": "sk-test", "status": "failure"}},
@@ -949,7 +968,7 @@ def test_get_logging_payload_replaces_model_only_when_router_rejected_it_as_unkn
 
     payload: Final = get_logging_payload(
         kwargs=kwargs,
-        response_obj=rejection,
+        response_obj=failure,
         start_time=datetime.datetime.now(timezone.utc),
         end_time=datetime.datetime.now(timezone.utc),
     )
