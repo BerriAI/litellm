@@ -7943,3 +7943,37 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
         )
         is True
     )
+
+
+def test_add_user_api_key_auth_to_request_metadata_attributes_a_cli_session_to_its_alias():
+    data = {"model": "gpt-5.4-nano", "messages": [{"role": "user", "content": "hi"}], "litellm_metadata": {}}
+    session = UserAPIKeyAuth(
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        key_alias="cli-session-alice",
+        user_id="alice",
+        is_session_token=True,
+    )
+
+    metadata = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data, user_api_key_dict=session, _metadata_variable_name="litellm_metadata"
+    )["litellm_metadata"]
+
+    assert metadata["user_api_key"] == "cli-session-alice"
+    assert metadata["user_api_key_hash"] == "cli-session-alice"
+    assert metadata["user_api_key_alias"] == "cli-session-alice"
+    assert "Qm7xJ2kP9sLw4vT1nR8yAa" not in (metadata["user_api_key"], metadata["user_api_key_hash"])
+
+
+def test_add_user_api_key_auth_to_request_metadata_keeps_the_hashed_token_for_virtual_keys():
+    from litellm.proxy._types import hash_token
+
+    data = {"model": "gpt-5.4-nano", "messages": [], "litellm_metadata": {}}
+    hashed = hash_token("sk-virtual-key")
+    virtual_key = UserAPIKeyAuth(api_key=hashed, key_alias="cli-session-alice", user_id="alice")
+
+    metadata = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data, user_api_key_dict=virtual_key, _metadata_variable_name="litellm_metadata"
+    )["litellm_metadata"]
+
+    assert metadata["user_api_key"] == hashed
+    assert metadata["user_api_key_hash"] == hashed

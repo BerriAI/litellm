@@ -4432,3 +4432,61 @@ def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_recei
         )
         == "resp_01Lit6806Bridged"
     )
+
+
+_CLI_SESSION_ALIAS: Final = "cli-session-alice"
+_CLI_SESSION_TOKEN: Final = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
+
+
+def _cli_session_request_metadata(logged_key: str) -> dict[str, str]:
+    return {
+        "user_api_key": logged_key,
+        "user_api_key_hash": logged_key,
+        "user_api_key_alias": _CLI_SESSION_ALIAS,
+        "user_api_key_user_id": "alice",
+    }
+
+
+@pytest.mark.parametrize("call_type", ["acompletion", "anthropic_messages", "aresponses"])
+def test_get_logging_payload_attributes_a_cli_session_to_its_alias(call_type: str):
+    payload = get_logging_payload(
+        kwargs={
+            "call_type": call_type,
+            "model": "gpt-5.4-nano",
+            "response_cost": 0.00001,
+            "litellm_params": {"metadata": _cli_session_request_metadata(_CLI_SESSION_ALIAS)},
+        },
+        response_obj=litellm.ModelResponse(id=f"{call_type}-1", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == _CLI_SESSION_ALIAS
+    assert json.loads(payload["metadata"])["user_api_key"] == _CLI_SESSION_ALIAS
+    assert json.loads(payload["metadata"])["user_api_key_alias"] == _CLI_SESSION_ALIAS
+
+
+@pytest.mark.parametrize("call_type", ["acompletion", "anthropic_messages", "aresponses"])
+def test_get_logging_payload_never_lands_a_raw_cli_session_token(call_type: str):
+    payload = get_logging_payload(
+        kwargs={
+            "call_type": call_type,
+            "model": "gpt-5.4-nano",
+            "litellm_params": {"metadata": _cli_session_request_metadata(_CLI_SESSION_TOKEN)},
+        },
+        response_obj=litellm.ModelResponse(id=f"{call_type}-2", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == hash_token(_CLI_SESSION_TOKEN)
+    assert json.loads(payload["metadata"])["user_api_key"] == hash_token(_CLI_SESSION_TOKEN)
+
+
+def test_redact_logged_api_key_cli_session_alias_needs_alias_provenance():
+    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True, key_alias=_CLI_SESSION_ALIAS) == (
+        _CLI_SESSION_ALIAS
+    )
+    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True) == hash_token(_CLI_SESSION_ALIAS)
+    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, key_alias=_CLI_SESSION_ALIAS) == hash_token(_CLI_SESSION_ALIAS)
+    assert _redact_logged_api_key("alice", already_redacted=True, key_alias="alice") == hash_token("alice")

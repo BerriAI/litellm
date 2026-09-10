@@ -11,6 +11,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
+    CLI_SESSION_KEY_PREFIX,
     SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
     SPEND_LOG_KEY_METADATA_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
@@ -62,6 +63,7 @@ _SPEND_LOG_STATEMENT_TIMEOUT_SQL: Final = f"SET LOCAL statement_timeout = {SPEND
 _SPEND_LOG_TRANSACTION_TIMEOUT: Final = timedelta(milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS)
 
 _HASHED_JWT_PREFIX: Final = "hashed-jwt-"
+_CLI_SESSION_KEY_PREFIX: Final = f"{CLI_SESSION_KEY_PREFIX}-"
 
 
 class KeyMetadataDict(TypedDict, total=False):
@@ -196,6 +198,16 @@ async def attach_user_emails(
     if not emails:
         return recovered
     return MappingProxyType({api_key: _meta_with_email(meta, emails) for api_key, meta in recovered.items()})
+
+
+def recover_cli_session_key_metadata(missing_keys: AbstractSet[str]) -> Mapping[str, KeyMetadataDict]:
+    return MappingProxyType(
+        {
+            key: KeyMetadataDict(key_alias=key, user_id=key.removeprefix(_CLI_SESSION_KEY_PREFIX))
+            for key in missing_keys
+            if key.startswith(_CLI_SESSION_KEY_PREFIX) and len(key) > len(_CLI_SESSION_KEY_PREFIX)
+        }
+    )
 
 
 async def recover_double_hashed_key_metadata(
@@ -383,9 +395,15 @@ async def fill_missing_api_key_aliases(
     if not missing_keys:
         return tuple(rows)
 
+    from_session_keys: Final = recover_cli_session_key_metadata(missing_keys)
     recovered: Final = await attach_user_emails(
         prisma_client,
-        await recover_double_hashed_key_metadata(prisma_client, missing_keys),
+        MappingProxyType(
+            {
+                **from_session_keys,
+                **await recover_double_hashed_key_metadata(prisma_client, missing_keys - frozenset(from_session_keys)),
+            }
+        ),
     )
     if not recovered:
         return tuple(rows)

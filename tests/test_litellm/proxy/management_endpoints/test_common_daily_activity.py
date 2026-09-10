@@ -2237,3 +2237,19 @@ def test_spend_logs_window_is_none_when_no_date_parses():
     from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
 
     assert _spend_logs_window({"garbage", ""}) is None
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_resolves_cli_session_keys_from_the_key_itself():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(side_effect=AssertionError("no reverse-hash or spend-log scan expected"))
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com")]
+    )
+
+    result = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={"cli-session-alice"})
+
+    assert result["cli-session-alice"]["key_alias"] == "cli-session-alice"
+    assert result["cli-session-alice"]["user_email"] == "alice@example.com"
