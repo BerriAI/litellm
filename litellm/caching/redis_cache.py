@@ -396,7 +396,9 @@ class RedisCircuitBreakerOpenError(Exception):
     """Raised in place of a Redis call while the circuit breaker is open."""
 
 
-def log_redis_failure(logger: logging.Logger, level: int, message: str, exc: BaseException) -> None:
+def log_redis_failure(
+    logger: logging.Logger, level: int, message: str, exc: BaseException, with_traceback: bool = False
+) -> None:
     """Log a Redis failure the caller is about to swallow.
 
     An open breaker refuses every call until Redis recovers and announced itself once when it
@@ -405,7 +407,7 @@ def log_redis_failure(logger: logging.Logger, level: int, message: str, exc: Bas
     if isinstance(exc, RedisCircuitBreakerOpenError):
         logger.debug("%s: %s", message, exc)
         return
-    logger.log(level, "%s: %s", message, exc, exc_info=exc if level >= logging.ERROR else None)
+    logger.log(level, "%s: %s", message, exc, exc_info=exc if with_traceback else None)
 
 
 def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> int:
