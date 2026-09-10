@@ -33,6 +33,19 @@ def test_originating_snapshot_masks_nested_credentials_without_altering_source()
     assert body["metadata"]["nested"][0]["Authorization"] == "Bearer secret"
 
 
+@pytest.mark.parametrize("header", ["Cookie", "cookie", "COOKIE", "sEt-CoOkIe"])
+def test_originating_snapshot_redacts_cookie_headers_shared_with_caller_metadata(header: str) -> None:
+    headers: Final = {header: "session=synthetic-session-credential", "content-type": "application/json"}
+    body: Final = {"messages": [{"role": "user", "content": "hello"}], "metadata": {"headers": headers}}
+    snapshot: Final = masked_originating_request({"proxy_server_request": {"body": body, "headers": headers}})
+    assert snapshot == {
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"headers": {header: "REDACTED", "content-type": "application/json"}},
+    }
+    assert headers[header] == "session=synthetic-session-credential"
+    assert body["metadata"]["headers"][header] == "session=synthetic-session-credential"
+
+
 @pytest.mark.parametrize("value", [None, "not-json", [], {"messages": object()}])
 def test_invalid_provider_payload_is_not_reported_as_captured(value: object) -> None:
     assert classifier_input_snapshot(value) is None

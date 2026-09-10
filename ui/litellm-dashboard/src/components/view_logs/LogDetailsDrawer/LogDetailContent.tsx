@@ -73,6 +73,9 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
   const isClassifier =
     metadata.internal_call_origin === AUTOROUTER_CLASSIFIER_ORIGIN &&
     (logEntry.call_type === "completion" || logEntry.call_type === "acompletion");
+  const rawRequest = formatData(logEntry.proxy_server_request || logEntry.messages);
+  const hasClassifierAudit =
+    isClassifier && (rawRequest?.classifier_input != null || rawRequest?.originating_request_masked != null);
 
   const hasMessages = checkHasMessages(logEntry.messages);
   const hasResponse = checkHasResponse(logEntry.response);
@@ -92,10 +95,6 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
-
-  const getRawRequest = () => {
-    return formatData(logEntry.proxy_server_request || logEntry.messages);
-  };
 
   const getFormattedResponse = () => {
     if (hasError && errorInfo) {
@@ -202,14 +201,14 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
           </div>
         </div>
       ) : null}
-      {!isLoadingDetails && isClassifier && (
-        <ClassifierAuditView request={getRawRequest()} response={getFormattedResponse()} />
+      {!isLoadingDetails && hasClassifierAudit && (
+        <ClassifierAuditView request={rawRequest} response={getFormattedResponse()} />
       )}
-      {!isLoadingDetails && !isClassifier && (
+      {!isLoadingDetails && !hasClassifierAudit && (
         <RequestResponseSection
           hasResponse={hasResponse}
           hasError={hasError}
-          getRawRequest={getRawRequest}
+          getRawRequest={() => rawRequest}
           getFormattedResponse={getFormattedResponse}
           logEntry={logEntry}
         />
