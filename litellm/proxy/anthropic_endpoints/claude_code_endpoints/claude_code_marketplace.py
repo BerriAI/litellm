@@ -2,8 +2,9 @@
 CLAUDE CODE MARKETPLACE
 
 Provides a registry/discovery layer for Claude Code plugins.
-Plugins are stored as metadata + git source references in LiteLLM database.
-Actual plugin files are hosted on GitHub/GitLab/Bitbucket.
+Plugins are stored as metadata + source references in LiteLLM database.
+Actual plugin files are hosted on GitHub/GitLab/Bitbucket or as a zip archive on
+any HTTPS host (S3, Artifactory, a static file server).
 
 Endpoints:
 /claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated)
@@ -21,6 +22,7 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Annotated, Final, Protocol, TypedDict
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -162,6 +164,15 @@ async def get_marketplace():
 # alphanumeric characters, dots, hyphens, and underscores.
 # This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
 _VALID_GIT_SUBDIR_PATH_RE: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
+_VALID_SHA256_RE: Final = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _is_https_url_with_host(url: str) -> bool:
+    try:
+        parts: Final = urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme == "https" and bool(parts.hostname)
 
 
 def _validate_plugin_source(source: Mapping[str, str]) -> None:
@@ -199,10 +210,24 @@ def _validate_plugin_source(source: Mapping[str, str]) -> None:
                     "error": "git-subdir 'path' must be a relative path of the form 'segment/segment' (alphanumeric, dots, hyphens, underscores only)"
                 },
             )
+    elif source_type == "archive":
+        if not _is_https_url_with_host(source.get("url", "")):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "archive source must include an https 'url' field "
+                    "(e.g., 'https://bucket.s3.amazonaws.com/plugins/plugin-name.zip')"
+                },
+            )
+        if "sha256" in source and not _VALID_SHA256_RE.match(source["sha256"]):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "archive 'sha256' must be a 64-character hex digest"},
+            )
     else:
         raise HTTPException(
             status_code=400,
-            detail={"error": "source.source must be 'github', 'url', or 'git-subdir'"},
+            detail={"error": "source.source must be 'github', 'url', 'git-subdir', or 'archive'"},
         )
 
 
@@ -248,8 +273,8 @@ async def register_plugin(
     Register a new plugin in the LiteLLM marketplace.
 
     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-    GitHub/GitLab/Bitbucket. Claude Code will clone from the git source
-    when users install.
+    GitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).
+    Claude Code clones the git source or downloads the archive when users install.
 
     This endpoint is create-only and never overwrites. If a plugin with
     the same name already exists it returns 409 Conflict; use
@@ -259,7 +284,7 @@ async def register_plugin(
 
     Parameters:
         - name: Plugin name (kebab-case)
-        - source: Git source reference (github, url, or git-subdir format)
+        - source: Plugin source reference (github, url, git-subdir, or archive format)
         - version: Semantic version (optional)
         - description: Plugin description (optional)
         - author: Author information (optional)
@@ -503,7 +528,7 @@ async def update_plugin(
 
     Parameters:
         - plugin_name: Name of the plugin to update (path parameter)
-        - source: Git source reference (github, url, or git-subdir format)
+        - source: Plugin source reference (github, url, git-subdir, or archive format)
         - version: Semantic version (optional)
         - description: Plugin description (optional)
         - author: Author information (optional)
