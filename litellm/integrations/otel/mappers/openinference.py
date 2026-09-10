@@ -12,6 +12,7 @@ from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
+    MAX_MESSAGE_ATTRS_PER_SPAN,
     MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
     collect,
     drop_none,
@@ -25,6 +26,8 @@ from litellm.integrations.otel.model.payloads import (
     LLMRequestParams,
     ToolDefinition,
 )
+
+_MAX_INDEXED_MESSAGES: Final = MAX_MESSAGE_ATTRS_PER_SPAN // 2
 
 
 class OpenInferenceMapper:
@@ -84,22 +87,35 @@ class OpenInferenceMapper:
                 return {}
 
     def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
+        outputs: Final = output_messages(data)
+        indexed_in, indexed_out = self._indexed_split(len(data.messages_in), len(outputs))
         return {
             **collect(self._LLM_CALL_ATTRS, data),
             **collect(self._BLOB_ATTRS, data),
-            **self._messages("llm.input_messages", "input.value", data.messages_in),
-            **self._messages("llm.output_messages", "output.value", output_messages(data)),
+            **self._messages("llm.input_messages", "input.value", data.messages_in, indexed_in),
+            **self._messages("llm.output_messages", "output.value", outputs, indexed_out),
             **self._tools(data),
         }
 
     @staticmethod
-    def _messages(prefix: str, value_key: str, messages: Sequence[object]) -> AttributeMap:
-        """Per-message ``{prefix}.{idx}.message.*`` keys + the ``value_key`` blob."""
+    def _indexed_split(inputs: int, outputs: int) -> tuple[int, int]:
+        """How many prompt and response messages get per-index attributes.
+
+        Both directions share one span-wide allowance. The response is reserved at
+        least half of it, so a long prompt can never push the completion off the
+        span, and the prompt takes whatever the response leaves unused.
+        """
+        indexed_out: Final = min(outputs, max(_MAX_INDEXED_MESSAGES // 2, _MAX_INDEXED_MESSAGES - inputs))
+        return _MAX_INDEXED_MESSAGES - indexed_out, indexed_out
+
+    @staticmethod
+    def _messages(prefix: str, value_key: str, messages: Sequence[object], indexed: int) -> AttributeMap:
+        """``{prefix}.{idx}.message.*`` keys for the leading ``indexed`` messages + the ``value_key`` blob of all."""
         parsed: Final = [(m.get("role") if isinstance(m, dict) else None, message_content(m)) for m in messages]
         attrs: Final = drop_none(
             {
                 key: value
-                for idx, (role, content) in enumerate(parsed)
+                for idx, (role, content) in enumerate(parsed[:indexed])
                 for key, value in (
                     (
                         f"{prefix}.{idx}.message.role",
