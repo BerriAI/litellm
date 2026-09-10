@@ -39,6 +39,7 @@ longer signal it.
 
 - **team**: Read now decodes the `team_info` envelope `/team/info` actually returns, so team attributes refresh from the proxy instead of always falling back to the prior state
 - **key**: Read now unwraps the `info` envelope `/key/info` actually returns; previously reads mapped nothing back into state, so drift on a key was never detected
+- **key**: Read now picks up `model_rpm_limit`, `model_tpm_limit`, `guardrails`, `tags`, `enforced_params`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type` and `prompts` from `info.metadata`, where the proxy actually stores them; previously they stayed empty in state, so a matching config showed a permanent phantom diff on them and out-of-band changes to them were never detected
 - **key**: Updates no longer send an empty `budget_duration`, which the proxy rejects with a 400; any update to a key without a configured `budget_duration` previously failed outright
 - **key**: A config-supplied `key` value (write-only) is now forwarded to `/key/generate`; previously it was silently dropped and the proxy generated a random key instead
 - **security**: The `litellm_key` data source and `litellm_key_block` resource normalize raw `sk-` keys to their SHA-256 token hash before building request URLs and resource IDs, so plaintext keys no longer land in reverse-proxy access logs, Terraform plan output, or state IDs

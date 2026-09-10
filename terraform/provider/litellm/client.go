@@ -87,10 +87,38 @@ func (c *Client) GetKey(keyID string) (*Key, error) {
 				info["key"] = k
 			}
 		}
+		hoistKeyFieldsStoredInMetadata(info)
 		return c.parseKeyResponse(info)
 	}
 
 	return c.parseKeyResponse(resp)
+}
+
+var keyFieldsStoredInMetadata = []string{
+	"model_rpm_limit",
+	"model_tpm_limit",
+	"guardrails",
+	"tags",
+	"enforced_params",
+	"allowed_passthrough_routes",
+	"rpm_limit_type",
+	"tpm_limit_type",
+	"prompts",
+}
+
+func hoistKeyFieldsStoredInMetadata(info map[string]interface{}) {
+	metadata, ok := info["metadata"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	for _, field := range keyFieldsStoredInMetadata {
+		if existing, present := info[field]; present && existing != nil {
+			continue
+		}
+		if v, present := metadata[field]; present {
+			info[field] = v
+		}
+	}
 }
 
 func (c *Client) UpdateKey(key *Key) (*Key, error) {
