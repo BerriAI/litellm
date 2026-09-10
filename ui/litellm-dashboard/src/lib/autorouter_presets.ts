@@ -159,15 +159,18 @@ export const deploymentRefsFromModelInfo = (
     return row.model_name && underlyingModels.length > 0 ? [{ modelGroup: row.model_name, underlyingModels }] : [];
   });
 
-export const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+export const resolveAvailableModels = (requiredModel: string, availability: ModelAvailability): readonly string[] => {
   const { modelGroups, underlyingIndex } = availability;
-  if (modelGroups.has(requiredModel)) return requiredModel;
+  if (modelGroups.has(requiredModel)) return [requiredModel];
   const normalized = normalizeModelName(requiredModel);
-  const groupMatch = Array.from(modelGroups).find((available) => normalizeModelName(available) === normalized);
-  if (groupMatch !== undefined) return groupMatch;
+  const groupMatches = Array.from(modelGroups).filter((available) => normalizeModelName(available) === normalized);
+  if (groupMatches.length > 0) return groupMatches;
   const key = normalizeUnderlyingModel(requiredModel);
-  return key === null ? undefined : underlyingIndex.get(key)?.[0];
+  return key === null ? [] : underlyingIndex.get(key) ?? [];
 };
+
+export const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined =>
+  resolveAvailableModels(requiredModel, availability)[0];
 
 export const getMissingModels = (
   config: Parameters<typeof getRequiredModels>[0],
