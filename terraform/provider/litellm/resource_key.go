@@ -315,6 +315,7 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	metadata, err := plannedKeyMetadata(c, d)
 	if err != nil {
+		d.Partial(true)
 		return diag.FromErr(fmt.Errorf("error updating key: %s", err))
 	}
 	key.Metadata = metadata
