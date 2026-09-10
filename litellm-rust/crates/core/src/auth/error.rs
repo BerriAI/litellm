@@ -6,6 +6,8 @@ pub enum AuthError {
     Configuration(#[from] AuthConfigurationError),
     #[error("credential acquisition failed: {0}")]
     AzureTokenAcquisition(String),
+    #[error("credential acquisition failed: Vertex AI credentials: {0}")]
+    VertexTokenAcquisition(String),
     #[error("credential acquisition failed: {}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
     CredentialChain(Vec<AuthError>),
     #[error("credential caller failed: credential caller returned an empty credential")]

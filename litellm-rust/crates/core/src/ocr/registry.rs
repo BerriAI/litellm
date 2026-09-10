@@ -26,6 +26,7 @@ pub(crate) enum OcrProvider {
     Mistral,
     AzureAi,
     Reducto,
+    VertexAi,
 }
 
 impl OcrProvider {
@@ -34,6 +35,7 @@ impl OcrProvider {
             Self::Mistral => "mistral",
             Self::AzureAi => "azure_ai",
             Self::Reducto => "reducto",
+            Self::VertexAi => "vertex_ai",
         }
     }
 }
@@ -51,6 +53,7 @@ pub(crate) fn resolve_wire_adapter(
         "mistral" => OcrProvider::Mistral,
         "azure_ai" => OcrProvider::AzureAi,
         "reducto" => OcrProvider::Reducto,
+        "vertex_ai" => OcrProvider::VertexAi,
         value => return Err(Error::InvalidProvider(value.to_string())),
     };
     let adapter = match typed_provider {
@@ -71,6 +74,10 @@ pub(crate) fn resolve_wire_adapter(
                 provider.model
             )));
         }
+        OcrProvider::VertexAi if provider.model.to_ascii_lowercase().contains("deepseek") => {
+            return Err(Error::Unsupported("Vertex DeepSeek OCR"));
+        }
+        OcrProvider::VertexAi => OcrAdapterKind::VertexMistral,
     };
     Ok((provider.model.to_string(), adapter))
 }

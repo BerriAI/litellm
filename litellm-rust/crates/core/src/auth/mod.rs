@@ -1,5 +1,6 @@
 mod credential;
 pub mod error;
+pub(crate) mod vertex;
 pub use error::AuthError;
 pub(crate) mod http;
 mod policy;

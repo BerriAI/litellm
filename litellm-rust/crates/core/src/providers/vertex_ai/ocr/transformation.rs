@@ -3,8 +3,6 @@ use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{LiteLLMOcrResponse, OcrRequestData};
 use serde_json::{Map, Value, json};
 
-use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
-
 const VERTEX_DEFAULT_LOCATION: &str = "us-central1";
 const VERTEX_DEFAULT_DEEPSEEK_API_BASE: &str = "https://aiplatform.googleapis.com";
 const VERTEX_AI_API_KEY_ENV: &str = "VERTEX_AI_API_KEY";
@@ -23,10 +21,8 @@ const DEEPSEEK_SUPPORTED_OCR_PARAMS: &[&str] = &[
     "stop",
 ];
 
-pub struct VertexAiOcrConfig;
 pub struct VertexAiDeepSeekOcrConfig;
 
-pub const VERTEX_AI_OCR_CONFIG: VertexAiOcrConfig = VertexAiOcrConfig;
 pub const VERTEX_AI_DEEPSEEK_OCR_CONFIG: VertexAiDeepSeekOcrConfig = VertexAiDeepSeekOcrConfig;
 
 fn string_param<'a>(params: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
@@ -82,30 +78,6 @@ fn vertex_location(
         .or_else(|| env_lookup(VERTEXAI_LOCATION_ENV).filter(|value| !value.trim().is_empty()))
         .or_else(|| env_lookup(VERTEX_LOCATION_ENV).filter(|value| !value.trim().is_empty()))
         .unwrap_or_else(|| VERTEX_DEFAULT_LOCATION.to_string())
-}
-
-fn vertex_mistral_api_base(api_base: Option<&str>, location: &str) -> String {
-    api_base
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("https://{location}-aiplatform.googleapis.com"))
-        .trim_end_matches('/')
-        .to_string()
-}
-
-pub fn complete_vertex_mistral_url(
-    api_base: Option<&str>,
-    model: &str,
-    optional_params: &Map<String, Value>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
-    let project = vertex_project(optional_params, env_lookup)?;
-    let location = vertex_location(optional_params, env_lookup);
-    let base = vertex_mistral_api_base(api_base, &location);
-    Ok(format!(
-        "{base}/v1/projects/{project}/locations/{location}/publishers/mistralai/models/{model}:rawPredict"
-    ))
 }
 
 pub fn complete_vertex_deepseek_url(
@@ -204,53 +176,6 @@ fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> V
             "model": model,
             "usage_info": usage.unwrap_or_else(|| json!({})),
         }),
-    }
-}
-
-impl OcrProviderConfig for VertexAiOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
-        MISTRAL_OCR_CONFIG.supported_ocr_params()
-    }
-
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn transform_ocr_request(
-        &self,
-        model: &str,
-        document: Value,
-        optional_params: Map<String, Value>,
-    ) -> Result<OcrRequestData, Error> {
-        MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
-    }
-
-    fn transform_ocr_response(
-        &self,
-        model: &str,
-        response_json: Value,
-    ) -> Result<LiteLLMOcrResponse, Error> {
-        MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
-    }
-
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn complete_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        optional_params: &Map<String, Value>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        complete_vertex_mistral_url(api_base, model, optional_params, env_lookup)
-    }
-
-    fn resolve_api_key(
-        &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        resolve_vertex_api_key(api_key, env_lookup)
-    }
-
-    fn requires_data_uri_document(&self) -> bool {
-        true
     }
 }
 
@@ -378,37 +303,6 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
 mod tests {
     use super::*;
     use rstest::rstest;
-
-    #[test]
-    fn vertex_mistral_url_uses_project_location_and_model() {
-        let params = Map::from_iter([
-            ("vertex_project".to_string(), json!("proj-1")),
-            ("vertex_location".to_string(), json!("europe-west4")),
-        ]);
-
-        let url = complete_vertex_mistral_url(None, "mistral-ocr-maas", &params, &|_| None)
-            .expect("url builds");
-
-        assert_eq!(
-            url,
-            "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
-        );
-    }
-
-    #[test]
-    fn vertex_mistral_reuses_mistral_body_transform() {
-        let body = VERTEX_AI_OCR_CONFIG
-            .transform_ocr_request(
-                "mistral-ocr-maas",
-                json!({"type": "image_url", "image_url": "data:image/png;base64,abc"}),
-                Map::new(),
-            )
-            .expect("request transforms")
-            .data;
-
-        assert_eq!(body["model"], "mistral-ocr-maas");
-        assert_eq!(body["document"]["image_url"], "data:image/png;base64,abc");
-    }
 
     #[test]
     fn vertex_deepseek_request_uses_ocr_endpoint_shape() {
