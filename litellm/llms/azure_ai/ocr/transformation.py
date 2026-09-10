@@ -2,6 +2,7 @@
 Azure AI OCR transformation implementation.
 """
 
+from collections.abc import Callable, Mapping
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -10,7 +11,8 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
 from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
-from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData
+from litellm.llms.azure_ai.ocr.common_utils import azure_rust_ocr_config
+from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData, RustOCRConfig
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -29,6 +31,11 @@ class AzureAIOCRConfig(MistralOCRConfig):
     Important: Azure AI only supports base64 data URIs (data:image/..., data:application/pdf;base64,...).
     Regular URLs are not supported.
     """
+
+    def get_rust_ocr_config(
+        self, kwargs: Mapping[str, object], resolve_secret: Callable[[str], str | None]
+    ) -> RustOCRConfig | None:
+        return azure_rust_ocr_config(kwargs)
 
     def __init__(self) -> None:
         super().__init__()
@@ -115,7 +122,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug("Azure AI OCR: Converting URL to base64 data URI (sync): %s", url)
+        verbose_logger.debug("Azure AI OCR: Converting URL to base64 data URI (sync)")
 
         # Fetch and convert to base64 data URI
         # convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
@@ -138,7 +145,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
         Returns:
             Base64 data URI string
         """
-        verbose_logger.debug("Azure AI OCR: Converting URL to base64 data URI (async): %s", url)
+        verbose_logger.debug("Azure AI OCR: Converting URL to base64 data URI (async)")
 
         # Fetch and convert to base64 data URI asynchronously
         # async_convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."

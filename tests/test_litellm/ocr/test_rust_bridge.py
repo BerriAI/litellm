@@ -1,11 +1,13 @@
 """Tests for the optional Rust-backed OCR path."""
 
+import asyncio
 import builtins
 import importlib
 import types
 
 import httpx
 import pytest
+import pytest_asyncio
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -189,14 +191,20 @@ def build_request(
     )
 
 
-@pytest.fixture(autouse=True)
-def _reset_rust_flag():
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
     rust_bridge._OCR.reset()
     rust_bridge._AOCR.reset()
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    await asyncio.sleep(0)
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    await GLOBAL_LOGGING_WORKER.stop()
     rust_bridge._OCR.reset()
     rust_bridge._AOCR.reset()
     configuration.reset_rust_configuration()
@@ -719,13 +727,18 @@ def test_run_rust_ocr_runs_pre_call_logging():
     assert logging_obj.pre_call_kwargs is not None
     assert logging_obj.pre_call_kwargs["input"] == "OCR document processing"
     additional_args = logging_obj.pre_call_kwargs["additional_args"]
-    complete_input = additional_args["complete_input_dict"]
-    assert complete_input["document"] == DOCUMENT
-    assert complete_input["include_image_base64"] is True
-    assert additional_args["api_base"] == "https://api.mistral.ai/v1"
-    assert additional_args["headers"] == {
-        "x-trace-id": "trace-1",
+    assert logging_obj.pre_call_kwargs["api_key"] is None
+    assert additional_args == {
+        "ocr_request_metadata": {
+            "model": "mistral-ocr-latest",
+            "custom_llm_provider": "mistral",
+            "litellm_call_id": None,
+            "document_type": "document_url",
+            "timeout": ocr_main.request_timeout,
+        }
     }
+    assert logging_obj.update_kwargs["optional_params"] == {}
+    assert bridge.calls[0]["optional_params"] == {"include_image_base64": True}
 
 
 def test_ocr_routes_to_rust_when_enabled(fake_bridge):
@@ -994,71 +1007,260 @@ async def test_python_fallback_maps_original_options_once(enabled, monkeypatch):
     assert len(handler.calls) == 2
 
 
+@pytest.mark.parametrize("provider", ["azure_ai", "vertex_ai"])
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("model", ["mistral/mistral-ocr-latest", "azure_ai/doc-intelligence/prebuilt-read"])
 @pytest.mark.asyncio
-async def test_native_public_ocr_matches_python(model, asynchronous):
+async def test_ocr_credentials_reach_execution_but_never_logging(provider, asynchronous, caplog):
+    import copy
+    import datetime
+    import logging
+
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    snapshots = []
+
+    class Capture(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            snapshots.append(copy.deepcopy(kwargs))
+
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            snapshots.append(copy.deepcopy(kwargs))
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            snapshots.append(copy.deepcopy(kwargs))
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            snapshots.append(copy.deepcopy(kwargs))
+
+    secrets = {
+        "client_secret": "sentinel-client-secret",
+        "azure_ad_token": "sentinel-azure-token",
+        "vertex_credentials": {"private_key": "sentinel-private-key", "nested": {"token": "sentinel-nested-token"}},
+        "unrecognized_future_option": "sentinel-future-option",
+    }
+    model = f"{provider}/mistral-ocr-latest"
+    document = {"type": "document_url", "document_url": "https://example.com/sentinel-document?sig=sentinel-signature"}
+    headers = {"Authorization": "Bearer sentinel-authorization", "x-custom": "sentinel-header"}
+    logger = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="aocr" if asynchronous else "ocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="review-call",
+        function_id="review",
+        kwargs={**secrets, "document": document, "api_key": "sentinel-api-key", "extra_headers": headers},
+        dynamic_input_callbacks=[Capture()],
+        dynamic_success_callbacks=[Capture()],
+        dynamic_failure_callbacks=[Capture()],
+        log_raw_request_response=True,
+    )
+    bridge = RecordingAsyncBridge() if asynchronous else RecordingBridge()
+    litellm.rust(True)
+    (rust_bridge._AOCR if asynchronous else rust_bridge._OCR).override(bridge)
+    request = build_request(
+        logging_obj=logger,
+        model=model,
+        custom_llm_provider=provider,
+        document=document,
+        api_key="sentinel-api-key",
+        extra_headers=headers,
+        optional_params=secrets,
+    )
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        response = (
+            await ocr_main._run_rust_aocr(request, lambda _: None)
+            if asynchronous
+            else ocr_main._run_rust_ocr(request, lambda _: None)
+        )
+        logger.post_call(
+            original_response='{"pages":[]}',
+            api_key="sentinel-api-key",
+            input=document,
+            additional_args={"complete_input_dict": secrets, "headers": headers},
+        )
+        logger.success_handler(response)
+        snapshots.append(copy.deepcopy(logger.model_call_details))
+        logger.failure_handler(RuntimeError("sentinel-provider-error"), "sentinel-request-in-traceback")
+        snapshots.append(copy.deepcopy(logger.model_call_details))
+    assert bridge.calls[0]["document"] == document
+    assert bridge.calls[0]["extra_headers"] == headers
+    assert bridge.calls[0]["api_key"] == "sentinel-api-key"
+    auth_field = "client_secret" if provider == "azure_ai" else "vertex_credentials"
+    assert bridge.calls[0]["optional_params"][auth_field] == secrets[auth_field]
+    assert bridge.calls[0]["optional_params"]["unrecognized_future_option"] == "sentinel-future-option"
+    assert snapshots
+    assert "sentinel-" not in repr(snapshots)
+    assert "sentinel-" not in caplog.text
+    assert "sentinel-" not in repr(request)
+    assert all("raw_request_typed_dict" not in snapshot for snapshot in snapshots)
+    assert all("complete_input_dict" not in snapshot.get("additional_args", {}) for snapshot in snapshots)
+
+    exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel = OpenTelemetry(config=OpenTelemetryConfig(), tracer_provider=tracer_provider)
+    with tracer_provider.get_tracer("ocr-review").start_as_current_span("ocr") as span:
+        for snapshot in snapshots:
+            otel.set_raw_request_attributes(span, snapshot, None)
+    assert "sentinel-" not in repr(exporter.get_finished_spans()[0].attributes)
+    tracer_provider.shutdown()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_python_ocr_request_logging_uses_metadata(enabled, asynchronous, caplog, ocr_logging_server):
+    import datetime
+    import logging
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    base, calls = ocr_logging_server
+
+    logger = Logging(
+        model=MODEL,
+        messages=[],
+        stream=False,
+        call_type="aocr" if asynchronous else "ocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="review-call",
+        function_id="review",
+        kwargs={"client_secret": "sentinel-initial-secret"},
+        log_raw_request_response=True,
+    )
+    litellm.rust(enabled)
+    rust_bridge._OCR.override(None)
+    rust_bridge._AOCR.override(None)
+    rust_bridge_loader._cached_bridge = None
+    arguments = {
+        "model": MODEL,
+        "document": {"type": "document_url", "document_url": "https://example.com/sentinel-document"},
+        "api_key": "sentinel-api-key",
+        "api_base": base,
+        "litellm_logging_obj": logger,
+        "extra_headers": {"x-custom": "sentinel-header"},
+        "document_annotation_prompt": "sentinel-prompt",
+        "vertex_credentials": "sentinel-credentials",
+    }
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        response = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+        if asynchronous:
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+            await asyncio.sleep(0)
+            GLOBAL_LOGGING_WORKER.start()
+            await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert response.pages[0].markdown == "hello world"
+    assert len(calls) == 1
+    assert calls[0][0]["authorization"] == "Bearer sentinel-api-key"
+    assert "sentinel-prompt" in calls[0][1]
+    assert "sentinel-" not in repr(logger.model_call_details)
+    assert "sentinel-" not in caplog.text
+    assert "raw_request_typed_dict" not in logger.model_call_details
+
+
+@pytest.fixture
+def ocr_logging_server():
     import json
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
-    from typing import Final
-    from urllib.parse import parse_qsl, urlsplit
 
-    native: Final = rust_bridge_loader.get_native_bridge()
-    if native is None:
-        pytest.skip("requires the compiled Rust extension")
-    calls: Final = []
+    calls = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            body: Final = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            target: Final = urlsplit(self.path)
             calls.append(
                 (
-                    target.path,
-                    parse_qsl(target.query),
-                    self.headers.get("Authorization"),
-                    self.headers.get("Ocp-Apim-Subscription-Key"),
-                    body,
+                    {name.lower(): value for name, value in self.headers.items()},
+                    self.rfile.read(int(self.headers["Content-Length"])).decode(),
                 )
             )
-            payload: Final = (
-                {"status": "succeeded", "analyzeResult": {"pages": []}}
-                if "doc-intelligence" in model
-                else {"pages": [{"index": 0, "markdown": "hello"}]}
-            )
-            encoded: Final = json.dumps(payload).encode()
+            body = json.dumps(FAKE_OCR_RESPONSE).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(encoded)
+            self.wfile.write(body)
 
         def log_message(self, *_args):
             pass
 
-    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread: Final = Thread(target=server.serve_forever, daemon=True)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
     thread.start()
-    responses: Final = []
     try:
-        for enabled in (False, True):
-            litellm.rust(enabled)
-            arguments: Final = {
-                "model": model,
-                "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
-                "api_key": "test-key",
-                "api_base": f"http://127.0.0.1:{server.server_port}",
-                "pages": [0, 2],
-                "timeout": 3.0,
-            }
-            response: Final = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
-            responses.append(response.model_dump())
-        assert len(calls) == 2
-        assert calls[0] == calls[1]
-        for key in ("model", "pages", "object"):
-            assert responses[0][key] == responses[1][key]
+        yield f"http://127.0.0.1:{server.server_port}", calls
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+@pytest.mark.parametrize(
+    "model, provider",
+    [
+        ("mistral-ocr-latest", None),
+        ("mistral/mistral-ocr-latest", None),
+        ("custom-deployment", "mistral"),
+    ],
+)
+def test_rust_ocr_provider_resolution_preserves_model_forms(model, provider, fake_bridge):
+    response = litellm.ocr(model=model, custom_llm_provider=provider, document=DOCUMENT, api_key="test-key")
+    assert response.pages[0].markdown == "hello world"
+    assert len(fake_bridge.calls) == 1
+    assert fake_bridge.calls[0]["model"] == model
+
+
+def test_ocr_logging_preserves_billing_identity_without_arbitrary_metadata():
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    identity = {"user_api_key_hash": "key-hash", "user_api_key_team_id": "team-id", "user_api_key_user_id": "user-id"}
+    logger = Logging(
+        model=MODEL,
+        messages=[],
+        stream=False,
+        call_type="ocr",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="review-call",
+        function_id="review",
+        kwargs={
+            "metadata": {
+                **identity,
+                "model_info": {"id": "deployment-id", "unknown": "sentinel-secret"},
+                "untrusted": "sentinel-secret",
+            },
+            "ocr_cost_per_page": 0.125,
+        },
+    )
+    ocr_main._marshal_rust_ocr_request(build_request(logging_obj=logger), lambda _: None)
+    assert logger.litellm_params["metadata"] == {**identity, "model_info": {"id": "deployment-id"}}
+    assert logger.get_router_model_id() == "deployment-id"
+    assert logger.litellm_params["ocr_cost_per_page"] == 0.125
+    assert "sentinel-secret" not in repr(logger.model_call_details)
+
+
+def test_rust_ocr_excludes_host_context_from_provider_options(fake_bridge):
+    response = litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="test-key",
+        metadata={"user_api_key_auth": object()},
+        litellm_metadata={"user_api_key_auth": object()},
+        unrecognized_future_option={"value": "preserved"},
+    )
+    assert response.pages[0].markdown == "hello world"
+    assert len(fake_bridge.calls) == 1
+    options = fake_bridge.calls[0]["optional_params"]
+    assert "metadata" not in options
+    assert "litellm_metadata" not in options
+    assert options["unrecognized_future_option"] == {"value": "preserved"}

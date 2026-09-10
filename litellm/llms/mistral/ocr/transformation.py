@@ -2,6 +2,7 @@
 Mistral OCR transformation implementation.
 """
 
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -12,6 +13,7 @@ from litellm.llms.base_llm.ocr.transformation import (
     DocumentType,
     OCRRequestData,
     OCRResponse,
+    RustOCRConfig,
 )
 from litellm.secret_managers.main import get_secret_str
 
@@ -30,6 +32,15 @@ class MistralOCRConfig(BaseOCRConfig):
 
     def __init__(self) -> None:
         super().__init__()
+
+    @staticmethod
+    def provider_for_model(model: str) -> str | None:
+        return "mistral" if model.startswith("mistral-ocr") else None
+
+    def get_rust_ocr_config(
+        self, kwargs: Mapping[str, object], resolve_secret: Callable[[str], str | None]
+    ) -> RustOCRConfig | None:
+        return RustOCRConfig(api_key_env_var=MISTRAL_OCR_API_KEY_ENV_VAR)
 
     def get_supported_ocr_params(self, model: str) -> list:
         """

@@ -2,8 +2,7 @@ use litellm_core::Error;
 use std::future::Future;
 
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
-use litellm_core::ocr::wire::{OcrWireRequest, decode_request};
-use litellm_core::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_core::ocr::wire::{OcrWireRequest, decode_request, is_supported_request};
 use pyo3::prelude::*;
 use serde_json::Value;
 
@@ -33,13 +32,7 @@ fn prepare_ocr(
             extra_headers,
             timeout,
         } = options;
-        let provider = get_custom_llm_provider(&model, custom_llm_provider.as_deref()).unwrap_or(
-            CustomLlmProvider {
-                model: &model,
-                custom_llm_provider: "mistral",
-            },
-        );
-        if provider.custom_llm_provider == "mistral" {
+        if is_supported_request(&model, custom_llm_provider.as_deref()) {
             let request = decode_request(OcrWireRequest {
                 model,
                 document,
@@ -50,8 +43,7 @@ fn prepare_ocr(
                 optional_params,
                 timeout_seconds: timeout.map(|value| value.as_secs_f64()),
             })?;
-            return crate::transport::ocr_client()?
-                .perform(request)
+            return litellm_core::ocr::ocr(request)
                 .await
                 .map(|response| response.into_json());
         }

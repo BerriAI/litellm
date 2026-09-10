@@ -12,7 +12,7 @@ from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class LiteLLMOcrRequest:
     model: str
     document: Mapping[str, object]

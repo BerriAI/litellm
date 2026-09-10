@@ -3,7 +3,10 @@ Base OCR transformation configuration.
 """
 
 import builtins
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -122,6 +125,47 @@ class OCRRequestData(LiteLLMPydanticObjectBase):
     files: dict[str, Any] | None = None
 
 
+def resolve_ocr_provider(model: str, custom_llm_provider: str | None) -> str | None:
+    import litellm
+    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+
+    if custom_llm_provider is not None:
+        return custom_llm_provider if custom_llm_provider in litellm.provider_list else None
+    prefix, separator, _ = model.partition("/")
+    if separator and prefix in litellm.provider_list:
+        return prefix
+    return MistralOCRConfig.provider_for_model(model)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class RustOCRConfig:
+    api_key_env_var: str | None = None
+    config_fields: frozenset[str] = frozenset()
+    extra_params: tuple[tuple[str, object], ...] = ()
+
+    def optional_params(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        from litellm.types.router import GenericLiteLLMParams
+        from litellm.types.utils import all_litellm_params
+
+        return MappingProxyType(
+            dict(
+                chain(
+                    (
+                        (name, value)
+                        for name, value in kwargs.items()
+                        if (
+                            name not in GenericLiteLLMParams.model_fields
+                            and name not in all_litellm_params
+                            or name in self.config_fields
+                        )
+                        and name not in ("litellm_logging_obj", "aocr", "litellm_call_id")
+                    ),
+                    self.extra_params,
+                )
+            )
+        )
+
+
 class BaseOCRConfig:
     """
     Base configuration for OCR transformations.
@@ -147,6 +191,11 @@ class BaseOCRConfig:
     def supports_rust_bridge(self) -> bool:
         """Whether the Rust OCR bridge may serve this config when it is enabled for the provider."""
         return True
+
+    def get_rust_ocr_config(
+        self, kwargs: Mapping[str, object], resolve_secret: Callable[[str], str | None]
+    ) -> RustOCRConfig | None:
+        return None
 
     def get_health_check_document(self) -> DocumentType:
         return {  # mutable-ok: litellm.aocr rejects any document that is not a dict
