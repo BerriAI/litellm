@@ -14,6 +14,7 @@ from litellm.constants import (
     request_timeout,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.realtime_streaming import client_sent_openai_beta_realtime_header
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.xai.common_utils import XAIModelInfo
@@ -413,14 +414,14 @@ async def _arealtime(
 
         api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
 
-        realtime_protocol = (
+        configured_realtime_protocol: Final = (
             kwargs.get("realtime_protocol")
             or litellm_params.get("realtime_protocol")
             or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
         )
-        if realtime_protocol is None and (query_params or {}).get("intent") == "transcription":
-            realtime_protocol = "GA"
-        realtime_protocol = realtime_protocol or "beta"
+        realtime_protocol: Final = _azure_realtime_protocol_for_client(
+            configured_realtime_protocol, query_params=query_params, websocket=websocket
+        )
         resolved_azure_ad_token: Final = (
             None if api_key else get_azure_ad_token(GenericLiteLLMParams(**kwargs, azure_ad_token=azure_ad_token))
         )
@@ -574,6 +575,19 @@ def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) 
 
 
 _TRANSCRIPTION_QUERY_PARAMS: Final[RealtimeQueryParams] = {"intent": "transcription"}
+
+
+def _azure_realtime_protocol_for_client(
+    configured_protocol: object,
+    *,
+    query_params: RealtimeQueryParams | None,
+    websocket: "WebSocket",
+) -> str:
+    if isinstance(configured_protocol, str) and configured_protocol:
+        return configured_protocol
+    if (query_params or {}).get("intent") == "transcription":
+        return "GA"
+    return "beta" if client_sent_openai_beta_realtime_header(websocket) else "GA"
 
 
 def _azure_realtime_health_protocol(
