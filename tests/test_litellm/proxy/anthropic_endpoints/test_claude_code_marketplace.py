@@ -1,7 +1,7 @@
 """
 Unit tests for claude_code_marketplace.py source validation.
 
-Covers the git-subdir source type added alongside the existing github and url types.
+Covers the git-subdir and archive source types added alongside the existing github and url types.
 """
 
 import json
@@ -85,6 +85,12 @@ _GIT_SUBDIR_SOURCE = {
     "source": "git-subdir",
     "url": "https://github.com/org/monorepo.git",
     "path": "plugins/my-plugin",
+}
+
+_ARCHIVE_SOURCE = {
+    "source": "archive",
+    "url": "https://skills-bucket.s3.us-east-1.amazonaws.com/plugins/s3-skill-1.0.0.zip",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 }
 
 
@@ -377,6 +383,75 @@ async def test_register_plugin_unknown_source_type():
 
     assert exc_info.value.status_code == 400
     assert "git-subdir" in exc_info.value.detail["error"]
+    assert "archive" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_archive_source_registers_and_is_served_verbatim_in_marketplace():
+    response = await register_plugin(
+        request=RegisterPluginRequest(name="s3-skill", source=_ARCHIVE_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    assert response.action == "created"
+    assert response.plugin.source == _ARCHIVE_SOURCE
+
+    marketplace = json.loads((await get_marketplace()).body)
+    assert marketplace["plugins"] == [{"name": "s3-skill", "source": _ARCHIVE_SOURCE, "version": "1.0.0"}]
+
+
+@pytest.mark.asyncio
+async def test_archive_source_without_sha256_is_accepted():
+    source = {"source": "archive", "url": "https://artifacts.example.com/plugin.zip"}
+
+    response = await register_plugin(
+        request=RegisterPluginRequest(name="unpinned-skill", source=source),
+        user_api_key_dict=_USER,
+    )
+
+    assert response.plugin.source == source
+
+
+@pytest.mark.asyncio
+async def test_update_plugin_to_archive_source():
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    response = await update_plugin(
+        plugin_name=name,
+        request=UpdatePluginRequest(source=_ARCHIVE_SOURCE),
+        user_api_key_dict=_USER,
+    )
+
+    assert response.action == "updated"
+    assert (await _read_stored_manifest(name))["source"] == _ARCHIVE_SOURCE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source, expected_fragment",
+    [
+        ({"source": "archive"}, "url"),
+        ({"source": "archive", "url": ""}, "url"),
+        ({"source": "archive", "url": "http://artifacts.example.com/plugin.zip"}, "https"),
+        ({"source": "archive", "url": "s3://skills-bucket/plugin.zip"}, "https"),
+        ({"source": "archive", "url": "https://"}, "https"),
+        ({"source": "archive", "url": "https:///plugin.zip"}, "https"),
+        ({"source": "archive", "url": "https://[::1/plugin.zip"}, "https"),
+        ({"source": "archive", "url": "https://artifacts.example.com/plugin.zip", "sha256": "a" * 63}, "sha256"),
+        ({"source": "archive", "url": "https://artifacts.example.com/plugin.zip", "sha256": "a" * 65}, "sha256"),
+        ({"source": "archive", "url": "https://artifacts.example.com/plugin.zip", "sha256": "g" * 64}, "sha256"),
+    ],
+)
+async def test_register_plugin_archive_rejects_malformed_source(source, expected_fragment):
+    with pytest.raises(HTTPException) as exc_info:
+        await register_plugin(request=RegisterPluginRequest(name="bad-plugin", source=source), user_api_key_dict=_USER)
+
+    assert exc_info.value.status_code == 400
+    assert expected_fragment in exc_info.value.detail["error"]
 
 
 @pytest.mark.asyncio
