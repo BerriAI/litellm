@@ -1,0 +1,121 @@
+import os
+import socket
+import sys
+import textwrap
+import urllib.parse
+from pathlib import Path
+from typing import Final, cast
+
+import pytest
+
+from gateway.launch import pool_database_url
+from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
+
+DB_ENV: Final = {
+    "DATABASE_HOST": "db.internal",
+    "DATABASE_PORT": "5432",
+    "DATABASE_USER": "litellm_pool",
+    "DATABASE_NAME": "litellm",
+    "DATABASE_PASSWORD": "p@ss",
+}
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return cast(tuple[str, int], probe.getsockname())[1]
+
+
+def _fake_pooler(tmp_path: Path) -> Path:
+    script: Final = tmp_path / "fake-pgbouncer"
+    script.write_text(
+        textwrap.dedent(
+            f"""\
+            #!{sys.executable}
+            import configparser, select, socket, sys
+            if sys.argv[1:] == ["--version"]:
+                print("PgBouncer 1.25.2")
+                sys.exit(0)
+            ini = configparser.ConfigParser()
+            ini.read(sys.argv[1])
+            port = ini.getint("pgbouncer", "listen_port")
+            tcp = socket.socket()
+            tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            tcp.bind(("127.0.0.1", port))
+            tcp.listen()
+            unix = socket.socket(socket.AF_UNIX)
+            unix.bind(ini.get("pgbouncer", "unix_socket_dir") + f"/.s.PGSQL.{{port}}")
+            unix.listen()
+            while True:
+                for ready in select.select([tcp, unix], [], [])[0]:
+                    ready.accept()[0].close()
+            """
+        )
+    )
+    script.chmod(0o700)
+    return script
+
+
+def _query(url: str) -> dict[str, str]:
+    return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
+
+
+@pytest.fixture
+def password_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    for var in ("DATABASE_URL", "IAM_TOKEN_DB_AUTH", "AZURE_POSTGRESQL_AUTH", "DATABASE_HOST_READ_REPLICA"):
+        monkeypatch.delenv(var, raising=False)
+    for var, value in DB_ENV.items():
+        monkeypatch.setenv(var, value)
+    return dict(DB_ENV)
+
+
+class TestPoolDatabaseUrl:
+    def test_disabled_pooler_leaves_the_assembled_url_alone(self, password_env: dict[str, str]):
+        settings: Final = DatabaseURLSettings.from_env()
+        settings.apply_to_env()
+        environ: Final = {"DATABASE_URL": "postgresql://litellm_pool:p%40ss@db.internal:5432/litellm"}
+        assert pool_database_url(settings, PgBouncerSettings(enabled=False), environ) is None
+        assert environ["DATABASE_URL"] == "postgresql://litellm_pool:p%40ss@db.internal:5432/litellm"
+
+    def test_a_missing_upstream_url_is_reported(self, password_env: dict[str, str]):
+        environ: Final[dict[str, str]] = {}
+        outcome: Final = pool_database_url(DatabaseURLSettings.from_env(), PgBouncerSettings(enabled=True), environ)
+        assert isinstance(outcome, PgBouncerError)
+        assert "DATABASE_URL" in outcome.reason
+        assert environ == {}
+
+    def test_token_auth_is_refused_and_the_minted_url_is_kept(
+        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+        environ: Final = {"DATABASE_URL": "postgresql://litellm:token@db.internal:5432/litellm"}
+        outcome: Final = pool_database_url(
+            DatabaseURLSettings.from_env(),
+            PgBouncerSettings(enabled=True, port=_free_port(), binary=str(_fake_pooler(tmp_path))),
+            environ,
+        )
+        assert isinstance(outcome, PgBouncerError)
+        assert "IAM_TOKEN_DB_AUTH" in outcome.reason
+        assert environ["DATABASE_URL"] == "postgresql://litellm:token@db.internal:5432/litellm"
+
+    def test_workers_inherit_the_loopback_url_the_supervisor_installed(
+        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        port: Final = _free_port()
+        settings: Final = DatabaseURLSettings.from_env()
+        settings.apply_to_env()
+        assert (
+            pool_database_url(
+                settings, PgBouncerSettings(enabled=True, port=port, binary=str(_fake_pooler(tmp_path))), os.environ
+            )
+            is None
+        )
+        pooled: Final = os.environ["DATABASE_URL"]
+        assert urllib.parse.urlsplit(pooled).netloc == f"litellm_pool:p%40ss@127.0.0.1:{port}"
+        assert _query(pooled)["pgbouncer"] == "true"
+
+        DatabaseURLSettings.from_env().apply_to_env()
+        worker_url: Final = os.environ["DATABASE_URL"]
+        assert urllib.parse.urlsplit(worker_url).netloc == f"litellm_pool:p%40ss@127.0.0.1:{port}"
+        assert _query(worker_url)["pgbouncer"] == "true"
