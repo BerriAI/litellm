@@ -79,11 +79,20 @@ _ROUTER_SPAN_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
         "cause": "router_cause",
         "score": "router_score",
         "escalated": "router_escalated",
+        "stall_escalated": "router_stall_escalated",
+        "stall_escalation_reason": "router_stall_reason",
+        "stall_escalation_original_tier": "router_stall_original_tier",
         "signals": "router_signals",
         "routed_model": "routed_model",
     }
 )
-_ROUTER_DIMENSIONS: Final[tuple[str, ...]] = ("router_tier", "router_cause", "router_escalated", "routed_model")
+_ROUTER_DIMENSIONS: Final[tuple[str, ...]] = (
+    "router_tier",
+    "router_cause",
+    "router_escalated",
+    "router_stall_reason",
+    "routed_model",
+)
 _COST_DIMENSIONS: Final[tuple[str, ...]] = ("team", "user", "key_alias", "model_group", *_ROUTER_DIMENSIONS)
 
 
@@ -99,7 +108,11 @@ def _router_span_fields(
     routing_decision: Final = _mapping_field(_metadata_of(standard_logging_payload), "routing_decision")
     if not routing_decision:
         return _EMPTY_MAPPING
-    escalated: Final = bool(routing_decision.get("escalated") or routing_decision.get("context_escalated"))
+    escalated: Final = bool(
+        routing_decision.get("escalated")
+        or routing_decision.get("context_escalated")
+        or routing_decision.get("stall_escalated")
+    )
     return MappingProxyType(
         {
             _ROUTER_SPAN_FIELDS[record_field]: value

@@ -398,6 +398,69 @@ def test_a_context_escalated_route_reports_as_escalated(logger: DataDogLLMObsLog
     assert "router_escalated:true" in payload["tags"]
 
 
+def test_a_stall_escalated_route_reports_as_escalated(logger: DataDogLLMObsLogger) -> None:
+    """The stall detector bumped the tier, so the spend on this request is escalated spend and
+    has to land in the same slice as every other escalation."""
+    payload = build(logger, metadata={"routing_decision": {"tier": "premium", "stall_escalated": True}})
+
+    assert payload["meta"]["metadata"]["router_escalated"] is True
+    assert "router_escalated:true" in payload["tags"]
+
+
+def test_the_stall_branch_is_its_own_cost_dimension(logger: DataDogLLMObsLogger) -> None:
+    """Charting the two branches apart is what tells an operator whether the bumps are buying
+    anything: a stuck model can be unstuck by a stronger one, a broken tool cannot."""
+    payload = build(
+        logger,
+        metadata={
+            "routing_decision": {
+                "tier": "premium",
+                "stall_escalated": True,
+                "stall_escalation_reason": "repeated_tool_error",
+                "stall_escalation_original_tier": "SIMPLE",
+            }
+        },
+    )
+
+    assert payload["meta"]["metadata"]["router_stall_reason"] == "repeated_tool_error"
+    assert payload["meta"]["metadata"]["router_stall_original_tier"] == "SIMPLE"
+    assert "router_stall_reason:repeated_tool_error" in payload["tags"]
+    assert "router_stall_reason" in payload["meta"]["metadata"]["_dd"]["cost_tags"]
+
+
+def test_stall_fields_survive_prompt_redaction() -> None:
+    """They aggregate the prompt rather than quoting it, unlike the signals entry that used to be
+    the only marker, so a redacted span still says the request was escalated and why."""
+    with patch.dict(os.environ, {"DD_API_KEY": "k", "DD_SITE": "us5.datadoghq.com"}, clear=True):
+        with patch("asyncio.create_task"):
+            redacted_logger = DataDogLLMObsLogger(turn_off_message_logging=True)
+    result = json.loads(
+        safe_dumps(
+            redacted_logger.create_llm_obs_payload(
+                build_payload(
+                    metadata={
+                        "routing_decision": {
+                            "tier": "premium",
+                            "signals": ["secret prompt text", "stall_escalation"],
+                            "stall_escalated": True,
+                            "stall_escalation_reason": "repeated_tool_call",
+                            "stall_escalation_original_tier": "SIMPLE",
+                        }
+                    }
+                ),
+                datetime(2026, 9, 1, 12, 0, 0),
+                datetime(2026, 9, 1, 12, 0, 2),
+            )
+        )
+    )
+
+    assert result["meta"]["metadata"]["router_stall_escalated"] is True
+    assert result["meta"]["metadata"]["router_stall_reason"] == "repeated_tool_call"
+    assert result["meta"]["metadata"]["router_stall_original_tier"] == "SIMPLE"
+    assert result["meta"]["metadata"]["router_escalated"] is True
+    assert "router_signals" not in result["meta"]["metadata"]
+
+
 def test_a_routed_request_that_did_not_escalate_reports_false(logger: DataDogLLMObsLogger) -> None:
     """Without this the escalation dimension is absent on ordinary traffic, so nothing can group by it."""
     payload = build(logger, metadata={"routing_decision": {"tier": "simple", "cause": "heuristic_scorer"}})

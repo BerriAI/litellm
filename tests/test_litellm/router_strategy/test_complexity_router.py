@@ -6810,6 +6810,139 @@ class TestStallEscalation:
         assert "stall_escalation" in result.routing_decision["signals"]
 
     @pytest.mark.asyncio
+    async def test_the_escalation_is_recorded_as_its_own_fields(self, mock_router_instance, basic_config):
+        """`signals` is prompt-quoting and redaction drops it, so a stall recorded only there is
+        invisible to an operator running with message logging off. These fields aggregate the
+        prompt rather than quoting it, so they survive and can carry a metric dimension."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.routing_decision["stall_escalated"] is True
+        assert result.routing_decision["stall_escalation_original_tier"] == "SIMPLE"
+        assert result.routing_decision["tier"] == "MEDIUM"
+
+    @pytest.mark.asyncio
+    async def test_the_two_detector_branches_are_told_apart(self, mock_router_instance, basic_config):
+        """A repeat loop is a stuck model, which is what the bump is for. Repeated tool errors are
+        usually a broken tool, where the stronger model fails the same way at a higher price."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        erroring = [
+            turn
+            for i, cmd in enumerate(("pytest a", "pytest b", "pytest c"))
+            for turn in (
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": f"e-{i}", "name": "bash", "input": {"cmd": cmd}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": f"e-{i}", "is_error": True, "content": "fail"}
+                    ],
+                },
+            )
+        ]
+        repeating = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}],
+        )
+        erroring_result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[*erroring, {"role": "user", "content": "Hello there!"}],
+        )
+        assert repeating.routing_decision["stall_escalation_reason"] == "repeated_tool_call"
+        assert erroring_result.routing_decision["stall_escalation_reason"] == "repeated_tool_error"
+
+    @pytest.mark.asyncio
+    async def test_an_unstalled_request_carries_no_stall_fields(self, mock_router_instance, basic_config):
+        """The fields must distinguish an escalated request from one the classifier placed at the
+        same tier on its own, so they cannot appear on ordinary traffic."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model", request_kwargs={}, messages=[{"role": "user", "content": "Hello there!"}]
+        )
+        assert "stall_escalated" not in result.routing_decision
+        assert "stall_escalation_reason" not in result.routing_decision
+        assert "stall_escalation_original_tier" not in result.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_a_stall_with_nowhere_to_go_records_the_detection_without_a_bump(
+        self, mock_router_instance, basic_config
+    ):
+        """Already at the highest configured tier, so no tier moved and no extra money was spent.
+        Reporting stall_escalated True there would overstate what the feature costs."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        messages = [
+            *_stalled_tool_history(),
+            {"role": "user", "content": "Let's think step by step and reason through this carefully."},
+        ]
+        result = await router.async_pre_routing_hook(model="test-model", request_kwargs={}, messages=messages)
+        assert result.routing_decision["stall_escalated"] is False
+        assert result.routing_decision["stall_escalation_reason"] == "repeated_tool_call"
+        assert "stall_escalation_original_tier" not in result.routing_decision
+
+    @pytest.mark.asyncio
+    async def test_the_fields_survive_message_redaction(self, mock_router_instance, basic_config):
+        """The whole point: with redaction on, `signals` goes and these have to stay, otherwise a
+        stall-escalated row is identical to one the classifier placed at that tier itself."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={**basic_config, "stall_escalation_enabled": True},
+        )
+        request_kwargs: Dict = {"metadata": {"headers": {"x-litellm-enable-message-redaction": True}}}
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs=request_kwargs,
+            messages=[*_stalled_tool_history(), {"role": "user", "content": "Hello there!"}],
+        )
+        redacted = litellm.Router._redact_prompt_text_if_needed(request_kwargs, result.routing_decision)
+        assert "signals" not in redacted
+        assert redacted["stall_escalated"] is True
+        assert redacted["stall_escalation_reason"] == "repeated_tool_call"
+        assert redacted["stall_escalation_original_tier"] == "SIMPLE"
+
+    @pytest.mark.asyncio
+    async def test_a_keyword_forced_tier_records_the_stall_fields_too(self, mock_router_instance, basic_config):
+        """The keyword-override path returns before classification, so it assembles its own
+        decision record and would otherwise drop the fields the classified path sets."""
+        router = ComplexityRouter(
+            model_name="test-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "stall_escalation_enabled": True,
+                "keyword_tier_rules": [{"keywords": ["billing"], "tier": "SIMPLE"}],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[*_stalled_tool_history(), {"role": "user", "content": "a billing question"}],
+        )
+        assert result.routing_decision["stall_escalated"] is True
+        assert result.routing_decision["stall_escalation_reason"] == "repeated_tool_call"
+        assert result.routing_decision["stall_escalation_original_tier"] == "SIMPLE"
+
+    @pytest.mark.asyncio
     async def test_stall_escalation_caps_at_highest_tier(self, mock_router_instance, basic_config):
         router = ComplexityRouter(
             model_name="test-router",

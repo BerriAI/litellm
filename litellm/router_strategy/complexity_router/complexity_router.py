@@ -61,6 +61,7 @@ from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
     RoutingDecisionCause,
+    StallEscalationReason,
     StandardLoggingRoutingDecision,
     StandardLoggingRoutingDecisionTierBoundaries,
 )
@@ -1547,6 +1548,8 @@ class ComplexityRouter(CustomLogger):
         conversation_continuing: bool = True,
         tier_litellm_params: Mapping[str, object] | None = None,
         context_escalation_original_tier: ComplexityTier | str | None = None,
+        stall_escalation_reason: StallEscalationReason | None = None,
+        stall_escalation_original_tier: ComplexityTier | str | None = None,
     ) -> StandardLoggingRoutingDecision:
         """Assemble the per-request provenance record for this router's decision.
 
@@ -1602,6 +1605,14 @@ class ComplexityRouter(CustomLogger):
             # (classifier, keyword rule, or session pin) had placed it before physics did.
             decision["context_escalated"] = True
             decision["context_escalation_original_tier"] = _tier_name(context_escalation_original_tier)
+        if stall_escalation_reason is not None:
+            # Same two facts the keyword pair records: the detector fired, and whether the tier
+            # actually moved. A stall detected at the highest configured tier has nowhere to go,
+            # so it reports the reason with stall_escalated False rather than claiming a bump.
+            decision["stall_escalated"] = stall_escalation_original_tier is not None
+            decision["stall_escalation_reason"] = stall_escalation_reason
+            if stall_escalation_original_tier is not None:
+                decision["stall_escalation_original_tier"] = _tier_name(stall_escalation_original_tier)
         if tier_litellm_params:
             masked_tier_litellm_params: Final = mask_credentials_in_payload(tier_litellm_params)
             if isinstance(masked_tier_litellm_params, Mapping):
@@ -2876,6 +2887,10 @@ class ComplexityRouter(CustomLogger):
             context_escalation_original_tier=(
                 decision.get("context_escalation_original_tier") if decision is not None else None
             ),
+            stall_escalation_reason=decision.get("stall_escalation_reason") if decision is not None else None,
+            stall_escalation_original_tier=(
+                decision.get("stall_escalation_original_tier") if decision is not None else None
+            ),
         )
         from litellm.types.router import PreRoutingHookResponse as HookResponse
 
@@ -3041,6 +3056,8 @@ class ComplexityRouter(CustomLogger):
             conversation_continuing=bool(decision.get("conversation_continuing", True)),
             tier_litellm_params=self._litellm_params_for_model(decided_tier, new_model),
             context_escalation_original_tier=decision.get("context_escalation_original_tier"),
+            stall_escalation_reason=decision.get("stall_escalation_reason"),
+            stall_escalation_original_tier=decision.get("stall_escalation_original_tier"),
         )
         return response.model_copy(
             update={  # mutable-ok: model_copy types update as a plain dict
@@ -3596,10 +3613,14 @@ class ComplexityRouter(CustomLogger):
         # Resolved here rather than beside the classifier because the keyword-override path below
         # returns before any classification runs, and a forced tier gets stuck for the same reason
         # a classified one does.
-        stalled: Final = self.config.stall_escalation_enabled and detect_stalled_task(
-            resolved_messages,
-            window=self.config.stall_escalation_window,
-            repeat_threshold=self.config.stall_escalation_repeat_threshold,
+        stalled: Final = (
+            detect_stalled_task(
+                resolved_messages,
+                window=self.config.stall_escalation_window,
+                repeat_threshold=self.config.stall_escalation_repeat_threshold,
+            )
+            if self.config.stall_escalation_enabled
+            else None
         )
 
         plan_mode_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
@@ -3636,7 +3657,10 @@ class ComplexityRouter(CustomLogger):
             keyword_bumped_tier: Final = (
                 self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
             )
-            escalated_tier: Final = self._escalate_tier(keyword_bumped_tier) if stalled else keyword_bumped_tier
+            escalated_tier: Final = (
+                self._escalate_tier(keyword_bumped_tier) if stalled is not None else keyword_bumped_tier
+            )
+            keyword_stall_original_tier: Final = keyword_bumped_tier if escalated_tier != keyword_bumped_tier else None
             keyword_escalated: Final = keyword_bumped_tier != override.tier
             routed_tier: Final = (
                 self._apply_plan_mode_floor(escalated_tier) if plan_floor is not None else escalated_tier
@@ -3665,11 +3689,13 @@ class ComplexityRouter(CustomLogger):
                     conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
                     tier=routed_tier,
-                    signals=("stall_escalation",) if stalled else None,
+                    signals=("stall_escalation",) if stalled is not None else None,
                     matched_keyword=plan_mode_sentinel if keyword_plan_floored else override.matched_keyword,
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
                     tier_litellm_params=keyword_tier_litellm_params,
+                    stall_escalation_reason=stalled,
+                    stall_escalation_original_tier=keyword_stall_original_tier,
                 ),
             )
 
@@ -3687,9 +3713,11 @@ class ComplexityRouter(CustomLogger):
         escalated: Final = tier != classified_tier
         if escalated:
             signals = (*signals, "escalation")
-        if stalled:
+        pre_stall_tier: Final = tier
+        if stalled is not None:
             tier = self._escalate_tier(tier)
             signals = (*signals, "stall_escalation")
+        stall_original_tier: Final = pre_stall_tier if tier != pre_stall_tier else None
         pre_floor_tier: Final = tier
         if plan_floor is not None:
             tier = self._apply_plan_mode_floor(tier)
@@ -3832,5 +3860,7 @@ class ComplexityRouter(CustomLogger):
                 classifier_cost=outcome.classifier_cost,
                 tier_litellm_params=tier_litellm_params,
                 context_escalation_original_tier=context_original_tier,
+                stall_escalation_reason=stalled,
+                stall_escalation_original_tier=stall_original_tier,
             ),
         )

@@ -8,6 +8,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    TypeAlias,
     get_args,
 )
 
@@ -2948,6 +2949,12 @@ SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
 
 
+StallEscalationReason: TypeAlias = Literal["repeated_tool_call", "repeated_tool_error"]
+"""Which stall branch fired. A repeat loop is a model that is stuck, which a stronger model can
+break; repeated tool errors are usually a broken tool or bad credentials, where the stronger
+model fails the same way at a higher price. Operationally different, so they are recorded apart."""
+
+
 class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
@@ -2967,6 +2974,9 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalated: bool
     context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     context_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    stall_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    stall_escalation_reason: StallEscalationReason  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    stall_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
@@ -2995,6 +3005,9 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "escalated",
         "context_escalated",
         "context_escalation_original_tier",
+        "stall_escalated",
+        "stall_escalation_reason",
+        "stall_escalation_original_tier",
         "tier_boundaries",
         "reasoning_override_min_score",
         "conversation_continuing",

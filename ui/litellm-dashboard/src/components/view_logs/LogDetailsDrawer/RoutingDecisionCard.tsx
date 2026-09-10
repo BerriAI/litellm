@@ -25,6 +25,9 @@ export interface RoutingDecision {
   escalation_keyword?: string;
   classifier_model?: string;
   escalated?: boolean;
+  stall_escalated?: boolean;
+  stall_escalation_reason?: string;
+  stall_escalation_original_tier?: string;
   tier_boundaries?: RoutingDecisionTierBoundaries;
   reasoning_override_min_score?: number;
 }
@@ -141,6 +144,23 @@ function describeEscalation(escalated: boolean, keyword: string | undefined): st
   return keyword ? `Requested via "${keyword}"; already at the highest tier` : "Requested; already at the highest tier";
 }
 
+const STALL_REASON_LABELS: Record<string, string> = {
+  repeated_tool_call: "the same tool call repeating",
+  repeated_tool_error: "the same tool call erroring",
+};
+
+/**
+ * A stall can be detected on a request already at the highest configured tier, which has
+ * nowhere to go. That row still has to say the detector fired, so an operator reading a bill
+ * can tell a real bump from a no-op. Only called when a stall was detected.
+ */
+function describeStallEscalation(escalated: boolean, reason: string | undefined, originalTier: string | undefined) {
+  const named = reason ? STALL_REASON_LABELS[reason] ?? reason : undefined;
+  const because = named ? `, ${named}` : "";
+  if (!escalated) return `Detected${because}; already at the highest tier`;
+  return originalTier ? `Yes, from ${originalTier}${because}` : `Yes${because}`;
+}
+
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-3 py-1 text-sm">
@@ -170,6 +190,9 @@ export function RoutingDecisionCard({
     signals,
     escalated,
     escalation_keyword: escalationKeyword,
+    stall_escalated: stallEscalated,
+    stall_escalation_reason: stallReason,
+    stall_escalation_original_tier: stallOriginalTier,
     tier_boundaries: tierBoundaries,
   } = decision;
 
@@ -219,6 +242,12 @@ export function RoutingDecisionCard({
         {routedModel && <Row label="Routed to">{routedModel}</Row>}
 
         {escalated !== undefined && <Row label="Escalated">{describeEscalation(escalated, escalationKeyword)}</Row>}
+
+        {stallEscalated !== undefined && (
+          <Row label="Stall escalated">
+            {describeStallEscalation(stallEscalated, stallReason, stallOriginalTier)}
+          </Row>
+        )}
 
         {signals && signals.length > 0 && (
           <Row label="Signals">

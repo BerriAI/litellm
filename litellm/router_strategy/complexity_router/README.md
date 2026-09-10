@@ -322,9 +322,22 @@ There is no state to expire or leak: detection reruns on every classified turn f
 request's own message list, so the bump lasts only as long as the recent tool calls still look
 stuck and lifts on its own the moment they don't. This also means it reads the whole
 conversation rather than only the turns since the newest human ask, so a plain follow-up like
-"try again" does not discard evidence from before it. Escalation records `stall_escalation` in
-`routing_decision.signals`; unlike `escalation_keywords`, it does not set the
-`escalated`/`escalation_keyword` pair, which is reserved for the keyword mechanism specifically.
+"try again" does not discard evidence from before it.
+
+Escalation records three fields of its own on the routing decision: `stall_escalated`,
+`stall_escalation_reason` (`repeated_tool_call` or `repeated_tool_error`), and
+`stall_escalation_original_tier`, the tier the request was bumped off. They are derived rather
+than prompt-quoting, so they survive message redaction, unlike the `stall_escalation` entry in
+`routing_decision.signals` that also marks the bump. Datadog LLM Observability carries them as
+`router_stall_escalated` / `router_stall_reason` / `router_stall_original_tier`, with
+`router_stall_reason` a cost dimension and `router_escalated` true, so escalated spend is a slice
+you can chart and the two branches can be told apart. The reason is worth splitting out because a
+repeat loop is a model that is genuinely stuck, which a stronger model can break, while repeated
+tool errors are usually a broken tool or bad credentials, where the stronger model fails the same
+way at a higher price. A stall detected on a request already at the highest configured tier
+records the reason with `stall_escalated: false` and no original tier, since nothing moved.
+Unlike `escalation_keywords`, it does not set the `escalated`/`escalation_keyword` pair, which is
+reserved for the keyword mechanism specifically.
 
 `stall_escalation_enabled` cannot be combined with `session_affinity` or
 `classification_mode: user_turn`: both replay a held routing decision on most turns instead of

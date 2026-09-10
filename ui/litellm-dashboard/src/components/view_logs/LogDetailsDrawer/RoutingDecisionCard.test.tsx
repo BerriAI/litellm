@@ -226,6 +226,53 @@ describe("RoutingDecisionCard", () => {
     expect(screen.getByText("Requested; already at the highest tier")).toBeInTheDocument();
   });
 
+  it("marks a stall escalation with the branch that fired and the tier it came from", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          tier: "MEDIUM",
+          stall_escalated: true,
+          stall_escalation_reason: "repeated_tool_error",
+          stall_escalation_original_tier: "SIMPLE",
+        }}
+      />,
+    );
+    expect(screen.getByText("Yes, from SIMPLE, the same tool call erroring")).toBeInTheDocument();
+  });
+
+  it("tells a stall-escalated row apart from an ordinary one under redaction", () => {
+    // The signals entry that used to be the only marker is gone with redaction on, so
+    // without these fields this row is identical to a request classified at MEDIUM.
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          tier: "MEDIUM",
+          signals: undefined,
+          stall_escalated: true,
+          stall_escalation_reason: "repeated_tool_call",
+          stall_escalation_original_tier: "SIMPLE",
+        }}
+      />,
+    );
+    expect(screen.getByText("Yes, from SIMPLE, the same tool call repeating")).toBeInTheDocument();
+  });
+
+  it("says a stall was detected even when there was no higher tier to move to", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{ ...heuristic, stall_escalated: false, stall_escalation_reason: "repeated_tool_call" }}
+      />,
+    );
+    expect(screen.getByText("Detected, the same tool call repeating; already at the highest tier")).toBeInTheDocument();
+  });
+
+  it("omits the stall row on a request the detector never flagged", () => {
+    render(<RoutingDecisionCard decision={heuristic} />);
+    expect(screen.queryByText("Stall escalated")).not.toBeInTheDocument();
+  });
+
   it("does not claim the score chose the tier on a redacted override row", () => {
     // `signals` is gone under redaction; the cause alone must suppress the band.
     render(<RoutingDecisionCard decision={{ ...heuristic, cause: "reasoning_override", signals: undefined }} />);

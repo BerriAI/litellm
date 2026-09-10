@@ -2,7 +2,7 @@
 Mid-task stall detection for the Complexity Router.
 
 Reads the assistant's own recent tool calls, which every agentic client resends on each
-turn, and reports whether the task currently looks stuck. No LLM call and no stored state:
+turn, and reports which stuck pattern the task looks caught in, if any. No LLM call and no state:
 the same window is rescanned per classified turn, so the verdict follows the conversation
 rather than latching.
 
@@ -19,6 +19,8 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import islice
 from typing import Final, NamedTuple
+
+from litellm.types.utils import StallEscalationReason
 
 _ARGUMENTS_PARSE_FAILED: Final = object()
 
@@ -94,8 +96,8 @@ def detect_stalled_task(
     *,
     window: int,
     repeat_threshold: int,
-) -> bool:
-    """Whether the newest tool call is still part of a stuck pattern: it repeats, or it
+) -> StallEscalationReason | None:
+    """Which stuck pattern the newest tool call is still part of, or None: it repeats, or it
     errored, at least repeat_threshold times across the last `window` calls.
 
     Both tests are anchored on the newest call rather than counting whichever pattern is
@@ -105,14 +107,16 @@ def detect_stalled_task(
     matches, so a retry loop broken up by an unrelated lookup still reads as stuck.
     """
     if not messages or repeat_threshold <= 0:
-        return False
+        return None
     recent: Final = tuple(islice(_iter_tool_call_events_newest_first(messages), window))
     if len(recent) < repeat_threshold:
-        return False
+        return None
     newest: Final = recent[0]
     repeats: Final = sum(1 for event in recent if event.signature == newest.signature)
     if repeats >= repeat_threshold:
-        return True
+        return "repeated_tool_call"
     if not newest.is_error:
-        return False
-    return sum(1 for event in recent if event.is_error) >= repeat_threshold
+        return None
+    if sum(1 for event in recent if event.is_error) >= repeat_threshold:
+        return "repeated_tool_error"
+    return None
