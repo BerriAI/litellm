@@ -591,6 +591,7 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
     @pytest.mark.asyncio
     async def test_failed_mcp_tool_call_spend_row_keeps_call_type_model_and_duration(self):
         import traceback
+        from types import SimpleNamespace
         from unittest.mock import AsyncMock
 
         from litellm.litellm_core_utils.litellm_logging import Logging
@@ -622,16 +623,11 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
         }
         proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging_obj.alert_types = []
+        spend_writer = SimpleNamespace(update_database=AsyncMock())
         original_callbacks = list(litellm.callbacks)
-        litellm.callbacks = [_ProxyDBLogger()]
+        litellm.callbacks = [_ProxyDBLogger(spend_writer=lambda: spend_writer)]
         try:
-            with (
-                patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()),
-                patch(
-                    "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
-                    new_callable=AsyncMock,
-                ) as update_database,
-            ):
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
                 await proxy_logging_obj.post_call_failure_hook(
                     request_data=request_data,
                     original_exception=blocked,
@@ -641,7 +637,7 @@ class TestPostCallFailureHookLiftsCallTypeAndStartTime:
             litellm.callbacks = original_callbacks
             ProxyLogging._callback_capabilities_cache.clear()
 
-        db_call = update_database.call_args.kwargs
+        db_call = spend_writer.update_database.call_args.kwargs
         payload = get_logging_payload(
             kwargs=db_call["kwargs"],
             response_obj=db_call["completion_response"],

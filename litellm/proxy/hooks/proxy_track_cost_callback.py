@@ -1,6 +1,6 @@
 import asyncio
 import traceback
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -23,6 +23,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_spend_update_writer import (
+    DBSpendUpdateWriter,
     debitable_model_access_groups,
     get_llm_router,
 )
@@ -70,7 +71,24 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
 )
 
 
+def _proxy_spend_writer() -> DBSpendUpdateWriter:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    return proxy_logging_obj.db_spend_update_writer
+
+
 class _ProxyDBLogger(CustomLogger):
+    def __init__(
+        self,
+        turn_off_message_logging: bool = False,
+        message_logging: bool = True,
+        spend_writer: Callable[[], DBSpendUpdateWriter] = _proxy_spend_writer,
+    ) -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # CustomLogger.__init__ takes untyped **kwargs
+            turn_off_message_logging=turn_off_message_logging, message_logging=message_logging
+        )
+        self._spend_writer: Final = spend_writer
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
 
@@ -103,8 +121,6 @@ class _ProxyDBLogger(CustomLogger):
             )
         ):
             return
-
-        from litellm.proxy.proxy_server import proxy_logging_obj
 
         _metadata = dict(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
@@ -202,7 +218,7 @@ class _ProxyDBLogger(CustomLogger):
             existing_metadata.get("standard_logging_guardrail_information")
         )
 
-        await proxy_logging_obj.db_spend_update_writer.update_database(
+        await self._spend_writer().update_database(
             token=user_api_key_dict.api_key,
             response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
