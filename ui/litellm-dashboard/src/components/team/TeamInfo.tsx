@@ -611,8 +611,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   );
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
-  const editsAsTeamAdmin =
-    canEditTeam && !is_proxy_admin && !isProxyAdminRole(userRole) && !is_org_admin && !isOrgAdminForTeam;
+  const viewerIsProxyAdmin = is_proxy_admin || isProxyAdminRole(userRole);
+  const viewerIsOrgAdmin = is_org_admin || isOrgAdminForTeam;
+  const editsAsTeamAdmin = canEditTeam && !viewerIsProxyAdmin && !viewerIsOrgAdmin;
   const teamEditAccess = useMemo(
     () => resolveTeamEditAccess(editsAsTeamAdmin, uiSettingsData?.values),
     [editsAsTeamAdmin, uiSettingsData],
