@@ -49,6 +49,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     coerce_stream_holdback_value,
 )
 from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    ChatCompletionMessageToolCall,
     Choices,
     GenericGuardrailAPIInputs,
     ModelResponse,
@@ -78,7 +80,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     Methods can be overridden to customize behavior for different message formats.
     """
 
-    delivers_ended_stream_text_rewrites = True
+    delivers_ended_stream_rewrites = True
+    assembles_streamed_response = True
 
     def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
         """
@@ -610,13 +613,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         deliver_ended_stream_rewrites: bool,
     ) -> None:
         """Ended-stream path: rebuild the full response, run the non-streaming
-        output guardrail against it, and (when opted in) write any text rewrite
-        back across the buffered chunks."""
+        output guardrail against it, and (when opted in) write any text or
+        tool-call rewrite back across the buffered chunks."""
         model_response: Final = cast(
             ModelResponse,
             stream_chunk_builder(chunks=responses_so_far, logging_obj=litellm_logging_obj),
         )
         pre_guardrail_texts: Final = self._string_choice_contents(model_response)
+        pre_guardrail_tool_calls: Final = self._function_tool_call_shapes(model_response)
         await self.process_output_response(
             response=model_response,
             guardrail_to_apply=guardrail_to_apply,
@@ -624,13 +628,21 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
         )
-        if deliver_ended_stream_rewrites:
-            await self._write_ended_stream_text_rewrites(
-                responses_so_far=responses_so_far,
-                guardrailed_response=model_response,
-                pre_guardrail_texts=pre_guardrail_texts,
-                guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
-            )
+        if not deliver_ended_stream_rewrites:
+            return
+        guardrail_name: Final = guardrail_to_apply.guardrail_name or "unknown"
+        await self._write_ended_stream_text_rewrites(
+            responses_so_far=responses_so_far,
+            guardrailed_response=model_response,
+            pre_guardrail_texts=pre_guardrail_texts,
+            guardrail_name=guardrail_name,
+        )
+        self._write_ended_stream_tool_call_rewrites(
+            responses_so_far=responses_so_far,
+            guardrailed_response=model_response,
+            pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+            guardrail_name=guardrail_name,
+        )
 
     def build_stream_error_items(
         self,
@@ -1042,6 +1054,71 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_texts=list(changed),  # mutable-ok: callee takes lists
             task_mappings=[(target_choice_index, None) for _ in changed],  # mutable-ok: callee takes lists
         )
+
+    @staticmethod
+    def _function_tool_call_shapes(response: "ModelResponse") -> tuple[tuple[str | None, str], ...]:
+        return tuple(
+            (tool_call.function.name, tool_call.function.arguments)
+            for choice in response.choices
+            for tool_call in choice.message.tool_calls or ()
+            if isinstance(tool_call, ChatCompletionMessageToolCall)
+        )
+
+    @staticmethod
+    def _function_tool_call_fragments(
+        responses_so_far: Sequence["ModelResponseStream"],
+    ) -> tuple[tuple[ChatCompletionDeltaToolCall, ...], ...]:
+        """Group the stream's function tool-call fragments by their tool-call index, in
+        the index order ``stream_chunk_builder`` lists the rebuilt tool calls, keeping
+        only the indices the builder keeps (an id and a name somewhere in the stream)."""
+        fragments: Final = tuple(
+            tool_call
+            for response in responses_so_far
+            for choice in response.choices
+            for tool_call in choice.delta.tool_calls or ()
+            if isinstance(tool_call, ChatCompletionDeltaToolCall)
+        )
+        identified: Final = frozenset(fragment.index for fragment in fragments if fragment.id)
+        named: Final = frozenset(fragment.index for fragment in fragments if fragment.function.name)
+        return tuple(
+            tuple(fragment for fragment in fragments if fragment.index == index) for index in sorted(identified & named)
+        )
+
+    def _write_ended_stream_tool_call_rewrites(
+        self,
+        responses_so_far: list["ModelResponseStream"],  # mutable-ok: rewrites the caller's buffered chunks in place
+        guardrailed_response: "ModelResponse",
+        pre_guardrail_tool_calls: tuple[tuple[str | None, str], ...],
+        guardrail_name: str,
+    ) -> None:
+        """Write ended-stream guardrail tool-call rewrites back across the buffered
+        chunks: the rewritten name and full arguments land in the tool call's first
+        fragment and the arguments of its later fragments are blanked, mirroring the
+        text write-back. A rewrite on a stream carrying more than one distinct choice
+        index, or whose fragments do not line up with the rebuilt tool calls, is
+        reported as undeliverable, so the pipeline executor discards it and releases
+        the original chunks."""
+        post_guardrail_tool_calls: Final = self._function_tool_call_shapes(guardrailed_response)
+        if post_guardrail_tool_calls == pre_guardrail_tool_calls:
+            return
+        stream_choice_indices: Final = frozenset(
+            choice.index for response in responses_so_far for choice in response.choices
+        )
+        fragments_by_tool_call: Final = self._function_tool_call_fragments(responses_so_far)
+        if len(stream_choice_indices) != 1 or len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(guardrail_name)
+        for before, (name, arguments), fragments in zip(
+            pre_guardrail_tool_calls, post_guardrail_tool_calls, fragments_by_tool_call
+        ):
+            if (name, arguments) == before:
+                continue
+            head, *tail = fragments
+            head.function.name = name
+            head.function.arguments = arguments
+            for fragment in tail:
+                fragment.function.arguments = ""
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,

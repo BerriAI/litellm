@@ -14,6 +14,16 @@ resource "litellm_team" "engineering" {
 }
 ```
 
+### Team with a Custom ID
+
+```hcl
+resource "litellm_team" "platform" {
+  team_id    = "platform-team"
+  team_alias = "platform"
+  models     = ["gpt-4-proxy"]
+}
+```
+
 ### Team with Comprehensive Configuration
 
 ```hcl
@@ -92,6 +102,8 @@ resource "litellm_team" "model_dependent_team" {
 
 The following arguments are supported:
 
+* `team_id` - (Optional) A stable, human-readable ID for the team (for example `platform-team`). If omitted, the provider generates a random UUID. Changing this forces a new team to be created.
+
 * `team_alias` - (Required) A human-readable identifier for the team.
 
 * `organization_id` - (Optional) The ID of the organization this team belongs to.
@@ -152,7 +164,7 @@ The following arguments are supported:
 
 In addition to the arguments above, the following attributes are exported:
 
-* `id` - The unique identifier for the team.
+* `id` - The unique identifier for the team, equal to `team_id`.
 
 ## Import
 
@@ -162,7 +174,7 @@ Teams can be imported using the team ID:
 terraform import litellm_team.engineering <team-id>
 ```
 
-Note: The team ID is generated when the team is created and is different from the `team_alias`.
+Note: Unless `team_id` is set, the team ID is generated when the team is created and is different from the `team_alias`.
 
 ## Note on Team Members
 
