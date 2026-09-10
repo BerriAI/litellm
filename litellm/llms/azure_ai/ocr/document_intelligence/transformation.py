@@ -92,6 +92,19 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     def get_api_key_env_var(self) -> str | None:
         return AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR
 
+    def resolve_connection_params(
+        self,
+        *,
+        api_key: str | None,
+        api_base: str | None,
+        dynamic_api_key: str | None,
+        dynamic_api_base: str | None,
+    ) -> tuple[str | None, str | None]:
+        return (
+            (dynamic_api_key or api_key) if api_key is not None else None,
+            (dynamic_api_base or api_base) if api_base is not None else None,
+        )
+
     def get_supported_ocr_params(self, model: str) -> list:
         """
         Get supported OCR parameters for Azure Document Intelligence.

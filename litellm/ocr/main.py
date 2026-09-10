@@ -94,9 +94,6 @@ def _prepare_ocr_request(
     if doc_type not in ["document_url", "image_url"]:
         raise ValueError(f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'")
 
-    caller_supplied_api_key: Final = api_key is not None
-    caller_supplied_api_base: Final = api_base is not None
-
     (
         model,
         custom_llm_provider,
@@ -109,21 +106,6 @@ def _prepare_ocr_request(
         api_key=api_key,
     )
 
-    suppress_dynamic_api_base: Final = (
-        not caller_supplied_api_base
-        and custom_llm_provider == "azure_ai"
-        and is_azure_document_intelligence_model(model)
-    )
-    suppress_dynamic_api_key: Final = (
-        not caller_supplied_api_key
-        and custom_llm_provider == "azure_ai"
-        and is_azure_document_intelligence_model(model)
-    )
-    if dynamic_api_key and not suppress_dynamic_api_key:
-        api_key = dynamic_api_key
-    if dynamic_api_base and not suppress_dynamic_api_base:
-        api_base = dynamic_api_base
-
     ocr_provider_config: Final = ProviderConfigManager.get_provider_ocr_config(
         model=model,
         provider=litellm.LlmProviders(custom_llm_provider),
@@ -131,6 +113,13 @@ def _prepare_ocr_request(
 
     if ocr_provider_config is None:
         raise ValueError(f"OCR is not supported for provider: {custom_llm_provider}")
+
+    resolved_api_key, resolved_api_base = ocr_provider_config.resolve_connection_params(
+        api_key=api_key,
+        api_base=api_base,
+        dynamic_api_key=dynamic_api_key,
+        dynamic_api_base=dynamic_api_base,
+    )
 
     verbose_logger.debug("OCR call - model: %s, provider: %s", model, custom_llm_provider)
 
@@ -176,7 +165,7 @@ def _prepare_ocr_request(
         optional_params=optional_params,
         litellm_params={
             "litellm_call_id": litellm_call_id,
-            "api_base": api_base,
+            "api_base": resolved_api_base,
         },
         custom_llm_provider=custom_llm_provider,
     )
@@ -184,8 +173,8 @@ def _prepare_ocr_request(
     return _PreparedOCRRequest(
         model=model,
         document=document,
-        api_key=api_key,
-        api_base=api_base,
+        api_key=resolved_api_key,
+        api_base=resolved_api_base,
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         provider_config=ocr_provider_config,

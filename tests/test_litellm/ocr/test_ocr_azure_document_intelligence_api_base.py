@@ -1,16 +1,19 @@
 """
-Regression tests for Azure Document Intelligence api_base resolution in OCR.
+Regression tests for Azure Document Intelligence connection resolution in OCR.
 
 `azure_ai` exposes two OCR services on one provider; the `doc-intelligence`
 sub-route must resolve to `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`, not to the
 generic `AZURE_AI_API_BASE` fallback that `get_llm_provider` injects. These tests
 pin that routing and guard the backwards-compatibility contract that an explicitly
-supplied api_base is always honoured.
+supplied connection parameters are always honoured.
 """
+
+import pytest
 
 from litellm.llms.azure_ai.ocr.common_utils import (
     is_azure_document_intelligence_model,
 )
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.ocr.main import _prepare_ocr_request, _rust_bridge_api_base
 
 _DOC = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
@@ -22,6 +25,9 @@ _AZURE_AI_API_KEY = "generic-azure-ai-key"
 
 class _FakeLogging:
     def update_from_kwargs(self, **kwargs: object) -> None:
+        return None
+
+    def pre_call(self, **kwargs: object) -> None:
         return None
 
 
@@ -112,9 +118,70 @@ class TestDocIntelligenceApiKeyResolution:
 
         assert prepared.api_key == "explicit-key"
 
+    def test_explicit_secret_references_are_preserved(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
+        monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
+
+        prepared = _prepare(
+            "azure_ai/doc-intelligence/prebuilt-layout",
+            "os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT",
+            api_key="os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY",
+        )
+
+        assert prepared.api_key == "os.environ/AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
+        assert prepared.api_base == "os.environ/AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"
+
+    def test_generic_azure_credentials_are_not_forwarded_to_doc_intelligence(self, monkeypatch):
+        monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
+        monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
+        monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", raising=False)
+        monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", raising=False)
+
+        prepared = _prepare("azure_ai/doc-intelligence/prebuilt-layout", None, api_key=None)
+
+        assert prepared.api_key is None
+        assert prepared.api_base is None
+
     def test_generic_azure_ai_key_still_applies_to_mistral_ocr(self, monkeypatch):
         monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
 
         prepared = _prepare("azure_ai/mistral-document-ai-2505", None, api_key=None)
 
         assert prepared.api_key == _AZURE_AI_API_KEY
+
+
+@pytest.mark.asyncio
+async def test_sync_and_async_request_headers_use_document_intelligence_key(monkeypatch):
+    monkeypatch.setenv("AZURE_AI_API_KEY", _AZURE_AI_API_KEY)
+    monkeypatch.setenv("AZURE_AI_API_BASE", _AZURE_AI_API_BASE)
+    monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", _DOC_INTELLIGENCE_API_KEY)
+    monkeypatch.setenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", _DOC_INTELLIGENCE_ENDPOINT)
+    prepared = _prepare("azure_ai/doc-intelligence/prebuilt-layout", None, api_key=None)
+    logging = _FakeLogging()
+    handler = BaseLLMHTTPHandler()
+
+    sync_headers, _, _, _ = handler._prepare_ocr_request(
+        model=prepared.model,
+        document=prepared.document,
+        optional_params=prepared.optional_params,
+        logging_obj=logging,
+        api_key=prepared.api_key,
+        api_base=prepared.api_base,
+        headers=None,
+        provider_config=prepared.provider_config,
+        litellm_params=prepared.litellm_params,
+    )
+    async_headers, _, _, _ = await handler._async_prepare_ocr_request(
+        model=prepared.model,
+        document=prepared.document,
+        optional_params=prepared.optional_params,
+        logging_obj=logging,
+        api_key=prepared.api_key,
+        api_base=prepared.api_base,
+        headers=None,
+        provider_config=prepared.provider_config,
+        litellm_params=prepared.litellm_params,
+    )
+
+    assert sync_headers["Ocp-Apim-Subscription-Key"] == _DOC_INTELLIGENCE_API_KEY
+    assert async_headers["Ocp-Apim-Subscription-Key"] == _DOC_INTELLIGENCE_API_KEY
