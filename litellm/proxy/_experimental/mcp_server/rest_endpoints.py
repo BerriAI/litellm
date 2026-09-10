@@ -1243,6 +1243,17 @@ if MCP_AVAILABLE:
         mcp_auth_header: str | None
         oauth2_headers: dict[str, str] | None
 
+    def _preview_origin(url: str | None) -> tuple[str, str, int | None] | None:
+        if not url:
+            return None
+        try:
+            parsed: Final = httpx.URL(url)
+        except httpx.InvalidURL:
+            return None
+        if parsed.scheme not in ("http", "https") or not parsed.host:
+            return None
+        return parsed.scheme, parsed.host, parsed.port
+
     def _stage_server_test(new_mcp_server_request: NewMCPServerRequest, headers: Headers) -> _StagedServerTest:
         """
         Resolve the credentials a not-yet-saved server config carries for a preview call.
@@ -1260,12 +1271,10 @@ if MCP_AVAILABLE:
             if new_mcp_server_request.server_id
             else None
         )
-        saved_origin: Final = _redact_mcp_resource_url(saved_server.url) if saved_server else None
-        preview_origin: Final = _redact_mcp_resource_url(new_mcp_server_request.url)
+        saved_origin: Final = _preview_origin(saved_server.url) if saved_server else None
+        preview_origin: Final = _preview_origin(new_mcp_server_request.url)
         may_inherit: Final = new_mcp_server_request.auth_type not in _STAGED_AUTH_VALUE_AUTH_TYPES or (
-            saved_origin is not None
-            and preview_origin is not None
-            and httpx.URL(saved_origin) == httpx.URL(preview_origin)
+            saved_origin is not None and saved_origin == preview_origin
         )
         request: Final = (
             _inherit_credentials_from_existing_server(new_mcp_server_request) if may_inherit else new_mcp_server_request

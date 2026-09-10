@@ -154,17 +154,28 @@ class TestExecuteWithMcpClient:
         assert saved.url == "https://stored.example/mcp"
 
     @pytest.mark.parametrize(
-        ("url", "same_origin"),
+        ("saved_url", "url", "same_origin"),
         (
-            ("https://other.example/mcp", False),
-            ("http://stored.example/mcp", False),
-            ("https://stored.example:8443/mcp", False),
-            ("https://stored.example:443/mcp", True),
+            ("https://stored.example/mcp", "https://other.example/mcp", False),
+            ("https://stored.example/mcp", "http://stored.example/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:8443/mcp", False),
+            ("https://stored.example/mcp", "https://stored.example:443/mcp", True),
+            ("http://stored.example/mcp", "http://stored.example:80/edited", True),
+            ("https://stored.example/mcp", "HTTPS://STORED.EXAMPLE/edited", True),
+            ("https://[::1]/mcp", "https://[::1]/edited", True),
+            ("https://[::1]/mcp", "https://[::1]:443/edited", True),
+            ("https://[::1]/mcp", "https://[::2]/edited", False),
+            ("https://stored.example/mcp", "https://stored.example:invalid/mcp", False),
         ),
     )
     @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
     def test_static_preview_respects_origin_when_inheriting_credentials(
-        self, monkeypatch: pytest.MonkeyPatch, url: str, same_origin: bool, explicit_credential: str | None
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        saved_url: str,
+        url: str,
+        same_origin: bool,
+        explicit_credential: str | None,
     ) -> None:
         from starlette.datastructures import Headers
 
@@ -174,7 +185,7 @@ class TestExecuteWithMcpClient:
         saved: Final = MCPServer(
             server_id="saved-preview-server",
             name="saved",
-            url="https://stored.example/mcp",
+            url=saved_url,
             transport=MCPTransport.http,
             auth_type=MCPAuth.basic,
             authentication_token="preview:stored",
