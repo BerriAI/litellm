@@ -2197,13 +2197,17 @@ def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
     return {"type": "openai_tokenizer", "tokenizer": _get_default_encoding()}
 
 
+def uses_anthropic_tokenizer(model: str) -> bool:
+    return model in litellm.anthropic_models and "claude-3" not in model
+
+
 def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     if model in litellm.cohere_models and "command-r" in model:
         # cohere
         cohere_tokenizer: Final = Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
-    elif model in litellm.anthropic_models and "claude-3" not in model:
+    elif uses_anthropic_tokenizer(model):
         claude_tokenizer: Final = Tokenizer.from_str(claude_json_str)
         return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
     # llama2
