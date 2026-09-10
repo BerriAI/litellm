@@ -1,5 +1,6 @@
 from litellm.proxy.session_replay.transcript import (
     RecordedBody,
+    RecordedMessage,
     attach_turn,
     build_transcript,
     tool_use_ids,
@@ -119,11 +120,49 @@ def test_tool_calls_the_recording_never_answered_get_stubbed():
     assert [block.tool_use_id for block in attached.blocks()] == ["toolu_ARM", "toolu_EXTRA"]
 
 
-def test_plain_user_turn_passes_through_untouched():
+def test_plain_user_turn_passes_through_when_no_tool_call_is_outstanding():
     transcript = _transcript()
     plain = next(turn for turn in transcript.user_turns if "tool_result" not in turn.block_types())
 
-    assert attach_turn(plain, ("toolu_ARM",)) is plain
+    assert attach_turn(plain, ()) is plain
+
+
+def test_plain_user_turn_still_answers_an_outstanding_tool_call():
+    """Anthropic rejects a plain user message straight after an unanswered tool_use, so an arm
+    that called a tool where the recording next has ordinary text would 400 on the following turn."""
+    transcript = _transcript()
+    plain = next(turn for turn in transcript.user_turns if "tool_result" not in turn.block_types())
+
+    attached = attach_turn(plain, ("toolu_ARM",))
+
+    assert attached is not None
+    kinds = [block.type for block in attached.blocks()]
+    assert kinds[0] == "tool_result"
+    assert attached.blocks()[0].tool_use_id == "toolu_ARM"
+    assert "text" in kinds
+    assert "Plan my week" in attached.text()
+
+
+def test_surplus_recorded_results_are_dropped_not_piled_onto_the_last_id():
+    """Mapping extras onto the final pending id repeats one tool_use_id in a single message,
+    which the provider rejects."""
+    turn = RecordedMessage.model_validate(
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "orig_1", "content": "a"},
+                {"type": "tool_result", "tool_use_id": "orig_2", "content": "b"},
+                {"type": "tool_result", "tool_use_id": "orig_3", "content": "c"},
+            ],
+        }
+    )
+
+    attached = attach_turn(turn, ("toolu_ARM",))
+
+    assert attached is not None
+    ids = [block.tool_use_id for block in attached.blocks()]
+    assert ids == ["toolu_ARM"]
+    assert len(ids) == len(set(ids))
 
 
 def test_tool_use_ids_reads_only_tool_use_blocks():
@@ -132,3 +171,47 @@ def test_tool_use_ids_reads_only_tool_use_blocks():
 
     assert tool_use_ids(assistant_blocks) == ("toolu_ORIGINAL",)
     assert tool_use_ids(transcript.system) == ()
+
+
+def test_transport_fields_never_reach_the_replay():
+    """The recorded body is caller-controlled and the spend-log snapshot strips api_key but not
+    api_base, so forwarding unrecognized keys would let a seeded session redirect an admin's
+    replay traffic to an attacker-chosen endpoint."""
+    hostile = dict(RECORDED_BODY) | {
+        "api_base": "https://attacker.example",
+        "api_key": "sk-leak",
+        "base_url": "https://attacker.example",
+        "custom_llm_provider": "openai",
+        "extra_headers": {"x-exfil": "1"},
+        "vertex_project": "someone-elses",
+    }
+
+    transcript = build_transcript(RecordedBody.model_validate(hostile))
+    keys = {key for key, _ in transcript.sampling_params}
+
+    assert keys.isdisjoint(
+        {"api_base", "api_key", "base_url", "custom_llm_provider", "extra_headers", "vertex_project"}
+    )
+    assert {"max_tokens", "thinking"} <= keys
+
+
+def test_tool_result_content_may_be_a_list_of_blocks():
+    """Anthropic tool results carry either a string or a list of content blocks, and rejecting
+    the list form would make every session using it unreplayable."""
+    turn = RecordedMessage.model_validate(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "orig_1",
+                    "content": [{"type": "text", "text": "file body"}],
+                }
+            ],
+        }
+    )
+
+    attached = attach_turn(turn, ("toolu_ARM",))
+
+    assert attached is not None
+    assert attached.blocks()[0].tool_use_id == "toolu_ARM"

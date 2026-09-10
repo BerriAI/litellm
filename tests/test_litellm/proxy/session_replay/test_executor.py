@@ -303,3 +303,50 @@ async def test_arm_token_totals_survive_serialization():
 
     assert run.model_dump()["prompt_tokens"] == 20
     assert run.model_dump()["output_tokens"] == 10
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_does_not_leave_an_unanswered_user_message_in_history():
+    """A failed call produces no assistant reply, so keeping its user turn would send two
+    consecutive user messages on the next turn and rebind results onto ids no longer pending."""
+    caller = _RecordingCaller([_tool_response("toolu_ARM"), RuntimeError("upstream 500"), _text_response("ok")])
+
+    await run_arm(_transcript(), SessionReplayArmSpec(label="a", model="m"), max_turns=10, session_id="s", call_model=caller)
+
+    for request in caller.requests:
+        roles = [message["role"] for message in request["messages"]]
+        assert all(a != b for a, b in zip(roles, roles[1:])), roles
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("winner", ["Tie", "TIE", "CANDIDATE A", "", "neither", "A "])
+async def test_any_judge_winner_string_is_a_recorded_outcome_never_an_exception(winner):
+    """Every arm is already billed by the time the judge answers, so an unparseable winner must
+    not take the whole job down with it."""
+    caller = _RecordingCaller([_text_response("x"), _text_response("y")])
+    run = await run_arm(
+        _transcript(), SessionReplayArmSpec(label="a", model="m"), max_turns=10, session_id="s", call_model=caller
+    )
+
+    async def call_judge(system_prompt, user_prompt):
+        return '{"winner": "%s", "confidence": 0.5, "reasoning": "r"}' % winner
+
+    verdict = await judge_runs(("ask",), (run, run), call_judge, random.Random(0))
+
+    assert verdict.winner in (None, "tie", "a")
+
+
+@pytest.mark.asyncio
+async def test_tie_is_recognised_whatever_case_the_judge_used():
+    caller = _RecordingCaller([_text_response("x"), _text_response("y")])
+    run = await run_arm(
+        _transcript(), SessionReplayArmSpec(label="a", model="m"), max_turns=10, session_id="s", call_model=caller
+    )
+
+    async def call_judge(system_prompt, user_prompt):
+        return '{"winner": "Tie", "confidence": 0.4, "reasoning": "same"}'
+
+    verdict = await judge_runs(("ask",), (run, run), call_judge, random.Random(0))
+
+    assert verdict.winner == "tie"
+    assert verdict.error is None

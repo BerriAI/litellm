@@ -99,13 +99,13 @@ def _request_body(
     return {  # mutable-ok: Anthropic Messages wire body
         **{key: value for key, value in transcript.sampling_params},  # mutable-ok: Anthropic Messages wire body
         "model": arm.model,
-        "messages": [
+        "messages": [  # mutable-ok: Anthropic Messages wire body
             message.model_dump(exclude_none=True) for message in messages
         ],  # mutable-ok: Anthropic Messages wire body
-        "system": [
+        "system": [  # mutable-ok: Anthropic Messages wire body
             block.model_dump(exclude_none=True) for block in transcript.system
         ],  # mutable-ok: Anthropic Messages wire body
-        "tools": [
+        "tools": [  # mutable-ok: Anthropic Messages wire body
             tool.model_dump(exclude_none=True) for tool in transcript.tools
         ],  # mutable-ok: Anthropic Messages wire body
         "stream": False,
@@ -141,6 +141,7 @@ async def run_arm(
             raw = await call_model(_request_body(transcript, arm, history, session_id))
             response = ArmResponse.model_validate(raw)
         except Exception as exc:  # noqa: BLE001  # a failed turn is recorded, never fatal to the job
+            history.pop()
             turns.append(_failed_turn(index, str(exc)))
             await on_progress(len(turns))
             continue
@@ -179,7 +180,15 @@ def _judge_prompt(human_asks: Sequence[str], runs: Sequence[SessionReplayArmResp
 
 
 def _unmask(position: str, order: Sequence[int], runs: Sequence[SessionReplayArmResponse]) -> str | None:
-    index: Final = ord(position.strip().upper()) - ord("A")
+    """Map the judge's blind A/B label back to an arm, or give up.
+
+    The judge writes this string, so it can be anything; anything unrecognized is a recorded
+    verdict error rather than an exception, since every arm has already been billed by here.
+    """
+    label: Final = position.strip().upper()
+    if len(label) != 1:
+        return None
+    index: Final = ord(label) - ord("A")
     if index < 0 or index >= len(order):
         return None
     return runs[order[index]].label
@@ -226,7 +235,7 @@ async def judge_runs(
     if parsed is None:
         return SessionReplayVerdictResponse(error=f"unparseable judge response: {raw[:200]}")
     position, confidence, reasoning = parsed
-    if position == "tie":
+    if position.strip().casefold() == "tie":
         return SessionReplayVerdictResponse(winner="tie", confidence=confidence, reasoning=reasoning)
     unmasked: Final = _unmask(position, order, runs)
     if unmasked is None:

@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Annotated, Final, Protocol
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, status
-from prisma import Json
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.shadow_eval_logger import (
@@ -44,7 +43,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 MAX_CONCURRENT_SESSION_REPLAYS: Final = 4
-STALE_JOB_AFTER: Final = timedelta(minutes=30)
+STALE_JOB_AFTER: Final = timedelta(hours=3)
 _REPLAYABLE_CALL_TYPE: Final = "anthropic_messages"
 
 
@@ -56,9 +55,14 @@ class _SessionReplayJobRow(Protocol):
 class _SessionReplayJobTable(Protocol):
     async def create(self, data: Mapping[str, object]) -> _SessionReplayJobRow: ...
 
-    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
-
     async def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
+
+def _json_column(value: object) -> object:
+    """prisma is an optional dependency of the base install, so it stays a lazy import."""
+    from prisma import Json
+
+    return Json(value)
 
 
 def _session_replay_jobs(prisma_client: PrismaClient) -> _SessionReplayJobTable:
@@ -179,10 +183,12 @@ def _judge_caller(llm_router: Router, judge_model: str, parent_metadata: Mapping
 
 
 async def _reap_stale_jobs(prisma_client: PrismaClient) -> None:
-    """Fail jobs whose pod died mid-run.
+    """Fail jobs whose pod died mid-run, so the partial unique index does not lock a session out forever.
 
-    Progress is written after every turn, so a running job with a stale updated_at is
-    abandoned. Without this the partial unique index would lock that session out forever.
+    The heartbeat only ticks between turns, and a single arm or judge call can legitimately run
+    for the router's whole timeout, so the window sits well above one call rather than near it.
+    Reaping is still a guess, which is why the terminal writes below are status-guarded: a job
+    reaped while it was in fact alive cannot overwrite the row a later replay now owns.
     """
     cutoff: Final = datetime.now(timezone.utc) - STALE_JOB_AFTER
     await _session_replay_jobs(prisma_client).update_many(
@@ -208,9 +214,10 @@ async def _run_job(
     jobs: Final = _session_replay_jobs(prisma_client)
 
     async def on_progress(turns_completed: int) -> None:
-        await jobs.update(
-            where={"id": job_id}, data={"turns_completed": turns_completed}
-        )  # mutable-ok: Prisma update input
+        await jobs.update_many(
+            where={"id": job_id, "status": "running"},  # mutable-ok: Prisma filter
+            data={"turns_completed": turns_completed},  # mutable-ok: Prisma update input
+        )
 
     try:
         outcome: Final = await replay_session(
@@ -226,8 +233,8 @@ async def _run_job(
         )
     except Exception as exc:  # noqa: BLE001  # the job records its own failure rather than dying silently
         verbose_proxy_logger.exception("session replay job %s failed", job_id)
-        await jobs.update(
-            where={"id": job_id},  # mutable-ok: Prisma update input
+        await jobs.update_many(
+            where={"id": job_id, "status": "running"},  # mutable-ok: Prisma filter
             data={  # mutable-ok: Prisma update input
                 "status": "failed",
                 "error": str(exc)[:1000],
@@ -235,11 +242,11 @@ async def _run_job(
             },
         )
         return
-    await jobs.update(
-        where={"id": job_id},  # mutable-ok: Prisma update input
+    await jobs.update_many(
+        where={"id": job_id, "status": "running"},  # mutable-ok: Prisma filter
         data={  # mutable-ok: Prisma update input
             "status": "completed",
-            "result": Json(outcome.model_dump()),
+            "result": _json_column(outcome.model_dump()),
             "turns_completed": sum(len(run.turns) for run in outcome.arms),
             "finished_at": datetime.now(timezone.utc),
         },
@@ -260,10 +267,7 @@ def _require_admin_viewer(user_api_key_dict: UserAPIKeyAuth, action: str) -> Non
 
 
 def _job_response(row: Mapping[str, object]) -> SessionReplayJobResponse:
-    result: Final = row.get("result")
-    payload: Final = (
-        result if isinstance(result, Mapping) else {}
-    )  # mutable-ok: empty stand-in for an unfinished job's result
+    payload: Final = _as_mapping(row.get("result")) or {}  # mutable-ok: stand-in for an unfinished job's result
     verdict: Final = payload.get("verdict")
     fidelity: Final = payload.get("fidelity")
     arms: Final = payload.get("arms")
@@ -350,7 +354,7 @@ async def start_session_replay(
             data={  # mutable-ok: Prisma create input
                 "session_id": data.session_id,
                 "status": "running",
-                "arms": Json([arm.model_dump() for arm in data.arms]),  # mutable-ok: Prisma Json column payload
+                "arms": _json_column([arm.model_dump() for arm in data.arms]),  # mutable-ok: Prisma Json column payload
                 "judge_model": data.judge_model,
                 "max_turns": data.max_turns,
                 "source_request_id": source.request_id,
@@ -369,7 +373,7 @@ async def start_session_replay(
             detail=f"could not create the replay job: {exc}",
         ) from exc
 
-    parent_metadata: Final = {
+    parent_metadata: Final = {  # mutable-ok: forwardable call metadata, an SDK kwarg
         "user_api_key_user_id": user_api_key_dict.user_id
     }  # mutable-ok: forwardable call metadata, an SDK kwarg
     asyncio.create_task(  # detached job; its own handler records terminal state on the row

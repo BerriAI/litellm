@@ -18,19 +18,21 @@ from pydantic import BaseModel, ConfigDict
 
 TRUNCATION_MARKER: Final = "litellm_truncated"
 
-_PROXY_INJECTED_KEYS: Final = frozenset(
+REPLAYABLE_SAMPLING_KEYS: Final = frozenset(
     {
-        "headers",
-        "litellm_metadata",
-        "litellm_session_id",
-        "litellm_trace_id",
-        "metadata",
-        "provider_specific_header",
-        "secret_fields",
+        "max_tokens",
+        "temperature",
+        "top_p",
+        "top_k",
+        "stop_sequences",
+        "thinking",
+        "tool_choice",
+        "output_config",
+        "service_tier",
     }
 )
 
-_STRUCTURAL_KEYS: Final = frozenset({"model", "messages", "system", "tools", "stream"})
+UNANSWERED_TOOL_RESULT: Final = "[no recorded result]"
 
 _SYSTEM_REMINDER: Final = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 
@@ -42,7 +44,7 @@ class ContentBlock(BaseModel):
     text: str | None = None
     id: str | None = None
     tool_use_id: str | None = None
-    content: str | None = None
+    content: str | tuple[ContentBlock, ...] | None = None
 
 
 class ToolDefinition(BaseModel):
@@ -91,13 +93,19 @@ class ReplayTranscript:
 
 
 def _count_truncations(value: object) -> int:
-    if isinstance(value, str):
-        return 1 if TRUNCATION_MARKER in value else 0
-    if isinstance(value, dict):
-        return sum(_count_truncations(item) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return sum(_count_truncations(item) for item in value)
-    return 0
+    """Walk the stored body iteratively; a recursive walk trips the CPU-spike CI gate."""
+    pending: Final[list[object]] = [value]  # mutable-ok: explicit stack replaces recursion
+    marked: Final[list[str]] = []  # mutable-ok: one entry per truncated string
+    while pending:
+        current = pending.pop()
+        if isinstance(current, str):
+            if TRUNCATION_MARKER in current:
+                marked.append(current)
+        elif isinstance(current, dict):
+            pending.extend(current.values())
+        elif isinstance(current, (list, tuple)):
+            pending.extend(current)
+    return len(marked)
 
 
 def _as_system_blocks(system: str | tuple[ContentBlock, ...]) -> tuple[ContentBlock, ...]:
@@ -119,6 +127,10 @@ def build_transcript(recorded_body: RecordedBody) -> ReplayTranscript:
 
     `role: "system"` messages are hoisted rather than dropped: the Anthropic Messages API
     rejects that role inside `messages`, but the text is real context the recorded model saw.
+
+    Sampling parameters are allowlisted, never filtered. The recorded body is caller-controlled
+    and keeps transport fields the snapshot does not strip, `api_base` among them, so forwarding
+    everything unrecognized would let a seeded session redirect an admin's replay traffic.
     """
     hoisted: Final = tuple(
         _hoisted_system_block(message) for message in recorded_body.messages if message.role == "system"
@@ -130,7 +142,7 @@ def build_transcript(recorded_body: RecordedBody) -> ReplayTranscript:
     sampling: Final = tuple(
         (key, value)
         for key, value in recorded_body.model_dump(exclude_none=True).items()
-        if key not in _PROXY_INJECTED_KEYS and key not in _STRUCTURAL_KEYS
+        if key in REPLAYABLE_SAMPLING_KEYS
     )
     return ReplayTranscript(
         system=_as_system_blocks(recorded_body.system) + hoisted,
@@ -150,30 +162,31 @@ def tool_use_ids(assistant_blocks: Sequence[ContentBlock]) -> tuple[str, ...]:
 def attach_turn(turn: RecordedMessage, pending_tool_use_ids: Sequence[str]) -> RecordedMessage | None:
     """Bind a recorded user turn onto the arm's own trajectory, or drop it as unattachable.
 
-    Recorded `tool_result` blocks carry the original run's `tool_use_id`s, which name
-    `tool_use` blocks this arm never emitted. When the arm did call tools the results are
-    rebound onto its ids in order; when it called none there is nothing to bind to, and
-    injecting the recording's tool output as prose would feed the arm answers to questions
-    it never asked, so the turn is dropped instead.
+    The Anthropic Messages API requires every `tool_use` an assistant emits to be answered by a
+    `tool_result` carrying that exact id, in the very next user message. The recording answers
+    the ids the ORIGINAL run emitted, so once an arm diverges the two no longer line up in
+    either direction, and both mismatches are a provider 400 rather than a quality question:
+
+    - the arm called tools the recording does not answer, including the case where the next
+      recorded turn is ordinary text, so every unanswered id gets a stub
+    - the recording answers tools the arm never called, so the surplus results are dropped
+      rather than piled onto the last pending id, which would repeat one id
+
+    A turn carrying only tool results while the arm called nothing has nothing to bind to, and
+    replaying the recording's tool output as prose would hand the arm answers to questions it
+    never asked, so that turn is dropped.
     """
     blocks: Final = turn.blocks()
     results: Final = tuple(block for block in blocks if block.type == "tool_result")
-    if not results:
-        return turn
+    others: Final = tuple(block for block in blocks if block.type != "tool_result")
     if not pending_tool_use_ids:
-        return None
+        return None if results else turn
     rebound: Final = tuple(
-        block.model_copy(
-            update={"tool_use_id": pending_tool_use_ids[min(index, len(pending_tool_use_ids) - 1)]}
-        )  # mutable-ok: pydantic model_copy update mapping
-        if block.type == "tool_result"
-        else block
-        for index, block in enumerate(blocks)
+        result.model_copy(update={"tool_use_id": tool_id})  # mutable-ok: pydantic model_copy update mapping
+        for tool_id, result in zip(pending_tool_use_ids, results)
     )
-    answered: Final = frozenset(block.tool_use_id for block in rebound if block.type == "tool_result")
     stubs: Final = tuple(
-        ContentBlock(type="tool_result", tool_use_id=tool_id, content="[no recorded result]")
-        for tool_id in pending_tool_use_ids
-        if tool_id not in answered
+        ContentBlock(type="tool_result", tool_use_id=tool_id, content=UNANSWERED_TOOL_RESULT)
+        for tool_id in pending_tool_use_ids[len(rebound) :]
     )
-    return RecordedMessage(role="user", content=rebound + stubs)
+    return RecordedMessage(role="user", content=rebound + stubs + others)

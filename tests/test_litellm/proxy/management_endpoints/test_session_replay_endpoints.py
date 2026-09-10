@@ -213,3 +213,34 @@ async def test_jsonb_columns_returned_as_text_are_still_parsed():
 
     assert isinstance(result, _SourceRequest)
     assert len(result.body.messages) == 1
+
+
+def test_finished_job_whose_result_comes_back_as_text_is_still_parsed():
+    """Same driver behaviour as the source body: a jsonb column can arrive as raw JSON text,
+    and treating it as absent would silently drop the arms, verdict and fidelity from GET."""
+    result = {
+        "human_asks": ["plan my week"],
+        "arms": [{"label": "auto_router", "model": "r", "final_text": "a", "turns": []}],
+        "verdict": {"winner": "auto_router", "confidence": 0.72, "reasoning": "more complete"},
+        "fidelity": {
+            "truncated_strings": 6,
+            "recorded_prompt_tokens": 41920,
+            "replayed_first_turn_prompt_tokens": 16016,
+        },
+    }
+
+    response = _job_response(
+        {
+            "id": "job-3",
+            "session_id": "s",
+            "status": "completed",
+            "judge_model": "j",
+            "max_turns": 5,
+            "result": json.dumps(result),
+        }
+    )
+
+    assert response.verdict is not None and response.verdict.winner == "auto_router"
+    assert response.fidelity is not None and response.fidelity.truncated_strings == 6
+    assert tuple(arm.label for arm in response.arms) == ("auto_router",)
+    assert response.human_asks == ("plan my week",)
