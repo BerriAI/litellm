@@ -111,9 +111,7 @@ class VectorStoreRegistry:
         self,
         vector_stores: Optional[list[LiteLLM_ManagedVectorStore]] = None,
     ):
-        self.vector_stores: list[LiteLLM_ManagedVectorStore] = (
-            vector_stores if vector_stores is not None else []
-        )
+        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores if vector_stores is not None else []
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
