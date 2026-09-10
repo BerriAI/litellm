@@ -1,10 +1,11 @@
 import asyncio
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Final
 
 import pytest
+import uvloop
 
 from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
 from litellm.proxy.collector import (
@@ -129,6 +130,52 @@ async def test_graceful_stop_hands_the_producer_over_to_its_fallback_without_los
     assert handler.lines == [b"event-1\n"]
     assert fallback.lines == [b"event-2\n"]
     assert (producer.stats().sent, producer.stats().fallback) == (1, 1)
+
+
+@pytest.mark.parametrize("loop_factory", [asyncio.new_event_loop, uvloop.new_event_loop], ids=["asyncio", "uvloop"])
+def test_drain_still_hands_over_live_producers_when_another_connection_already_died(
+    tmp_path: Path, loop_factory: Callable[[], asyncio.AbstractEventLoop]
+):
+    """A transport the loop force-closed under a busy handler must not abort the half-close of the others."""
+
+    async def scenario() -> tuple[int, list[bytes]]:
+        release: Final = asyncio.Event()
+
+        async def slow_handler(line: bytes) -> None:
+            await release.wait()
+
+        consumer: Final = SpendEventConsumer(slow_handler)
+        address: Final = UnixAddress(path=str(tmp_path / "spend.sock"))
+        server: Final = await consumer.serve(address)
+        _, dead = await open_collector_connection(address, timeout=1.0)
+        dead.write(b"stuck\n")
+        await dead.drain()
+        await asyncio.sleep(0.05)
+        for connection in consumer._open_connections:  # pyright: ignore[reportPrivateUsage]  # force-close like uvloop does on a socket error
+            connection.transport.close()
+        dead.close()
+        fallback: Final = _Fallback()
+        producer: Final = SpendEventProducer(
+            address=address, on_unavailable="fallback", buffer_size=100, connect_timeout=1.0, fallback=fallback
+        )
+        await producer.publish(b"event-1\n")
+        await asyncio.sleep(0.05)
+
+        server.close()
+        draining: Final = asyncio.ensure_future(consumer.drain(timeout=0.5))
+        await asyncio.sleep(0.05)
+        await producer.publish(b"event-2\n")
+        await producer.close(drain_timeout=5.0)
+        still_open: Final = await draining
+        release.set()
+        await asyncio.sleep(0.05)
+        return still_open, fallback.lines
+
+    with asyncio.Runner(loop_factory=loop_factory) as runner:
+        still_open, fallback_lines = runner.run(scenario())
+
+    assert still_open == 2
+    assert fallback_lines == [b"event-2\n"]
 
 
 def test_address_argument():

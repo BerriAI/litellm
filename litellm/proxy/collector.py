@@ -110,7 +110,12 @@ class SpendEventConsumer:
         Returns how many producer connections were still open when the timeout hit.
         """
         for writer in tuple(self._open_connections):
-            writer.write_eof()
+            if writer.is_closing() or not writer.can_write_eof():
+                continue
+            try:
+                writer.write_eof()
+            except (OSError, RuntimeError) as error:
+                verbose_proxy_logger.debug("collector: producer already gone before half-close: %s", error)
         try:
             await asyncio.wait_for(self._idle.wait(), timeout)
         except TimeoutError:
