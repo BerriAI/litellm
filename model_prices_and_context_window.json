@@ -33709,13 +33709,14 @@
         "supports_tool_choice": true
     },
     "jina-reranker-v2-base-multilingual": {
-        "input_cost_per_token": 1.8e-08,
+        "input_cost_per_token": 5e-08,
         "litellm_provider": "jina_ai",
         "max_input_tokens": 1024,
         "max_output_tokens": 1024,
         "max_tokens": 1024,
         "mode": "rerank",
-        "output_cost_per_token": 1.8e-08
+        "output_cost_per_token": 0.0,
+        "source": "https://api.jina.ai/v1/models"
     },
     "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 4.125e-06,
