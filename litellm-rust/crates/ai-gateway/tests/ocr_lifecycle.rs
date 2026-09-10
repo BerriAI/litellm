@@ -297,7 +297,7 @@ async fn reducto_upload_error_body_is_truncated() {
     let error = ocr(request).await.expect_err("upload should fail");
 
     assert!(
-        matches!(error, Error::Http { status: 500, body } if body.chars().count() < 300 && body.ends_with("... (truncated)"))
+        matches!(error, Error::Transport(litellm_core::error::TransportError::Http { status: 500, body }) if body.chars().count() < 300 && body.ends_with("... (truncated)"))
     );
     server.await.expect("server task completes");
 }
@@ -439,7 +439,10 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     let call = call.with_subscriber(trace.dispatcher());
     let err = call.await.expect_err("provider error propagates");
 
-    assert!(matches!(err, Error::Http { status: 500, .. }));
+    assert!(matches!(
+        err,
+        Error::Transport(litellm_core::error::TransportError::Http { status: 500, .. })
+    ));
     server.await.expect("server task completes");
     assert_eq!(
         logger.events(),

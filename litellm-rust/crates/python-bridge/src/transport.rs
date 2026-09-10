@@ -4,17 +4,14 @@ use litellm_core::error::{Error, TransportError};
 use litellm_core::ocr::OcrClient;
 
 pub(crate) fn ocr_client() -> Result<OcrClient, Error> {
-    static CLIENT: OnceLock<Result<OcrClient, String>> = OnceLock::new();
+    static CLIENT: OnceLock<Result<OcrClient, TransportError>> = OnceLock::new();
     CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
                 .build()
-                .map_err(|error| error.to_string())
-                .and_then(|provider_http| {
-                    OcrClient::new(provider_http).map_err(|error| error.to_string())
-                })
+                .map_err(TransportError::from)
+                .and_then(OcrClient::new)
         })
-        .as_ref()
-        .cloned()
-        .map_err(|error| TransportError::Network(error.clone()).into())
+        .clone()
+        .map_err(Error::from)
 }

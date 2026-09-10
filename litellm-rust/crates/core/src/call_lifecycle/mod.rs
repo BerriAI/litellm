@@ -383,13 +383,20 @@ mod tests {
                 "request".to_string(),
                 &hooks,
                 |_request| async move {
-                    Err::<String, Error>(Error::Network("provider down".to_string()))
+                    Err::<String, Error>(
+                        crate::error::TransportError::Network("provider down".to_string()).into(),
+                    )
                 },
             )
             .await
             .expect_err("call fails");
 
-        assert_eq!(error, Error::Network("provider down".to_string()));
+        assert_eq!(
+            error,
+            Error::Transport(crate::error::TransportError::Network(
+                "provider down".to_string()
+            ))
+        );
         assert_eq!(hooks.events(), vec!["pre_call", "during_call", "failure"]);
     }
 

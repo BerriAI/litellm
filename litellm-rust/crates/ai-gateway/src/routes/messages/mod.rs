@@ -10,6 +10,7 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use litellm_core::Error;
+use litellm_core::error::TransportError;
 use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
@@ -115,9 +116,11 @@ impl IntoResponse for MessagesRouteError {
             Error::OcrResponse(_)
             | Error::OcrPolling(_)
             | Error::ChatResponse(_)
-            | Error::Http { .. }
-            | Error::Network(_)
-            | Error::Connect(_)
+            | Error::Transport(
+                TransportError::Http { .. }
+                | TransportError::Network(_)
+                | TransportError::Connect(_),
+            )
             | Error::InvalidResponse(_)
             | Error::InvalidType { .. }
             | Error::MissingField(_) => (

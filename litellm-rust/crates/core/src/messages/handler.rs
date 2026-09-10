@@ -22,7 +22,7 @@ pub(super) async fn execute_messages_provider_call(
 
     let response = http_request(request_builder)
         .await
-        .map_err(crate::error::TransportError::before_request)?;
+        .map_err(crate::error::TransportError::from_reqwest_before_dispatch)?;
 
     let status = response.status();
     let text = response
@@ -31,10 +31,11 @@ pub(super) async fn execute_messages_provider_call(
         .map_err(crate::error::TransportError::from)?;
 
     if !status.is_success() {
-        return Err(Error::Http {
+        return Err(crate::error::TransportError::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
-        });
+        }
+        .into());
     }
 
     let response = serde_json::from_str(&text)
@@ -62,17 +63,18 @@ pub(super) async fn execute_messages_provider_stream(
 
     let response = http_request(request_builder)
         .await
-        .map_err(crate::error::TransportError::before_request)?;
+        .map_err(crate::error::TransportError::from_reqwest_before_dispatch)?;
     let status = response.status();
     if !status.is_success() {
         let text = response
             .text()
             .await
             .map_err(crate::error::TransportError::from)?;
-        return Err(Error::Http {
+        return Err(crate::error::TransportError::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
-        });
+        }
+        .into());
     }
     Ok(response)
 }

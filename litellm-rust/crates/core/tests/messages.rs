@@ -420,7 +420,10 @@ async fn messages_maps_provider_error_status_to_http_error() {
     .await
     .expect_err("provider error propagates");
 
-    assert!(matches!(err, Error::Http { status: 401, .. }));
+    assert!(matches!(
+        err,
+        Error::Transport(crate::error::TransportError::Http { status: 401, .. })
+    ));
 }
 
 #[tokio::test]

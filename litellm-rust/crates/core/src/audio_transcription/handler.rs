@@ -23,17 +23,18 @@ pub async fn execute_audio_transcription_provider_call(
     }
     let response = http_request(request_builder)
         .await
-        .map_err(crate::error::TransportError::before_request)?;
+        .map_err(crate::error::TransportError::from_reqwest_before_dispatch)?;
     let status = response.status();
     let text = response
         .text()
         .await
         .map_err(crate::error::TransportError::from)?;
     if !status.is_success() {
-        return Err(Error::Http {
+        return Err(crate::error::TransportError::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
-        });
+        }
+        .into());
     }
     let response_json = serde_json::from_str(&text)
         .map_err(|error| Error::InvalidResponse(format!("invalid audio response JSON: {error}")))?;

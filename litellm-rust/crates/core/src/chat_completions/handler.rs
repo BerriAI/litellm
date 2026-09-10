@@ -32,7 +32,7 @@ pub(super) async fn execute_chat_completions_provider_call(
 
     let response = http_request(request_builder)
         .await
-        .map_err(TransportError::before_request)?;
+        .map_err(TransportError::from_reqwest_before_dispatch)?;
 
     let status = response.status();
     let text = response
@@ -41,10 +41,11 @@ pub(super) async fn execute_chat_completions_provider_call(
         .map_err(|err| Error::from(TransportError::from(err)))?;
 
     if !status.is_success() {
-        return Err(Error::Http {
+        return Err(TransportError::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
-        });
+        }
+        .into());
     }
 
     let body: Value = serde_json::from_str(&text)

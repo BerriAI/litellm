@@ -29,17 +29,8 @@ pub enum Error {
     InvalidRequest(String),
     #[error(transparent)]
     Auth(#[from] AuthError),
-    #[error("upstream request failed with status {status}: {body}")]
-    Http { status: u16, body: String },
-    #[error("upstream network error: {0}")]
-    Network(String),
-    /// The provider was never reached: DNS, TCP, TLS or proxy setup failed
-    /// before any byte of the request went out. Nothing was billed, so a host
-    /// that keeps a reference implementation can serve the request itself.
-    /// A timeout is deliberately not this, since the provider may have received
-    /// and answered the request already.
-    #[error("could not reach the provider: {0}")]
-    Connect(String),
+    #[error(transparent)]
+    Transport(#[from] TransportError),
     #[error("routing error: {0}")]
     Routing(String),
     /// The request is outside the surface this route covers in Rust. Hosts that
@@ -87,12 +78,13 @@ pub enum TransportError {
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]
     Network(String),
+    /// The provider was never reached, so a host can safely retry on another path.
     #[error("could not reach the provider: {0}")]
     Connect(String),
 }
 
 impl TransportError {
-    pub fn before_request(error: reqwest::Error) -> Self {
+    pub fn from_reqwest_before_dispatch(error: reqwest::Error) -> Self {
         let before_dispatch = !error.is_timeout() && (error.is_connect() || error.is_builder());
         let message = error.without_url().to_string();
         if before_dispatch {
@@ -106,16 +98,6 @@ impl TransportError {
 impl From<reqwest::Error> for TransportError {
     fn from(error: reqwest::Error) -> Self {
         Self::Network(error.without_url().to_string())
-    }
-}
-
-impl From<TransportError> for Error {
-    fn from(error: TransportError) -> Self {
-        match error {
-            TransportError::Http { status, body } => Self::Http { status, body },
-            TransportError::Network(message) => Self::Network(message),
-            TransportError::Connect(message) => Self::Connect(message),
-        }
     }
 }
 
@@ -150,12 +132,13 @@ impl Error {
             }
             Self::InvalidProvider(_) => ErrorKind::InvalidProvider,
             Self::Auth(_) => ErrorKind::Auth,
-            Self::Http { .. } => ErrorKind::Http,
-            Self::Network(_) | Self::OcrPolling(OcrPollingError::PollTimeout) => ErrorKind::Network,
+            Self::Transport(TransportError::Http { .. }) => ErrorKind::Http,
+            Self::Transport(TransportError::Network(_))
+            | Self::OcrPolling(OcrPollingError::PollTimeout) => ErrorKind::Network,
             Self::OcrPolling(OcrPollingError::PollOrigin | OcrPollingError::PollLocation) => {
                 ErrorKind::InvalidResponse
             }
-            Self::Connect(_) => ErrorKind::Connect,
+            Self::Transport(TransportError::Connect(_)) => ErrorKind::Connect,
             Self::Routing(_) => ErrorKind::Routing,
             Self::Unsupported(_) => ErrorKind::Unsupported,
         }
@@ -165,6 +148,17 @@ impl Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transport_error_is_exposed_without_an_extra_message_prefix() {
+        let error = Error::from(TransportError::Network("connection reset".to_string()));
+
+        assert_eq!(error.kind(), ErrorKind::Network);
+        assert_eq!(
+            error.to_string(),
+            "upstream network error: connection reset"
+        );
+    }
 
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {
@@ -176,7 +170,7 @@ mod tests {
             .send()
             .await
             .expect_err("invalid port");
-        let error = TransportError::before_request(error);
+        let error = TransportError::from_reqwest_before_dispatch(error);
         assert!(matches!(error, TransportError::Connect(_)));
         assert!(!error.to_string().contains("secret"));
         assert!(!error.to_string().contains("private"));
@@ -218,7 +212,7 @@ mod tests {
         let error = response.expect_err("server does not respond");
         assert!(error.is_timeout());
         assert!(matches!(
-            TransportError::before_request(error),
+            TransportError::from_reqwest_before_dispatch(error),
             TransportError::Network(_)
         ));
     }

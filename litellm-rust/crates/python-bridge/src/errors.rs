@@ -1,4 +1,4 @@
-use litellm_core::error::{Error, ErrorKind};
+use litellm_core::error::{Error, ErrorKind, TransportError};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
@@ -39,7 +39,7 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
 /// on its own path; anything after it is not, because the provider has already
 /// done the work and billed for it.
 pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
-    if let Error::Http { status, body } = err {
+    if let Error::Transport(TransportError::Http { status, body }) = err {
         return RustUpstreamError::new_err((status, format!("{status}: {body}")));
     }
     match err.kind() {
@@ -69,7 +69,9 @@ pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
         | Error::OcrRequest(litellm_core::ocr::error::OcrRequestError::MissingField(
             "document_url" | "image_url",
         )) => PyValueError::new_err("Document URL is required"),
-        Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
+        Error::Transport(TransportError::Http { status, body }) => {
+            RustUpstreamError::new_err((status, body))
+        }
         other => core_error_to_pyerr(other),
     }
 }
@@ -87,10 +89,13 @@ mod ocr_error_tests {
                 assert!(mapped.is_instance_of::<PyValueError>(py));
                 assert_eq!(mapped.value(py).to_string(), "Document URL is required");
             }
-            let mapped = ocr_error_to_pyerr(Error::Http {
-                status: 429,
-                body: r#"{"message":"rate limited"}"#.to_string(),
-            });
+            let mapped = ocr_error_to_pyerr(
+                TransportError::Http {
+                    status: 429,
+                    body: r#"{"message":"rate limited"}"#.to_string(),
+                }
+                .into(),
+            );
             assert!(mapped.is_instance_of::<RustUpstreamError>(py));
             let args: (u16, String) = mapped
                 .value(py)

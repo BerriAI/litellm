@@ -13,6 +13,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, HeaderName};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+use litellm_core::error::TransportError;
 use litellm_core::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
 use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
@@ -42,7 +43,7 @@ impl ResponsesWebSocketConnection {
     ) -> Result<Self, Error> {
         let mut request = url
             .into_client_request()
-            .map_err(|error| Error::Network(error.to_string()))?;
+            .map_err(|error| TransportError::Network(error.to_string()))?;
         for (name, value) in headers {
             let header_name = name
                 .parse::<HeaderName>()
@@ -54,16 +55,18 @@ impl ResponsesWebSocketConnection {
         let connect = connect_upstream(request);
         let result = match timeout {
             Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
-                Error::Network("Responses WebSocket connection timed out".to_string())
+                TransportError::Network("Responses WebSocket connection timed out".to_string())
             })?,
             None => connect.await,
         };
         let (socket, _) = result.map_err(|error| match *error {
-            tokio_tungstenite::tungstenite::Error::Http(response) => Error::Http {
-                status: response.status().as_u16(),
-                body: String::new(),
-            },
-            other => Error::Network(other.to_string()),
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                Error::from(TransportError::Http {
+                    status: response.status().as_u16(),
+                    body: String::new(),
+                })
+            }
+            other => Error::from(TransportError::Network(other.to_string())),
         })?;
         Ok(Self {
             socket: Arc::new(Mutex::new(Some(socket))),
@@ -73,12 +76,14 @@ impl ResponsesWebSocketConnection {
     pub async fn send_text(&self, text: String) -> Result<(), Error> {
         let mut socket = self.socket.lock().await;
         let Some(socket) = socket.as_mut() else {
-            return Err(Error::Network("Responses WebSocket is closed".to_string()));
+            return Err(
+                TransportError::Network("Responses WebSocket is closed".to_string()).into(),
+            );
         };
         socket
             .send(Message::Text(text))
             .await
-            .map_err(|error| Error::Network(error.to_string()))
+            .map_err(|error| TransportError::Network(error.to_string()).into())
     }
 
     pub async fn recv_text(&self) -> Result<Option<String>, Error> {
@@ -93,7 +98,7 @@ impl ResponsesWebSocketConnection {
                 .map_err(|error| Error::InvalidResponse(error.to_string())),
             Some(Ok(Message::Close(_))) | None => Ok(None),
             Some(Ok(_)) => Ok(None),
-            Some(Err(error)) => Err(Error::Network(error.to_string())),
+            Some(Err(error)) => Err(TransportError::Network(error.to_string()).into()),
         }
     }
 
@@ -103,7 +108,7 @@ impl ResponsesWebSocketConnection {
             socket
                 .close(None)
                 .await
-                .map_err(|error| Error::Network(error.to_string()))?;
+                .map_err(|error| TransportError::Network(error.to_string()))?;
         }
         *socket = None;
         Ok(())
@@ -134,7 +139,7 @@ async fn dial_upstream(
     let mut request = url
         .as_str()
         .into_client_request()
-        .map_err(|error| Error::Network(error.to_string()))?;
+        .map_err(|error| TransportError::Network(error.to_string()))?;
     request.headers_mut().insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {api_key}"))
@@ -145,15 +150,17 @@ async fn dial_upstream(
         connect_upstream(request),
     )
     .await
-    .map_err(|_| Error::Network("Responses WebSocket connection timed out".to_string()))?;
+    .map_err(|_| TransportError::Network("Responses WebSocket connection timed out".to_string()))?;
     result
         .map(|(socket, _)| socket)
         .map_err(|error| match *error {
-            tokio_tungstenite::tungstenite::Error::Http(response) => Error::Http {
-                status: response.status().as_u16(),
-                body: String::new(),
-            },
-            other => Error::Network(other.to_string()),
+            tokio_tungstenite::tungstenite::Error::Http(response) => {
+                Error::from(TransportError::Http {
+                    status: response.status().as_u16(),
+                    body: String::new(),
+                })
+            }
+            other => Error::from(TransportError::Network(other.to_string())),
         })
 }
 
@@ -215,12 +222,12 @@ where
                         .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                     upstream_tx.send(Message::Text(payload))
                         .await
-                        .map_err(|error| Error::Network(error.to_string()))?;
+                        .map_err(|error| TransportError::Network(error.to_string()))?;
                 }
             }
             message = upstream_rx.next() => {
                 let Some(message) = message else { break };
-                match message.map_err(|error| Error::Network(error.to_string()))? {
+                match message.map_err(|error| TransportError::Network(error.to_string()))? {
                     Message::Text(text) => {
                         let event = serde_json::from_str::<ResponsesWsEvent>(&text)
                             .map_err(|error| Error::InvalidResponse(error.to_string()))?;
@@ -231,7 +238,7 @@ where
                         {
                             client_out.send(outbound)
                                 .await
-                                .map_err(|error| Error::Network(error.to_string()))?;
+                                .map_err(|error| TransportError::Network(error.to_string()))?;
                         }
                     }
                     Message::Close(_) => break,
@@ -273,7 +280,7 @@ where
             upstream_tx
                 .send(Message::Text(payload))
                 .await
-                .map_err(|error| Error::Network(error.to_string()))?;
+                .map_err(|error| TransportError::Network(error.to_string()))?;
         }
     }
     ResponsesWebSocketStreaming::bidirectional_forward(
@@ -348,7 +355,10 @@ mod tests {
         let result =
             dial_upstream("gpt-5", "sk-test", Some(&format!("wss://127.0.0.1:{port}"))).await;
 
-        assert!(matches!(result, Err(Error::Network(_))));
+        assert!(matches!(
+            result,
+            Err(Error::Transport(TransportError::Network(_)))
+        ));
     }
 
     async fn websocket_base() -> (String, tokio::task::JoinHandle<()>) {
@@ -539,7 +549,10 @@ mod tests {
         )
         .await
         .expect_err("status error");
-        assert!(matches!(error, Error::Http { status: 401, .. }));
+        assert!(matches!(
+            error,
+            Error::Transport(TransportError::Http { status: 401, .. })
+        ));
         server.await.expect("server task");
     }
 
@@ -568,7 +581,10 @@ mod tests {
         )
         .await
         .expect_err("status error");
-        assert!(matches!(error, Error::Http { status: 500, .. }));
+        assert!(matches!(
+            error,
+            Error::Transport(TransportError::Http { status: 500, .. })
+        ));
         server.await.expect("server task");
     }
 }

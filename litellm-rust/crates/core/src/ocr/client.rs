@@ -19,7 +19,7 @@ pub struct OcrClient {
 }
 
 impl OcrClient {
-    pub fn new(provider_http: reqwest::Client) -> Result<Self, Error> {
+    pub fn new(provider_http: reqwest::Client) -> Result<Self, TransportError> {
         let document_fetcher = MediaFetcher::new().map_err(TransportError::from)?;
         Ok(Self {
             provider_http,
@@ -55,19 +55,16 @@ impl OcrClient {
 }
 
 pub async fn ocr(request: OcrRequest) -> Result<OcrResponseData, Error> {
-    static CLIENT: OnceLock<Result<OcrClient, String>> = OnceLock::new();
+    static CLIENT: OnceLock<Result<OcrClient, TransportError>> = OnceLock::new();
     let client = CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(OCR_CONNECT_TIMEOUT_SECS))
                 .build()
-                .map_err(|error| error.to_string())
-                .and_then(|provider_http| {
-                    OcrClient::new(provider_http).map_err(|error| error.to_string())
-                })
+                .map_err(TransportError::from)
+                .and_then(OcrClient::new)
         })
-        .as_ref()
-        .map_err(|error| TransportError::Network(error.clone()))?;
+        .clone()?;
     client.perform(request).await
 }
 

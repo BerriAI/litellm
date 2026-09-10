@@ -770,7 +770,10 @@ mod round_trip {
         .expect_err("upstream rejects");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::Http { status: 429, .. }),
+            matches!(
+                err,
+                Error::Transport(crate::error::TransportError::Http { status: 429, .. })
+            ),
             "expected a 429, got {err:?}"
         );
     }
@@ -794,7 +797,10 @@ mod round_trip {
         .await
         .expect_err("nothing is listening");
         assert!(
-            matches!(err, Error::Connect(_)),
+            matches!(
+                err,
+                Error::Transport(crate::error::TransportError::Connect(_))
+            ),
             "expected a pre-send connect failure, got {err:?}"
         );
     }
