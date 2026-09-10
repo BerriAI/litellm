@@ -5,6 +5,7 @@ use crate::ocr::formats::deepseek::{DeepSeekOcrFormat, types::DeepSeekOcrParams}
 use crate::ocr::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
 use crate::ocr::types::{OcrConnection, OcrDocument};
 use crate::providers::vertex_ai::auth::{self, VertexAuthInputs};
+use crate::url_utils::ApiUrl;
 
 async fn authenticate(
     connection: &OcrConnection,
@@ -47,16 +48,26 @@ impl OcrIntegration for VertexMistral {
         let authentication = authenticate(connection, config, env_lookup).await?;
         let location = location(config, env_lookup);
         let default_base = format!("https://{location}-aiplatform.googleapis.com");
-        let base = connection
-            .api_base
-            .as_deref()
-            .unwrap_or(&default_base)
-            .trim_end_matches('/');
+        let base = connection.api_base.as_deref().unwrap_or(&default_base);
+        let prediction = format!("{model}:rawPredict");
+        let path = [
+            "v1",
+            "projects",
+            authentication.project_id.as_str(),
+            "locations",
+            location.as_str(),
+            "publishers",
+            "mistralai",
+            "models",
+            prediction.as_str(),
+        ];
         Ok(PreparedOcrBackend {
-            url: format!(
-                "{base}/v1/projects/{}/locations/{location}/publishers/mistralai/models/{model}:rawPredict",
-                authentication.project_id
-            ),
+            url: ApiUrl::parse(base)
+                .and_then(|url| url.complete_path(&path))
+                .map(|url| url.into_string())
+                .map_err(|_| crate::ocr::error::OcrRequestError::RequestField {
+                    path: "api_base".into(),
+                })?,
             headers: authentication.headers,
         })
     }
@@ -107,13 +118,26 @@ impl OcrIntegration for VertexDeepSeek {
         let base = connection
             .api_base
             .as_deref()
-            .unwrap_or(VERTEX_DEEPSEEK_API_BASE)
-            .trim_end_matches('/');
+            .unwrap_or(VERTEX_DEEPSEEK_API_BASE);
         Ok(PreparedOcrBackend {
-            url: format!(
-                "{base}/v1/projects/{}/locations/{location}/endpoints/openapi/chat/completions",
-                authentication.project_id
-            ),
+            url: ApiUrl::parse(base)
+                .and_then(|url| {
+                    url.complete_path(&[
+                        "v1",
+                        "projects",
+                        authentication.project_id.as_str(),
+                        "locations",
+                        location.as_str(),
+                        "endpoints",
+                        "openapi",
+                        "chat",
+                        "completions",
+                    ])
+                })
+                .map(|url| url.into_string())
+                .map_err(|_| crate::ocr::error::OcrRequestError::RequestField {
+                    path: "api_base".into(),
+                })?,
             headers: authentication.headers,
         })
     }

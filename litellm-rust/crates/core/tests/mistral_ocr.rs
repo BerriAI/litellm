@@ -69,14 +69,25 @@ fn transform_ocr_response_normalizes_mistral_json() {
 
 #[test]
 fn complete_url_defaults_and_dedupes_v1() {
-    assert_eq!(complete_url(None), "https://api.mistral.ai/v1/ocr");
-    assert_eq!(complete_url(Some(" ")), "https://api.mistral.ai/v1/ocr");
+    assert_eq!(complete_url(None).unwrap(), "https://api.mistral.ai/v1/ocr");
     assert_eq!(
-        complete_url(Some("https://example.com")),
+        complete_url(Some(" ")).unwrap(),
+        "https://api.mistral.ai/v1/ocr"
+    );
+    assert_eq!(
+        complete_url(Some("https://example.com")).unwrap(),
         "https://example.com/v1/ocr"
     );
     assert_eq!(
-        complete_url(Some("https://example.com/v1/")),
+        complete_url(Some("https://example.com/v1/")).unwrap(),
         "https://example.com/v1/ocr"
+    );
+    assert_eq!(
+        complete_url(Some("https://example.com/v1/ocr?tenant=a")).unwrap(),
+        "https://example.com/v1/ocr?tenant=a"
+    );
+    assert_eq!(
+        complete_url(Some("https://example.com/v1?tenant=a")).unwrap(),
+        "https://example.com/v1/ocr?tenant=a"
     );
 }

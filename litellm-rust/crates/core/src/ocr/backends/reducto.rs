@@ -8,6 +8,7 @@ use crate::ocr::formats::reducto::{
 };
 use crate::ocr::types::{OcrConnection, OcrDocument};
 use crate::providers::reducto::auth;
+use crate::url_utils::ApiUrl;
 
 #[derive(Clone, Debug)]
 pub struct ReductoBackend;
@@ -17,12 +18,20 @@ impl OcrBackend for ReductoBackend {
     const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::Reducto;
 }
 
-pub fn normalize_api_base(api_base: Option<&str>) -> &str {
-    api_base
+pub fn complete_url(api_base: Option<&str>, path: &str) -> Result<String, OcrError> {
+    let base = api_base
         .map(str::trim)
         .filter(|base| !base.is_empty())
-        .unwrap_or(REDUCTO_OCR_API_BASE)
-        .trim_end_matches('/')
+        .unwrap_or(REDUCTO_OCR_API_BASE);
+    ApiUrl::parse(base)
+        .and_then(|url| url.complete_path(&[path]))
+        .map(|url| url.into_string())
+        .map_err(|_| {
+            OcrRequestError::RequestField {
+                path: "api_base".into(),
+            }
+            .into()
+        })
 }
 
 async fn prepare_reducto_document(
@@ -44,10 +53,7 @@ async fn prepare_reducto_document(
         .map_err(|_| OcrRequestError::InvalidDataUri)?;
     let mut builder = client
         .provider_http()
-        .post(format!(
-            "{}/upload",
-            normalize_api_base(connection.api_base.as_deref())
-        ))
+        .post(complete_url(connection.api_base.as_deref(), "upload")?)
         .multipart(reqwest::multipart::Form::new().part("file", part))
         .timeout(connection.timeout);
     for (name, value) in headers {
@@ -97,10 +103,7 @@ macro_rules! impl_reducto_backend {
                     env_lookup,
                 )?;
                 Ok(PreparedOcrBackend {
-                    url: format!(
-                        "{}/parse",
-                        normalize_api_base(connection.api_base.as_deref())
-                    ),
+                    url: complete_url(connection.api_base.as_deref(), "parse")?,
                     headers,
                 })
             }

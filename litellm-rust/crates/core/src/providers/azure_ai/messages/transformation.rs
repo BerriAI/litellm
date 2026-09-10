@@ -9,12 +9,11 @@ use crate::messages::types::{
 use crate::providers::anthropic::messages::transformation::{
     ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
 };
+use crate::url_utils::ApiUrl;
 use serde_json::{Map, Value};
 
 const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
 const AZURE_API_BASE_ENV: &str = "AZURE_API_BASE";
-const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
-const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 const SYSTEM_ROLE: &str = "system";
 const TEXT_BLOCK_TYPE: &str = "text";
 
@@ -50,17 +49,13 @@ pub fn complete_azure_anthropic_url(
             MissingCredential::AzureApiBase,
         )))?;
 
-    let api_base = api_base.trim_end_matches('/');
-
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
-        return Ok(api_base.to_string());
-    }
-
-    let with_anthropic = match api_base.split_once(ANTHROPIC_PATH_SEGMENT) {
-        Some((prefix, _)) => format!("{prefix}{ANTHROPIC_PATH_SEGMENT}"),
-        None => format!("{api_base}{ANTHROPIC_PATH_SEGMENT}"),
-    };
-    Ok(format!("{with_anthropic}{MESSAGES_PATH_SUFFIX}"))
+    ApiUrl::parse(&api_base)
+        .and_then(|url| url.truncate_path_after("anthropic"))
+        .and_then(|url| {
+            url.complete_path_with_aliases(&["anthropic", "v1", "messages"], &[&["v1", "messages"]])
+        })
+        .map(|url| url.into_string())
+        .map_err(|error| Error::InvalidRequest(format!("invalid api_base: {error}")))
 }
 
 fn strip_scope_from_block(block: &mut ContentBlock) {
@@ -285,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_strategy_is_x_api_key() {
+    fn credential_placement_is_x_api_key() {
         assert_eq!(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
                 .credential_placement()

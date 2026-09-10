@@ -16,6 +16,7 @@ use crate::chat_completions::types::{
     ChatCompletionsUsage, ChatMessage, ChatMessageContent,
 };
 use crate::error::Error;
+use crate::url_utils::ApiUrl;
 
 use super::super::aws_base::{bedrock_model_id_and_region, resolve_bedrock_region};
 use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
@@ -46,8 +47,6 @@ const CONFIG_PARAMS: &[&str] = &[
     "aws_external_id",
     AWS_BEDROCK_RUNTIME_ENDPOINT,
 ];
-
-const CONVERSE_PATH_SUFFIX: &str = "/converse";
 
 pub struct BedrockChatCompletionsConfig;
 
@@ -88,14 +87,12 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
-        let endpoint = endpoint.trim_end_matches('/');
-        // A host that already built the full Converse URL (LiteLLM's Python
-        // path encodes the model id itself) passes it through untouched, the
-        // way the Anthropic config leaves a complete `/v1/messages` URL alone.
-        if endpoint.ends_with(CONVERSE_PATH_SUFFIX) {
-            return Ok(endpoint.to_string());
-        }
-        Ok(format!("{endpoint}/model/{model_id}{CONVERSE_PATH_SUFFIX}"))
+        ApiUrl::parse(&endpoint)
+            .and_then(|url| {
+                url.complete_path_with_aliases(&["model", &model_id, "converse"], &[&["converse"]])
+            })
+            .map(|url| url.into_string())
+            .map_err(|error| Error::InvalidRequest(format!("invalid api_base: {error}")))
     }
 
     fn auth(

@@ -1,13 +1,14 @@
 use crate::Error;
-use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
+use crate::constants::OPENAI_RESPONSES_DEFAULT_API_BASE;
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
+use crate::url_utils::ApiUrl;
 
 pub trait ResponsesWebSocketProviderConfig: Sync {
     fn model_in_websocket_url(&self) -> bool {
         true
     }
 
-    fn complete_url(&self, api_base: Option<&str>, model: &str) -> String {
+    fn complete_url(&self, api_base: Option<&str>, model: &str) -> Result<String, Error> {
         complete_url(api_base, model, self.model_in_websocket_url())
     }
 
@@ -24,43 +25,27 @@ pub trait ResponsesWebSocketProviderConfig: Sync {
     ) -> Result<ResponsesWsTransformResult, Error>;
 }
 
-pub fn complete_url(api_base: Option<&str>, model: &str, model_in_websocket_url: bool) -> String {
+pub fn complete_url(
+    api_base: Option<&str>,
+    model: &str,
+    model_in_websocket_url: bool,
+) -> Result<String, Error> {
     let base = api_base
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(OPENAI_RESPONSES_DEFAULT_API_BASE);
-    let (base_without_query, query) = base
-        .split_once('?')
-        .map_or((base, None), |(value, query)| (value, Some(query)));
-    let response_url = format!(
-        "{}{}",
-        base_without_query.trim_end_matches('/'),
-        OPENAI_RESPONSES_PATH
-    );
-    let scheme_flipped = if let Some(rest) = response_url.strip_prefix("https://") {
-        format!("wss://{rest}")
-    } else if let Some(rest) = response_url.strip_prefix("http://") {
-        format!("ws://{rest}")
-    } else {
-        response_url
-    };
-    let url = query.map_or(scheme_flipped.clone(), |value| {
-        format!("{scheme_flipped}?{value}")
-    });
-    if !model_in_websocket_url
-        || query.is_some_and(|value| {
-            value
-                .split('&')
-                .any(|part| part.split('=').next() == Some("model"))
+    let url = ApiUrl::parse(base)
+        .and_then(|url| match url.scheme() {
+            "https" => url.with_scheme("wss"),
+            "http" => url.with_scheme("ws"),
+            _ => Ok(url),
         })
-    {
-        return url;
+        .and_then(|url| url.complete_path(&["responses"]))
+        .map_err(|error| Error::InvalidRequest(format!("invalid api_base: {error}")))?;
+    if !model_in_websocket_url || url.has_query_key("model") {
+        return Ok(url.into_string());
     }
-    format!(
-        "{url}{}model={}",
-        if query.is_some() { "&" } else { "?" },
-        crate::http_utils::encode_query_value(model)
-    )
+    Ok(url.append_query_pair("model", model).into_string())
 }
 
 pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent {
@@ -115,20 +100,31 @@ mod tests {
     #[test]
     fn url_construction_matches_python_defaults_and_query_behavior() {
         assert_eq!(
-            complete_url(None, "gpt-5", true),
+            complete_url(None, "gpt-5", true).expect("url builds"),
             "wss://api.openai.com/v1/responses?model=gpt-5"
         );
         assert_eq!(
-            complete_url(Some("http://localhost:8080/"), "gpt 5", true),
-            "ws://localhost:8080/responses?model=gpt%205"
+            complete_url(Some("http://localhost:8080/"), "gpt 5", true).expect("url builds"),
+            "ws://localhost:8080/responses?model=gpt+5"
         );
         assert_eq!(
-            complete_url(Some("https://example.test/v1?foo=bar"), "gpt-5", true),
+            complete_url(Some("https://example.test/v1?foo=bar"), "gpt-5", true)
+                .expect("url builds"),
             "wss://example.test/v1/responses?foo=bar&model=gpt-5"
         );
         assert_eq!(
-            complete_url(Some("https://example.test?model=existing"), "gpt-5", true),
+            complete_url(Some("https://example.test?model=existing"), "gpt-5", true)
+                .expect("url builds"),
             "wss://example.test/responses?model=existing"
+        );
+        assert_eq!(
+            complete_url(
+                Some("https://example.test/v1/responses?foo=bar"),
+                "gpt-5",
+                true,
+            )
+            .expect("url builds"),
+            "wss://example.test/v1/responses?foo=bar&model=gpt-5"
         );
     }
 

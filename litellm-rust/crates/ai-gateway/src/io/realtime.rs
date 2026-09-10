@@ -74,7 +74,7 @@ pub(crate) async fn dial_upstream(
     api_key: &str,
     api_base: Option<&str>,
 ) -> Result<UpstreamWs, Error> {
-    let url = OPENAI_REALTIME_CONFIG.complete_url(api_base, model);
+    let url = OPENAI_REALTIME_CONFIG.complete_url(api_base, model)?;
 
     let mut request = url
         .as_str()

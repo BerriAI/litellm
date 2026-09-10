@@ -15,5 +15,6 @@ pub mod realtime;
 pub mod responses;
 pub mod router;
 pub mod routing_utils;
+mod url_utils;
 
 pub use error::{AuthError, Error};

@@ -45,6 +45,7 @@ azure_identity = { version = "1.0.0", features = ["tokio"] }
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 veil = "0.3.0"
+url = "2.5.8"
 
 [profile.release]
 opt-level = 3

@@ -2,11 +2,11 @@ use crate::auth::CredentialPlacement;
 use crate::auth::error::MissingCredential;
 use crate::error::{AuthError, Error};
 use crate::messages::transformation::AnthropicMessagesProviderConfig;
+use crate::url_utils::ApiUrl;
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 const DEFAULT_ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
-const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 
 pub struct AnthropicMessagesConfig;
 
@@ -31,17 +31,16 @@ pub fn resolve_anthropic_api_key(
 pub fn complete_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> String {
+) -> Result<String, Error> {
     let api_base = non_empty(api_base)
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_BASE_ENV).filter(|value| !value.trim().is_empty()))
         .unwrap_or_else(|| DEFAULT_ANTHROPIC_API_BASE.to_string());
 
-    let api_base = api_base.trim_end_matches('/');
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
-        return api_base.to_string();
-    }
-    format!("{api_base}{MESSAGES_PATH_SUFFIX}")
+    ApiUrl::parse(&api_base)
+        .and_then(|url| url.complete_path(&["v1", "messages"]))
+        .map(|url| url.into_string())
+        .map_err(|error| Error::InvalidRequest(format!("invalid api_base: {error}")))
 }
 
 impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
@@ -52,7 +51,7 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(complete_anthropic_url(api_base, env_lookup))
+        complete_anthropic_url(api_base, env_lookup)
     }
 
     fn resolve_api_key(
@@ -75,7 +74,7 @@ mod tests {
     #[test]
     fn url_defaults_to_public_anthropic_endpoint() {
         assert_eq!(
-            complete_anthropic_url(None, &|_| None),
+            complete_anthropic_url(None, &|_| None).expect("url builds"),
             "https://api.anthropic.com/v1/messages"
         );
     }
@@ -83,7 +82,7 @@ mod tests {
     #[test]
     fn url_appends_messages_suffix_to_custom_base() {
         assert_eq!(
-            complete_anthropic_url(Some("https://proxy.internal"), &|_| None),
+            complete_anthropic_url(Some("https://proxy.internal"), &|_| None).expect("url builds"),
             "https://proxy.internal/v1/messages"
         );
     }
@@ -91,8 +90,18 @@ mod tests {
     #[test]
     fn url_leaves_complete_messages_endpoint_untouched() {
         assert_eq!(
-            complete_anthropic_url(Some("https://proxy.internal/v1/messages"), &|_| None),
+            complete_anthropic_url(Some("https://proxy.internal/v1/messages"), &|_| None)
+                .expect("url builds"),
             "https://proxy.internal/v1/messages"
+        );
+    }
+
+    #[test]
+    fn url_completes_path_before_existing_query() {
+        assert_eq!(
+            complete_anthropic_url(Some("https://proxy.internal/v1?tenant=a"), &|_| None)
+                .expect("url builds"),
+            "https://proxy.internal/v1/messages?tenant=a"
         );
     }
 
@@ -102,7 +111,7 @@ mod tests {
             (key == ANTHROPIC_API_BASE_ENV).then(|| "https://env.anthropic".to_string())
         };
         assert_eq!(
-            complete_anthropic_url(Some("  "), &with_env),
+            complete_anthropic_url(Some("  "), &with_env).expect("url builds"),
             "https://env.anthropic/v1/messages"
         );
     }
@@ -125,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_strategy_and_default_headers_match_anthropic() {
+    fn credential_placement_and_default_headers_match_anthropic() {
         assert_eq!(
             ANTHROPIC_MESSAGES_CONFIG
                 .credential_placement()

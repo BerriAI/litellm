@@ -31,6 +31,13 @@ async fn prepared_url(
         .map(|prepared| prepared.url)
 }
 
+fn query_value(url: &str, key: &str) -> Option<String> {
+    url::Url::parse(url)
+        .expect("prepared URL parses")
+        .query_pairs()
+        .find_map(|(name, value)| (name == key).then(|| value.into_owned()))
+}
+
 #[rstest]
 #[case(json!([2,0,0,1]), "1,2,3")]
 #[case(json!("1-3, 5"), "1-3,5")]
@@ -43,7 +50,7 @@ async fn document_intelligence_url_normalizes_zero_based_pages(
 ) {
     let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({"pages":pages}));
     let url = prepared_url("prebuilt-read", &mapped).await.unwrap();
-    assert!(url.ends_with(&format!("&pages={expected}")));
+    assert_eq!(query_value(&url, "pages").as_deref(), Some(expected));
 }
 #[rstest]
 #[case(json!([true]))]
@@ -91,12 +98,8 @@ async fn document_intelligence_page_mapping_omits_empty_list() {
 #[tokio::test]
 async fn document_intelligence_maps_features(#[case] features: Value, #[case] expected: &str) {
     let mapped = params(&AZURE_DOCUMENT_INTELLIGENCE, json!({"features":features}));
-    assert!(
-        prepared_url("prebuilt-read", &mapped)
-            .await
-            .unwrap()
-            .ends_with(&format!("&features={expected}"))
-    );
+    let url = prepared_url("prebuilt-read", &mapped).await.unwrap();
+    assert_eq!(query_value(&url, "features").as_deref(), Some(expected));
 }
 #[rstest]
 #[case(json!(["languages,ocr"]))]
@@ -329,7 +332,7 @@ async fn polling_forwards_subscription_or_bearer_and_preserves_native(#[case] be
         Some(operation().as_object().unwrap().clone())
     );
     let seen = requests.lock().unwrap();
-    assert!(seen[0].contains("&pages=1,3"));
+    assert!(seen[0].contains("&pages=1%2C3"));
     for poll in &seen[1..] {
         assert!(poll.to_ascii_lowercase().contains(if bearer {
             "authorization: bearer token"

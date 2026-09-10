@@ -10,19 +10,14 @@ use crate::ocr::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
 use crate::ocr::types::{OcrConnection, OcrDocument, OcrRequestFormat};
 use crate::ocr::wire::DecodedOcrResponse;
 use crate::providers::azure_ai::auth;
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use crate::url_utils::ApiUrl;
 
-fn encode_model_id(model: &str) -> Result<String, OcrRequestError> {
-    const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
-        .remove(b'-')
-        .remove(b'_')
-        .remove(b'.')
-        .remove(b'~');
+fn model_id(model: &str) -> Result<&str, OcrRequestError> {
     let model = model.rsplit('/').next().unwrap_or(model);
     if matches!(model, "." | "..") {
         return Err(OcrRequestError::DotModel);
     }
-    Ok(utf8_percent_encode(model, PATH_SEGMENT).to_string())
+    Ok(model)
 }
 
 #[derive(Clone, Debug)]
@@ -51,8 +46,14 @@ impl OcrIntegration for AzureMistral {
             env_lookup,
         )
         .await?;
+        let path: Vec<&str> = AZURE_AI_OCR_PATH.trim_matches('/').split('/').collect();
         Ok(PreparedOcrBackend {
-            url: format!("{}{AZURE_AI_OCR_PATH}", base.trim_end_matches('/')),
+            url: ApiUrl::parse(&base)
+                .and_then(|url| url.complete_path(&path))
+                .map(|url| url.into_string())
+                .map_err(|_| OcrRequestError::RequestField {
+                    path: "api_base".into(),
+                })?,
             headers,
         })
     }
@@ -102,20 +103,26 @@ impl OcrIntegration for AzureDocumentIntelligence {
             connection.api_base.as_deref(),
             env_lookup,
         )?;
-        let mut url = format!(
-            "{}/documentintelligence/documentModels/{}:analyze?api-version={}",
-            endpoint.trim_end_matches('/'),
-            encode_model_id(model)?,
-            AZURE_DI_API_VERSION
-        );
-        if let Some(pages) = &params.pages {
-            url.push_str("&pages=");
-            url.push_str(&pages.0);
-        }
-        if let Some(features) = &params.features {
-            url.push_str("&features=");
-            url.push_str(&features.0);
-        }
+        let model = format!("{}:analyze", model_id(model)?);
+        let url = ApiUrl::parse(&endpoint)
+            .and_then(|url| url.complete_path(&["documentintelligence", "documentModels", &model]))
+            .map(|url| {
+                url.append_query_pairs(
+                    [("api-version", AZURE_DI_API_VERSION)]
+                        .into_iter()
+                        .chain(params.pages.iter().map(|pages| ("pages", pages.0.as_str())))
+                        .chain(
+                            params
+                                .features
+                                .iter()
+                                .map(|features| ("features", features.0.as_str())),
+                        ),
+                )
+                .into_string()
+            })
+            .map_err(|_| OcrRequestError::RequestField {
+                path: "api_base".into(),
+            })?;
         let headers = auth::authenticate_document_intelligence(
             connection.extra_headers.clone(),
             connection.api_key.as_deref(),

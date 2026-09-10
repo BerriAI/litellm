@@ -130,7 +130,7 @@ async fn dial_upstream(
     api_key: &str,
     api_base: Option<&str>,
 ) -> Result<ResponsesUpstreamWs, Error> {
-    let url = OPENAI_RESPONSES_WS_CONFIG.complete_url(api_base, model);
+    let url = OPENAI_RESPONSES_WS_CONFIG.complete_url(api_base, model)?;
     let mut request = url
         .as_str()
         .into_client_request()

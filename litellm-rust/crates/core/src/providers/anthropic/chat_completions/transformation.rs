@@ -129,7 +129,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(complete_anthropic_url(api_base, env_lookup))
+        complete_anthropic_url(api_base, env_lookup)
     }
 
     fn auth(

@@ -71,15 +71,6 @@ where
     <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
-pub(crate) fn encode_query_value(value: &str) -> String {
-    const QUERY_VALUE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
-        .remove(b'-')
-        .remove(b'.')
-        .remove(b'_')
-        .remove(b'~');
-    percent_encoding::utf8_percent_encode(value, QUERY_VALUE).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,21 +1,25 @@
 use crate::constants::MISTRAL_OCR_API_BASE;
 use crate::ocr::backends::{BackendConfig, OcrBackend, OcrIntegration, PreparedOcrBackend};
-use crate::ocr::error::OcrError;
+use crate::ocr::error::{OcrError, OcrRequestError};
 use crate::ocr::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
 use crate::ocr::types::{OcrConnection, OcrDocument};
 use crate::providers::mistral::auth;
+use crate::url_utils::ApiUrl;
 
-pub fn complete_url(api_base: Option<&str>) -> String {
+pub fn complete_url(api_base: Option<&str>) -> Result<String, OcrError> {
     let base = api_base
         .map(str::trim)
         .filter(|base| !base.is_empty())
-        .unwrap_or(MISTRAL_OCR_API_BASE)
-        .trim_end_matches('/');
-    if base.ends_with("/v1") {
-        format!("{base}/ocr")
-    } else {
-        format!("{base}/v1/ocr")
-    }
+        .unwrap_or(MISTRAL_OCR_API_BASE);
+    ApiUrl::parse(base)
+        .and_then(|url| url.complete_path(&["v1", "ocr"]))
+        .map(|url| url.into_string())
+        .map_err(|_| {
+            OcrRequestError::RequestField {
+                path: "api_base".into(),
+            }
+            .into()
+        })
 }
 
 #[derive(Clone, Debug)]
@@ -41,7 +45,7 @@ impl OcrIntegration for MistralDirect {
             env_lookup,
         )?;
         Ok(PreparedOcrBackend {
-            url: complete_url(connection.api_base.as_deref()),
+            url: complete_url(connection.api_base.as_deref())?,
             headers,
         })
     }

@@ -12,6 +12,7 @@ use crate::audio_transcription::types::{
     TranscriptionAudio, TranscriptionParams,
 };
 use crate::error::Error;
+use crate::url_utils::ApiUrl;
 
 pub use super::aws_base::{aws_auth_config, bedrock_model_id_and_region, resolve_bedrock_region};
 use super::constants::BEDROCK_RUNTIME_ENDPOINT_TEMPLATE;
@@ -102,10 +103,10 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
-        Ok(format!(
-            "{}/model/{model_id}/converse",
-            endpoint.trim_end_matches('/')
-        ))
+        ApiUrl::parse(&endpoint)
+            .and_then(|url| url.complete_path(&["model", &model_id, "converse"]))
+            .map(|url| url.into_string())
+            .map_err(|error| Error::InvalidRequest(format!("invalid api_base: {error}")))
     }
 
     fn auth(

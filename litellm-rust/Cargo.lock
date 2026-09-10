@@ -1791,7 +1791,6 @@ dependencies = [
  "data-url",
  "gcp_auth",
  "moka",
- "percent-encoding",
  "rand 0.8.7",
  "reqwest 0.12.28",
  "rstest",
@@ -1805,6 +1804,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "veil",
 ]
 
