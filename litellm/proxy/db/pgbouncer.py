@@ -70,9 +70,9 @@ PGBOUNCER_TOKEN_AUTH_CONFLICT: Final = (
 # Prisma's client-side TLS params describe the hop to Postgres, which becomes
 # PgBouncer's server side. They move into ``server_tls_*`` and must not stay on
 # the loopback URL: the listener speaks plain TCP and Prisma would refuse it
-# under ``sslmode=require``.
+# under ``sslmode=require`` or ``channel_binding=require``.
 PRISMA_TLS_PARAM_KEYS: Final[frozenset[str]] = frozenset(
-    {"sslmode", "sslcert", "sslaccept", "sslidentity", "sslpassword"}
+    {"sslmode", "sslcert", "sslaccept", "sslidentity", "sslpassword", "channel_binding", "gssencmode"}
 )
 POOLED_URL_DROPPED_KEYS: Final[frozenset[str]] = PRISMA_TLS_PARAM_KEYS | frozenset(("options", "pgbouncer"))
 PGBOUNCER_SSLMODES: Final[frozenset[str]] = frozenset(
