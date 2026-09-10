@@ -4,13 +4,17 @@ Tests for cost tracking settings management endpoints.
 Tests the GET and PATCH endpoints for managing cost discount configuration.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 
 import litellm
+from litellm._internal_context import pinned_billing_time
+from litellm.proxy._types import CostEstimateRequest
 from litellm.proxy.management_endpoints.cost_tracking_settings import router
 from litellm.proxy.proxy_server import app
 
@@ -789,13 +793,13 @@ INPUT_TOKENS = 1000
 OUTPUT_TOKENS = 500
 
 
-def _router_pricing(**pricing: float) -> MagicMock:
+def _router_pricing(model: str = AN_UNDERLYING_MODEL, **pricing: float) -> MagicMock:
     mock_router = MagicMock()
     mock_router.get_model_list.return_value = [
         {
             "model_name": AN_ALIAS,
             "litellm_params": {
-                "model": AN_UNDERLYING_MODEL,
+                "model": model,
                 "custom_llm_provider": "openai",
                 **pricing,
             },
@@ -811,9 +815,7 @@ async def _estimate(mock_router: MagicMock | None, model: str = AN_ALIAS, **over
 
     request = CostEstimateRequest(
         model=model,
-        input_tokens=INPUT_TOKENS,
-        output_tokens=OUTPUT_TOKENS,
-        **overrides,
+        **{"input_tokens": INPUT_TOKENS, "output_tokens": OUTPUT_TOKENS, **overrides},
     )
     with patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
         "litellm.proxy.proxy_server.llm_router", mock_router
@@ -909,3 +911,299 @@ class TestEstimateCostPeriodTotals:
         assert response.cost_per_request == pytest.approx(0.0022)
         assert response.daily_margin_cost == pytest.approx(0.02)
         assert response.daily_cost == pytest.approx(0.22)
+
+
+CACHE_READ_TOKENS = 800
+CACHE_CREATION_TOKENS = 100
+REASONING_TOKENS = 200
+TEXT_INPUT_TOKENS = INPUT_TOKENS - CACHE_READ_TOKENS - CACHE_CREATION_TOKENS
+TEXT_OUTPUT_TOKENS = OUTPUT_TOKENS - REASONING_TOKENS
+
+
+async def _estimate_with_cache_and_reasoning(mock_router: MagicMock | None, model: str = AN_ALIAS, **overrides: int):
+    return await _estimate(
+        mock_router,
+        model=model,
+        cache_read_input_tokens=CACHE_READ_TOKENS,
+        cache_creation_input_tokens=CACHE_CREATION_TOKENS,
+        reasoning_tokens=REASONING_TOKENS,
+        **overrides,
+    )
+
+
+class TestEstimateCostCacheAndReasoningTokens:
+    @pytest.mark.asyncio
+    async def test_a_mapped_model_bills_cache_and_reasoning_tokens_at_their_own_rates(self, monkeypatch):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
+            {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 3e-7,
+                "cache_creation_input_token_cost": 3.75e-6,
+                "output_cost_per_reasoning_token": 1e-5,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        )
+
+        response = await _estimate_with_cache_and_reasoning(None, model=A_MAPPED_MODEL, num_requests_per_day=10)
+
+        assert response.cache_read_cost_per_request == pytest.approx(CACHE_READ_TOKENS * 3e-7)
+        assert response.cache_creation_cost_per_request == pytest.approx(CACHE_CREATION_TOKENS * 3.75e-6)
+        assert response.reasoning_cost_per_request == pytest.approx(REASONING_TOKENS * 1e-5)
+        assert response.input_cost_per_request == pytest.approx(
+            TEXT_INPUT_TOKENS * 3e-6 + CACHE_READ_TOKENS * 3e-7 + CACHE_CREATION_TOKENS * 3.75e-6
+        )
+        assert response.output_cost_per_request == pytest.approx(TEXT_OUTPUT_TOKENS * 15e-6 + REASONING_TOKENS * 1e-5)
+        assert response.cost_per_request == pytest.approx(
+            response.input_cost_per_request + response.output_cost_per_request
+        )
+        assert response.daily_cache_read_cost == pytest.approx(10 * CACHE_READ_TOKENS * 3e-7)
+        assert response.daily_cache_creation_cost == pytest.approx(10 * CACHE_CREATION_TOKENS * 3.75e-6)
+        assert response.daily_reasoning_cost == pytest.approx(10 * REASONING_TOKENS * 1e-5)
+        assert response.monthly_cache_read_cost is None
+        assert response.cache_read_input_token_cost == pytest.approx(3e-7)
+        assert response.cache_creation_input_token_cost == pytest.approx(3.75e-6)
+        assert response.output_cost_per_reasoning_token == pytest.approx(1e-5)
+        assert (
+            response.cache_read_input_tokens,
+            response.cache_creation_input_tokens,
+            response.reasoning_tokens,
+        ) == (CACHE_READ_TOKENS, CACHE_CREATION_TOKENS, REASONING_TOKENS)
+
+    @pytest.mark.asyncio
+    async def test_a_model_without_cache_or_reasoning_prices_estimates_what_the_proxy_bills(self, monkeypatch):
+        """The cost calculator bills cache tokens of a cost-map model without cache prices at zero
+        and its reasoning tokens at the output rate. The estimate reports those effective rates."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
+            {"input_cost_per_token": 5e-6, "output_cost_per_token": 6e-6, "litellm_provider": "openai", "mode": "chat"},
+        )
+
+        response = await _estimate_with_cache_and_reasoning(None, model=A_MAPPED_MODEL)
+
+        assert response.cache_read_cost_per_request == 0.0
+        assert response.cache_creation_cost_per_request == 0.0
+        assert response.reasoning_cost_per_request == pytest.approx(REASONING_TOKENS * 6e-6)
+        assert response.input_cost_per_request == pytest.approx(TEXT_INPUT_TOKENS * 5e-6)
+        assert response.cost_per_request == pytest.approx(TEXT_INPUT_TOKENS * 5e-6 + OUTPUT_TOKENS * 6e-6)
+        assert response.cache_read_input_token_cost == 0.0
+        assert response.cache_creation_input_token_cost == 0.0
+        assert response.output_cost_per_reasoning_token == pytest.approx(6e-6)
+
+    @pytest.mark.asyncio
+    async def test_a_request_without_cache_or_reasoning_tokens_estimates_as_before(self, monkeypatch):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
+            {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 3e-7,
+                "cache_creation_input_token_cost": 3.75e-6,
+                "output_cost_per_reasoning_token": 1e-5,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        )
+
+        response = await _estimate(None, model=A_MAPPED_MODEL, num_requests_per_day=10)
+
+        assert response.cost_per_request == pytest.approx(INPUT_TOKENS * 3e-6 + OUTPUT_TOKENS * 15e-6)
+        assert response.cache_read_cost_per_request == 0.0
+        assert response.cache_creation_cost_per_request == 0.0
+        assert response.reasoning_cost_per_request == 0.0
+        assert response.daily_cache_read_cost == 0.0
+        assert response.daily_reasoning_cost == 0.0
+
+    @pytest.mark.asyncio
+    async def test_a_custom_priced_deployment_bills_cache_and_reasoning_tokens_from_its_flat_rates(self):
+        response = await _estimate_with_cache_and_reasoning(
+            _router_pricing(input_cost_per_token=1e-6, output_cost_per_token=2e-6, cache_read_input_token_cost=1e-7)
+        )
+
+        assert response.cache_read_cost_per_request == pytest.approx(CACHE_READ_TOKENS * 1e-7)
+        assert response.cache_creation_cost_per_request == pytest.approx(CACHE_CREATION_TOKENS * 1e-6)
+        assert response.reasoning_cost_per_request == pytest.approx(REASONING_TOKENS * 2e-6)
+        assert response.cost_per_request == pytest.approx(
+            TEXT_INPUT_TOKENS * 1e-6 + CACHE_READ_TOKENS * 1e-7 + CACHE_CREATION_TOKENS * 1e-6 + OUTPUT_TOKENS * 2e-6
+        )
+        assert response.cache_read_input_token_cost == pytest.approx(1e-7)
+        assert response.cache_creation_input_token_cost == pytest.approx(1e-6)
+        assert response.output_cost_per_reasoning_token == pytest.approx(2e-6)
+
+    @pytest.mark.asyncio
+    async def test_a_custom_priced_deployment_of_a_mapped_model_inherits_its_built_in_cache_rates(self, monkeypatch):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
+            {
+                "input_cost_per_token": 5e-6,
+                "output_cost_per_token": 6e-6,
+                "cache_read_input_token_cost": 5e-7,
+                "cache_creation_input_token_cost": 6.25e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        )
+
+        response = await _estimate_with_cache_and_reasoning(
+            _router_pricing(model=A_MAPPED_MODEL, input_cost_per_token=1e-6, output_cost_per_token=2e-6)
+        )
+
+        assert response.cache_read_cost_per_request == pytest.approx(CACHE_READ_TOKENS * 5e-7)
+        assert response.cache_creation_cost_per_request == pytest.approx(CACHE_CREATION_TOKENS * 6.25e-6)
+        assert response.input_cost_per_request == pytest.approx(
+            TEXT_INPUT_TOKENS * 1e-6 + CACHE_READ_TOKENS * 5e-7 + CACHE_CREATION_TOKENS * 6.25e-6
+        )
+        assert response.cache_read_input_token_cost == pytest.approx(5e-7)
+        assert response.cache_creation_input_token_cost == pytest.approx(6.25e-6)
+
+    @pytest.mark.asyncio
+    async def test_a_tiered_model_reports_the_rates_its_lines_were_billed_at(self, monkeypatch):
+        """Above a token tier the calculator bills every line at the tier's rate, so the reported
+        rates must be the tier's too: each line equals its token count times the rate next to it."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
+            {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 3e-7,
+                "cache_creation_input_token_cost": 3.75e-6,
+                "input_cost_per_token_above_200k_tokens": 6e-6,
+                "output_cost_per_token_above_200k_tokens": 3e-5,
+                "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+                "cache_creation_input_token_cost_above_200k_tokens": 7.5e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        )
+
+        response = await _estimate(
+            None,
+            model=A_MAPPED_MODEL,
+            input_tokens=250_000,
+            cache_read_input_tokens=200_000,
+            cache_creation_input_tokens=10_000,
+            output_tokens=1_000,
+            reasoning_tokens=200,
+        )
+
+        assert response.input_cost_per_token == pytest.approx(6e-6)
+        assert response.output_cost_per_token == pytest.approx(3e-5)
+        assert response.cache_read_input_token_cost == pytest.approx(6e-7)
+        assert response.cache_creation_input_token_cost == pytest.approx(7.5e-6)
+        assert response.output_cost_per_reasoning_token == pytest.approx(3e-5)
+        assert response.cache_read_cost_per_request == pytest.approx(200_000 * response.cache_read_input_token_cost)
+        assert response.cache_creation_cost_per_request == pytest.approx(
+            10_000 * response.cache_creation_input_token_cost
+        )
+        assert response.reasoning_cost_per_request == pytest.approx(200 * response.output_cost_per_reasoning_token)
+        assert response.input_cost_per_request == pytest.approx(
+            40_000 * response.input_cost_per_token
+            + response.cache_read_cost_per_request
+            + response.cache_creation_cost_per_request
+        )
+        assert response.output_cost_per_request == pytest.approx(1_000 * response.output_cost_per_token)
+
+    @pytest.mark.asyncio
+    async def test_a_quote_prices_its_totals_and_its_rates_at_the_same_moment(self, monkeypatch):
+        """The totals and the reported rates resolve off-peak pricing on separate paths. A quote
+        taken as a window opens must not bill on one side of it and report rates from the other."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
+            {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "off_peak_pricing": {
+                    "hours_utc": "02:00-03:00",
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token": 5e-6,
+                },
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        )
+
+        with pinned_billing_time(datetime(2026, 1, 1, 2, 30, tzinfo=timezone.utc)):
+            response = await _estimate(None, model=A_MAPPED_MODEL)
+
+        assert response.input_cost_per_token == pytest.approx(1e-6)
+        assert response.output_cost_per_token == pytest.approx(5e-6)
+        assert response.input_cost_per_request == pytest.approx(INPUT_TOKENS * response.input_cost_per_token)
+        assert response.output_cost_per_request == pytest.approx(OUTPUT_TOKENS * response.output_cost_per_token)
+
+
+    @pytest.mark.asyncio
+    async def test_an_unrouted_model_reports_the_rates_of_the_provider_the_calculator_inferred(self, monkeypatch):
+        """The cost calculator infers a provider this endpoint never resolved, and the provider decides
+        whether a tier threshold is inclusive. xai bills a request sitting exactly on the 200k threshold
+        at the tier rate, so the reported rates have to be the tier's rather than the sub-tier base."""
+        an_xai_model = "xai/tiered-model"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            an_xai_model,
+            {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 3e-7,
+                "input_cost_per_token_above_200k_tokens": 6e-6,
+                "output_cost_per_token_above_200k_tokens": 3e-5,
+                "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+                "litellm_provider": "xai",
+                "mode": "chat",
+            },
+        )
+
+        response = await _estimate(
+            None,
+            model=an_xai_model,
+            input_tokens=200_000,
+            cache_read_input_tokens=100_000,
+            output_tokens=1_000,
+        )
+
+        assert response.input_cost_per_token == pytest.approx(6e-6)
+        assert response.output_cost_per_token == pytest.approx(3e-5)
+        assert response.cache_read_input_token_cost == pytest.approx(6e-7)
+        assert response.cache_read_cost_per_request == pytest.approx(100_000 * response.cache_read_input_token_cost)
+        assert response.input_cost_per_request == pytest.approx(
+            100_000 * response.input_cost_per_token + response.cache_read_cost_per_request
+        )
+        assert response.output_cost_per_request == pytest.approx(1_000 * response.output_cost_per_token)
+
+
+class TestCostEstimateRequestTokenSubsets:
+    def test_cache_tokens_beyond_the_input_tokens_are_rejected(self):
+        with pytest.raises(ValidationError, match="cannot exceed input_tokens"):
+            CostEstimateRequest(
+                model=AN_ALIAS,
+                input_tokens=INPUT_TOKENS,
+                output_tokens=OUTPUT_TOKENS,
+                cache_read_input_tokens=INPUT_TOKENS,
+                cache_creation_input_tokens=1,
+            )
+
+    def test_reasoning_tokens_beyond_the_output_tokens_are_rejected(self):
+        with pytest.raises(ValidationError, match="cannot exceed output_tokens"):
+            CostEstimateRequest(
+                model=AN_ALIAS,
+                input_tokens=INPUT_TOKENS,
+                output_tokens=OUTPUT_TOKENS,
+                reasoning_tokens=OUTPUT_TOKENS + 1,
+            )
+
+    def test_the_endpoint_answers_422_when_cache_tokens_exceed_input_tokens(self):
+        response = client.post(
+            "/cost/estimate",
+            headers={"Authorization": "Bearer sk-1234"},
+            json={"model": AN_ALIAS, "input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 8000},
+        )
+
+        assert response.status_code == 422
+        assert "cannot exceed input_tokens" in response.text

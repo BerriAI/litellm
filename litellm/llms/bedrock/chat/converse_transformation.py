@@ -4,6 +4,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 
 import copy
 import json
+import re
 import time
 import types
 from collections.abc import Mapping
@@ -293,6 +294,10 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock",
                 )
 
+    @staticmethod
+    def _is_openai_gpt_reasoning_model(model: str) -> bool:
+        return re.search(r"openai\.gpt-\d", model) is not None
+
     def _is_nova_2_model(self, model: str) -> bool:
         """
         Check if the model is a Nova 2 model that supports reasoningConfig.
@@ -423,14 +428,14 @@ class AmazonConverseConfig(BaseConfig):
         Handle the reasoning_effort parameter based on the model type.
 
         - GPT-OSS and DeepSeek V3 models: passed through unchanged via additionalModelRequestFields.
-        - OpenAI GPT-5.x models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
+        - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
         if "gpt-oss" in model or "deepseek" in model:
             optional_params["reasoning_effort"] = reasoning_effort
-        elif "openai.gpt-5" in model:
+        elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
             optional_params["reasoning"] = reasoning
         elif self._is_nova_2_model(model):
@@ -594,7 +599,11 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "gpt-oss" in model or "openai.gpt-5" in model or "openai.gpt-5" in base_model:
+        if (
+            "gpt-oss" in model
+            or self._is_openai_gpt_reasoning_model(model)
+            or self._is_openai_gpt_reasoning_model(base_model)
+        ):
             supported_params.append("reasoning_effort")
         elif self._is_deepseek_model(model=model, base_model=base_model):
             if not self._is_deepseek_r1_model(model=model, base_model=base_model):
@@ -953,7 +962,7 @@ class AmazonConverseConfig(BaseConfig):
                     "Dropping unsupported `thinking` param for Bedrock model=%s; it reasons natively.",
                     model,
                 )
-            elif param == "thinking" and "openai.gpt-5" not in model:
+            elif param == "thinking" and not self._is_openai_gpt_reasoning_model(model):
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
@@ -1843,6 +1852,7 @@ class AmazonConverseConfig(BaseConfig):
             data=request_data,
             messages=messages,
             encoding=encoding,
+            json_mode=json_mode,
         )
 
     def _transform_reasoning_content(self, reasoning_content_blocks: list[BedrockConverseReasoningContentBlock]) -> str:
@@ -2275,6 +2285,7 @@ class AmazonConverseConfig(BaseConfig):
         data: dict | str,
         messages: list,
         encoding,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         if logging_obj is not None:
@@ -2285,7 +2296,9 @@ class AmazonConverseConfig(BaseConfig):
                 additional_args={"complete_input_dict": data},
             )
 
-        json_mode: Final[bool | None] = optional_params.get("json_mode", None)
+        resolved_json_mode: Final[bool | None] = (
+            json_mode if json_mode is not None else optional_params.get("json_mode", None)
+        )
         ## RESPONSE OBJECT
         try:
             completion_response: Final = ConverseResponseBlock(**response.json())
@@ -2377,7 +2390,7 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["thinking_blocks"] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         filtered_tools: Final = self._filter_json_mode_tools(
-            json_mode=json_mode,
+            json_mode=resolved_json_mode,
             tools=tools,
             chat_completion_message=chat_completion_message,
         )
@@ -2401,7 +2414,7 @@ class AmazonConverseConfig(BaseConfig):
         # When json_mode filtered out all synthetic tool calls the response
         # is plain content, not a pending tool invocation. Fix finish_reason
         # so callers (e.g. OpenAI SDK) don't misinterpret it.
-        if json_mode and not filtered_tools and tools:
+        if resolved_json_mode and not filtered_tools and tools:
             initial_finish_reason = "stop"
 
         (

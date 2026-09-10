@@ -1053,7 +1053,7 @@ if MCP_AVAILABLE:
                                 route="/mcp/call_tool",
                                 traceback_str=failure_traceback,
                             )
-                    except Exception:
+                    except Exception:  # noqa: BLE001  # a failing failure hook must not mask the tool call's own error
                         verbose_logger.exception("Error logging failed MCP proxy tool call")
                 raise
             if proxy_logging_obj is not None:
