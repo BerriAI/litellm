@@ -158,6 +158,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     dynamic_params: {
       otel_endpoint: "text",
       otel_headers: "text",
+      otel_exporter_otlp_protocol: "select",
     },
     description: "OpenTelemetry Logging Integration",
   },

@@ -80,17 +80,19 @@ def policy_from_litellm_params(litellm_params: Mapping[str, object]) -> AutoRout
 def policy_for_model(
     llm_router: "Router | None",
     model_alias: str,
-    team_id: str | None,
+    request_kwargs: Mapping[str, object],
     request_tags: Sequence[str],
 ) -> AutoRouterCompressionPolicy | None:
-    """The compression policy of the auto router marker `model_alias` resolves to.
+    """The compression policy of the auto router marker `model_alias` resolves to for this caller.
 
-    Pre-call arming and the routing hook both resolve through here, so an alias with
-    several tag-scoped markers cannot suppress under one and then route under another.
+    Pre-call arming and the routing hook both resolve through here, and here resolves through the
+    router's own request-scoped deployment lookup, so an alias with several tag-scoped markers
+    cannot suppress under one and then route under another, and a team router reached by its
+    public name carries its policy for every principal that can reach it.
     """
     if llm_router is None:
         return None
-    deployments: Final = llm_router.get_model_list(model_name=model_alias, team_id=team_id) or ()
+    deployments: Final = llm_router.deployments_for_request(model_alias, request_kwargs)
     markers: Final = tuple(
         litellm_params
         for deployment in deployments
@@ -106,17 +108,6 @@ def policy_for_model(
     # Lazy, so the first marker carrying a policy wins and the rest are never read.
     candidates: Final = (policy_from_litellm_params(params) for params in (*tag_matched, *untagged))
     return next((policy for policy in candidates if policy is not None), None)
-
-
-def team_id_from_request(request_kwargs: Mapping[str, object]) -> str | None:
-    """The caller's team id, from whichever metadata bucket this surface writes to."""
-    for meta_key in ("metadata", "litellm_metadata"):
-        meta = request_kwargs.get(meta_key)
-        if isinstance(meta, Mapping):
-            team_id = meta.get("user_api_key_team_id")
-            if isinstance(team_id, str):
-                return team_id
-    return None
 
 
 def _compression_guardrail_classes() -> tuple[type, ...]:
@@ -172,7 +163,7 @@ async def arm_pre_call(
     policy: Final = policy_for_model(
         llm_router=llm_router,
         model_alias=model_alias,
-        team_id=team_id_from_request(data),
+        request_kwargs=data,
         request_tags=_get_tags_from_request_kwargs(data),
     )
     if policy is None:

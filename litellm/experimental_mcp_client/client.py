@@ -18,6 +18,7 @@ from mcp import ClientSession, McpError, ReadResourceResult, Resource, StdioServ
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.shared.message import SessionMessage
+from mcp.shared.session import RequestResponder
 from typing_extensions import Unpack
 
 _TransportStreams: TypeAlias = tuple[
@@ -56,10 +57,13 @@ def missing_streamable_http_client_error() -> ImportError:
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
+    ClientResult,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
+    ServerNotification,
+    ServerRequest,
     TextContent,
 )
 from mcp.types import Tool as MCPTool
@@ -146,8 +150,8 @@ _SDK_READ_TIMEOUT_CODE: Final = int(httpx.codes.REQUEST_TIMEOUT)
 otherwise carries JSON-RPC error codes."""
 
 
-def _as_read_timeout(exc: BaseException) -> TimeoutError | None:
-    """The session read timeout elapsing, re-expressed as a ``TimeoutError``, or ``None``.
+def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
+    """Normalize an MCP SDK read timeout for client and gateway diagnostics, or return ``None``.
 
     The SDK reports its own elapsed read timeout as ``McpError`` carrying an HTTP status code in a
     field that otherwise holds JSON-RPC error codes, and it relays an upstream's JSON-RPC error
@@ -442,6 +446,18 @@ class MCPClient:
         in_flight_error: BaseException | None = None
         try:
             read_stream, write_stream = transport[0], transport[1]
+            stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
+
+            async def receive_message(
+                message: RequestResponder[ServerRequest, ClientResult] | ServerNotification | Exception,
+            ) -> None:
+                if not isinstance(message, (ValueError, httpx.RequestError, OSError)):
+                    return
+                if not stream_error.done():
+                    stream_error.set_result(message)
+                # The SDK closes pending requests when its message handler raises.
+                raise RuntimeError("MCP response stream failed")
+
             # Build session kwargs with optional callbacks
             session_kwargs: Final[dict[str, Any]] = {}
             if self._sampling_callback is not None:
@@ -456,6 +472,7 @@ class MCPClient:
                 read_stream,
                 write_stream,
                 read_timeout_seconds=timedelta(seconds=self.timeout),
+                message_handler=receive_message,
                 **session_kwargs,
             )
             session: Final = await session_ctx.__aenter__()
@@ -467,6 +484,10 @@ class MCPClient:
                     if isinstance(ins, str) and ins.strip():
                         self._last_initialize_instructions = ins.strip()
                 return await operation(session)
+            except McpError:
+                if stream_error.done():
+                    raise stream_error.result()
+                raise
             finally:
                 try:
                     await session_ctx.__aexit__(None, None, None)
@@ -501,11 +522,10 @@ class MCPClient:
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception as e:
-            read_timeout: Final = _as_read_timeout(e)
+            read_timeout: Final = as_mcp_read_timeout(e)
             if read_timeout is not None:
                 verbose_logger.warning(
-                    "MCP client timed out after %ss waiting for %s to answer; the server accepted the "
-                    "request and ended its response stream without a JSON-RPC reply",
+                    "MCP client timed out after %ss waiting for a valid MCP response from %s",
                     self.timeout,
                     self.server_url or "stdio",
                 )

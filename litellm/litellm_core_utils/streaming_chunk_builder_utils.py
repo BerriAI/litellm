@@ -24,6 +24,7 @@ from litellm.types.utils import (
     Choices,
     CompletionTokensDetails,
     CompletionTokensDetailsWrapper,
+    Delta,
     Function,
     FunctionCall,
     ModelResponse,
@@ -327,6 +328,18 @@ class ChunkProcessor:
         return ""
 
     @staticmethod
+    def _get_role_from_chunks(chunks: Sequence["_BaseChunk"]) -> str:
+        return ChunkProcessor._role_of_choice(next((c["choices"][0] for c in chunks if c.get("choices")), None))
+
+    @staticmethod
+    def _role_of_choice(choice: object) -> str:
+        match choice:
+            case StreamingChoices(delta=Delta(role=str() as role)) | {"delta": {"role": str() as role}} if role:
+                return role
+            case _:
+                return "assistant"
+
+    @staticmethod
     def _get_model_from_chunks(chunks: Sequence["_BaseChunk"], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
@@ -353,8 +366,7 @@ class ChunkProcessor:
         model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
 
-        first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), chunk)
-        role: Final = first_chunk_with_choices["choices"][0]["delta"]["role"]
+        role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
