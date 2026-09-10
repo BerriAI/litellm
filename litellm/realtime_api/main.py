@@ -261,6 +261,8 @@ async def arealtime_calls(
     timeout: float | None = None,
     **kwargs,
 ):
+    from litellm.llms.chatgpt.realtime import realtime_call_headers
+
     model_name = model or "gpt-4o-realtime-preview"
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -283,6 +285,9 @@ async def arealtime_calls(
     )
     if session is not None:
         session = _with_resolved_session_model(session, model_name)
+    call_headers: Final = (
+        realtime_call_headers(litellm_params) if custom_llm_provider == "chatgpt" else kwargs.get("extra_headers")
+    )
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
@@ -299,7 +304,7 @@ async def arealtime_calls(
         provider_config=provider_config,
         model=model_name,
         session_config=session,
-        extra_headers=kwargs.get("extra_headers"),
+        extra_headers=call_headers,
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
@@ -310,7 +315,7 @@ async def arealtime_calls(
             {
                 "model": model_name,
                 "api_base": ChatGPTRealtime.get_api_base(litellm_params.api_base),
-                "extra_headers": configured_realtime_headers(kwargs.get("extra_headers")),
+                "extra_headers": configured_realtime_headers(call_headers),
             }
         )
     return response

@@ -199,7 +199,8 @@ async def test_offer_exchange_wraps_call_and_filters_client_headers(monkeypatch,
         data = kwargs["data"]
         assert data["sdp_body"] == b"v=0\r\n"
         assert data["session"] == session
-        assert data["extra_headers"] == {"openai-alpha": "quicksilver=v2"}
+        assert data["chatgpt_realtime_client_headers"] == {"openai-alpha": "quicksilver=v2"}
+        assert "extra_headers" not in data
         assert data["extra_query"] == {"intent": "quicksilver", "architecture": "avas"}
 
         async def respond():

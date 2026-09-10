@@ -23,6 +23,25 @@ def configured_realtime_headers(headers: Mapping[str, object] | None) -> Mapping
     return MappingProxyType({key.lower(): value for key, value in validated.items()})
 
 
+def realtime_call_headers(params: GenericLiteLLMParams) -> dict[str, str]:  # mutable-ok: HTTP handler header contract
+    inbound: Final = TypeAdapter(Mapping[str, str]).validate_python(
+        getattr(params, "chatgpt_realtime_client_headers", None) or MappingProxyType({})
+    )
+    configured: Final = TypeAdapter(Mapping[str, object]).validate_python(
+        getattr(params, "extra_headers", None) or MappingProxyType({})
+    )
+    return {  # mutable-ok: HTTP handler header contract
+        **MappingProxyType(
+            {
+                key.lower(): value
+                for key, value in inbound.items()
+                if key.lower() in ("openai-alpha", "openai-beta", "x-session-id", "x-oai-attestation")
+            }
+        ),
+        **configured_realtime_headers(configured),
+    }
+
+
 def realtime_headers(
     params: GenericLiteLLMParams, headers: Mapping[str, str], extra_headers: Mapping[str, object] | None = None
 ) -> dict[str, str]:  # mutable-ok: HTTP handler header contract

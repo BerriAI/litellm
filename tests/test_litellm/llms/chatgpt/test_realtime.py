@@ -1,11 +1,9 @@
-import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from websockets.asyncio.server import serve
 
 import litellm
 from litellm.llms.chatgpt.realtime import ChatGPTRealtime
@@ -14,15 +12,47 @@ from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("inbound_headers", [{}, {"openai-alpha": "quicksilver=v2"}])
+async def test_routed_call_preserves_deployment_gateway_headers(inbound_headers, chatgpt_tokens, monkeypatch):
+    from litellm.llms.chatgpt.codex import CodexRealtimeOffer, build_call_request
+
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", chatgpt_tokens)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(201, text="v=0\r\n", headers={"location": "/v1/realtime/calls/rtc_test"})
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "voice-gateway",
+                "litellm_params": {
+                    "model": "chatgpt/gpt-live-1-codex",
+                    "api_base": "https://voice.example/backend-api/codex",
+                    "extra_headers": {"x-gateway-route": "configured"},
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    offer = CodexRealtimeOffer(sdp="v=0\r\n", session={"model": "voice-gateway"})
+    try:
+        response = await router.arealtime_calls(**build_call_request(offer, {}, inbound_headers), client=client)
+        assert requests[0].headers.get("x-gateway-route") == "configured"
+        assert response.extensions["chatgpt_realtime"]["extra_headers"]["x-gateway-route"] == "configured"
+        for name, value in inbound_headers.items():
+            assert requests[0].headers[name] == value
+    finally:
+        await client.client.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["gpt-realtime-1.5", "gpt-live-1-codex"])
 @pytest.mark.parametrize("call_id", [None, "rtc_existing"])
 async def test_websocket_forwards_configured_headers_without_client_identity(model, call_id, chatgpt_tokens):
-    captured = asyncio.get_running_loop().create_future()
-
-    async def receive_connection(connection):
-        captured.set_result(connection.request.headers)
-        await connection.wait_closed()
-
     websocket = SimpleNamespace(
         headers={"authorization": "Bearer client", "cookie": "private-cookie", "openai-alpha": "client-value"},
         scope={},
@@ -30,16 +60,23 @@ async def test_websocket_forwards_configured_headers_without_client_identity(mod
         send_text=AsyncMock(),
         close=AsyncMock(),
     )
-    async with serve(receive_connection, "127.0.0.1", 0) as gateway:
-        port = gateway.sockets[0].getsockname()[1]
-        await asyncio.wait_for(litellm._arealtime(
-            model=f"chatgpt/{model}", websocket=websocket, api_base=f"http://127.0.0.1:{port}",
+    with patch("websockets.connect") as connect:
+        connect.return_value.__aenter__ = AsyncMock(side_effect=RuntimeError("stop before streaming"))
+        await litellm._arealtime(
+            model=f"chatgpt/{model}",
+            websocket=websocket,
+            api_base="https://voice.example/codex",
             chatgpt_realtime_call_id=call_id,
             headers={"x-deployment-header": "configured"},
-            extra_headers={"X-Gateway-Route": "voice", "OpenAI-Alpha": "configured-value",
-                           "aUtHoRiZaTiOn": "Bearer wrong", "CHATGPT-ACCOUNT-ID": "wrong"},
-        ), timeout=10)
-        headers = await asyncio.wait_for(captured, timeout=5)
+            extra_headers={
+                "X-Gateway-Route": "voice",
+                "OpenAI-Alpha": "configured-value",
+                "aUtHoRiZaTiOn": "Bearer wrong",
+                "CHATGPT-ACCOUNT-ID": "wrong",
+            },
+        )
+        connect.assert_called_once()
+        headers = httpx.Headers(connect.call_args.kwargs["additional_headers"])
     assert headers["x-deployment-header"] == "configured"
     assert headers["x-gateway-route"] == "voice"
     assert headers["openai-alpha"] == "configured-value"

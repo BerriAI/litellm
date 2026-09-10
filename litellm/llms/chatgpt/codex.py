@@ -49,7 +49,7 @@ def build_call_request(
         "extra_query": {  # mutable-ok: router request parameters
             key: value for key, value in query.items() if key in ("intent", "architecture")
         },
-        "extra_headers": {  # mutable-ok: router request headers
+        "chatgpt_realtime_client_headers": {  # mutable-ok: router request headers
             key: value
             for key, value in headers.items()
             if key in ("openai-alpha", "openai-beta", "x-session-id", "x-oai-attestation")
