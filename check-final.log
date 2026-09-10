@@ -1,15 +1,4 @@
-uv sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
-Checked 232 packages in 37ms
-uv run --no-sync python scripts/prisma_generate_if_needed.py
-Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
-cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
-
-up to date in 541ms
-bootstrap: .env left untouched
-bootstrap: done
-./scripts/pre_commit_lint.sh
-check: logging full output to /Users/jvalluru/LiteLLM-work/litellm/.git/worktrees/litellm-lit-7135/pre_commit_lint.log
-check: nothing staged; scoping to the working tree's diff against the merge base with 6b721de3e5:
+check: nothing staged; scoping to the working tree's diff against the merge base with 6b721de3e530bc97758d59621e57e3a75a9ebadf:
     litellm/proxy/_experimental/mcp_server/rest_endpoints.py
     tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py
     ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/editToolPreview.test.ts
@@ -19,26 +8,26 @@ check: nothing staged; scoping to the working tree's diff against the merge base
     ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx
 check: linting Python (make lint)
 uv sync --inexact --frozen --group proxy-dev --group e2e-dev
-Checked 205 packages in 6ms
+Checked 205 packages in 5ms
 uv run --no-sync python scripts/prisma_generate_if_needed.py
 Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
 cd litellm && uv run --no-sync ruff check . && cd ..
-uv run --no-sync python scripts/ruff_strict_gate.py --base "6b721de3e5"
-uv run --no-sync python scripts/type_discipline_gate.py --base "6b721de3e5"
-uv run --no-sync python scripts/test_quality_gate.py --base "6b721de3e5"
-uv run --no-sync python scripts/type_check_gate.py --base "6b721de3e5"
+uv run --no-sync python scripts/ruff_strict_gate.py --base "6b721de3e530bc97758d59621e57e3a75a9ebadf"
+uv run --no-sync python scripts/type_discipline_gate.py --base "6b721de3e530bc97758d59621e57e3a75a9ebadf"
+uv run --no-sync python scripts/test_quality_gate.py --base "6b721de3e530bc97758d59621e57e3a75a9ebadf"
+uv run --no-sync python scripts/type_check_gate.py --base "6b721de3e530bc97758d59621e57e3a75a9ebadf"
 uv run --no-sync basedpyright tests/e2e
 cd litellm && uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py && cd ..
 No LiteLLM type hints found.
-All checks passed!
-uv run --no-sync ruff check --config ruff-tests.toml tests
 1 file already formatted
 All checks passed!
+uv run --no-sync ruff check --config ruff-tests.toml tests
+All checks passed!
 [from litellm import *] OK! no issues!
-OK: every strict rule is within its codebase ceiling (base 6b721de3e5)
+OK: every strict rule is within its codebase ceiling (base 6b721de3e530bc97758d59621e57e3a75a9ebadf)
 0 errors, 0 warnings, 0 notes
-OK: every TQ rule is within its test-suite ceiling (base 6b721de3e5)
-OK: every LIT rule is within its codebase ceiling (base 6b721de3e5)
+OK: every TQ rule is within its test-suite ceiling (base 6b721de3e530bc97758d59621e57e3a75a9ebadf)
+OK: every LIT rule is within its codebase ceiling (base 6b721de3e530bc97758d59621e57e3a75a9ebadf)
 OK: every rule is within its basedpyright limit or no higher than base (137959 errors total)
 check: ruff format --check (scoped litellm files)
 1 file already formatted
@@ -55,22 +44,22 @@ All matched files use Prettier code style!
   254:23  warning  Object literal with 6 properties passed inline as an argument; assign it to a named variable first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            local/no-large-inline-object-arg
   448:62  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      @typescript-eslint/no-explicit-any
   451:6   warning  React Hook useEffect has a missing dependency: 'form'. Either include it or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       react-hooks/exhaustive-deps
-  585:55  warning  Async arrow function has a complexity of 25. Maximum allowed is 20                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            complexity
-  680:28  warning  Object literal with 5 properties passed inline as an argument; assign it to a named variable first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            local/no-large-inline-object-arg
-  705:26  warning  Compilation Skipped: Use of incompatible library
+  588:55  warning  Async arrow function has a complexity of 25. Maximum allowed is 20                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            complexity
+  683:28  warning  Object literal with 5 properties passed inline as an argument; assign it to a named variable first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            local/no-large-inline-object-arg
+  708:26  warning  Compilation Skipped: Use of incompatible library
 
 This API returns functions which cannot be memoized without leading to stale UI. To prevent this, by default React Compiler will skip memoizing this component/hook. However, you may see issues if values from this API are passed to other components/hooks that are memoized.
 
-/Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx:705:26
-  703 |
-  704 |   React.useEffect(() => {
-> 705 |     const subscription = form.watch((values, { name, type }) => {
+/Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx:708:26
+  706 |
+  707 |   React.useEffect(() => {
+> 708 |     const subscription = form.watch((values, { name, type }) => {
       |                          ^^^^ React Hook Form's `useForm()` API returns a `watch()` function which cannot be memoized safely.
-  706 |       if (type !== "change" || name === undefined) {
-  707 |         return;
-  708 |       }  react-hooks/incompatible-library
-  725:52  warning  Object literal with 9 properties passed inline as an argument; assign it to a named variable first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            local/no-large-inline-object-arg
-  782:21  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      @typescript-eslint/no-explicit-any
+  709 |       if (type !== "change" || name === undefined) {
+  710 |         return;
+  711 |       }  react-hooks/incompatible-library
+  728:52  warning  Object literal with 9 properties passed inline as an argument; assign it to a named variable first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            local/no-large-inline-object-arg
+  785:21  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      @typescript-eslint/no-explicit-any
 
 /Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx
    22:30  warning  Unexpected any. Specify a different type                                                                                                                                                      @typescript-eslint/no-explicit-any
@@ -106,7 +95,7 @@ wrote 33 feature fragments to /Users/jvalluru/LiteLLM-work/litellm-lit-7135/lite
 > node scripts/gen-api-types.mjs
 
 ✨ openapi-typescript 7.13.0
-🚀 /var/folders/n4/7jf8qfys5256pzfjlkkcmzj80000gn/T/litellm-openapi-qqevN5/openapi.json → /Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/lib/http/schema.d.ts [690.2ms]
+🚀 /var/folders/n4/7jf8qfys5256pzfjlkkcmzj80000gn/T/litellm-openapi-EyadgS/openapi.json → /Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/lib/http/schema.d.ts [620.9ms]
 check: summary
     ran:     Python lint (make lint)
     skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)
@@ -114,4 +103,4 @@ check: summary
     ran:     dashboard lint (prettier + eslint + lint budgets)
     ran:     dashboard API-type sync (npm run gen:api)
 check: PASS
-check: full log: /Users/jvalluru/LiteLLM-work/litellm/.git/worktrees/litellm-lit-7135/pre_commit_lint.log
+

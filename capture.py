@@ -17,6 +17,7 @@ async def main():
             await page.get_by_title('preview_' + case, exact=True).click()
             await page.get_by_role('tab', name='Settings', exact=True).click()
             await expect(page.get_by_text('Unable to load tools', exact=True)).to_be_visible(timeout=30000)
+            await page.wait_for_timeout(1500)
             records = []
             issued = set()
             def note_request(request):

@@ -20,13 +20,13 @@
     "tags": [
       "litellm-7135:after"
     ],
-    "id": "sha256:f061712316ab2897b57ea858626a9d6a433118319ce217f28f4ab4d6cc81fcc1",
+    "id": "sha256:e2d166e9ad70880c9627b224171a5bfa5152d87e9af821f1891da8e1b7bf54fd",
     "labels": {
       "dev.chainguard.image.title": "wolfi-base",
       "dev.chainguard.package.main": "",
       "org.opencontainers.image.authors": "Chainguard Team https://www.chainguard.dev/",
       "org.opencontainers.image.created": "2026-08-30T12:58:50Z",
-      "org.opencontainers.image.revision": "245369764e80d113e80ec8269846e5257692b8bc",
+      "org.opencontainers.image.revision": "493c98f9bf",
       "org.opencontainers.image.source": "https://github.com/chainguard-images/images/tree/main/images/wolfi-base",
       "org.opencontainers.image.title": "wolfi-base",
       "org.opencontainers.image.url": "https://images.chainguard.dev/directory/image/wolfi-base/overview",

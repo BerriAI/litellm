@@ -1,5 +1,5 @@
 {
-  "commit": "245369764e80d113e80ec8269846e5257692b8bc",
+  "commit": "493c98f9bffbcf2ea1d5ba30e324427daa9a173b",
   "case": "url",
   "requestsAfterEdit": [
     {
@@ -18,14 +18,6 @@
       ],
       "error": null,
       "message": "Successfully retrieved tools"
-    },
-    {
-      "method": "GET",
-      "url": "http://localhost:47135/mcp-rest/tools/list?server_id=8bc75227-7652-4790-b16f-db47809c94b3",
-      "status": 500,
-      "tools": [],
-      "error": null,
-      "message": null
     }
   ],
   "visibleTools": 1,
