@@ -1285,7 +1285,7 @@ class HTTPHandler:
         # Create a client with a connection pool
         return httpx.Client(
             transport=self._create_sync_transport(),
-            mounts=self._create_sync_proxy_mounts(verify=ssl_config, cert=cert),
+            mounts=self._create_sync_proxy_mounts(verify=ssl_config, cert=cert, http2=self.http2),
             http2=self.http2,
             timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
             verify=ssl_config,
@@ -1575,10 +1575,13 @@ class HTTPHandler:
     def _create_sync_proxy_mounts(
         verify: VerifyTypes,
         cert: CertTypes | None,
+        http2: bool = False,
     ) -> Mapping[str, HTTPTransport | None] | None:
         if not litellm.force_ipv4:
             return None
-        return _environment_proxy_mounts(lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert))
+        return _environment_proxy_mounts(
+            lambda proxy_url: HTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2)
+        )
 
 
 def get_async_httpx_client(

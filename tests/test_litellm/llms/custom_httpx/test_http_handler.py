@@ -1,5 +1,4 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
 import gc
 import io
 import os
@@ -665,70 +664,22 @@ async def test_async_http_handler_http2_transport():
 
 
 @pytest.mark.asyncio
-async def test_async_http_handler_http2_request(tmp_path):
-    pytest.importorskip("h2")
-    pytest.importorskip("cryptography")
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.x509.oid import NameOID
-    from h2.config import H2Configuration
-    from h2.connection import H2Connection
-    from h2.events import RequestReceived
+async def test_async_http_handler_http2_request():
+    requests: list[httpx.Request] = []
 
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    certificate = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(subject)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=1))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
-        .sign(key, hashes.SHA256())
-    )
-    certificate_path = tmp_path / "certificate.pem"
-    key_path = tmp_path / "key.pem"
-    certificate_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.TraditionalOpenSSL,
-            serialization.NoEncryption(),
-        )
-    )
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, request=request, json={"ok": True})
 
-    async def serve_http2(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        connection = H2Connection(config=H2Configuration(client_side=False, header_encoding="utf-8"))
-        connection.initiate_connection()
-        writer.write(connection.data_to_send())
-        await writer.drain()
-        while data := await reader.read(65535):
-            for event in connection.receive_data(data):
-                if isinstance(event, RequestReceived):
-                    connection.send_headers(event.stream_id, [(":status", "200"), ("content-type", "application/json")])
-                    connection.send_data(event.stream_id, b'{"ok":true}', end_stream=True)
-            writer.write(connection.data_to_send())
-            await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-
-    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    server_context.load_cert_chain(certificate_path, key_path)
-    server_context.set_alpn_protocols(["h2"])
-    server = await asyncio.start_server(serve_http2, "127.0.0.1", 0, ssl=server_context)
-    handler = AsyncHTTPHandler(http2=True, ssl_verify=False)
+    handler = AsyncHTTPHandler(http2=True)
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
     try:
-        port = server.sockets[0].getsockname()[1]
-        response = await handler.get(f"https://localhost:{port}/search")
-        assert response.http_version == "HTTP/2"
+        response = await handler.get("https://example.com/search")
         assert response.json() == {"ok": True}
+        assert requests[0].url == "https://example.com/search"
     finally:
         await handler.close()
-        server.close()
-        await server.wait_closed()
 
 
 def test_http_handler_http2_transport():
@@ -740,6 +691,24 @@ def test_http_handler_http2_transport():
     finally:
         http2_handler.close()
         default_handler.close()
+
+
+def test_http_handler_http2_request():
+    requests: list[httpx.Request] = []
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, request=request, json={"ok": True})
+
+    handler = HTTPHandler(http2=True)
+    handler.client.close()
+    handler.client = httpx.Client(transport=httpx.MockTransport(mock_handler))
+    try:
+        response = handler.get("https://example.com/search")
+        assert response.json() == {"ok": True}
+        assert requests[0].url == "https://example.com/search"
+    finally:
+        handler.close()
 
 
 @pytest.mark.asyncio
