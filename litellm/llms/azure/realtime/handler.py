@@ -6,7 +6,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Any, Final, Protocol, cast
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -29,6 +29,12 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
             await client_ws.send_text(message)
     except websockets.exceptions.ConnectionClosed:
         pass
+
+
+class _ProxyClientWebSocket(Protocol):
+    """Client-facing websocket handle: this path only closes it after a failed handshake."""
+
+    async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
 
 
 class AzureOpenAIRealtime(AzureChatCompletion):
@@ -104,17 +110,17 @@ class AzureOpenAIRealtime(AzureChatCompletion):
     async def async_realtime(
         self,
         model: str,
-        websocket: Any,
+        websocket: _ProxyClientWebSocket,
         logging_obj: LiteLLMLogging,
         api_base: str | None = None,
         api_key: str | None = None,
         api_version: str | None = None,
         azure_ad_token: str | None = None,
-        client: Any | None = None,
+        client: object | None = None,
         timeout: float | None = None,
         realtime_protocol: str | None = None,
         query_params: RealtimeQueryParams | None = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
     ):
         import websockets

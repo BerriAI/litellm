@@ -19,7 +19,7 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -4474,7 +4474,7 @@ def _complete_snowflake(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client = _dispatch_client_http(ctx)
+    injected_client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4486,11 +4486,11 @@ def _complete_snowflake(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
+    client: Final = (
+        injected_client if injected_client is not None else (HTTPHandler(timeout=timeout) if stream is False else None)
+    )  # Keep this here, otherwise, the httpx.client closes and streaming is impossible
 
     try:
-        client = (
-            HTTPHandler(timeout=timeout) if stream is False else None
-        )  # Keep this here, otherwise, the httpx.client closes and streaming is impossible
         response: Final = base_llm_http_handler.completion(
             model=model,
             messages=messages,
@@ -5398,6 +5398,14 @@ def completion(
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
+        bridges_to_responses_api: Final = (
+            responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
+        )
+        allowed_openai_params: Final[list[str] | None] = (
+            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+            if bridges_to_responses_api
+            else kwargs.get("allowed_openai_params")
+        )
         optional_param_args: Final = {
             "functions": functions,
             "function_call": function_call,
@@ -5442,7 +5450,7 @@ def completion(
             "service_tier": service_tier,
             "store": store,
             "prompt_cache_key": prompt_cache_key,
-            "allowed_openai_params": kwargs.get("allowed_openai_params"),
+            "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
         optional_params = get_optional_params(**optional_param_args, **non_default_params)
@@ -6545,7 +6553,7 @@ def embedding(
                 client=client,
                 timeout=timeout,
                 aembedding=aembedding,
-                litellm_params={},
+                litellm_params=litellm_params_dict,
                 api_base=api_base,
                 print_verbose=print_verbose,
                 extra_headers=headers,
@@ -7805,6 +7813,7 @@ def transcription(
             azure_ad_token=azure_ad_token,
             max_retries=max_retries,
             litellm_params=litellm_params_dict,
+            custom_llm_provider=custom_llm_provider,
         )
     elif custom_llm_provider == "openai" or (custom_llm_provider in litellm.openai_compatible_providers):
         api_base = (
@@ -8247,6 +8256,7 @@ def speech(
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
+            VertexAILyriaTextToSpeechConfig,
             VertexAITextToSpeechConfig,
         )
 
@@ -8271,7 +8281,11 @@ def speech(
 
         # Vertex AI Text-to-Speech (Google Cloud TTS)
         if text_to_speech_provider_config is None:
-            text_to_speech_provider_config = VertexAITextToSpeechConfig()
+            text_to_speech_provider_config = (  # rebind-ok: model metadata selects the Vertex TTS implementation
+                VertexAILyriaTextToSpeechConfig()
+                if VertexAILyriaTextToSpeechConfig.is_lyria_model(model)
+                else VertexAITextToSpeechConfig()
+            )
 
         # Cast to specific Vertex AI config type to access dispatch method
         vertex_config: Final = cast(VertexAITextToSpeechConfig, text_to_speech_provider_config)
@@ -8375,6 +8389,34 @@ def speech(
             input=input,
             voice=voice_str,
             text_to_speech_provider_config=minimax_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
+    elif custom_llm_provider == "mistral":
+        from litellm.llms.mistral.audio_speech.transformation import (
+            MistralTextToSpeechConfig,
+        )
+
+        mistral_tts_config: Final = text_to_speech_provider_config or MistralTextToSpeechConfig()
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        mistral_voice: Final[str | None] = voice if isinstance(voice, str) else None
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=mistral_voice,
+            text_to_speech_provider_config=mistral_tts_config,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params_dict,
@@ -8553,7 +8595,7 @@ def config_completion(**kwargs):
         )
 
 
-def stream_chunk_builder_text_completion(chunks: list, messages: list | None = None) -> TextCompletionResponse:
+def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None = None) -> TextCompletionResponse:
     id: Final = chunks[0]["id"]
     object: Final = chunks[0]["object"]
     created: Final = chunks[0]["created"]
@@ -8670,10 +8712,11 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
 
 def stream_chunk_builder(
     chunks: list,
-    messages: list | None = None,
+    messages: Sequence | None = None,
     start_time=None,
     end_time=None,
     logging_obj: Optional["Logging"] = None,
+    count_prompt_tokens: Callable[[], int] | None = None,
 ) -> ModelResponse | TextCompletionResponse | None:
     try:
         if chunks is None:
@@ -8747,6 +8790,7 @@ def stream_chunk_builder(
                 completion_output=completion_output,
                 messages=messages,
                 reasoning_tokens=0,
+                count_prompt_tokens=count_prompt_tokens,
             )
             setattr(response, "usage", usage)
 
@@ -8924,6 +8968,7 @@ def stream_chunk_builder(
             completion_output=completion_output,
             messages=messages,
             reasoning_tokens=reasoning_tokens,
+            count_prompt_tokens=count_prompt_tokens,
         )
 
         setattr(response, "usage", usage)

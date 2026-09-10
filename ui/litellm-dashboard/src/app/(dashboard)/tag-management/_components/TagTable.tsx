@@ -39,6 +39,7 @@ const TagTable: React.FC<TagTableProps> = ({ data, onEdit, onDelete, onSelectTag
   return (
     <DataTable
       data={data}
+      paginationMode="client"
       columns={columns}
       getRowId={(tag, index) => tag.name || String(index)}
       fillHeight

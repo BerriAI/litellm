@@ -37,6 +37,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     TextCompletionResponse,
+    Usage,
 )
 
 if TYPE_CHECKING:
@@ -147,6 +148,144 @@ class AnthropicPassthroughLoggingHandler:
         if model_group:
             return model_group.removeprefix("passthrough/")
         return model
+
+    @staticmethod
+    def _resolve_logged_model(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        request_body: Mapping[str, object],
+        all_chunks: Sequence[str | bytes],
+    ) -> str:
+        request_model: Final = request_body.get("model")
+        logged_model: Final = (
+            request_model
+            if isinstance(request_model, str) and request_model
+            else str(litellm_logging_obj.model_call_details.get("model") or "")
+        )
+        if logged_model and logged_model != "unknown":
+            return logged_model
+        return AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(all_chunks) or logged_model
+
+    @staticmethod
+    def _usage_only_response_or_none(
+        all_chunks: Sequence[str | bytes], model: str, speed: str | None
+    ) -> ModelResponse | None:
+        try:
+            return AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=all_chunks, model=model, speed=speed
+            )
+        except Exception as e:  # noqa: BLE001  # the usage-only fallback must never raise out of failure logging
+            verbose_proxy_logger.warning("Anthropic passthrough: usage-only fallback failed (model=%s): %s", model, e)
+            return None
+
+    @staticmethod
+    def _assemble_streaming_response(
+        all_chunks: Sequence[str | bytes],
+        litellm_logging_obj: LiteLLMLoggingObj,
+        model: str,
+        speed: str | None,
+    ) -> ModelResponse | TextCompletionResponse | None:
+        try:
+            assembled: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                all_chunks=all_chunks,
+                litellm_logging_obj=litellm_logging_obj,
+                model=model,
+                speed=speed,
+            )
+        except Exception as e:  # noqa: BLE001  # any assembly error falls back to usage-only cost
+            verbose_proxy_logger.warning(
+                "Anthropic passthrough: stream assembly raised (model=%s): %s; falling "
+                "back to usage-only cost from raw SSE events.",
+                model,
+                e,
+            )
+            return AnthropicPassthroughLoggingHandler._usage_only_response_or_none(all_chunks, model, speed)
+        if assembled is not None:
+            return assembled
+        return AnthropicPassthroughLoggingHandler._usage_only_response_or_none(all_chunks, model, speed)
+
+    @staticmethod
+    def _build_streaming_response_for_logging(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        request_body: Mapping[str, object],
+        all_chunks: Sequence[str | bytes],
+        model: str,
+    ) -> ModelResponse | TextCompletionResponse | None:
+        response: Final = AnthropicPassthroughLoggingHandler._assemble_streaming_response(
+            all_chunks=all_chunks,
+            litellm_logging_obj=litellm_logging_obj,
+            model=model,
+            speed=AnthropicPassthroughLoggingHandler._cost_relevant_speed(request_body),
+        )
+        if response is None:
+            return None
+        AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
+            response=response, all_chunks=all_chunks, model=model
+        )
+        return response
+
+    @staticmethod
+    def record_partial_usage_for_failure(
+        litellm_logging_obj: LiteLLMLoggingObj,
+        request_body: Mapping[str, object],
+        all_chunks: Sequence[str | bytes],
+    ) -> None:
+        if not all_chunks:
+            return
+        model: Final = AnthropicPassthroughLoggingHandler._resolve_logged_model(
+            litellm_logging_obj, request_body, all_chunks
+        )
+        partial_response: Final = AnthropicPassthroughLoggingHandler._build_streaming_response_for_logging(
+            litellm_logging_obj=litellm_logging_obj, request_body=request_body, all_chunks=all_chunks, model=model
+        )
+        usage: Final = cast(Usage | None, getattr(partial_response, "usage", None))
+        if partial_response is None or usage is None:
+            return
+        litellm_logging_obj.record_partial_usage_for_failure(
+            usage=usage,
+            response_cost=AnthropicPassthroughLoggingHandler._cost_partial_stream_or_zero(
+                partial_response=partial_response, model=model, logging_obj=litellm_logging_obj
+            ),
+        )
+
+    @staticmethod
+    def _cost_partial_stream_or_zero(
+        partial_response: ModelResponse | TextCompletionResponse, model: str, logging_obj: LiteLLMLoggingObj
+    ) -> float:
+        try:
+            return AnthropicPassthroughLoggingHandler._compute_response_cost(
+                litellm_model_response=partial_response,
+                model=AnthropicPassthroughLoggingHandler._resolve_costing_model(model, logging_obj),
+                logging_obj=logging_obj,
+            )
+        except Exception as e:  # noqa: BLE001  # an uncostable partial stream still bills its tokens, at zero cost
+            verbose_proxy_logger.warning(
+                "Anthropic passthrough: could not cost the partial usage of a failed stream (model=%s): %s", model, e
+            )
+            return 0.0
+
+    @staticmethod
+    def _compute_response_cost(
+        litellm_model_response: ModelResponse | TextCompletionResponse,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> float:
+        if logging_obj.model_call_details.get("cache_hit") is True:
+            return 0.0
+        custom_llm_provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
+        model_for_cost: Final = (
+            f"{custom_llm_provider}/{model}"
+            if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/")
+            else model
+        )
+        return litellm.completion_cost(
+            completion_response=litellm_model_response,
+            model=model_for_cost,
+            custom_llm_provider=custom_llm_provider,
+            custom_pricing=use_custom_pricing_for_model(
+                litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
+            ),
+            router_model_id=logging_obj.get_router_model_id(),
+        )
 
     @staticmethod
     def _extract_message_start_field(
@@ -278,31 +417,9 @@ class AnthropicPassthroughLoggingHandler:
         if logging_obj.model_call_details.get("stream") is True:
             logging_obj.model_call_details["complete_streaming_response"] = litellm_model_response
         try:
-            # Get custom_llm_provider from logging object if available (e.g., azure_ai for Azure Anthropic)
-            custom_llm_provider: Final = logging_obj.model_call_details.get("custom_llm_provider")
-
             model = AnthropicPassthroughLoggingHandler._resolve_costing_model(model, logging_obj)
-
-            # Prepend custom_llm_provider to model if not already present
-            model_for_cost = model
-            if custom_llm_provider and not model.startswith(f"{custom_llm_provider}/"):
-                model_for_cost = f"{custom_llm_provider}/{model}"
-
-            router_model_id: Final = logging_obj.get_router_model_id()
-            custom_pricing: Final = use_custom_pricing_for_model(
-                litellm_params=(logging_obj.litellm_params if hasattr(logging_obj, "litellm_params") else None)
-            )
-
-            response_cost: Final = (
-                0.0
-                if logging_obj.model_call_details.get("cache_hit") is True
-                else litellm.completion_cost(
-                    completion_response=litellm_model_response,
-                    model=model_for_cost,
-                    custom_llm_provider=custom_llm_provider,
-                    custom_pricing=custom_pricing,
-                    router_model_id=router_model_id,
-                )
+            response_cost: Final = AnthropicPassthroughLoggingHandler._compute_response_cost(
+                litellm_model_response=litellm_model_response, model=model, logging_obj=logging_obj
             )
 
             kwargs["response_cost"] = response_cost
@@ -356,57 +473,12 @@ class AnthropicPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
 
-        speed: Final = AnthropicPassthroughLoggingHandler._cost_relevant_speed(request_body)
-        model = request_body.get("model", "")
-        # Check if it's available in the logging object
-        if (
-            not model
-            and hasattr(litellm_logging_obj, "model_call_details")
-            and litellm_logging_obj.model_call_details.get("model")
-        ):
-            model = cast(str, litellm_logging_obj.model_call_details.get("model"))
-
-        if not model or model == "unknown":
-            chunk_model: Final = AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(all_chunks)
-            if chunk_model:
-                model = chunk_model
-
-        try:
-            complete_streaming_response = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-                all_chunks=all_chunks,
-                litellm_logging_obj=litellm_logging_obj,
-                model=model,
-                speed=speed,
-            )
-        except Exception as e:
-            # stream_chunk_builder re-raises assembly failures (as litellm.APIError)
-            # on large agentic tool-use / thinking streams; treat that the same as a
-            # None result so the usage-only fallback below still recovers cost
-            verbose_proxy_logger.warning(
-                "Anthropic passthrough: stream assembly raised (model=%s): %s; falling "
-                "back to usage-only cost from raw SSE events.",
-                model,
-                e,
-            )
-            complete_streaming_response = None
-        if complete_streaming_response is None:
-            # stream_chunk_builder cannot always reassemble large agentic streams, but
-            # Anthropic still emits token usage in the message_start / message_delta SSE
-            # events regardless of content shape; recover usage-only so cost is tracked.
-            # Guard it too: a raise here would defeat the point and drop the request
-            try:
-                complete_streaming_response = AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
-                    all_chunks=all_chunks,
-                    model=model,
-                    speed=speed,
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning(
-                    "Anthropic passthrough: usage-only fallback failed (model=%s): %s",
-                    model,
-                    e,
-                )
-                complete_streaming_response = None
+        model: Final = AnthropicPassthroughLoggingHandler._resolve_logged_model(
+            litellm_logging_obj, request_body, all_chunks
+        )
+        complete_streaming_response: Final = AnthropicPassthroughLoggingHandler._build_streaming_response_for_logging(
+            litellm_logging_obj=litellm_logging_obj, request_body=request_body, all_chunks=all_chunks, model=model
+        )
         if complete_streaming_response is None:
             verbose_proxy_logger.error(
                 "Unable to build complete streaming response for Anthropic passthrough endpoint, not logging..."
@@ -415,11 +487,6 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
-        AnthropicPassthroughLoggingHandler._recover_interrupted_stream_output_tokens(
-            response=complete_streaming_response,
-            all_chunks=all_chunks,
-            model=model,
-        )
         kwargs: Final = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,

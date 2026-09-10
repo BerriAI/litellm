@@ -57,8 +57,20 @@ def _make_access_group_record(
     return record
 
 
-def _make_team_record(team_id: str, access_group_ids: list[str] | None = None):
-    return types.SimpleNamespace(team_id=team_id, access_group_ids=access_group_ids or [])
+def _make_team_record(team_id: str, access_group_ids: list[str] | None = None, team_alias: str | None = None):
+    return types.SimpleNamespace(team_id=team_id, access_group_ids=access_group_ids or [], team_alias=team_alias)
+
+
+def _make_mcp_server_record(server_id: str, alias: str | None = None, server_name: str | None = None):
+    return types.SimpleNamespace(server_id=server_id, alias=alias, server_name=server_name)
+
+
+def _make_agent_record(agent_id: str, agent_name: str):
+    return types.SimpleNamespace(agent_id=agent_id, agent_name=agent_name)
+
+
+def _make_key_record(token: str, key_alias: str | None = None):
+    return types.SimpleNamespace(token=token, key_alias=key_alias)
 
 
 @pytest.fixture
@@ -109,6 +121,12 @@ def client_and_mocks(monkeypatch):
     mock_key_table.find_unique = AsyncMock(return_value=None)
     mock_key_table.update = AsyncMock(return_value=None)
 
+    mock_mcp_server_table = MagicMock()
+    mock_mcp_server_table.find_many = AsyncMock(return_value=[])
+
+    mock_agents_table = MagicMock()
+    mock_agents_table.find_many = AsyncMock(return_value=[])
+
     @asynccontextmanager
     async def mock_tx():
         tx = types.SimpleNamespace(
@@ -122,6 +140,8 @@ def client_and_mocks(monkeypatch):
         litellm_accessgrouptable=mock_access_group_table,
         litellm_teamtable=mock_team_table,
         litellm_verificationtoken=mock_key_table,
+        litellm_mcpservertable=mock_mcp_server_table,
+        litellm_agentstable=mock_agents_table,
         tx=mock_tx,
     )
     mock_prisma.db = mock_db
@@ -1447,3 +1467,169 @@ def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks
     update_call_kwargs = mock_table.update.call_args.kwargs
     assert update_call_kwargs["data"]["assigned_team_ids"] == []
     assert update_call_kwargs["data"]["assigned_key_ids"] == []
+
+
+# ---------------------------------------------------------------------------
+# Resolved resource names (LIT-6594)
+# ---------------------------------------------------------------------------
+
+
+def _mock_resource_tables(mock_prisma, *, mcp_servers=(), agents=(), teams=(), keys=()):
+    mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(mcp_servers))
+    mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=list(agents))
+    mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=list(teams))
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(keys))
+
+
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
+    """Every id list gets a sibling list of {id, name}; name is null when the id has no alias or no longer resolves."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(
+            access_group_id="ag-123",
+            access_mcp_server_ids=["mcp-a", "mcp-b", "mcp-ghost"],
+            access_agent_ids=["agent-a", "agent-ghost"],
+            assigned_team_ids=["team-a", "team-b"],
+            assigned_key_ids=["key-a", "key-b"],
+        )
+    )
+    _mock_resource_tables(
+        mock_prisma,
+        mcp_servers=[
+            _make_mcp_server_record("mcp-a", alias="GitHub"),
+            _make_mcp_server_record("mcp-b", server_name="jira_tools"),
+        ],
+        agents=[_make_agent_record("agent-a", "support-bot")],
+        teams=[
+            _make_team_record("team-a", ["ag-123"], team_alias="Platform"),
+            _make_team_record("team-b", ["ag-123"]),
+        ],
+        keys=[_make_key_record("key-a", key_alias="ci-key"), _make_key_record("key-b")],
+    )
+
+    resp = client.get(f"{base_path}/ag-123")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["access_mcp_servers"] == [
+        {"id": "mcp-a", "name": "GitHub"},
+        {"id": "mcp-b", "name": "jira_tools"},
+        {"id": "mcp-ghost", "name": None},
+    ]
+    assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}, {"id": "agent-ghost", "name": None}]
+    assert body["assigned_teams"] == [{"id": "team-a", "name": "Platform"}, {"id": "team-b", "name": None}]
+    assert body["assigned_keys"] == [{"id": "key-a", "name": "ci-key"}, {"id": "key-b", "name": None}]
+    assert body["access_mcp_server_ids"] == ["mcp-a", "mcp-b", "mcp-ghost"]
+    assert body["assigned_team_ids"] == ["team-a", "team-b"]
+
+    mcp_where = mock_prisma.db.litellm_mcpservertable.find_many.call_args.kwargs["where"]
+    assert sorted(mcp_where["server_id"]["in"]) == ["mcp-a", "mcp-b", "mcp-ghost"]
+    agent_where = mock_prisma.db.litellm_agentstable.find_many.call_args.kwargs["where"]
+    assert sorted(agent_where["agent_id"]["in"]) == ["agent-a", "agent-ghost"]
+    key_where = mock_prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert sorted(key_where["token"]["in"]) == ["key-a", "key-b"]
+
+
+def test_list_access_groups_resolves_names_with_one_query_per_table(client_and_mocks):
+    """List batches every group's ids into one lookup per table and attributes names back to the right group."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_table.find_many = AsyncMock(
+        return_value=[
+            _make_access_group_record(
+                access_group_id="ag-1", access_mcp_server_ids=["mcp-a"], access_agent_ids=["agent-a"], assigned_key_ids=["key-a"]
+            ),
+            _make_access_group_record(
+                access_group_id="ag-2", access_mcp_server_ids=["mcp-b"], access_agent_ids=["agent-b"], assigned_key_ids=["key-b"]
+            ),
+        ]
+    )
+    _mock_resource_tables(
+        mock_prisma,
+        mcp_servers=[_make_mcp_server_record("mcp-a", alias="A"), _make_mcp_server_record("mcp-b", alias="B")],
+        agents=[_make_agent_record("agent-a", "Agent A"), _make_agent_record("agent-b", "Agent B")],
+        keys=[_make_key_record("key-a", key_alias="Key A"), _make_key_record("key-b", key_alias="Key B")],
+    )
+
+    resp = client.get("/v1/access_group")
+    assert resp.status_code == 200
+    first, second = resp.json()
+    assert first["access_mcp_servers"] == [{"id": "mcp-a", "name": "A"}]
+    assert first["access_agents"] == [{"id": "agent-a", "name": "Agent A"}]
+    assert first["assigned_keys"] == [{"id": "key-a", "name": "Key A"}]
+    assert second["access_mcp_servers"] == [{"id": "mcp-b", "name": "B"}]
+    assert second["access_agents"] == [{"id": "agent-b", "name": "Agent B"}]
+    assert second["assigned_keys"] == [{"id": "key-b", "name": "Key B"}]
+
+    for table, column in (
+        (mock_prisma.db.litellm_mcpservertable, "server_id"),
+        (mock_prisma.db.litellm_agentstable, "agent_id"),
+        (mock_prisma.db.litellm_verificationtoken, "token"),
+    ):
+        table.find_many.assert_awaited_once()
+        assert len(table.find_many.call_args.kwargs["where"][column]["in"]) == 2
+
+
+def test_list_access_groups_skips_lookups_when_nothing_to_resolve(client_and_mocks):
+    """Groups with no MCP servers, agents or keys must not trigger an empty IN () query per table."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_table.find_many = AsyncMock(
+        return_value=[_make_access_group_record(access_group_id="ag-1"), _make_access_group_record(access_group_id="ag-2")]
+    )
+
+    resp = client.get("/v1/access_group")
+    assert resp.status_code == 200
+    assert all(group["access_mcp_servers"] == [] and group["assigned_keys"] == [] for group in resp.json())
+
+    mock_prisma.db.litellm_mcpservertable.find_many.assert_not_awaited()
+    mock_prisma.db.litellm_agentstable.find_many.assert_not_awaited()
+    mock_prisma.db.litellm_verificationtoken.find_many.assert_not_awaited()
+
+
+def test_create_access_group_response_carries_resolved_names(client_and_mocks):
+    """The create response already shows names so the UI never has to refetch to label what it just saved."""
+    client, mock_prisma, *_ = client_and_mocks
+    team_record = _make_team_record("team-1", team_alias="Platform")
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_record)
+    _mock_resource_tables(
+        mock_prisma,
+        mcp_servers=[_make_mcp_server_record("mcp-a", alias="GitHub")],
+        agents=[_make_agent_record("agent-a", "support-bot")],
+        teams=[team_record],
+    )
+
+    resp = client.post(
+        "/v1/access_group",
+        json={
+            "access_group_name": "new-group",
+            "access_mcp_server_ids": ["mcp-a"],
+            "access_agent_ids": ["agent-a"],
+            "assigned_team_ids": ["team-1"],
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["access_mcp_servers"] == [{"id": "mcp-a", "name": "GitHub"}]
+    assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}]
+    assert body["assigned_teams"] == [{"id": "team-1", "name": "Platform"}]
+
+
+def test_update_access_group_response_carries_resolved_names(client_and_mocks):
+    """The update response reflects the new ids with their names, not the pre-update state."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(access_group_id="ag-update", access_mcp_server_ids=["mcp-old"])
+    )
+    _mock_resource_tables(
+        mock_prisma,
+        mcp_servers=[_make_mcp_server_record("mcp-new", alias="Linear")],
+        agents=[_make_agent_record("agent-a", "support-bot")],
+    )
+
+    resp = client.put(
+        "/v1/access_group/ag-update", json={"access_mcp_server_ids": ["mcp-new"], "access_agent_ids": ["agent-a"]}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["access_mcp_servers"] == [{"id": "mcp-new", "name": "Linear"}]
+    assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}]
+    assert body["access_mcp_server_ids"] == ["mcp-new"]
