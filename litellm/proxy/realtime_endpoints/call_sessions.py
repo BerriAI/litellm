@@ -23,7 +23,12 @@ from litellm.llms.chatgpt.codex import (
 from litellm.llms.chatgpt.realtime import configured_realtime_headers
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-from litellm.proxy.auth.user_api_key_auth import get_api_key, get_api_key_from_custom_header, user_api_key_auth
+from litellm.proxy.auth.user_api_key_auth import (
+    get_api_key,
+    get_api_key_from_custom_header,
+    get_websocket_api_key,
+    user_api_key_auth,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
 
@@ -171,14 +176,13 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
     protocols: Final = tuple(
         p.strip() for p in websocket.headers.get("sec-websocket-protocol", "").split(",") if p.strip()
     )
-    alternate_key: Final = websocket.headers.get("api-key") or next(
-        (p.removeprefix("openai-insecure-api-key.") for p in protocols if p.startswith("openai-insecure-api-key.")), ""
-    )
-    authorization: Final = websocket.headers.get("authorization") or f"Bearer {alternate_key}"
     logging_obj: Logging | None = None  # rebind-ok: cleanup needs the logger only after pre-call succeeds
     try:
         try:
-            call: Final = decode_call(token, authorization)
+            api_key: Final = get_websocket_api_key(websocket)
+            if not api_key:
+                raise HTTPException(403, "No API key provided")
+            call: Final = decode_call(token, f"Bearer {api_key}")
             await can_key_call_resolved_model(
                 model=call.alias,
                 llm_model_list=server.llm_model_list,

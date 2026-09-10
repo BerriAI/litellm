@@ -7137,7 +7137,7 @@ def test_user_api_key_auth_opens_a_datadog_span_for_accepted_and_rejected_keys(t
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("attachment", ["path", "query"])
-@pytest.mark.parametrize("credential", ["authorization", "api-key", "subprotocol"])
+@pytest.mark.parametrize("credential", ["authorization", "api-key", "subprotocol", "x-litellm-api-key", "custom", "custom-mixed"])
 @pytest.mark.parametrize("query_model", [b"", b"model=unbudgeted"])
 async def test_sideband_auth_uses_encrypted_model_for_budget_checks(monkeypatch, attachment, credential, query_model):
     import hashlib
@@ -7154,6 +7154,8 @@ async def test_sideband_auth_uses_encrypted_model_for_budget_checks(monkeypatch,
         call_id="rtc_test", model="gpt-live-1-codex", alias="budgeted-voice",
         owner=hashlib.sha256(b"Bearer owner").hexdigest(), expires_at=time.time() + 300,
     ))
+    from litellm.proxy import proxy_server
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "x-proxy-key"} if credential.startswith("custom") else {})
     seen = []
 
     async def authenticate(request, api_key):
@@ -7169,6 +7171,9 @@ async def test_sideband_auth_uses_encrypted_model_for_budget_checks(monkeypatch,
         "headers": {
             "authorization": [(b"authorization", b"Bearer owner")],
             "api-key": [(b"api-key", b"owner")],
+            "x-litellm-api-key": [(b"x-litellm-api-key", b"owner")],
+            "custom": [(b"x-proxy-key", b"Bearer owner")],
+            "custom-mixed": [(b"x-proxy-key", b"Bearer owner"), (b"authorization", b"Bearer other-owner")],
             "subprotocol": [(b"sec-websocket-protocol", b"realtime, openai-insecure-api-key.owner")],
         }[credential],
     }, AsyncMock(), AsyncMock())
@@ -7335,4 +7340,39 @@ async def test_sideband_rejects_budget_fallback_before_rerouting(monkeypatch, at
         await auth_module.user_api_key_auth_websocket(websocket)
     assert error.value.status_code == 403
     limiter.get_fallback_model_within_budget.assert_not_awaited()
+    send.assert_awaited_once_with({"type": "websocket.close", "code": 1008, "reason": ""})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_value", [None, b"Bearer different-owner"])
+async def test_sideband_custom_header_cannot_fall_back_to_other_credentials(monkeypatch, custom_value):
+    import hashlib
+    import importlib
+    import time
+    from unittest.mock import AsyncMock
+    from fastapi import HTTPException, WebSocket
+    from litellm.proxy import proxy_server
+    from litellm.llms.chatgpt.codex import CodexRealtimeCall
+    from litellm.proxy.realtime_endpoints.call_sessions import encode_call
+
+    auth_module = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-custom-header-salt")
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "x-proxy-key"})
+    token = encode_call(CodexRealtimeCall(
+        call_id="rtc_test", model="gpt-live-1-codex", alias="voice",
+        owner=hashlib.sha256(b"Bearer owner").hexdigest(), expires_at=time.time() + 300,
+    ))
+    authenticate = AsyncMock()
+    monkeypatch.setattr(auth_module, "user_api_key_auth", authenticate)
+    send = AsyncMock()
+    websocket = WebSocket({
+        "type": "websocket", "scheme": "ws", "server": ("localhost", 4000),
+        "path": "/v1/live/" + token, "path_params": {"call_id": token}, "query_string": b"",
+        "headers": [(b"authorization", b"Bearer owner")]
+        + ([(b"x-proxy-key", custom_value)] if custom_value is not None else []),
+    }, AsyncMock(), send)
+    with pytest.raises(HTTPException) as error:
+        await auth_module.user_api_key_auth_websocket(websocket)
+    assert error.value.status_code == 403
+    authenticate.assert_not_awaited()
     send.assert_awaited_once_with({"type": "websocket.close", "code": 1008, "reason": ""})
