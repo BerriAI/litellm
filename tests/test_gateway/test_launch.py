@@ -5,6 +5,7 @@ import textwrap
 import urllib.parse
 from pathlib import Path
 from typing import Final, cast
+from unittest.mock import MagicMock, patch
 
 import pytest
 from uvicorn.importer import import_from_string
@@ -13,7 +14,7 @@ from uvicorn.main import main as uvicorn_main
 import gateway.main
 from gateway.launch import GATEWAY_APP, main, pool_database_url, uvicorn_argv
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
-from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
+from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR, PgBouncerError, PgBouncerSettings
 
 DB_ENV: Final = {
     "DATABASE_HOST": "db.internal",
@@ -66,12 +67,24 @@ def _query(url: str) -> dict[str, str]:
 
 @pytest.fixture
 def password_env(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    for var in ("DATABASE_URL", "IAM_TOKEN_DB_AUTH", "AZURE_POSTGRESQL_AUTH", "DATABASE_HOST_READ_REPLICA"):
+    for var in (
+        "DATABASE_URL",
+        "IAM_TOKEN_DB_AUTH",
+        "AZURE_POSTGRESQL_AUTH",
+        "DATABASE_HOST_READ_REPLICA",
+        PGBOUNCER_POOLED_ENV_VAR,
+    ):
         monkeypatch.setenv(var, "")
         monkeypatch.delenv(var)
     for var, value in DB_ENV.items():
         monkeypatch.setenv(var, value)
     return dict(DB_ENV)
+
+
+def _minted_iam_token(token: str):
+    rds: Final = MagicMock()
+    rds.generate_db_auth_token.return_value = token
+    return patch("boto3.client", return_value=rds)
 
 
 def _uvicorn_params(argv: tuple[str, ...]) -> dict[str, object]:
@@ -109,16 +122,23 @@ class TestPoolDatabaseUrl:
         assert isinstance(outcome, PgBouncerError)
         assert "DATABASE_URL" in outcome.reason
 
-    def test_token_auth_is_refused(self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_token_auth_hands_the_workers_the_pool_user_not_the_token(
+        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
-        environ: Final = {"DATABASE_URL": "postgresql://litellm:token@db.internal:5432/litellm"}
-        outcome: Final = pool_database_url(
-            DatabaseURLSettings.from_env(),
-            PgBouncerSettings(enabled=True, port=_free_port(), binary=str(_fake_pooler(tmp_path))),
-            environ,
-        )
-        assert isinstance(outcome, PgBouncerError)
-        assert "IAM_TOKEN_DB_AUTH" in outcome.reason
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        port: Final = _free_port()
+        environ: Final = {"DATABASE_URL": "postgresql://litellm:MINTED_TOKEN@db.internal:5432/litellm"}
+        with _minted_iam_token("MINTED_TOKEN"):
+            outcome: Final = pool_database_url(
+                DatabaseURLSettings.from_env(),
+                PgBouncerSettings(enabled=True, port=port, binary=str(_fake_pooler(tmp_path))),
+                environ,
+            )
+        assert isinstance(outcome, str), outcome
+        pooled: Final = urllib.parse.urlsplit(outcome)
+        assert (pooled.username, pooled.hostname, pooled.port) == ("litellm_pgbouncer", "127.0.0.1", port)
+        assert "MINTED_TOKEN" not in outcome
 
 
 class TestMain:
@@ -134,14 +154,39 @@ class TestMain:
         main(("--workers", "4"), serve=lambda argv: served.append(tuple(argv)))
 
         pooled: Final = os.environ["DATABASE_URL"]
-        assert urllib.parse.urlsplit(pooled).netloc == f"litellm_pool:p%40ss@127.0.0.1:{port}"
+        assert urllib.parse.urlsplit(pooled).hostname == "127.0.0.1"
+        assert urllib.parse.urlsplit(pooled).port == port
+        assert urllib.parse.urlsplit(pooled).username == "litellm_pgbouncer"
+        assert "p%40ss" not in pooled
         assert _query(pooled)["pgbouncer"] == "true"
         assert _uvicorn_params(served[0])["timeout_keep_alive"] == 75
 
         DatabaseURLSettings.from_env().apply_to_env()
-        worker_url: Final = os.environ["DATABASE_URL"]
-        assert urllib.parse.urlsplit(worker_url).netloc == f"litellm_pool:p%40ss@127.0.0.1:{port}"
-        assert _query(worker_url)["pgbouncer"] == "true"
+        assert urllib.parse.urlsplit(os.environ["DATABASE_URL"]).netloc == urllib.parse.urlsplit(pooled).netloc
+        assert _query(os.environ["DATABASE_URL"])["pgbouncer"] == "true"
+
+    def test_iam_workers_keep_the_loopback_url_instead_of_minting_their_own(
+        self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        port: Final = _free_port()
+        monkeypatch.delenv("DATABASE_PASSWORD")
+        monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        monkeypatch.setenv("LITELLM_PGBOUNCER_ENABLED", "true")
+        monkeypatch.setenv("LITELLM_PGBOUNCER_PORT", str(port))
+        monkeypatch.setenv("LITELLM_PGBOUNCER_BINARY", str(_fake_pooler(tmp_path)))
+        served: Final[list[tuple[str, ...]]] = []
+        with _minted_iam_token("SUPERVISOR_TOKEN"):
+            main(("--workers", "4"), serve=lambda argv: served.append(tuple(argv)))
+        pooled: Final = os.environ["DATABASE_URL"]
+        assert urllib.parse.urlsplit(pooled).netloc.endswith(f"@127.0.0.1:{port}")
+        assert "SUPERVISOR_TOKEN" not in pooled
+        assert os.environ[PGBOUNCER_POOLED_ENV_VAR] == "true"
+        assert len(served) == 1
+
+        with _minted_iam_token("WORKER_TOKEN"):
+            DatabaseURLSettings.from_env().apply_to_env()
+        assert os.environ["DATABASE_URL"] == pooled
 
     def test_a_pooler_that_cannot_start_stops_the_gateway_before_uvicorn(
         self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path

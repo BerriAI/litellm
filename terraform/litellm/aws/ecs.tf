@@ -306,8 +306,8 @@ resource "aws_ecs_task_definition" "gateway" {
     }
 
     precondition {
-      condition     = !var.gateway_connection_pool_enabled || local.byo_database
-      error_message = "gateway_connection_pool_enabled requires an existing database via database_url with create_database = false: the module-created Aurora authenticates with IAM tokens, which the in-container pgbouncer cannot follow because it holds a static database password."
+      condition     = !var.gateway_connection_pool_enabled || local.database_enabled
+      error_message = "gateway_connection_pool_enabled needs a database: set create_database = true or pass database_url."
     }
   }
 

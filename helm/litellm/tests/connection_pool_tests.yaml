@@ -82,23 +82,39 @@ tests:
             name: LITELLM_PGBOUNCER_ENABLED
           any: true
 
-  - it: pool with IAM auth fails at render time
+  - it: pool with IAM auth renders both the pool and the token auth flag
     template: gateway/deployment.yaml
     set:
       database.connectionPool.enabled: true
       database.writer.useIAMAuth: true
     asserts:
-      - failedTemplate:
-          errorMessage: "database.connectionPool.enabled cannot be combined with database.writer.useIAMAuth or database.writer.useAzureEntraAuth: the in-container pgbouncer holds a static database password and cannot follow a rotating token. Disable the pool or use a static database password"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
 
-  - it: pool with Entra auth fails at render time
+  - it: pool with Entra auth renders both the pool and the token auth flag
     template: gateway/deployment.yaml
     set:
       database.connectionPool.enabled: true
       database.writer.useAzureEntraAuth: true
     asserts:
-      - failedTemplate:
-          errorMessage: "database.connectionPool.enabled cannot be combined with database.writer.useIAMAuth or database.writer.useAzureEntraAuth: the in-container pgbouncer holds a static database password and cannot follow a rotating token. Disable the pool or use a static database password"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_POSTGRESQL_AUTH
+            value: "true"
 
   - it: IAM auth without the pool still renders
     template: gateway/deployment.yaml
