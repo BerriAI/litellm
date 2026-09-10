@@ -27,6 +27,7 @@ from litellm.proxy.proxy_server import (
     _get_proxy_model_info,
     _translate_model_name_for_response,
 )
+from litellm.types.router import DeploymentModelListingInfo
 
 
 def _team_row() -> dict:
@@ -1427,8 +1428,13 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     team_row = _team_row()
     router = _public_named_router(team_row)
     deployment = MagicMock()
-    deployment.litellm_params.model = "azure/gpt-5.2-low-rpm-testing"
+    deployment.litellm_params.model = "azure/gpt-4.1"
     router.get_deployment_by_model_group_name.return_value = deployment
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("azure/gpt-4.1",),
+        max_input_tokens=16384,
+        max_output_tokens=4096,
+    )
 
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(ps, "general_settings", {})
@@ -1445,6 +1451,9 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     resp = await ps.model_info(model_id="team-claude-sonnet", user_api_key_dict=key)
 
     assert resp["id"] == "team-claude-sonnet"
+    assert resp.get("mode") == "chat"
+    assert resp.get("max_input_tokens") == 16384
+    assert resp.get("max_output_tokens") == 4096
     # lookup happened by the internal routing key, not the public name
     router.get_deployment_by_model_group_name.assert_called_once_with(
         "model_name_team-abc-123_4a6b8"
