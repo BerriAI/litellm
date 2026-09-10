@@ -63,7 +63,7 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
         request: &LiteLLMOcrRequest,
     ) -> Result<DecodedOcrResponse<Self::ProviderResponse>, OcrError> {
         polling::read_operation_response(
-            client.provider_http(),
+            client.polling_http(),
             response,
             url,
             headers,

@@ -195,6 +195,36 @@ async fn polling_forwards_bearer_credentials() {
 }
 
 #[tokio::test]
+async fn polling_does_not_follow_redirects() {
+    let (base, seen, server) = mock_server(vec![
+        MockResponse {
+            status: 202,
+            headers: vec![("Operation-Location", "{base}/operation".into())],
+            body: json!({}),
+        },
+        MockResponse {
+            status: 302,
+            headers: vec![("Location", "{base}/redirected".into())],
+            body: json!({}),
+        },
+        MockResponse::json(json!({"status":"succeeded"})),
+    ])
+    .await;
+
+    let error = perform_ocr(wire_request(
+        "azure_ai/doc-intelligence/prebuilt-read",
+        &base,
+        json!({}),
+    ))
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("status 302"), "{error}");
+    assert_eq!(seen.lock().unwrap().len(), 2);
+    server.abort();
+}
+
+#[tokio::test]
 async fn polling_rejects_terminal_failure() {
     let (base, _, server) = mock_server(vec![
         MockResponse {
