@@ -23,6 +23,7 @@ from .auth import CliContextObj, context_secret_vault, get_stored_api_key, load_
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
+    ApiKeyHelper,
     ClaudeSettingsError,
     load_json_or_empty,
     merge_claude_settings,
@@ -123,7 +124,7 @@ def _stored_login_is_pkce(vault: SecretVault) -> bool:
     return token_data is not None and token_data.get("refresh_token") is not None
 
 
-def _ensure_fresh_login(ctx: click.Context) -> None:
+def ensure_fresh_login(ctx: click.Context) -> None:
     ctx_obj: Final[CliContextObj] = ctx.obj
     base_url: Final = ctx_obj["base_url"].rstrip("/")
     vault: Final = context_secret_vault(ctx)
@@ -141,7 +142,7 @@ def _ensure_fresh_login(ctx: click.Context) -> None:
     click.echo("No fresh LiteLLM login found for this proxy; starting login...")
     ctx.invoke(login, pkce=pkce)
     if not _usable_login(get_stored_api_key(expected_base_url=base_url, vault=vault), vault):
-        raise UpError("Login did not produce a usable token; cannot start `lite up`.")
+        raise UpError("Login did not produce a usable token.")
 
 
 def _restore_and_report() -> None:
@@ -169,7 +170,7 @@ def up(ctx: click.Context) -> None:
     base_url: Final = ctx.obj["base_url"]
 
     try:
-        _ensure_fresh_login(ctx)
+        ensure_fresh_login(ctx)
         api_key: Final = resolve_api_key(ctx)
         verify_proxy_key(base_url, api_key)
 
@@ -190,7 +191,7 @@ def up(ctx: click.Context) -> None:
         )
 
         CLAUDE_SETTINGS_PATH.parent.mkdir(exist_ok=True)
-        merged: Final = merge_claude_settings(original_settings, base_url, api_key_helper)
+        merged: Final = merge_claude_settings(original_settings, base_url, ApiKeyHelper(api_key_helper))
         with open(CLAUDE_SETTINGS_PATH, "w") as f:
             json.dump(merged, f, indent=2)
     except (AgentRunError, ClaudeSettingsError) as e:

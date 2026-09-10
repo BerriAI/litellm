@@ -60,6 +60,7 @@ def phoenix_project_headers(auth_metadata: Mapping[str, str] | None) -> Mapping[
 def phoenix_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     cfg: Final = _V1Phoenix.get_arize_phoenix_config()
     headers: Final = cfg.otlp_auth_headers if hasattr(cfg, "otlp_auth_headers") else None
