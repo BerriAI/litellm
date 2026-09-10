@@ -4,7 +4,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, cast, get_args
 from uuid import uuid4
 
 import fastapi
@@ -39,16 +39,32 @@ from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
-
     from litellm.router import Router
 
 router: Final = APIRouter()
 
 
+class BackgroundResponseStore(Protocol):
+    """The one managed-object write a queued background response needs.
+
+    Naming it here keeps this module from importing the enterprise hook that implements it.
+    """
+
+    async def store_unified_object_id(
+        self,
+        unified_object_id: str,
+        file_object: ResponsesAPIResponse,
+        litellm_parent_otel_span: object | None,
+        model_object_id: str,
+        file_purpose: Literal["response"],
+        user_api_key_dict: UserAPIKeyAuth,
+        persist_attribution: bool = False,
+    ) -> None: ...
+
+
 async def store_background_response_object(
     response: ResponsesAPIResponse,
-    managed_files_obj: "_PROXY_LiteLLMManagedFiles",
+    managed_files_obj: BackgroundResponseStore,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """Record a queued background response so the cost poller can find and bill it.
@@ -408,12 +424,8 @@ async def responses_api(
             and isinstance(response, ResponsesAPIResponse)
             and response.status in ("queued", "in_progress")
         ):
-            from litellm_enterprise.proxy.hooks.managed_files import (
-                _PROXY_LiteLLMManagedFiles,
-            )
-
             managed_files_obj: Final = cast(
-                _PROXY_LiteLLMManagedFiles | None,
+                BackgroundResponseStore | None,
                 proxy_logging_obj.get_proxy_hook("managed_files"),
             )
 
