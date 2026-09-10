@@ -472,6 +472,12 @@ describe("chat_completion prompt cache usage", () => {
 
     expect(usageData).toEqual(expect.not.objectContaining({ cost: expect.anything() }));
   });
+
+  it("omits cost when the provider reports a blank value", async () => {
+    const usageData = await captureUsage({ cost: "  " });
+
+    expect(usageData).toEqual(expect.not.objectContaining({ cost: expect.anything() }));
+  });
 });
 
 describe("chat_completion response cache", () => {
