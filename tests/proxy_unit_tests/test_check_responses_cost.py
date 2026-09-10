@@ -1191,18 +1191,23 @@ class TestCheckResponsesCost:
         """The row's provider id drives the fetch, not the nonce-encrypted advertised id.
 
         A background create advertises a freshly encrypted id per call, so unified_object_id
-        is not a stable handle on the generation.
+        is no handle on the generation.
         """
         from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+        from litellm.responses.utils import ResponsesAPIRequestUtils
         from litellm.types.utils import SpecialEnums
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
 
-        provider_response_id = "resp_provider_stable_1"
+        provider_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-xyz",
+            response_id="resp_upstream_stable",
+        )
         stale_advertised_id = "resp_" + str(
             encrypt_value_helper(
                 value=SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
-                    "resp_some_other_encoding", "test-user", "test-team"
+                    "resp_a_previous_encoding", "test-user", "test-team"
                 )
             )
         )
@@ -1216,21 +1221,20 @@ class TestCheckResponsesCost:
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
-
-        mock_response = ResponsesAPIResponse(
-            id=provider_response_id,
-            object="response",
-            status="completed",
-            created_at=int(datetime.now().timestamp()),
-            output=[],
-            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        mock_llm_router.aget_responses = AsyncMock(
+            return_value=ResponsesAPIResponse(
+                id=provider_response_id,
+                object="response",
+                status="completed",
+                created_at=int(datetime.now().timestamp()),
+                output=[],
+                usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+            )
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
-            await check_responses_cost_instance.check_responses_cost()
+        await check_responses_cost_instance.check_responses_cost()
 
-        assert mock_aget.call_args[1]["response_id"] == provider_response_id
+        assert mock_llm_router.aget_responses.call_args[1]["response_id"] == provider_response_id
         assert _completed_job_ids(mock_prisma_client) == ["job-provider-id"]
 
     @pytest.mark.asyncio
@@ -1239,11 +1243,16 @@ class TestCheckResponsesCost:
     ):
         """Rows created earlier carry the encrypted advertised id in both columns."""
         from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+        from litellm.responses.utils import ResponsesAPIRequestUtils
         from litellm.types.utils import SpecialEnums
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
 
-        provider_response_id = "resp_legacy_upstream_9"
+        provider_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-xyz",
+            response_id="resp_legacy_upstream",
+        )
         legacy_id = "resp_" + str(
             encrypt_value_helper(
                 value=SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
@@ -1261,19 +1270,18 @@ class TestCheckResponsesCost:
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
-
-        mock_response = ResponsesAPIResponse(
-            id=provider_response_id,
-            object="response",
-            status="completed",
-            created_at=int(datetime.now().timestamp()),
-            output=[],
-            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        mock_llm_router.aget_responses = AsyncMock(
+            return_value=ResponsesAPIResponse(
+                id=provider_response_id,
+                object="response",
+                status="completed",
+                created_at=int(datetime.now().timestamp()),
+                output=[],
+                usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+            )
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
-            await check_responses_cost_instance.check_responses_cost()
+        await check_responses_cost_instance.check_responses_cost()
 
-        assert mock_aget.call_args[1]["response_id"] == provider_response_id
+        assert mock_llm_router.aget_responses.call_args[1]["response_id"] == provider_response_id
         assert _completed_job_ids(mock_prisma_client) == ["job-legacy"]
