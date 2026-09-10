@@ -61,6 +61,8 @@ pub enum OcrResponseError {
     OperationStatus(String),
     #[error("OCR numeric value is outside the supported range: {0}")]
     NumericRange(&'static str),
+    #[error("No content in DeepSeek OCR response")]
+    EmptyContent,
     #[error("OCR document redirect missing Location header")]
     MissingRedirectLocation,
     #[error("invalid OCR document redirect")]

@@ -63,3 +63,4 @@ pub(crate) const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
 pub(crate) const REDUCTO_OCR_API_BASE: &str = "https://platform.reducto.ai";
 pub(crate) const REDUCTO_ID_PREFIX: &str = "reducto://";
 pub(crate) const VERTEX_OCR_DEFAULT_LOCATION: &str = "us-central1";
+pub(crate) const DEEPSEEK_OCR_MODEL_NAMESPACE: &str = "deepseek-ai";

@@ -10,6 +10,7 @@ mod macros;
 
 pub(crate) use macros::ocr_format;
 
+pub mod deepseek;
 pub mod document_intelligence;
 pub mod mistral;
 pub mod reducto;

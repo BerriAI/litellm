@@ -21,6 +21,9 @@ mod azure_ai_tests;
 #[path = "../../tests/azure_document_intelligence_ocr.rs"]
 mod azure_document_intelligence_tests;
 #[cfg(test)]
+#[path = "../../tests/deepseek_ocr.rs"]
+mod deepseek_tests;
+#[cfg(test)]
 #[path = "../../tests/mistral_ocr.rs"]
 mod mistral_tests;
 #[cfg(test)]
