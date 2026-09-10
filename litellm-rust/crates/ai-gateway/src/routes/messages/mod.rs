@@ -108,7 +108,6 @@ impl IntoResponse for MessagesRouteError {
             Error::Auth(_)
             | Error::MissingApiKey { .. }
             | Error::MissingAzureAiCredentials
-            | Error::MissingAzureAiCredentialsOrAdToken
             | Error::MissingAzureDocumentIntelligenceCredentials
             | Error::MissingReductoApiKey => (
                 StatusCode::BAD_GATEWAY,
