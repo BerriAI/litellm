@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,6 +8,7 @@ use serde_json::{Map, Value};
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::registry::{OcrAdapterKind, resolve_wire_adapter};
 use crate::Error;
+use crate::auth::InputSource;
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -65,8 +67,11 @@ pub enum OcrResponseFormat {
 #[derive(Clone)]
 pub struct OcrConnection {
     pub api_key: Option<String>,
+    pub api_key_source: InputSource,
     pub api_base: Option<String>,
+    pub api_base_source: InputSource,
     pub extra_headers: Vec<(String, String)>,
+    pub extra_headers_source: InputSource,
     pub timeout: Duration,
     pub max_download_bytes: u64,
 }
@@ -75,8 +80,11 @@ impl Default for OcrConnection {
     fn default() -> Self {
         Self {
             api_key: None,
+            api_key_source: InputSource::Deployment,
             api_base: None,
+            api_base_source: InputSource::Deployment,
             extra_headers: Vec::new(),
+            extra_headers_source: InputSource::Deployment,
             timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
             max_download_bytes: crate::constants::OCR_DOWNLOAD_MAX_BYTES,
         }
@@ -90,6 +98,7 @@ pub struct LiteLLMOcrRequest {
     pub hooks: Arc<dyn OcrHooks>,
     pub litellm_call_id: Option<String>,
     pub optional_params: Map<String, Value>,
+    pub input_sources: BTreeMap<String, InputSource>,
     pub(crate) adapter: OcrAdapterKind,
 }
 
@@ -109,6 +118,7 @@ impl LiteLLMOcrRequest {
             hooks: Arc::new(NoopOcrHooks),
             litellm_call_id: None,
             optional_params,
+            input_sources: BTreeMap::new(),
             adapter: adapter_kind,
         })
     }

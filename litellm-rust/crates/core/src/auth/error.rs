@@ -65,6 +65,14 @@ pub enum AuthConfigurationError {
     EmptyReference(String),
     #[error("Azure credential initialization failed: {0}")]
     AzureCredentialInitialization(String),
+    #[error("Azure authority must be an HTTPS origin without credentials, query, or fragment")]
+    InvalidAzureAuthority,
+    #[error("request-controlled Azure auth inputs cannot be combined with host credentials")]
+    MixedAzureCredentialSources,
+    #[error("request-controlled Azure credential references are not allowed")]
+    RequestAzureCredentialReference,
+    #[error("host credentials cannot be sent to a request-controlled Azure endpoint")]
+    RequestAzureCredentialDestination,
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]

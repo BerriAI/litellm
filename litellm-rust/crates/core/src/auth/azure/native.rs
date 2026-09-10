@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use crate::AuthError;
 use crate::auth::secret::SecretValue;
 use crate::auth::token::ResolvedCredential;
+use crate::auth::{InputSource, Sourced};
 
 use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,
@@ -24,34 +25,68 @@ use super::credential_provider_cache::{
 #[derive(Clone, Debug)]
 pub(crate) enum NativeAzureRequest {
     ClientSecret {
-        tenant_id: String,
-        client_id: String,
-        client_secret: SecretValue,
-        scope: String,
-        authority: Option<String>,
+        tenant_id: Sourced<String>,
+        client_id: Sourced<String>,
+        client_secret: Sourced<SecretValue>,
+        scope: Sourced<String>,
+        authority: Option<Sourced<String>>,
     },
     ClientAssertion {
-        tenant_id: String,
-        client_id: String,
-        assertion: SecretValue,
+        tenant_id: Sourced<String>,
+        client_id: Sourced<String>,
+        assertion: Sourced<SecretValue>,
         assertion_identity: String,
-        scope: String,
-        authority: Option<String>,
+        scope: Sourced<String>,
+        authority: Option<Sourced<String>>,
     },
     WorkloadIdentity {
-        tenant_id: String,
-        client_id: String,
-        token_file_path: String,
-        scope: String,
-        authority: Option<String>,
+        tenant_id: Sourced<String>,
+        client_id: Sourced<String>,
+        token_file_path: Sourced<String>,
+        scope: Sourced<String>,
+        authority: Option<Sourced<String>>,
     },
     ManagedIdentity {
-        client_id: Option<String>,
-        scope: String,
+        client_id: Option<Sourced<String>>,
+        scope: Sourced<String>,
+        selection_source: InputSource,
     },
     DeveloperTools {
-        scope: String,
+        scope: Sourced<String>,
+        selection_source: InputSource,
     },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ValidatedAzureRequest {
+    request: NativeAzureRequest,
+    credential_source: InputSource,
+}
+
+impl ValidatedAzureRequest {
+    pub(crate) fn new(request: NativeAzureRequest) -> Result<Self, AuthError> {
+        validate_authority(&request)?;
+        let credential_source = validate_sources(&request)?;
+        Ok(Self {
+            request,
+            credential_source,
+        })
+    }
+
+    pub(crate) fn credential_source(&self) -> InputSource {
+        self.credential_source
+    }
+
+    #[cfg(test)]
+    pub(super) fn kind(&self) -> &'static str {
+        match self.request {
+            NativeAzureRequest::ClientSecret { .. } => "client-secret",
+            NativeAzureRequest::ClientAssertion { .. } => "client-assertion",
+            NativeAzureRequest::WorkloadIdentity { .. } => "workload-identity",
+            NativeAzureRequest::ManagedIdentity { .. } => "managed-identity",
+            NativeAzureRequest::DeveloperTools { .. } => "developer-tools",
+        }
+    }
 }
 
 pub(crate) struct NativeAzureTokenAcquirer {
@@ -86,14 +121,17 @@ impl NativeAzureTokenAcquirer {
 
     pub(crate) async fn acquire(
         &self,
-        request: NativeAzureRequest,
+        request: ValidatedAzureRequest,
     ) -> Result<ResolvedCredential, AuthError> {
-        let scope = request.scope().to_string();
-        let key = request.cache_key();
+        let scope = request.request.scope().to_string();
+        let key = request.request.cache_key();
         let transport = self.transport.clone();
         let credential = self
             .cache
-            .get_or_create(key, async move { build_credential(request, transport) })
+            .get_or_create(
+                key,
+                async move { build_credential(request.request, transport) },
+            )
             .await?;
         let token = credential
             .get_token(&[scope.as_str()], None)
@@ -117,7 +155,7 @@ impl NativeAzureRequest {
             | Self::ClientAssertion { scope, .. }
             | Self::WorkloadIdentity { scope, .. }
             | Self::ManagedIdentity { scope, .. }
-            | Self::DeveloperTools { scope } => scope,
+            | Self::DeveloperTools { scope, .. } => scope.value(),
         }
     }
 
@@ -131,11 +169,14 @@ impl NativeAzureRequest {
                 authority,
             } => AzureCredentialProviderCacheKey {
                 mechanism: "client-secret",
-                authority: authority.clone().unwrap_or_default(),
-                tenant_id: tenant_id.clone(),
-                client_id: client_id.clone(),
-                scope: scope.clone(),
-                secret_identity: secret_digest(client_secret.expose()),
+                authority: authority
+                    .as_ref()
+                    .map(|value| value.value().clone())
+                    .unwrap_or_default(),
+                tenant_id: tenant_id.value().clone(),
+                client_id: client_id.value().clone(),
+                scope: scope.value().clone(),
+                secret_identity: secret_digest(client_secret.value().expose()),
             },
             Self::ClientAssertion {
                 tenant_id,
@@ -146,13 +187,16 @@ impl NativeAzureRequest {
                 authority,
             } => AzureCredentialProviderCacheKey {
                 mechanism: "client-assertion",
-                authority: authority.clone().unwrap_or_default(),
-                tenant_id: tenant_id.clone(),
-                client_id: client_id.clone(),
-                scope: scope.clone(),
+                authority: authority
+                    .as_ref()
+                    .map(|value| value.value().clone())
+                    .unwrap_or_default(),
+                tenant_id: tenant_id.value().clone(),
+                client_id: client_id.value().clone(),
+                scope: scope.value().clone(),
                 secret_identity: format!(
                     "{assertion_identity}:{}",
-                    secret_digest(assertion.expose())
+                    secret_digest(assertion.value().expose())
                 ),
             },
             Self::WorkloadIdentity {
@@ -163,30 +207,176 @@ impl NativeAzureRequest {
                 authority,
             } => AzureCredentialProviderCacheKey {
                 mechanism: "workload-identity",
-                authority: authority.clone().unwrap_or_default(),
-                tenant_id: tenant_id.clone(),
-                client_id: client_id.clone(),
-                scope: scope.clone(),
-                secret_identity: token_file_path.clone(),
+                authority: authority
+                    .as_ref()
+                    .map(|value| value.value().clone())
+                    .unwrap_or_default(),
+                tenant_id: tenant_id.value().clone(),
+                client_id: client_id.value().clone(),
+                scope: scope.value().clone(),
+                secret_identity: token_file_path.value().clone(),
             },
-            Self::ManagedIdentity { client_id, scope } => AzureCredentialProviderCacheKey {
+            Self::ManagedIdentity {
+                client_id, scope, ..
+            } => AzureCredentialProviderCacheKey {
                 mechanism: "managed-identity",
                 authority: String::new(),
                 tenant_id: String::new(),
-                client_id: client_id.clone().unwrap_or_default(),
-                scope: scope.clone(),
+                client_id: client_id
+                    .as_ref()
+                    .map(|value| value.value().clone())
+                    .unwrap_or_default(),
+                scope: scope.value().clone(),
                 secret_identity: String::new(),
             },
-            Self::DeveloperTools { scope } => AzureCredentialProviderCacheKey {
+            Self::DeveloperTools { scope, .. } => AzureCredentialProviderCacheKey {
                 mechanism: "developer-tools",
                 authority: String::new(),
                 tenant_id: String::new(),
                 client_id: String::new(),
-                scope: scope.clone(),
+                scope: scope.value().clone(),
                 secret_identity: String::new(),
             },
         }
     }
+}
+
+fn validate_authority(request: &NativeAzureRequest) -> Result<(), AuthError> {
+    let authority = match request {
+        NativeAzureRequest::ClientSecret { authority, .. }
+        | NativeAzureRequest::ClientAssertion { authority, .. }
+        | NativeAzureRequest::WorkloadIdentity { authority, .. } => authority.as_ref(),
+        NativeAzureRequest::ManagedIdentity { .. } | NativeAzureRequest::DeveloperTools { .. } => {
+            None
+        }
+    };
+    let Some(authority) = authority else {
+        return Ok(());
+    };
+    let url = url::Url::parse(authority.value())
+        .map_err(|_| AuthError::Configuration(AuthConfigurationError::InvalidAzureAuthority))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.path(), "" | "/")
+    {
+        return Err(AuthError::Configuration(
+            AuthConfigurationError::InvalidAzureAuthority,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sources(request: &NativeAzureRequest) -> Result<InputSource, AuthError> {
+    match request {
+        NativeAzureRequest::ClientSecret {
+            tenant_id,
+            client_id,
+            client_secret,
+            scope,
+            authority,
+        } => {
+            let identity_sources = [
+                tenant_id.source(),
+                client_id.source(),
+                client_secret.source(),
+            ];
+            let request_identity = identity_sources.contains(&InputSource::Request);
+            if request_identity
+                && !identity_sources
+                    .iter()
+                    .all(|source| *source == InputSource::Request)
+            {
+                return mixed_sources();
+            }
+            if !request_identity && is_request_controlled(scope, authority.as_ref()) {
+                return mixed_sources();
+            }
+            Ok(if request_identity {
+                InputSource::Request
+            } else {
+                trusted_source(&identity_sources)
+            })
+        }
+        NativeAzureRequest::ClientAssertion {
+            tenant_id,
+            client_id,
+            assertion,
+            scope,
+            authority,
+            ..
+        } => trusted_only(&[
+            tenant_id.source(),
+            client_id.source(),
+            assertion.source(),
+            scope.source(),
+            authority
+                .as_ref()
+                .map(Sourced::source)
+                .unwrap_or(InputSource::Environment),
+        ]),
+        NativeAzureRequest::WorkloadIdentity {
+            tenant_id,
+            client_id,
+            token_file_path,
+            scope,
+            authority,
+        } => trusted_only(&[
+            tenant_id.source(),
+            client_id.source(),
+            token_file_path.source(),
+            scope.source(),
+            authority
+                .as_ref()
+                .map(Sourced::source)
+                .unwrap_or(InputSource::Environment),
+        ]),
+        NativeAzureRequest::ManagedIdentity {
+            client_id,
+            scope,
+            selection_source,
+        } => trusted_only(&[
+            client_id
+                .as_ref()
+                .map(Sourced::source)
+                .unwrap_or(InputSource::Environment),
+            scope.source(),
+            *selection_source,
+        ]),
+        NativeAzureRequest::DeveloperTools {
+            scope,
+            selection_source,
+        } => trusted_only(&[scope.source(), *selection_source]),
+    }
+}
+
+fn is_request_controlled<T>(value: &Sourced<T>, optional: Option<&Sourced<String>>) -> bool {
+    value.source() == InputSource::Request
+        || optional.is_some_and(|value| value.source() == InputSource::Request)
+}
+
+fn trusted_only(sources: &[InputSource]) -> Result<InputSource, AuthError> {
+    if sources.contains(&InputSource::Request) {
+        return mixed_sources();
+    }
+    Ok(trusted_source(sources))
+}
+
+fn trusted_source(sources: &[InputSource]) -> InputSource {
+    if sources.contains(&InputSource::Deployment) {
+        InputSource::Deployment
+    } else {
+        InputSource::Environment
+    }
+}
+
+fn mixed_sources<T>() -> Result<T, AuthError> {
+    Err(AuthError::Configuration(
+        AuthConfigurationError::MixedAzureCredentialSources,
+    ))
 }
 
 fn build_credential(
@@ -201,11 +391,11 @@ fn build_credential(
             authority,
             ..
         } => ClientSecretCredential::new(
-            &tenant_id,
-            client_id,
-            Secret::new(client_secret.expose().to_string()),
+            tenant_id.value(),
+            client_id.into_value(),
+            Secret::new(client_secret.value().expose().to_string()),
             Some(ClientSecretCredentialOptions {
-                client_options: client_options(authority, transport),
+                client_options: client_options(authority.map(Sourced::into_value), transport),
             }),
         )
         .map(|credential| credential as Arc<dyn TokenCredential>),
@@ -216,11 +406,11 @@ fn build_credential(
             authority,
             ..
         } => ClientAssertionCredential::new(
-            tenant_id,
-            client_id,
-            StaticAssertion(assertion),
+            tenant_id.into_value(),
+            client_id.into_value(),
+            StaticAssertion(assertion.into_value()),
             Some(ClientAssertionCredentialOptions {
-                client_options: client_options(authority, transport),
+                client_options: client_options(authority.map(Sourced::into_value), transport),
             }),
         )
         .map(|credential| credential as Arc<dyn TokenCredential>),
@@ -232,16 +422,18 @@ fn build_credential(
             ..
         } => WorkloadIdentityCredential::new(Some(WorkloadIdentityCredentialOptions {
             credential_options: azure_identity::ClientAssertionCredentialOptions {
-                client_options: client_options(authority, transport),
+                client_options: client_options(authority.map(Sourced::into_value), transport),
             },
-            client_id: Some(client_id),
-            tenant_id: Some(tenant_id),
-            token_file_path: Some(token_file_path.into()),
+            client_id: Some(client_id.into_value()),
+            tenant_id: Some(tenant_id.into_value()),
+            token_file_path: Some(token_file_path.into_value().into()),
         }))
         .map(|credential| credential as Arc<dyn TokenCredential>),
         NativeAzureRequest::ManagedIdentity { client_id, .. } => {
             ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
-                user_assigned_id: client_id.map(UserAssignedId::ClientId),
+                user_assigned_id: client_id
+                    .map(Sourced::into_value)
+                    .map(UserAssignedId::ClientId),
                 client_options: client_options(None, transport),
             }))
             .map(|credential| credential as Arc<dyn TokenCredential>)
@@ -303,8 +495,43 @@ mod tests {
     use azure_core::http::{AsyncRawResponse, HttpClient, Request, StatusCode, Transport};
     use azure_core::{Bytes, Result};
 
-    use super::{NativeAzureRequest, NativeAzureTokenAcquirer};
-    use crate::auth::secret::SecretValue;
+    use super::{NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest};
+    use crate::auth::{InputSource, SecretValue, Sourced};
+
+    fn deployment<T>(value: T) -> Sourced<T> {
+        Sourced::new(value, InputSource::Deployment)
+    }
+
+    fn sourced_client_secret(
+        credential_source: InputSource,
+        authority_source: InputSource,
+        authority: &str,
+    ) -> NativeAzureRequest {
+        NativeAzureRequest::ClientSecret {
+            tenant_id: Sourced::new("tenant".to_string(), credential_source),
+            client_id: Sourced::new("client".to_string(), credential_source),
+            client_secret: Sourced::new(SecretValue::new("secret"), credential_source),
+            scope: Sourced::new("scope".to_string(), InputSource::Environment),
+            authority: Some(Sourced::new(authority.to_string(), authority_source)),
+        }
+    }
+
+    fn client_secret_request(
+        tenant: &str,
+        client: &str,
+        secret: &str,
+        scope: &str,
+        authority: &str,
+    ) -> ValidatedAzureRequest {
+        ValidatedAzureRequest::new(NativeAzureRequest::ClientSecret {
+            tenant_id: deployment(tenant.to_string()),
+            client_id: deployment(client.to_string()),
+            client_secret: deployment(SecretValue::new(secret)),
+            scope: deployment(scope.to_string()),
+            authority: Some(deployment(authority.to_string())),
+        })
+        .unwrap()
+    }
 
     #[derive(Debug, Default)]
     struct RecordingTokenClient {
@@ -343,13 +570,13 @@ mod tests {
         let transport = Arc::new(RecordingTokenClient::default());
         let acquirer =
             NativeAzureTokenAcquirer::with_transport(4, Transport::new(transport.clone()));
-        let request = NativeAzureRequest::ClientSecret {
-            tenant_id: "tenant".to_string(),
-            client_id: "client".to_string(),
-            client_secret: SecretValue::new("secret"),
-            scope: "https://service.test/.default".to_string(),
-            authority: Some("https://login.test".to_string()),
-        };
+        let request = client_secret_request(
+            "tenant",
+            "client",
+            "secret",
+            "https://service.test/.default",
+            "https://login.test",
+        );
 
         let first = acquirer.acquire(request.clone()).await.unwrap();
         let second = acquirer.acquire(request).await.unwrap();
@@ -373,15 +600,7 @@ mod tests {
         let transport = Arc::new(RecordingTokenClient::default());
         let acquirer =
             NativeAzureTokenAcquirer::with_transport(16, Transport::new(transport.clone()));
-        let request = |tenant: &str, client: &str, secret: &str, scope: &str, authority: &str| {
-            NativeAzureRequest::ClientSecret {
-                tenant_id: tenant.into(),
-                client_id: client.into(),
-                client_secret: SecretValue::new(secret),
-                scope: scope.into(),
-                authority: Some(authority.into()),
-            }
-        };
+        let request = client_secret_request;
         let base = request("tenant", "client", "secret", "scope", "https://login.test");
         let variants = [
             base.clone(),
@@ -429,5 +648,57 @@ mod tests {
         }
 
         assert_eq!(transport.requests.lock().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn request_authority_requires_request_owned_client_secret_identity() {
+        let error = ValidatedAzureRequest::new(sourced_client_secret(
+            InputSource::Deployment,
+            InputSource::Request,
+            "https://login.example",
+        ))
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::AuthError::Configuration(
+                crate::auth::error::AuthConfigurationError::MixedAzureCredentialSources
+            )
+        ));
+    }
+
+    #[test]
+    fn request_owned_client_secret_identity_can_select_custom_authority() {
+        let request = ValidatedAzureRequest::new(sourced_client_secret(
+            InputSource::Request,
+            InputSource::Request,
+            "https://login.example",
+        ))
+        .unwrap();
+
+        assert_eq!(request.credential_source(), InputSource::Request);
+    }
+
+    #[test]
+    fn authority_is_restricted_to_an_https_origin() {
+        for authority in [
+            "http://login.example",
+            "https://user@login.example",
+            "https://login.example/tenant",
+            "https://login.example?target=other",
+        ] {
+            let error = ValidatedAzureRequest::new(sourced_client_secret(
+                InputSource::Deployment,
+                InputSource::Deployment,
+                authority,
+            ))
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                crate::AuthError::Configuration(
+                    crate::auth::error::AuthConfigurationError::InvalidAzureAuthority
+                )
+            ));
+        }
     }
 }

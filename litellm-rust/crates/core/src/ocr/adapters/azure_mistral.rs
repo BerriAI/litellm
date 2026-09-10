@@ -3,6 +3,8 @@ use std::sync::OnceLock;
 use super::OcrAdapter;
 use crate::Error;
 use crate::auth::azure::{AzureAuthInputs, AzureAuthService};
+use crate::auth::error::AuthConfigurationError;
+use crate::auth::{InputSource, Sourced};
 use crate::constants::AZURE_AI_OCR_PATH;
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::mistral::{self, MistralOcrParams, MistralOcrResponse};
@@ -34,8 +36,11 @@ impl OcrAdapter for AzureMistralAdapter {
             known: params,
             extra_params: _extra_params,
         } = _prepare_ocr_request::<MistralOcrParams>(request)?;
-        let config =
-            AzureAuthInputs::from_optional_params(&request.optional_params).map_err(Error::from)?;
+        let config = AzureAuthInputs::from_sourced_optional_params(
+            &request.optional_params,
+            &request.input_sources,
+        )
+        .map_err(Error::from)?;
         let headers = validate_environment(&request.connection, &config, &credential_env).await?;
         let url = get_complete_url(request.connection.api_base.as_deref(), &credential_env)?;
         let document = inline_remote_document(
@@ -87,22 +92,49 @@ async fn validate_environment(
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, OcrError> {
     if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
+        validate_destination(connection, connection.extra_headers_source)?;
         return Ok(connection.extra_headers.clone());
     }
-    if let Some(key) =
-        nonblank(connection.api_key.clone()).or_else(|| nonblank(env_lookup(AZURE_AI_API_KEY_ENV)))
-    {
-        return Ok(bearer_headers(connection, &key));
+    let key = nonblank(connection.api_key.clone())
+        .map(|value| Sourced::new(value, connection.api_key_source))
+        .or_else(|| {
+            nonblank(env_lookup(AZURE_AI_API_KEY_ENV))
+                .map(|value| Sourced::new(value, InputSource::Environment))
+        });
+    if let Some(key) = key {
+        validate_destination(connection, key.source())?;
+        return Ok(bearer_headers(connection, key.value()));
     }
     static SERVICE: OnceLock<AzureAuthService> = OnceLock::new();
     let key = SERVICE
         .get_or_init(AzureAuthService::default)
-        .resolve(config, env_lookup)
+        .get_azure_ad_token(config, env_lookup)
         .await
         .map_err(Error::from)?
-        .map(|credential| credential.secret().expose().to_string())
+        .map(|credential| {
+            let source = credential.source();
+            let value = credential.value().secret().expose().to_string();
+            Sourced::new(value, source)
+        })
         .ok_or(Error::MissingAzureAiCredentials)?;
-    Ok(bearer_headers(connection, &key))
+    validate_destination(connection, key.source())?;
+    Ok(bearer_headers(connection, key.value()))
+}
+
+fn validate_destination(
+    connection: &OcrConnection,
+    credential_source: InputSource,
+) -> Result<(), OcrError> {
+    if connection.api_base.is_some()
+        && connection.api_base_source == InputSource::Request
+        && credential_source != InputSource::Request
+    {
+        return Err(Error::from(crate::AuthError::Configuration(
+            AuthConfigurationError::RequestAzureCredentialDestination,
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn bearer_headers(connection: &OcrConnection, key: &str) -> Vec<(String, String)> {
@@ -166,6 +198,47 @@ mod tests {
             ))
             .await
             .unwrap()[0],
+            ("Authorization".into(), "Bearer request-key".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn request_endpoint_cannot_receive_environment_key() {
+        let connection = OcrConnection {
+            api_base: Some("https://request.example".into()),
+            api_base_source: InputSource::Request,
+            ..Default::default()
+        };
+
+        let error = validate_environment(&connection, &Default::default(), &|name| {
+            (name == AZURE_AI_API_KEY_ENV).then(|| "environment-key".into())
+        })
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("request-controlled Azure endpoint")
+        );
+    }
+
+    #[tokio::test]
+    async fn request_endpoint_accepts_request_owned_key() {
+        let connection = OcrConnection {
+            api_key: Some("request-key".into()),
+            api_key_source: InputSource::Request,
+            api_base: Some("https://request.example".into()),
+            api_base_source: InputSource::Request,
+            ..Default::default()
+        };
+
+        let headers = validate_environment(&connection, &Default::default(), &|_| None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            headers[0],
             ("Authorization".into(), "Bearer request-key".into())
         );
     }
