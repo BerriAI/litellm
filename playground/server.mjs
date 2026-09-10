@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { timingSafeEqual } from 'node:crypto';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
@@ -8,10 +9,28 @@ import { createServer as createViteServer } from 'vite';
 import { WebSocketServer } from 'ws';
 
 const playgroundDirectory = path.dirname(fileURLToPath(import.meta.url));
-const repositoryDirectory = path.resolve(playgroundDirectory, '..');
-const workspaceDirectory = path.join(playgroundDirectory, 'workspace');
+const repositoryDirectory = path.resolve(process.env.PLAYGROUND_REPOSITORY_DIR ?? path.resolve(playgroundDirectory, '..'));
+const workspaceDirectory = path.resolve(process.env.PLAYGROUND_WORKSPACE_DIR ?? path.join(playgroundDirectory, 'workspace'));
 const examplesDirectory = path.join(workspaceDirectory, 'examples');
 const port = Number(process.env.PORT ?? 5173);
+const host = process.env.HOST ?? '127.0.0.1';
+const isProduction = process.env.NODE_ENV === 'production';
+const staticDirectory = path.join(playgroundDirectory, 'dist');
+const playgroundPassword = process.env.PLAYGROUND_PASSWORD;
+const commandEnvironment = { ...process.env };
+delete commandEnvironment.PLAYGROUND_PASSWORD;
+
+const isAuthorized = request => {
+  if (!playgroundPassword) {
+    return true;
+  }
+  const expected = Buffer.from(`opencode:${playgroundPassword}`);
+  const authorization = request.headers.authorization ?? '';
+  const actual = authorization.startsWith('Basic ')
+    ? Buffer.from(authorization.slice('Basic '.length), 'base64')
+    : Buffer.alloc(0);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+};
 
 const readRequestBody = request =>
   new Promise((resolve, reject) => {
@@ -24,6 +43,35 @@ const readRequestBody = request =>
 const sendJson = (response, status, value) => {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(value));
+};
+
+const contentTypes = new Map([
+  ['.css', 'text/css; charset=utf-8'],
+  ['.html', 'text/html; charset=utf-8'],
+  ['.js', 'text/javascript; charset=utf-8'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.map', 'application/json; charset=utf-8'],
+  ['.svg', 'image/svg+xml'],
+]);
+
+const serveStaticFile = async (request, response) => {
+  const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+  const relativePath = pathname === '/' ? 'index.html' : pathname.slice(1);
+  const filePath = path.resolve(staticDirectory, relativePath);
+  if (!filePath.startsWith(`${staticDirectory}${path.sep}`)) {
+    return false;
+  }
+  try {
+    const body = await readFile(filePath);
+    response.writeHead(200, {
+      'cache-control': relativePath === 'index.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
+      'content-type': contentTypes.get(path.extname(filePath)) ?? 'application/octet-stream',
+    });
+    response.end(body);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const runCommand = (command, args, options) =>
@@ -96,13 +144,34 @@ const readExamples = async () => {
   }));
 };
 
-const vite = await createViteServer({
+const writableFilePath = async target => {
+  if (target === 'GUIDE.md') {
+    return path.join(workspaceDirectory, 'GUIDE.md');
+  }
+  const examples = await readExamples();
+  const match = examples.flatMap(example => example.files.map(file => ({ example, file })))
+    .find(({ file }) => file.target === target);
+  return match ? path.join(match.example.directory, match.file.path) : null;
+};
+
+const vite = isProduction ? null : await createViteServer({
   root: playgroundDirectory,
   server: { middlewareMode: true },
   appType: 'spa',
 });
 
 const server = http.createServer(async (request, response) => {
+  if (request.method === 'GET' && request.url === '/healthz') {
+    sendJson(response, 200, { healthy: true });
+    return;
+  }
+
+  if (!isAuthorized(request)) {
+    response.writeHead(401, { 'www-authenticate': 'Basic realm="LiteLLM Playground"' });
+    response.end('Authentication required');
+    return;
+  }
+
   if (request.method === 'GET' && request.url === '/api/info') {
     const [examples, guideSource, revision] = await Promise.all([
       readExamples(),
@@ -115,6 +184,25 @@ const server = http.createServer(async (request, response) => {
       guide: { path: 'GUIDE.md', source: guideSource, target: 'GUIDE.md' },
       rootUri: pathToFileURL(workspaceDirectory).href,
     });
+    return;
+  }
+
+  if (request.method === 'PUT' && request.url === '/api/file') {
+    try {
+      const body = JSON.parse(await readRequestBody(request));
+      const filePath = typeof body.target === 'string' ? await writableFilePath(body.target) : null;
+      if (!filePath || typeof body.source !== 'string') {
+        sendJson(response, 400, { success: false, output: 'A valid playground file is required' });
+        return;
+      }
+      await writeFile(filePath, body.source, 'utf8');
+      sendJson(response, 200, { success: true });
+    } catch (error) {
+      sendJson(response, 500, {
+        success: false,
+        output: error instanceof Error ? error.message : 'Unable to save file',
+      });
+    }
     return;
   }
 
@@ -136,7 +224,7 @@ const server = http.createServer(async (request, response) => {
       const result = await runCommand(
         'cargo',
         ['run', '--quiet', '--manifest-path', path.join(example.directory, 'Cargo.toml')],
-        { cwd: workspaceDirectory, stdio: ['ignore', 'pipe', 'pipe'] },
+        { cwd: workspaceDirectory, env: commandEnvironment, stdio: ['ignore', 'pipe', 'pipe'] },
       );
       sendJson(response, 200, result);
     } catch (error) {
@@ -148,18 +236,32 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  vite.middlewares(request, response, () => {
-    response.writeHead(404);
-    response.end('Not found');
-  });
+  if (vite) {
+    vite.middlewares(request, response, () => {
+      response.writeHead(404);
+      response.end('Not found');
+    });
+    return;
+  }
+
+  if (await serveStaticFile(request, response)) {
+    return;
+  }
+
+  response.writeHead(404);
+  response.end('Not found');
 });
 
-const websocketServer = new WebSocketServer({ server, path: '/lsp' });
+const websocketServer = new WebSocketServer({
+  server,
+  path: '/lsp',
+  verifyClient: ({ req }) => isAuthorized(req),
+});
 
 websocketServer.on('connection', socket => {
   const analyzer = spawn('rust-analyzer', [], {
     cwd: workspaceDirectory,
-    env: process.env,
+    env: commandEnvironment,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let pending = Buffer.alloc(0);
@@ -201,6 +303,6 @@ websocketServer.on('connection', socket => {
   socket.on('close', () => analyzer.kill());
 });
 
-server.listen(port, '127.0.0.1', () => {
-  process.stdout.write(`LiteLLM Rust Playground: http://localhost:${port}\n`);
+server.listen(port, host, () => {
+  process.stdout.write(`LiteLLM Rust Playground: http://${host}:${port}\n`);
 });

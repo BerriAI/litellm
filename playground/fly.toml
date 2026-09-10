@@ -1,0 +1,49 @@
+app = "litellm-rust-playground"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "playground/Dockerfile"
+
+[env]
+  PLAYGROUND_VOLUME_ROOT = "/data"
+
+[mounts]
+  source = "playground_data"
+  destination = "/data"
+  initial_size = "20gb"
+  snapshot_retention = 14
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 20
+    hard_limit = 30
+
+  [http_service.http_options]
+    idle_timeout = 3600
+
+  [http_service.checks]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/healthz"
+
+[[services]]
+  internal_port = 4096
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 8443
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "4gb"
+  persist_rootfs = "never"

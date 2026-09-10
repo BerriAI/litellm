@@ -16,8 +16,6 @@ import { EditorView, basicSetup } from 'codemirror';
 
 import './style.css';
 
-const STORAGE_KEY = 'litellm-rust-playground-files';
-
 type PlaygroundFile = {
   languageId: 'rust' | 'toml';
   path: string;
@@ -240,17 +238,29 @@ const runCode = async (exampleId: string, files: StoredFiles): Promise<RunResult
   return response.json() as Promise<RunResult>;
 };
 
-const loadStoredFiles = (): StoredFiles => {
-  try {
-    const value = localStorage.getItem(STORAGE_KEY);
-    return value ? (JSON.parse(value) as StoredFiles) : {};
-  } catch {
-    return {};
-  }
-};
+const saveTimers = new Map<string, number>();
 
-const saveStoredFile = (path: string, source: string) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...loadStoredFiles(), [path]: source }));
+const saveFile = (target: string, source: string) => {
+  const pendingTimer = saveTimers.get(target);
+  if (pendingTimer !== undefined) {
+    window.clearTimeout(pendingTimer);
+  }
+  saveTimers.set(target, window.setTimeout(async () => {
+    saveTimers.delete(target);
+    try {
+      const response = await fetch('/api/file', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ target, source }),
+      });
+      if (!response.ok) {
+        throw new Error(`Unable to save ${target}`);
+      }
+    } catch {
+      runStatus.textContent = `Save failed: ${target}`;
+      runStatus.dataset.state = 'error';
+    }
+  }, 350));
 };
 
 const main = async () => {
@@ -260,7 +270,6 @@ const main = async () => {
     throw new Error('No runnable examples found');
   }
 
-  const storedFiles = loadStoredFiles();
   const allFiles = info.examples.flatMap(example => example.files.map(file => ({ example, file })));
   const fileByUri = new Map(allFiles.map(entry => [entry.file.uri, entry]));
   const views = new Map<string, EditorView>();
@@ -414,7 +423,7 @@ const main = async () => {
       ? [rust(), client.plugin(file.uri, 'rust'), commandClickDefinition]
       : [];
     const view = new EditorView({
-      doc: storedFiles[file.target] ?? file.source,
+      doc: file.source,
       extensions: [
         basicSetup,
         oneDark,
@@ -422,7 +431,7 @@ const main = async () => {
         EditorView.lineWrapping,
         EditorView.updateListener.of(update => {
           if (update.docChanged) {
-            saveStoredFile(file.target, update.state.doc.toString());
+            saveFile(file.target, update.state.doc.toString());
           }
         }),
       ],
@@ -432,7 +441,7 @@ const main = async () => {
   });
 
   const markdownView = new EditorView({
-    doc: storedFiles[info.guide.target] ?? info.guide.source,
+    doc: info.guide.source,
     extensions: [
       basicSetup,
       markdown(),
@@ -442,7 +451,7 @@ const main = async () => {
       EditorView.lineWrapping,
       EditorView.updateListener.of(update => {
         if (update.docChanged) {
-          saveStoredFile(info.guide.target, update.state.doc.toString());
+          saveFile(info.guide.target, update.state.doc.toString());
         }
       }),
     ],
