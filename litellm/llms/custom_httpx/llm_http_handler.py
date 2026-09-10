@@ -310,6 +310,69 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     )
 
 
+def _maybe_spill_request_body_to_file(data: dict) -> tuple[str, int] | None:
+    """
+    Optionally spill a large request body to a temporary file so the caller
+    can drop its in-memory references for the duration of the provider call.
+
+    Controlled by LITELLM_REQUEST_SPILL_MB (default 0 = disabled): request
+    bodies whose serialized size is >= N MiB are written to a temp file and
+    a (path, size) tuple is returned. Anything else returns None and the
+    caller sends in memory, exactly as before.
+    """
+    import json as _json
+    import os as _os
+    import tempfile as _tempfile
+
+    try:
+        threshold_mb = int(_os.getenv("LITELLM_REQUEST_SPILL_MB", "0") or "0")
+    except ValueError:
+        return None
+    if threshold_mb <= 0:
+        return None
+    try:
+        blob = _json.dumps(data, default=str).encode("utf-8")
+        if len(blob) < threshold_mb * 1024 * 1024:
+            return None
+        fd, path = _tempfile.mkstemp(prefix="litellm-request-spill-", suffix=".json")
+        with _os.fdopen(fd, "wb") as fh:
+            fh.write(blob)
+        return path, len(blob)
+    except (OSError, TypeError, ValueError) as e:  # never block the request on a failed spill
+        verbose_logger.warning("request body spill failed (%r); sending in memory", e)
+        return None
+
+
+async def _spilled_request_body_iterator(path: str) -> AsyncIterator[bytes]:
+    """
+    Stream a spilled request body from disk and delete the file once the
+    body has been fully sent (or the stream is closed on error). Reads run
+    in a thread so large bodies do not block the event loop.
+    """
+    import os as _os
+
+    def _read_chunks() -> Iterator[bytes]:
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(256 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+
+    try:
+        chunks = _read_chunks()
+        while True:
+            chunk = await asyncio.to_thread(next, chunks, b"")
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        try:
+            _os.unlink(path)
+        except OSError:
+            pass
+
+
 class BaseLLMHTTPHandler:
     async def _make_common_async_call(
         self,
@@ -2934,18 +2997,45 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
-        body_kwargs: Final[dict[str, Any]] = {"data": signed_body} if signed_body is not None else {"json": data}
+        body_kwargs: dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
-        ## LOGGING
-        logging_obj.pre_call(
-            input=input,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        # Optional request-body spill (LITELLM_REQUEST_SPILL_MB, off by default):
+        # for the whole provider call this frame, the pre-call logging payload
+        # and the streaming iterator's request context all reference `data`, so
+        # large bodies multiply with concurrency on long-running calls. When
+        # enabled, serialize the final body once to a temp file, drop every
+        # in-memory reference and stream the body to the provider from there;
+        # the file deletes itself once the body has been sent, and a retry
+        # re-enters this handler and spills again.
+        _spilled = _maybe_spill_request_body_to_file(data)
+        if _spilled is not None:
+            request_context["input"] = "<spilled-to-disk>"
+            input = "<spilled-to-disk>"
+            logging_obj.pre_call(
+                input="<spilled-to-disk>",
+                api_key="",
+                additional_args={
+                    "complete_input_dict": {
+                        "spilled_to_disk": True,
+                        "spill_bytes": _spilled[1],
+                    },
+                    "api_base": api_base,
+                    "headers": headers,
+                },
+            )
+            body_kwargs = {"content": _spilled_request_body_iterator(_spilled[0])}
+            data = None
+        else:
+            ## LOGGING
+            logging_obj.pre_call(
+                input=input,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": api_base,
+                    "headers": headers,
+                },
+            )
 
         try:
             if is_stream_request:

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import logging
 import threading
 import time
@@ -26,6 +27,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _collect_ws_project_quota_callbacks,
+    _maybe_spill_request_body_to_file,
+    _spilled_request_body_iterator,
     _google_genai_streaming_hidden_params,
     _has_pre_call_deployment_hook,
     _rust_responses_websocket_enabled,
@@ -3620,3 +3623,51 @@ def test_image_edit_handler_keeps_the_sync_transform():
     assert config.transform_calls == ["sync"]
     assert captured["body"] == {"transformed_by": "sync"}
     assert response.data[0].b64_json == "sync"
+
+
+# ---------------- request body spill (LITELLM_REQUEST_SPILL_MB) ----------------
+
+
+def test_request_body_spill_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("LITELLM_REQUEST_SPILL_MB", raising=False)
+    big = {"messages": ["x" * (2 * 1024 * 1024)]}
+    assert _maybe_spill_request_body_to_file(big) is None
+
+
+def test_request_body_spill_invalid_threshold_is_disabled(monkeypatch):
+    monkeypatch.setenv("LITELLM_REQUEST_SPILL_MB", "not-a-number")
+    big = {"messages": ["x" * (2 * 1024 * 1024)]}
+    assert _maybe_spill_request_body_to_file(big) is None
+
+
+def test_request_body_spill_below_threshold(monkeypatch):
+    monkeypatch.setenv("LITELLM_REQUEST_SPILL_MB", "1")
+    assert _maybe_spill_request_body_to_file({"messages": ["small"]}) is None
+
+
+def test_request_body_spill_writes_file_and_returns_size(monkeypatch):
+    monkeypatch.setenv("LITELLM_REQUEST_SPILL_MB", "1")
+    payload = {"messages": ["x" * (2 * 1024 * 1024)]}
+    result = _maybe_spill_request_body_to_file(payload)
+    assert result is not None
+    path, size = result
+    try:
+        assert size >= 2 * 1024 * 1024
+        with open(path, "rb") as fh:
+            assert json.load(fh) == payload
+    finally:
+        os.unlink(path)
+
+
+@pytest.mark.asyncio
+async def test_request_body_spill_iterator_streams_chunks_and_deletes_file(tmp_path):
+    path = tmp_path / "spill.json"
+    body = os.urandom(700 * 1024)  # more than one 256 KiB chunk
+    path.write_bytes(body)
+
+    chunks = []
+    async for chunk in _spilled_request_body_iterator(str(path)):
+        chunks.append(chunk)
+
+    assert b"".join(chunks) == body
+    assert not path.exists()
