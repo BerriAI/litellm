@@ -14,7 +14,6 @@ from litellm.constants import (
     request_timeout,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.realtime_streaming import client_sent_openai_beta_realtime_header
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.xai.common_utils import XAIModelInfo
@@ -34,7 +33,7 @@ from litellm.utils import ProviderConfigManager
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.common_utils import get_azure_ad_token
-from ..llms.azure.realtime.handler import AzureOpenAIRealtime
+from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
@@ -419,7 +418,7 @@ async def _arealtime(
             or litellm_params.get("realtime_protocol")
             or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
         )
-        realtime_protocol: Final = _azure_realtime_protocol_for_client(
+        realtime_protocol: Final = azure_realtime_protocol_for_client(
             configured_realtime_protocol, query_params=query_params, websocket=websocket
         )
         resolved_azure_ad_token: Final = (
@@ -575,19 +574,6 @@ def _is_transcription_only_realtime_model(model: str, custom_llm_provider: str) 
 
 
 _TRANSCRIPTION_QUERY_PARAMS: Final[RealtimeQueryParams] = {"intent": "transcription"}
-
-
-def _azure_realtime_protocol_for_client(
-    configured_protocol: object,
-    *,
-    query_params: RealtimeQueryParams | None,
-    websocket: "WebSocket",
-) -> str:
-    if isinstance(configured_protocol, str) and configured_protocol:
-        return configured_protocol
-    if (query_params or {}).get("intent") == "transcription":
-        return "GA"
-    return "beta" if client_sent_openai_beta_realtime_header(websocket) else "GA"
 
 
 def _azure_realtime_health_protocol(

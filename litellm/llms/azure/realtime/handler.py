@@ -6,16 +6,22 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
+from ....litellm_core_utils.realtime_streaming import (
+    RealTimeStreaming,
+    client_sent_openai_beta_realtime_header,
+)
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..azure import AzureChatCompletion
+
+if TYPE_CHECKING:
+    from fastapi import WebSocket
 
 # BACKEND_WS_URL = "ws://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
 
@@ -29,6 +35,19 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
             await client_ws.send_text(message)
     except websockets.exceptions.ConnectionClosed:
         pass
+
+
+def azure_realtime_protocol_for_client(
+    configured_protocol: object,
+    *,
+    query_params: RealtimeQueryParams | None,
+    websocket: "WebSocket",
+) -> str:
+    if isinstance(configured_protocol, str) and configured_protocol:
+        return configured_protocol
+    if (query_params or {}).get("intent") == "transcription":
+        return "GA"
+    return "beta" if client_sent_openai_beta_realtime_header(websocket) else "GA"
 
 
 class _ProxyClientWebSocket(Protocol):
