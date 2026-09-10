@@ -15,12 +15,22 @@ spec:
   maxReplicas: {{ .Values.gateway.hpa.maxReplicas }}
   metrics:
     {{- if .Values.gateway.hpa.targetCPUUtilizationPercentage }}
+    {{- if and .Values.gateway.spendWorker.enabled .Values.gateway.spendWorker.scaleOnGatewayContainerCpu }}
+    - type: ContainerResource
+      containerResource:
+        name: cpu
+        container: gateway
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.gateway.hpa.targetCPUUtilizationPercentage }}
+    {{- else }}
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
           averageUtilization: {{ .Values.gateway.hpa.targetCPUUtilizationPercentage }}
+    {{- end }}
     {{- end }}
     {{- if .Values.gateway.hpa.targetMemoryUtilizationPercentage }}
     - type: Resource
