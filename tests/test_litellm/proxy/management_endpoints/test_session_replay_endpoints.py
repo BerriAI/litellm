@@ -1,17 +1,23 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_endpoints.session_replay_endpoints import (
+    MAX_CONCURRENT_SESSION_REPLAYS,
     _job_response,
     _load_source_request,
     _require_admin_viewer,
     _require_admin_writer,
     _SourceRequest,
     _SourceUnavailable,
+    get_session_replay,
+    list_session_replays,
+    start_session_replay,
 )
+from litellm.types.management_endpoints.session_replay_endpoints import StartSessionReplayRequest
 
 RECORDED = {
     "model": "router",
@@ -244,3 +250,150 @@ def test_finished_job_whose_result_comes_back_as_text_is_still_parsed():
     assert response.fidelity is not None and response.fidelity.truncated_strings == 6
     assert tuple(arm.label for arm in response.arms) == ("auto_router",)
     assert response.human_asks == ("plan my week",)
+
+
+ADMIN = UserAPIKeyAuth(api_key="k", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+
+REPLAYABLE_ROW = {
+    "request_id": "req-42",
+    "proxy_server_request": RECORDED,
+    "prompt_tokens": 41920,
+    "metadata": {},
+}
+
+
+class _FakeJobsTable:
+    def __init__(self, create_error=None):
+        self.created = []
+        self.updates = []
+        self.create_error = create_error
+
+    async def create(self, data):
+        if self.create_error is not None:
+            raise self.create_error
+        self.created.append(data)
+        return SimpleNamespace(id="job-new")
+
+    async def update_many(self, *, where, data):
+        self.updates.append((where, data))
+        return 1
+
+
+class _HandlerPrisma:
+    """Answers the handler's raw queries by matching on the SQL it actually sends."""
+
+    def __init__(self, rows_by_kind, jobs):
+        self.rows_by_kind = rows_by_kind
+        self.jobs = jobs
+
+    class _Db:
+        def __init__(self, outer):
+            self.outer = outer
+            self.litellm_sessionreplayjob = outer.jobs
+
+        async def query_raw(self, query, *args):
+            if "COUNT(*)" in query:
+                return self.outer.rows_by_kind.get("count", [{"running": 0}])
+            if "LiteLLM_SpendLogs" in query:
+                return self.outer.rows_by_kind.get("source", [])
+            return self.outer.rows_by_kind.get("jobs", [])
+
+    @property
+    def db(self):
+        return self._Db(self)
+
+
+def _start_request(**overrides):
+    body = {
+        "session_id": "sess",
+        "judge_model": "judge",
+        "max_turns": 1,
+        "arms": [{"label": "a", "model": "m"}, {"label": "b", "model": "n"}],
+    }
+    return StartSessionReplayRequest.model_validate(body | overrides)
+
+
+def _install(monkeypatch, prisma, router=object()):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma, raising=False)
+    monkeypatch.setattr(proxy_server, "llm_router", router, raising=False)
+
+
+@pytest.mark.asyncio
+async def test_start_refuses_once_the_concurrent_replay_cap_is_reached(monkeypatch):
+    """Each replay bills real calls per turn per arm, so the cap is what stops a pile-up."""
+    jobs = _FakeJobsTable()
+    prisma = _HandlerPrisma({"count": [{"running": MAX_CONCURRENT_SESSION_REPLAYS}]}, jobs)
+    _install(monkeypatch, prisma)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await start_session_replay(data=_start_request(), user_api_key_dict=ADMIN)
+
+    assert excinfo.value.status_code == 429
+    assert jobs.created == []
+
+
+@pytest.mark.asyncio
+async def test_start_on_a_session_with_nothing_recorded_creates_no_job(monkeypatch):
+    jobs = _FakeJobsTable()
+    _install(monkeypatch, _HandlerPrisma({"source": []}, jobs))
+
+    with pytest.raises(HTTPException) as excinfo:
+        await start_session_replay(data=_start_request(), user_api_key_dict=ADMIN)
+
+    assert excinfo.value.status_code == 404
+    assert jobs.created == []
+
+
+@pytest.mark.asyncio
+async def test_a_lost_race_on_the_unique_index_is_a_409_not_a_500(monkeypatch):
+    """Two starts on one session pass the advisory count and the partial unique index decides."""
+
+    from prisma.errors import UniqueViolationError
+
+    jobs = _FakeJobsTable(
+        create_error=UniqueViolationError({"user_facing_error": {"meta": {}}}, message="unique constraint violated")
+    )
+    _install(monkeypatch, _HandlerPrisma({"source": [REPLAYABLE_ROW]}, jobs))
+
+    with pytest.raises(HTTPException) as excinfo:
+        await start_session_replay(data=_start_request(), user_api_key_dict=ADMIN)
+
+    assert excinfo.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_any_other_create_failure_surfaces_as_a_500_naming_the_cause(monkeypatch):
+    """Mapping every create failure to 'already running' hid a real Prisma error for a whole round."""
+    jobs = _FakeJobsTable(create_error=RuntimeError("column arms is of type jsonb"))
+    _install(monkeypatch, _HandlerPrisma({"source": [REPLAYABLE_ROW]}, jobs))
+
+    with pytest.raises(HTTPException) as excinfo:
+        await start_session_replay(data=_start_request(), user_api_key_dict=ADMIN)
+
+    assert excinfo.value.status_code == 500
+    assert "jsonb" in str(excinfo.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_reading_a_missing_job_is_a_404(monkeypatch):
+    _install(monkeypatch, _HandlerPrisma({"jobs": []}, _FakeJobsTable()))
+
+    with pytest.raises(HTTPException) as excinfo:
+        await get_session_replay(job_id="nope", user_api_key_dict=ADMIN)
+
+    assert excinfo.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_listing_returns_jobs_newest_first(monkeypatch):
+    rows = [
+        {"id": "job-2", "session_id": "s", "status": "running", "judge_model": "j", "max_turns": 5},
+        {"id": "job-1", "session_id": "s", "status": "completed", "judge_model": "j", "max_turns": 5},
+    ]
+    _install(monkeypatch, _HandlerPrisma({"jobs": rows}, _FakeJobsTable()))
+
+    listed = await list_session_replays(user_api_key_dict=ADMIN, session_id="s", limit=10)
+
+    assert [job.job_id for job in listed.jobs] == ["job-2", "job-1"]
