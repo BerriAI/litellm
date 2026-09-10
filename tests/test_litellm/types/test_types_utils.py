@@ -1,13 +1,50 @@
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 
-
+import litellm
 from litellm.types.utils import HiddenParams, all_litellm_params, text_tokens_without_nested_reasoning
 
 
 def test_rust_is_a_known_litellm_param():
     assert "rust" in all_litellm_params
+
+
+def test_litellm_params_is_not_sent_to_the_provider():
+    """https://github.com/BerriAI/litellm/issues/40072"""
+    parsed: Final = MagicMock()
+    parsed.model_dump.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    raw_response: Final = MagicMock()
+    raw_response.headers = {}
+    raw_response.parse.return_value = parsed
+    client: Final = MagicMock()
+    client.chat.completions.with_raw_response.create.return_value = raw_response
+
+    litellm.completion(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_params={"api_key": "sk-deployment-credential"},
+        api_key="sk-test",
+        client=client,
+    )
+
+    create_kwargs: Final = client.chat.completions.with_raw_response.create.call_args.kwargs
+    assert "litellm_params" not in create_kwargs
+    assert "litellm_params" not in (create_kwargs.get("extra_body") or {})
 
 
 def test_hidden_params_response_ms():
