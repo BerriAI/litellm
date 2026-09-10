@@ -315,6 +315,7 @@ def test_parse_tool_call_arguments_concatenated_is_not_dropped_silently():
         '{"a": 1}{"b":',  # truncated tail
         '{"a": 1} garbage',  # trailing garbage
         '{"a": 1}{"b": 2} x',  # complete objects followed by junk
+        '{"a": 1}[1, 2]',  # valid JSON, but not an object
     ],
 )
 def test_parse_tool_call_arguments_rejects_incomplete_concatenation(raw):
