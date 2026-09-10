@@ -3999,7 +3999,7 @@ def test_completion_novita_ai():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client.chat.completions, "create", new=MagicMock(return_value=_openai_mock_response())
     ) as mock_call:
         try:
             completion(

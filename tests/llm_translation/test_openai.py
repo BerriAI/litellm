@@ -289,10 +289,13 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
 
 
 @patch("litellm.main.openai_chat_completions._get_openai_client")
-def test_openai_max_retries_0(mock_get_openai_client):
+def test_openai_max_retries_0(mock_get_openai_client, chat_completion_response):
     import litellm
 
     litellm.set_verbose = True
+    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
+        chat_completion_response
+    )
     response = litellm.completion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],

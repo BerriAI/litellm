@@ -290,7 +290,7 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
         # "2024-02-15-preview",
     ],
 )
-def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
+def test_azure_gpt_4o_with_tool_call_and_response_format(api_version, chat_completion_response):
     from litellm import completion
     from typing import Optional
     from pydantic import BaseModel
@@ -335,6 +335,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
     ]
 
     with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
+        mock_post.return_value.parse.return_value = chat_completion_response
         response = litellm.completion(
             model="azure/gpt-4.1-mini",
             messages=[

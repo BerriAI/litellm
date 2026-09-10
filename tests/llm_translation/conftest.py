@@ -9,6 +9,7 @@ import asyncio
 import importlib
 
 import pytest
+from openai.types.chat import ChatCompletion
 
 
 import litellm  # noqa: E402
@@ -27,6 +28,26 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     vcr_config_dict,
 )
 from tests.fake_openai_endpoint import ensure_fake_openai_endpoint  # noqa: E402
+
+
+@pytest.fixture
+def chat_completion_response() -> ChatCompletion:
+    return ChatCompletion.model_validate(
+        {
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello there"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
+        }
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
