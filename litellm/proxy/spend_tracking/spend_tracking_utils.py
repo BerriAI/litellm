@@ -4,6 +4,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
+from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    EMPTY_MAPPING,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
@@ -22,6 +24,7 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
+from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
@@ -860,7 +863,7 @@ _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 
 
 def _sanitize_request_body_for_spend_logs_payload(
-    request_body: dict,
+    request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
 ) -> dict:
@@ -1247,9 +1250,13 @@ def _get_proxy_server_request_for_spend_logs_payload(
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
-        _proxy_server_request: Final = cast(dict | None, litellm_params.get("proxy_server_request", {}))
+        _proxy_server_request: Final = cast(dict | None, litellm_params.get("proxy_server_request", EMPTY_MAPPING))
         if _proxy_server_request is not None:
-            _request_body = _proxy_server_request.get("body", {}) or {}
+            _request_body = _proxy_server_request.get("body", EMPTY_MAPPING) or EMPTY_MAPPING
+
+            standard_payload: Final = (kwargs or EMPTY_MAPPING).get("standard_logging_object")
+            if isinstance(standard_payload, Mapping):
+                _request_body = MappingProxyType({**_request_body, **classifier_audit_fields(standard_payload)})
 
             if kwargs is not None:
                 realtime_tools: Final = kwargs.get("realtime_tools")
@@ -1272,7 +1279,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
                 # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
-                    _request_body = _convert_mapping_to_json_serializable(_request_body)
+                    _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)

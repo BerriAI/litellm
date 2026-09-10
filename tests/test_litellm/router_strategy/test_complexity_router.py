@@ -2625,6 +2625,7 @@ class TestEncryptedTaskClassifier:
                 {"role": "user", "content": "<system-reminder>Injected reminder</system-reminder>"},
             ],
             "instructions": "Caller constraints",
+            "proxy_server_request": {"body": {"input": [task], "metadata": {"authorization": "source-secret"}}},
             "tools": [{"type": "function", "name": "execute"}],
             "previous_response_id": "resp_parent",
             "litellm_session_id": "parent-session",
@@ -2669,6 +2670,11 @@ class TestEncryptedTaskClassifier:
         assert call["turn_off_message_logging"] is True
         assert call["metadata"]["user_api_key_hash"] == "caller-key-hash"
         assert call["proxy_server_request"]["body"]["input"] == call["input"]
+        assert call["proxy_server_request"]["originating_request_masked"] == {
+            "input": [task], "metadata": {"authorization": "REDACTED"},
+        }
+        assert "source-secret" not in json.dumps(call)
+        assert "originating_request_masked" not in call["proxy_server_request"]["body"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -3287,6 +3293,29 @@ class TestLLMClassifier:
             "COMPLEX",
             "REASONING",
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source_body", [
+        {"model": "router", "messages": [{"role": "user", "content": "source-only"}]},
+        {"model": "router", "system": "source-only", "messages": [{"role": "user", "content": "ask"}]},
+        {"model": "router", "instructions": "source-only", "input": "ask"},
+    ])
+    async def test_classifier_source_is_masked_and_separate_from_provider_input(
+        self, llm_complexity_router, mock_router_instance, source_body
+    ):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+        outcome = await llm_complexity_router.aclassify(
+            "classify-this-ask", request_kwargs={"proxy_server_request": {
+                "body": {**source_body, "metadata": {"authorization": "source-secret"}}
+            }}
+        )
+        assert outcome.cause == "llm_classifier"
+        call_kwargs = mock_router_instance.acompletion.call_args.kwargs
+        source = call_kwargs["proxy_server_request"]["originating_request_masked"]
+        assert source == {**source_body, "metadata": {"authorization": "REDACTED"}}
+        assert "source-only" not in str(call_kwargs["messages"])
+        assert "source-only" not in str(call_kwargs["proxy_server_request"]["body"])
+        assert "classify-this-ask" in str(call_kwargs["messages"])
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("reasoning_effort", [None, "none", "low"], ids=["omitted", "none", "low"])
