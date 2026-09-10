@@ -1,0 +1,679 @@
+syntax = "proto3";
+
+package envoy.config.core.v3;
+
+import "envoy/config/core/v3/address.proto";
+import "envoy/config/core/v3/backoff.proto";
+import "envoy/config/core/v3/http_uri.proto";
+import "envoy/type/v3/percent.proto";
+import "envoy/type/v3/semantic_version.proto";
+
+import "google/protobuf/any.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/wrappers.proto";
+
+import "xds/core/v3/context_params.proto";
+
+import "envoy/annotations/deprecation.proto";
+import "udpa/annotations/migrate.proto";
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.config.core.v3";
+option java_outer_classname = "BaseProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/config/core/v3;corev3";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: Common types]
+
+// Envoy supports :ref:`upstream priority routing
+// <arch_overview_http_routing_priority>` both at the route and the virtual
+// cluster level. The current priority implementation uses different connection
+// pool and circuit breaking settings for each priority level. This means that
+// even for HTTP/2 requests, two physical connections will be used to an
+// upstream host. In the future Envoy will likely support true HTTP/2 priority
+// over a single upstream connection.
+enum RoutingPriority {
+  DEFAULT = 0;
+  HIGH = 1;
+}
+
+// HTTP request method.
+enum RequestMethod {
+  METHOD_UNSPECIFIED = 0;
+  GET = 1;
+  HEAD = 2;
+  POST = 3;
+  PUT = 4;
+  DELETE = 5;
+  CONNECT = 6;
+  OPTIONS = 7;
+  TRACE = 8;
+  PATCH = 9;
+}
+
+// Identifies the direction of the traffic relative to the local Envoy.
+enum TrafficDirection {
+  // Default option is unspecified.
+  UNSPECIFIED = 0;
+
+  // The transport is used for incoming traffic.
+  INBOUND = 1;
+
+  // The transport is used for outgoing traffic.
+  OUTBOUND = 2;
+}
+
+// Identifies location of where either Envoy runs or where upstream hosts run.
+message Locality {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.Locality";
+
+  // Region this :ref:`zone <envoy_v3_api_field_config.core.v3.Locality.zone>` belongs to.
+  string region = 1;
+
+  // Defines the local service zone where Envoy is running. Though optional, it
+  // should be set if discovery service routing is used and the discovery
+  // service exposes :ref:`zone data <envoy_v3_api_field_config.endpoint.v3.LocalityLbEndpoints.locality>`,
+  // either in this message or via :option:`--service-zone`. The meaning of zone
+  // is context dependent, e.g. `Availability Zone (AZ)
+  // <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html>`_
+  // on AWS, `Zone <https://cloud.google.com/compute/docs/regions-zones/>`_ on
+  // GCP, etc.
+  string zone = 2;
+
+  // When used for locality of upstream hosts, this field further splits zone
+  // into smaller chunks of sub-zones so they can be load balanced
+  // independently.
+  string sub_zone = 3;
+}
+
+// BuildVersion combines SemVer version of extension with free-form build information
+// (i.e. 'alpha', 'private-build') as a set of strings.
+message BuildVersion {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.BuildVersion";
+
+  // SemVer version of extension.
+  type.v3.SemanticVersion version = 1;
+
+  // Free-form build information.
+  // Envoy defines several well known keys in the source/common/version/version.h file
+  google.protobuf.Struct metadata = 2;
+}
+
+// Version and identification for an Envoy extension.
+// [#next-free-field: 7]
+message Extension {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.Extension";
+
+  // This is the name of the Envoy filter as specified in the Envoy
+  // configuration, e.g. envoy.filters.http.router, com.acme.widget.
+  string name = 1;
+
+  // Category of the extension.
+  // Extension category names use reverse DNS notation. For instance "envoy.filters.listener"
+  // for Envoy's built-in listener filters or "com.acme.filters.http" for HTTP filters from
+  // acme.com vendor.
+  // [#comment:TODO(yanavlasov): Link to the doc with existing envoy category names.]
+  string category = 2;
+
+  // [#not-implemented-hide:] Type descriptor of extension configuration proto.
+  // [#comment:TODO(yanavlasov): Link to the doc with existing configuration protos.]
+  // [#comment:TODO(yanavlasov): Add tests when PR #9391 lands.]
+  string type_descriptor = 3
+      [deprecated = true, (envoy.annotations.deprecated_at_minor_version) = "3.0"];
+
+  // The version is a property of the extension and maintained independently
+  // of other extensions and the Envoy API.
+  // This field is not set when extension did not provide version information.
+  BuildVersion version = 4;
+
+  // Indicates that the extension is present but was disabled via dynamic configuration.
+  bool disabled = 5;
+
+  // Type URLs of extension configuration protos.
+  repeated string type_urls = 6;
+}
+
+// Identifies a specific Envoy instance. The node identifier is presented to the
+// management server, which may use this identifier to distinguish per Envoy
+// configuration for serving.
+// [#next-free-field: 13]
+message Node {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.Node";
+
+  reserved 5;
+
+  reserved "build_version";
+
+  // An opaque node identifier for the Envoy node. This also provides the local
+  // service node name. It should be set if any of the following features are
+  // used: :ref:`statsd <arch_overview_statistics>`, :ref:`CDS
+  // <config_cluster_manager_cds>`, and :ref:`HTTP tracing
+  // <arch_overview_tracing>`, either in this message or via
+  // :option:`--service-node`.
+  string id = 1;
+
+  // Defines the local service cluster name where Envoy is running. Though
+  // optional, it should be set if any of the following features are used:
+  // :ref:`statsd <arch_overview_statistics>`, :ref:`health check cluster
+  // verification
+  // <envoy_v3_api_field_config.core.v3.HealthCheck.HttpHealthCheck.service_name_matcher>`,
+  // :ref:`runtime override directory <envoy_v3_api_msg_config.bootstrap.v3.Runtime>`,
+  // :ref:`user agent addition
+  // <envoy_v3_api_field_extensions.filters.network.http_connection_manager.v3.HttpConnectionManager.add_user_agent>`,
+  // :ref:`HTTP global rate limiting <config_http_filters_rate_limit>`,
+  // :ref:`CDS <config_cluster_manager_cds>`, and :ref:`HTTP tracing
+  // <arch_overview_tracing>`, either in this message or via
+  // :option:`--service-cluster`.
+  string cluster = 2;
+
+  // Opaque metadata extending the node identifier. Envoy will pass this
+  // directly to the management server.
+  google.protobuf.Struct metadata = 3;
+
+  // Map from xDS resource type URL to dynamic context parameters. These may vary at runtime (unlike
+  // other fields in this message). For example, the xDS client may have a shard identifier that
+  // changes during the lifetime of the xDS client. In Envoy, this would be achieved by updating the
+  // dynamic context on the Server::Instance's LocalInfo context provider. The shard ID dynamic
+  // parameter then appears in this field during future discovery requests.
+  map<string, xds.core.v3.ContextParams> dynamic_parameters = 12;
+
+  // Locality specifying where the Envoy instance is running.
+  Locality locality = 4;
+
+  // Free-form string that identifies the entity requesting config.
+  // E.g. "envoy" or "grpc"
+  string user_agent_name = 6;
+
+  oneof user_agent_version_type {
+    // Free-form string that identifies the version of the entity requesting config.
+    // E.g. "1.12.2" or "abcd1234", or "SpecialEnvoyBuild"
+    string user_agent_version = 7;
+
+    // Structured version of the entity requesting config.
+    BuildVersion user_agent_build_version = 8;
+  }
+
+  // List of extensions and their versions supported by the node.
+  repeated Extension extensions = 9;
+
+  // Client feature support list. These are well known features described
+  // in the Envoy API repository for a given major version of an API. Client features
+  // use reverse DNS naming scheme, for example ``com.acme.feature``.
+  // See :ref:`the list of features <client_features>` that xDS client may
+  // support.
+  repeated string client_features = 10;
+
+  // Known listening ports on the node as a generic hint to the management server
+  // for filtering :ref:`listeners <config_listeners>` to be returned. For example,
+  // if there is a listener bound to port 80, the list can optionally contain the
+  // SocketAddress ``(0.0.0.0,80)``. The field is optional and just a hint.
+  repeated Address listening_addresses = 11
+      [deprecated = true, (envoy.annotations.deprecated_at_minor_version) = "3.0"];
+}
+
+// Metadata provides additional inputs to filters based on matched listeners,
+// filter chains, routes and endpoints. It is structured as a map, usually from
+// filter name (in reverse DNS format) to metadata specific to the filter. Metadata
+// key-values for a filter are merged as connection and request handling occurs,
+// with later values for the same key overriding earlier values.
+//
+// An example use of metadata is providing additional values to
+// http_connection_manager in the envoy.http_connection_manager.access_log
+// namespace.
+//
+// Another example use of metadata is to per service config info in cluster metadata, which may get
+// consumed by multiple filters.
+//
+// For load balancing, Metadata provides a means to subset cluster endpoints.
+// Endpoints have a Metadata object associated and routes contain a Metadata
+// object to match against. There are some well defined metadata used today for
+// this purpose:
+//
+// * ``{"envoy.lb": {"canary": <bool> }}`` This indicates the canary status of an
+//   endpoint and is also used during header processing
+//   (x-envoy-upstream-canary) and for stats purposes.
+// [#next-major-version: move to type/metadata/v2]
+message Metadata {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.Metadata";
+
+  // Key is the reverse DNS filter name, e.g. com.acme.widget. The ``envoy.*``
+  // namespace is reserved for Envoy's built-in filters.
+  // If both ``filter_metadata`` and
+  // :ref:`typed_filter_metadata <envoy_v3_api_field_config.core.v3.Metadata.typed_filter_metadata>`
+  // fields are present in the metadata with same keys,
+  // only ``typed_filter_metadata`` field will be parsed.
+  map<string, google.protobuf.Struct> filter_metadata = 1
+      [(validate.rules).map = {keys {string {min_len: 1}}}];
+
+  // Key is the reverse DNS filter name, e.g. com.acme.widget. The ``envoy.*``
+  // namespace is reserved for Envoy's built-in filters.
+  // The value is encoded as google.protobuf.Any.
+  // If both :ref:`filter_metadata <envoy_v3_api_field_config.core.v3.Metadata.filter_metadata>`
+  // and ``typed_filter_metadata`` fields are present in the metadata with same keys,
+  // only ``typed_filter_metadata`` field will be parsed.
+  map<string, google.protobuf.Any> typed_filter_metadata = 2
+      [(validate.rules).map = {keys {string {min_len: 1}}}];
+}
+
+// Runtime derived uint32 with a default when not specified.
+message RuntimeUInt32 {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.RuntimeUInt32";
+
+  // Default value if runtime value is not available.
+  uint32 default_value = 2;
+
+  // Runtime key to get value for comparison. This value is used if defined.
+  string runtime_key = 3;
+}
+
+// Runtime derived uint64 with a default when not specified.
+message RuntimeUInt64 {
+  // Default value if runtime value is not available.
+  uint64 default_value = 2;
+
+  // Runtime key to get value for comparison. This value is used if defined.
+  string runtime_key = 3;
+}
+
+// Runtime derived percentage with a default when not specified.
+message RuntimePercent {
+  // Default value if runtime value is not available.
+  type.v3.Percent default_value = 1;
+
+  // Runtime key to get value for comparison. This value is used if defined.
+  string runtime_key = 2;
+}
+
+// Runtime derived double with a default when not specified.
+message RuntimeDouble {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.RuntimeDouble";
+
+  // Default value if runtime value is not available.
+  double default_value = 1;
+
+  // Runtime key to get value for comparison. This value is used if defined.
+  string runtime_key = 2;
+}
+
+// Runtime derived bool with a default when not specified.
+message RuntimeFeatureFlag {
+  option (udpa.annotations.versioning).previous_message_type =
+      "envoy.api.v2.core.RuntimeFeatureFlag";
+
+  // Default value if runtime value is not available.
+  google.protobuf.BoolValue default_value = 1 [(validate.rules).message = {required: true}];
+
+  // Runtime key to get value for comparison. This value is used if defined. The boolean value must
+  // be represented via its
+  // `canonical JSON encoding <https://developers.google.com/protocol-buffers/docs/proto3#json>`_.
+  string runtime_key = 2;
+}
+
+// Please use :ref:`KeyValuePair <envoy_api_msg_config.core.v3.KeyValuePair>` instead.
+// [#not-implemented-hide:]
+message KeyValue {
+  // The key of the key/value pair.
+  string key = 1 [
+    deprecated = true,
+    (validate.rules).string = {min_len: 1 max_bytes: 16384},
+    (envoy.annotations.deprecated_at_minor_version) = "3.0"
+  ];
+
+  // The value of the key/value pair.
+  //
+  // The ``bytes`` type is used. This means if JSON or YAML is used to to represent the
+  // configuration, the value must be base64 encoded. This is unfriendly for users in most
+  // use scenarios of this message.
+  //
+  bytes value = 2 [deprecated = true, (envoy.annotations.deprecated_at_minor_version) = "3.0"];
+}
+
+message KeyValuePair {
+  // The key of the key/value pair.
+  string key = 1 [(validate.rules).string = {min_len: 1 max_bytes: 16384}];
+
+  // The value of the key/value pair.
+  google.protobuf.Value value = 2;
+}
+
+// Key/value pair plus option to control append behavior. This is used to specify
+// key/value pairs that should be appended to a set of existing key/value pairs.
+message KeyValueAppend {
+  // Describes the supported actions types for key/value pair append action.
+  enum KeyValueAppendAction {
+    // If the key already exists, this action will result in the following behavior:
+    //
+    // - Comma-concatenated value if multiple values are not allowed.
+    // - New value added to the list of values if multiple values are allowed.
+    //
+    // If the key doesn't exist then this will add pair with specified key and value.
+    APPEND_IF_EXISTS_OR_ADD = 0;
+
+    // This action will add the key/value pair if it doesn't already exist. If the
+    // key already exists then this will be a no-op.
+    ADD_IF_ABSENT = 1;
+
+    // This action will overwrite the specified value by discarding any existing
+    // values if the key already exists. If the key doesn't exist then this will add
+    // the pair with specified key and value.
+    OVERWRITE_IF_EXISTS_OR_ADD = 2;
+
+    // This action will overwrite the specified value by discarding any existing
+    // values if the key already exists. If the key doesn't exist then this will
+    // be no-op.
+    OVERWRITE_IF_EXISTS = 3;
+  }
+
+  // The single key/value pair record to be appended or overridden. This field must be set.
+  KeyValuePair record = 3;
+
+  // Key/value pair entry that this option to append or overwrite. This field is deprecated
+  // and please use :ref:`record <envoy_v3_api_field_config.core.v3.KeyValueAppend.record>`
+  // as replacement.
+  // [#not-implemented-hide:]
+  KeyValue entry = 1 [
+    deprecated = true,
+    (validate.rules).message = {skip: true},
+    (envoy.annotations.deprecated_at_minor_version) = "3.0"
+  ];
+
+  // Describes the action taken to append/overwrite the given value for an existing
+  // key or to only add this key if it's absent.
+  KeyValueAppendAction action = 2 [(validate.rules).enum = {defined_only: true}];
+}
+
+// Key/value pair to append or remove.
+message KeyValueMutation {
+  // Key/value pair to append or overwrite. Only one of ``append`` or ``remove`` can be set or
+  // the configuration will be rejected.
+  KeyValueAppend append = 1;
+
+  // Key to remove. Only one of ``append`` or ``remove`` can be set or the configuration will be
+  // rejected.
+  string remove = 2 [(validate.rules).string = {max_bytes: 16384}];
+}
+
+// Query parameter name/value pair.
+message QueryParameter {
+  // The key of the query parameter. Case sensitive.
+  string key = 1 [(validate.rules).string = {min_len: 1}];
+
+  // The value of the query parameter.
+  string value = 2;
+}
+
+// Header name/value pair.
+message HeaderValue {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.HeaderValue";
+
+  // Header name.
+  string key = 1
+      [(validate.rules).string =
+           {min_len: 1 max_bytes: 16384 well_known_regex: HTTP_HEADER_NAME strict: false}];
+
+  // Header value.
+  //
+  // The same :ref:`format specifier <config_access_log_format>` as used for
+  // :ref:`HTTP access logging <config_access_log>` applies here, however
+  // unknown header values are replaced with the empty string instead of ``-``.
+  // Header value is encoded as string. This does not work for non-utf8 characters.
+  // Only one of ``value`` or ``raw_value`` can be set.
+  string value = 2 [
+    (validate.rules).string = {max_bytes: 16384 well_known_regex: HTTP_HEADER_VALUE strict: false},
+    (udpa.annotations.field_migrate).oneof_promotion = "value_type"
+  ];
+
+  // Header value is encoded as bytes which can support non-utf8 characters.
+  // Only one of ``value`` or ``raw_value`` can be set.
+  bytes raw_value = 3 [
+    (validate.rules).bytes = {min_len: 0 max_len: 16384},
+    (udpa.annotations.field_migrate).oneof_promotion = "value_type"
+  ];
+}
+
+// Header name/value pair plus option to control append behavior.
+message HeaderValueOption {
+  option (udpa.annotations.versioning).previous_message_type =
+      "envoy.api.v2.core.HeaderValueOption";
+
+  // Describes the supported actions types for header append action.
+  enum HeaderAppendAction {
+    // If the header already exists, this action will result in:
+    //
+    // - Comma-concatenated for predefined inline headers.
+    // - Duplicate header added in the ``HeaderMap`` for other headers.
+    //
+    // If the header doesn't exist then this will add new header with specified key and value.
+    APPEND_IF_EXISTS_OR_ADD = 0;
+
+    // This action will add the header if it doesn't already exist. If the header
+    // already exists then this will be a no-op.
+    ADD_IF_ABSENT = 1;
+
+    // This action will overwrite the specified value by discarding any existing values if
+    // the header already exists. If the header doesn't exist then this will add the header
+    // with specified key and value.
+    OVERWRITE_IF_EXISTS_OR_ADD = 2;
+
+    // This action will overwrite the specified value by discarding any existing values if
+    // the header already exists. If the header doesn't exist then this will be no-op.
+    OVERWRITE_IF_EXISTS = 3;
+  }
+
+  // Header name/value pair that this option applies to.
+  HeaderValue header = 1 [(validate.rules).message = {required: true}];
+
+  // Should the value be appended? If true (default), the value is appended to
+  // existing values. Otherwise it replaces any existing values.
+  // This field is deprecated and please use
+  // :ref:`append_action <envoy_v3_api_field_config.core.v3.HeaderValueOption.append_action>` as replacement.
+  //
+  // .. note::
+  //   The :ref:`external authorization service <envoy_v3_api_msg_service.auth.v3.CheckResponse>` and
+  //   :ref:`external processor service <envoy_v3_api_msg_service.ext_proc.v3.ProcessingResponse>` have
+  //   default value (``false``) for this field.
+  google.protobuf.BoolValue append = 2
+      [deprecated = true, (envoy.annotations.deprecated_at_minor_version) = "3.0"];
+
+  // Describes the action taken to append/overwrite the given value for an existing header
+  // or to only add this header if it's absent.
+  // Value defaults to :ref:`APPEND_IF_EXISTS_OR_ADD
+  // <envoy_v3_api_enum_value_config.core.v3.HeaderValueOption.HeaderAppendAction.APPEND_IF_EXISTS_OR_ADD>`.
+  HeaderAppendAction append_action = 3 [(validate.rules).enum = {defined_only: true}];
+
+  // Is the header value allowed to be empty? If false (default), custom headers with empty values are dropped,
+  // otherwise they are added.
+  bool keep_empty_value = 4;
+}
+
+// Wrapper for a set of headers.
+message HeaderMap {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.HeaderMap";
+
+  // A list of header names and their values.
+  repeated HeaderValue headers = 1;
+}
+
+// A directory that is watched for changes, e.g. by inotify on Linux. Move/rename
+// events inside this directory trigger the watch.
+message WatchedDirectory {
+  // Directory path to watch.
+  string path = 1 [(validate.rules).string = {min_len: 1}];
+
+  // If set to true, the watcher will also subscribe to file modification events
+  // (``IN_MODIFY`` on Linux) in addition to move events (``IN_MOVED_TO``). This allows
+  // in-place file writes to trigger reload callbacks. Use this when the writing process
+  // cannot use atomic rename (e.g. certain secret managers that write certificate files
+  // directly). By default, only move/rename events are watched, which is the safe choice
+  // for atomic updates (e.g. Kubernetes ConfigMap symlink swaps).
+  bool watch_modify = 2;
+}
+
+// Data source consisting of a file, an inline value, or an environment variable.
+// [#next-free-field: 6]
+message DataSource {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.DataSource";
+
+  oneof specifier {
+    option (validate.required) = true;
+
+    // Local filesystem data source.
+    string filename = 1 [(validate.rules).string = {min_len: 1}];
+
+    // Bytes inlined in the configuration.
+    bytes inline_bytes = 2;
+
+    // String inlined in the configuration.
+    string inline_string = 3;
+
+    // Environment variable data source.
+    string environment_variable = 4 [(validate.rules).string = {min_len: 1}];
+  }
+
+  // Watched directory that is watched for file changes. If this is set explicitly, the file
+  // specified in the ``filename`` field will be reloaded when relevant file move events occur.
+  //
+  // .. note::
+  //   This field only makes sense when the ``filename`` field is set.
+  //
+  // .. note::
+  //   Envoy only updates when the file is replaced by a file move, and not when the file is
+  //   edited in place.
+  //
+  // .. note::
+  //   Not all use cases of ``DataSource`` support watching directories. It depends on the
+  //   specific usage of the ``DataSource``. See the documentation of the parent message for
+  //   details.
+  WatchedDirectory watched_directory = 5;
+}
+
+// The message specifies the retry policy of remote data source when fetching fails.
+// [#next-free-field: 7]
+message RetryPolicy {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.RetryPolicy";
+
+  // See :ref:`RetryPriority <envoy_v3_api_field_config.route.v3.RetryPolicy.retry_priority>`.
+  message RetryPriority {
+    string name = 1 [(validate.rules).string = {min_len: 1}];
+
+    oneof config_type {
+      google.protobuf.Any typed_config = 2;
+    }
+  }
+
+  // See :ref:`RetryHostPredicate <envoy_v3_api_field_config.route.v3.RetryPolicy.retry_host_predicate>`.
+  message RetryHostPredicate {
+    string name = 1 [(validate.rules).string = {min_len: 1}];
+
+    oneof config_type {
+      google.protobuf.Any typed_config = 2;
+    }
+  }
+
+  // Specifies parameters that control :ref:`retry backoff strategy <envoy_v3_api_msg_config.core.v3.BackoffStrategy>`.
+  // This parameter is optional, in which case the default base interval is 1000 milliseconds. The
+  // default maximum interval is 10 times the base interval.
+  BackoffStrategy retry_back_off = 1;
+
+  // Specifies the allowed number of retries. This parameter is optional and
+  // defaults to 1.
+  google.protobuf.UInt32Value num_retries = 2
+      [(udpa.annotations.field_migrate).rename = "max_retries"];
+
+  // For details, see :ref:`retry_on <envoy_v3_api_field_config.route.v3.RetryPolicy.retry_on>`.
+  string retry_on = 3;
+
+  // For details, see :ref:`retry_priority <envoy_v3_api_field_config.route.v3.RetryPolicy.retry_priority>`.
+  RetryPriority retry_priority = 4;
+
+  // For details, see :ref:`RetryHostPredicate <envoy_v3_api_field_config.route.v3.RetryPolicy.retry_host_predicate>`.
+  repeated RetryHostPredicate retry_host_predicate = 5;
+
+  // For details, see :ref:`host_selection_retry_max_attempts <envoy_v3_api_field_config.route.v3.RetryPolicy.host_selection_retry_max_attempts>`.
+  int64 host_selection_retry_max_attempts = 6;
+}
+
+// The message specifies how to fetch data from remote and how to verify it.
+message RemoteDataSource {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.RemoteDataSource";
+
+  // The HTTP URI to fetch the remote data.
+  HttpUri http_uri = 1 [(validate.rules).message = {required: true}];
+
+  // SHA256 string for verifying data.
+  string sha256 = 2 [(validate.rules).string = {min_len: 1}];
+
+  // Retry policy for fetching remote data.
+  RetryPolicy retry_policy = 3;
+}
+
+// Async data source which support async data fetch.
+message AsyncDataSource {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.AsyncDataSource";
+
+  oneof specifier {
+    option (validate.required) = true;
+
+    // Local async data source.
+    DataSource local = 1;
+
+    // Remote async data source.
+    RemoteDataSource remote = 2;
+  }
+}
+
+// Configuration for transport socket in :ref:`listeners <config_listeners>` and
+// :ref:`clusters <envoy_v3_api_msg_config.cluster.v3.Cluster>`. If the configuration is
+// empty, a default transport socket implementation and configuration will be
+// chosen based on the platform and existence of tls_context.
+message TransportSocket {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.TransportSocket";
+
+  reserved 2;
+
+  reserved "config";
+
+  // The name of the transport socket to instantiate. The name must match a supported transport
+  // socket implementation.
+  string name = 1 [(validate.rules).string = {min_len: 1}];
+
+  // Implementation specific configuration which depends on the implementation being instantiated.
+  // See the supported transport socket implementations for further documentation.
+  oneof config_type {
+    google.protobuf.Any typed_config = 3;
+  }
+}
+
+// Runtime derived FractionalPercent with defaults for when the numerator or denominator is not
+// specified via a runtime key.
+//
+// .. note::
+//
+//   Parsing of the runtime key's data is implemented such that it may be represented as a
+//   :ref:`FractionalPercent <envoy_v3_api_msg_type.v3.FractionalPercent>` proto represented as JSON/YAML
+//   and may also be represented as an integer with the assumption that the value is an integral
+//   percentage out of 100. For instance, a runtime key lookup returning the value "42" would parse
+//   as a ``FractionalPercent`` whose numerator is 42 and denominator is HUNDRED.
+message RuntimeFractionalPercent {
+  option (udpa.annotations.versioning).previous_message_type =
+      "envoy.api.v2.core.RuntimeFractionalPercent";
+
+  // Default value if the runtime value's for the numerator/denominator keys are not available.
+  type.v3.FractionalPercent default_value = 1 [(validate.rules).message = {required: true}];
+
+  // Runtime key for a YAML representation of a FractionalPercent.
+  string runtime_key = 2;
+}
+
+// Identifies a specific ControlPlane instance that Envoy is connected to.
+message ControlPlane {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.ControlPlane";
+
+  // An opaque control plane identifier that uniquely identifies an instance
+  // of control plane. This can be used to identify which control plane instance,
+  // the Envoy is connected to.
+  string identifier = 1;
+}

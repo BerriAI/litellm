@@ -1,0 +1,55 @@
+// THIS FILE IS DEPRECATED
+// Users should instead use the corresponding proto in the xds tree.
+// No new changes will be accepted here.
+
+syntax = "proto3";
+
+package udpa.annotations;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/cncf/xds/go/udpa/annotations";
+
+// Magic number in this file derived from top 28bit of SHA256 digest of
+// "udpa.annotation.migrate".
+
+extend google.protobuf.MessageOptions {
+  MigrateAnnotation message_migrate = 171962766;
+}
+
+extend google.protobuf.FieldOptions {
+  FieldMigrateAnnotation field_migrate = 171962766;
+}
+
+extend google.protobuf.EnumOptions {
+  MigrateAnnotation enum_migrate = 171962766;
+}
+
+extend google.protobuf.EnumValueOptions {
+  MigrateAnnotation enum_value_migrate = 171962766;
+}
+
+extend google.protobuf.FileOptions {
+  FileMigrateAnnotation file_migrate = 171962766;
+}
+
+message MigrateAnnotation {
+  // Rename the message/enum/enum value in next version.
+  string rename = 1;
+}
+
+message FieldMigrateAnnotation {
+  // Rename the field in next version.
+  string rename = 1;
+
+  // Add the field to a named oneof in next version. If this already exists, the
+  // field will join its siblings under the oneof, otherwise a new oneof will be
+  // created with the given name.
+  string oneof_promotion = 2;
+}
+
+message FileMigrateAnnotation {
+  // Move all types in the file to another package, this implies changing proto
+  // file path.
+  string move_to_package = 2;
+}

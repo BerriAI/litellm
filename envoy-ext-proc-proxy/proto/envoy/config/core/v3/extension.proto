@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package envoy.config.core.v3;
+
+import "google/protobuf/any.proto";
+
+import "udpa/annotations/status.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.config.core.v3";
+option java_outer_classname = "ExtensionProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/config/core/v3;corev3";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: Extension configuration]
+
+// Message type for extension configuration.
+// [#next-major-version: revisit all existing typed_config that doesn't use this wrapper.].
+message TypedExtensionConfig {
+  // The name of an extension. This is not used to select the extension, instead
+  // it serves the role of an opaque identifier.
+  string name = 1 [(validate.rules).string = {min_len: 1}];
+
+  // The typed config for the extension. The type URL will be used to identify
+  // the extension. In the case that the type URL is ``xds.type.v3.TypedStruct``
+  // (or, for historical reasons, ``udpa.type.v1.TypedStruct``), the inner type
+  // URL of ``TypedStruct`` will be utilized. See the
+  // :ref:`extension configuration overview
+  // <config_overview_extension_configuration>` for further details.
+  google.protobuf.Any typed_config = 2 [(validate.rules).any = {required: true}];
+}

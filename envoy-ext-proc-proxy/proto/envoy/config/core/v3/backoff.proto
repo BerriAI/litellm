@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package envoy.config.core.v3;
+
+import "google/protobuf/duration.proto";
+
+import "udpa/annotations/status.proto";
+import "udpa/annotations/versioning.proto";
+import "validate/validate.proto";
+
+option java_package = "io.envoyproxy.envoy.config.core.v3";
+option java_outer_classname = "BackoffProto";
+option java_multiple_files = true;
+option go_package = "github.com/envoyproxy/go-control-plane/envoy/config/core/v3;corev3";
+option (udpa.annotations.file_status).package_version_status = ACTIVE;
+
+// [#protodoc-title: Backoff strategy]
+
+// Configuration defining a jittered exponential back off strategy.
+message BackoffStrategy {
+  option (udpa.annotations.versioning).previous_message_type = "envoy.api.v2.core.BackoffStrategy";
+
+  // The base interval to be used for the next back off computation. It should
+  // be greater than zero and less than or equal to :ref:`max_interval
+  // <envoy_v3_api_field_config.core.v3.BackoffStrategy.max_interval>`.
+  google.protobuf.Duration base_interval = 1 [(validate.rules).duration = {
+    required: true
+    gte {nanos: 1000000}
+  }];
+
+  // Specifies the maximum interval between retries. This parameter is optional,
+  // but must be greater than or equal to the :ref:`base_interval
+  // <envoy_v3_api_field_config.core.v3.BackoffStrategy.base_interval>` if set. The default
+  // is 10 times the :ref:`base_interval
+  // <envoy_v3_api_field_config.core.v3.BackoffStrategy.base_interval>`.
+  google.protobuf.Duration max_interval = 2 [(validate.rules).duration = {gt {}}];
+}

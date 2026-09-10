@@ -1,0 +1,23 @@
+// THIS FILE IS DEPRECATED
+// Users should instead use the corresponding proto in the xds tree.
+// No new changes will be accepted here.
+
+syntax = "proto3";
+
+package udpa.annotations;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/cncf/xds/go/udpa/annotations";
+
+extend google.protobuf.MessageOptions {
+  // Magic number derived from 0x78 ('x') 0x44 ('D') 0x53 ('S')
+  VersioningAnnotation versioning = 7881811;
+}
+
+message VersioningAnnotation {
+  // Track the previous message type. E.g. this message might be
+  // udpa.foo.v3alpha.Foo and it was previously udpa.bar.v2.Bar. This
+  // information is consumed by UDPA via proto descriptors.
+  string previous_message_type = 1;
+}
