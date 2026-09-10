@@ -12,7 +12,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
-from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, InternalRequestOrigin, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
@@ -489,6 +489,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         )
 
     async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time):
+        releases_slot: Final = kwargs.get("internal_request_origin") is not InternalRequestOrigin.REALTIME_OBSERVER
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -521,7 +522,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # Setup values
             # ------------
 
-            if global_max_parallel_requests is not None:
+            if releases_slot and global_max_parallel_requests is not None:
                 # get value from cache
                 _key: Final = "global_max_parallel_requests"
                 # decrement
@@ -552,13 +553,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": int(releases_slot),
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - int(releases_slot), 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -593,13 +594,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": int(releases_slot),
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - int(releases_slot), 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -619,13 +620,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
-                    "current_tpm": total_tokens,
-                    "current_rpm": 1,
+                    "current_requests": int(releases_slot),
+                    "current_tpm": total_tokens if releases_slot else 0,
+                    "current_rpm": int(releases_slot),
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - int(releases_slot), 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -645,13 +646,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
-                    "current_tpm": total_tokens,
-                    "current_rpm": 1,
+                    "current_requests": int(releases_slot),
+                    "current_tpm": total_tokens if releases_slot else 0,
+                    "current_rpm": int(releases_slot),
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - int(releases_slot), 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -671,13 +672,13 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
-                    "current_tpm": total_tokens,
-                    "current_rpm": 1,
+                    "current_requests": int(releases_slot),
+                    "current_tpm": total_tokens if releases_slot else 0,
+                    "current_rpm": int(releases_slot),
                 }
 
                 new_val = {
-                    "current_requests": max(current["current_requests"] - 1, 0),
+                    "current_requests": max(current["current_requests"] - int(releases_slot), 0),
                     "current_tpm": current["current_tpm"] + total_tokens,
                     "current_rpm": current["current_rpm"],
                 }
@@ -694,6 +695,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             self.print_verbose(e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        if kwargs.get("internal_request_origin") is InternalRequestOrigin.REALTIME_OBSERVER:
+            return
         try:
             self.print_verbose("Inside Max Parallel Request Failure Hook")
             litellm_parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs=kwargs)

@@ -97,6 +97,10 @@ class ReconcileOutcome(NamedTuple):
     live_after: frozenset[str] | None
 
 
+class InternalRequestOrigin(enum.Enum):
+    REALTIME_OBSERVER = enum.auto()
+
+
 class SupportedDBObjectType(str, enum.Enum):
     """
     Supported database object types for fine-grained DB storage control.

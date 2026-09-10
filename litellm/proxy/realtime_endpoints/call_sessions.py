@@ -29,7 +29,7 @@ from litellm.llms.chatgpt.realtime import (
     configured_realtime_headers,
     realtime_endpoint,
 )
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import InternalRequestOrigin, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import (
     get_api_key,
@@ -73,6 +73,7 @@ async def supervise_codex_call(request: Request, call: CodexRealtimeCall, auth: 
             auth,
             call.alias,
             "_arealtime",
+            internal_realtime_observer=True,
         )
         pinned: Final = {  # mutable-ok: logging and provider parameter contract
             **processed,
@@ -116,6 +117,9 @@ async def supervise_codex_call(request: Request, call: CodexRealtimeCall, auth: 
         async def close_call() -> None:
             await handler.close_call(connection, call.model, api_base)
 
+        async def force_close_call() -> None:
+            await handler.hangup_call(api_base)
+
         frontend: Final = WebSocket(
             {**request.scope, "type": "websocket"}, receive=receive, send=send
         )  # mutable-ok: ASGI scope
@@ -126,6 +130,7 @@ async def supervise_codex_call(request: Request, call: CodexRealtimeCall, auth: 
             logger,
             auth,
             close_call,
+            force_close_call=force_close_call,
             terminal_usage_required=realtime_endpoint(call.model) == "live",
         )
         supervision_owned = True
@@ -191,6 +196,8 @@ async def process_codex_request(
     auth: UserAPIKeyAuth,
     model: str,
     route_type: Literal["arealtime_calls", "_arealtime"],
+    *,
+    internal_realtime_observer: bool = False,
 ) -> tuple[dict[str, object], Logging]:  # mutable-ok: common request processor returns enriched routing arguments
     from litellm.proxy import proxy_server as server
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -211,7 +218,14 @@ async def process_codex_request(
         user_api_base=server.user_api_base,
         model=model,
         route_type=route_type,
+        **(
+            MappingProxyType({"internal_realtime_observer": True})
+            if internal_realtime_observer
+            else MappingProxyType({})
+        ),
     )
+    if internal_realtime_observer:
+        logging_obj.model_call_details["internal_request_origin"] = InternalRequestOrigin.REALTIME_OBSERVER
     return processed, logging_obj
 
 

@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -9,6 +10,51 @@ import litellm
 from litellm.llms.chatgpt.realtime import ChatGPTRealtime
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["closed", "network"])
+@pytest.mark.parametrize(
+    "hangup_status, expectation", [(200, nullcontext()), (503, pytest.raises(httpx.HTTPStatusError))]
+)
+async def test_live_closed_observer_uses_independent_hangup(failure, hangup_status, expectation, chatgpt_tokens):
+    from websockets.exceptions import ConnectionClosedOK
+    from websockets.frames import Close
+
+    handler = ChatGPTRealtime(
+        GenericLiteLLMParams(
+            chatgpt_realtime_call_id="rtc_live_closed",
+            chatgpt_token_dir=chatgpt_tokens,
+            extra_query={"gateway": "tenant"},
+        ),
+        {},
+        {"x-gateway-token": "test-only"},
+    )
+    connection = SimpleNamespace(
+        send=AsyncMock(
+            side_effect=(
+                ConnectionClosedOK(Close(1000, ""), Close(1000, ""), True)
+                if failure == "closed"
+                else OSError("socket unavailable")
+            )
+        )
+    )
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(hangup_status)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    with patch("httpx.AsyncClient", return_value=client):
+        with expectation:
+            await handler.close_call(connection, "gpt-live-1-codex", "https://gateway.example/v1")
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    assert str(requests[0].url) == "https://gateway.example/v1/realtime/calls/rtc_live_closed/hangup?gateway=tenant"
+    assert requests[0].headers["x-gateway-token"] == "test-only"
+    assert requests[0].headers["Authorization"] == "Bearer test-token-default"
+    assert client.is_closed
 
 
 @pytest.mark.asyncio
@@ -47,8 +93,17 @@ async def test_realtime_session_urls_honor_gateway(endpoint, source, chatgpt_tok
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("inbound_headers", [{}, {"openai-alpha": "quicksilver=v2"}])
-async def test_routed_call_preserves_deployment_gateway_headers(inbound_headers, chatgpt_tokens, monkeypatch):
-    from litellm.llms.chatgpt.codex import CodexRealtimeOffer, build_call_request
+@pytest.mark.parametrize("model, endpoint", [("gpt-live-1-codex", "live"), ("gpt-realtime-1.5", "realtime")])
+async def test_routed_call_preserves_deployment_gateway_headers(
+    inbound_headers, model, endpoint, chatgpt_tokens, monkeypatch
+):
+    from litellm.llms.chatgpt.codex import (
+        CodexRealtimeCall,
+        CodexRealtimeOffer,
+        build_call_request,
+        build_sideband_request,
+        parse_call_response,
+    )
 
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", chatgpt_tokens)
     requests = []
@@ -64,11 +119,22 @@ async def test_routed_call_preserves_deployment_gateway_headers(inbound_headers,
             {
                 "model_name": "voice-gateway",
                 "litellm_params": {
-                    "model": "chatgpt/gpt-live-1-codex",
+                    "model": f"chatgpt/{model}",
                     "api_base": "https://voice.example/backend-api/codex",
                     "extra_headers": {"x-gateway-route": "configured"},
-                    "extra_query": {"gateway_token": "configured", "intent": "pinned-intent"},
+                    "extra_query": {
+                        "gateway_token": "configured",
+                        "intent": "pinned-intent",
+                        "count": 7,
+                        "fraction": 1.5,
+                        "enabled": True,
+                        "disabled": False,
+                        "blank": None,
+                        "model": "other-model",
+                        "call_id": "rtc_wrong",
+                    },
                 },
+                "model_info": {"id": "selected-gateway-deployment"},
             }
         ],
         num_retries=0,
@@ -84,11 +150,29 @@ async def test_routed_call_preserves_deployment_gateway_headers(inbound_headers,
             "gateway_token": "configured",
             "intent": "pinned-intent",
             "architecture": "avas",
+            "count": "7",
+            "fraction": "1.5",
+            "enabled": "true",
+            "disabled": "false",
+            "blank": "",
+            "model": "other-model",
+            "call_id": "rtc_wrong",
         }
         assert response.extensions["chatgpt_realtime"]["extra_query"] == dict(requests[0].url.params)
         assert response.extensions["chatgpt_realtime"]["extra_headers"]["x-gateway-route"] == "configured"
         for name, value in inbound_headers.items():
             assert requests[0].headers[name] == value
+        call = parse_call_response(response, alias="voice-gateway", owner="test-owner", expires_at=1)
+        restored = CodexRealtimeCall.model_validate_json(call.model_dump_json())
+        assert restored.model_id == "selected-gateway-deployment"
+        assert restored.model == model
+        handler = ChatGPTRealtime(GenericLiteLLMParams.model_validate(build_sideband_request(restored)), {})
+        sideband_url = httpx.URL(handler._construct_url(restored.api_base, {"model": restored.model}))
+        assert {key: value for key, value in sideband_url.params.items() if key != "call_id"} == {
+            key: value for key, value in requests[0].url.params.items() if key not in ("model", "call_id")
+        }
+        assert sideband_url.params.get("call_id") == ("rtc_test" if endpoint == "realtime" else None)
+        assert sideband_url.path.endswith("/realtime" if endpoint == "realtime" else "/live/rtc_test")
     finally:
         await client.client.aclose()
 

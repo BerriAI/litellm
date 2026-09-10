@@ -3,8 +3,9 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from httpx import URL
+from httpx import URL, QueryParams
 from pydantic import TypeAdapter
+from websockets.exceptions import ConnectionClosed
 
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.openai.realtime.handler import OpenAIRealtime
@@ -40,11 +41,14 @@ def configured_realtime_query(params: GenericLiteLLMParams) -> Mapping[str, str]
     inbound: Final = TypeAdapter(Mapping[str, str]).validate_python(
         getattr(params, "chatgpt_realtime_client_query", None) or MappingProxyType({})
     )
-    configured: Final = TypeAdapter(Mapping[str, str]).validate_python(
+    configured: Final = TypeAdapter(Mapping[str, str | int | float | bool | None]).validate_python(
         getattr(params, "extra_query", None) or MappingProxyType({})
     )
     return MappingProxyType(
-        {**{key: value for key, value in inbound.items() if key in ("intent", "architecture")}, **configured}
+        {
+            **{key: value for key, value in inbound.items() if key in ("intent", "architecture")},
+            **QueryParams(configured),
+        }
     )
 
 
@@ -111,8 +115,12 @@ class ChatGPTRealtime(OpenAIRealtime):
 
     async def close_call(self, connection: "ClientConnection", model: str, api_base: str) -> None:
         if realtime_endpoint(model) == "live":
-            await connection.send('{"type":"session.close"}')
-            return
+            try:
+                await connection.send('{"type":"session.close"}')
+                return
+            except (ConnectionClosed, OSError):
+                await self.hangup_call(api_base)
+                return
         await self.hangup_call(api_base)
 
     async def hangup_call(self, api_base: str) -> None:

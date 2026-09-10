@@ -30,6 +30,67 @@ class Socket:
         self.closed = True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", ["terminal", "no_terminal", "timeout"])
+async def test_live_unacknowledged_close_uses_bounded_independent_hangup(monkeypatch, fallback):
+    from litellm.proxy.realtime_endpoints import call_supervision
+
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    sink = Sink(logger)
+    invalidate = AsyncMock()
+    monkeypatch.setattr(call_supervision, "invalidate_budget_reservation_counters", invalidate)
+
+    async def force_close():
+        if fallback == "terminal":
+            await socket.messages.put({"type": "session.closed", "usage": {"audio_duration_ms": 1000}})
+        elif fallback == "timeout":
+            await asyncio.Event().wait()
+
+    force = AsyncMock(side_effect=force_close)
+    close = AsyncMock()
+    supervisor = CallSupervisor(
+        socket,
+        sink,
+        logger,
+        UserAPIKeyAuth(),
+        close,
+        force_close_call=force,
+        drain_timeout=0.01,
+        termination_timeout=0.08,
+    )
+    await socket.messages.put({"type": "session.started"})
+    await supervisor.start()
+    await asyncio.wait_for(supervisor.close(), timeout=0.5)
+    close.assert_awaited_once()
+    force.assert_awaited_once()
+    assert socket.closed
+    if fallback == "terminal":
+        invalidate.assert_not_awaited()
+        assert not logger.model_call_details.get("realtime_usage_incomplete")
+    else:
+        invalidate.assert_awaited_once()
+        assert logger.model_call_details["realtime_usage_incomplete"] is True
+
+
+@pytest.mark.asyncio
+async def test_live_confirmed_terminal_does_not_force_hangup():
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+
+    async def close():
+        await socket.messages.put({"type": "session.closed"})
+
+    force = AsyncMock()
+    supervisor = CallSupervisor(socket, Sink(logger), logger, UserAPIKeyAuth(), close, force_close_call=force)
+    await socket.messages.put({"type": "session.started"})
+    await supervisor.start()
+    await supervisor.close()
+    force.assert_not_awaited()
+
+
 class Sink:
     def __init__(self, logger):
         self.logger = logger
@@ -178,7 +239,7 @@ async def test_observer_error_rejects_start(caplog):
 
 
 @pytest.mark.asyncio
-async def test_failed_logging_releases_reservation(monkeypatch):
+async def test_failed_logging_invalidates_reservation_without_zeroing_spend(monkeypatch):
     from litellm.proxy.realtime_endpoints import call_supervision
 
     socket = Socket()
@@ -187,15 +248,86 @@ async def test_failed_logging_releases_reservation(monkeypatch):
     sink = MagicMock()
     sink.log_messages = AsyncMock(side_effect=RuntimeError("logging unavailable"))
     release = AsyncMock()
+    invalidate = AsyncMock()
     monkeypatch.setattr(call_supervision, "release_or_invalidate_budget_reservation", release)
+    monkeypatch.setattr(call_supervision, "invalidate_budget_reservation_counters", invalidate)
     supervisor = CallSupervisor(socket, sink, logger, UserAPIKeyAuth(), AsyncMock())
     await socket.messages.put({"type": "session.started"})
     await supervisor.start()
     await socket.messages.put({"type": "session.closed"})
     with pytest.raises(RuntimeError, match="logging unavailable"):
         await supervisor.wait()
-    release.assert_awaited_once_with(budget_reservation=None)
+    release.assert_not_awaited()
+    invalidate.assert_awaited_once_with(budget_reservation=None)
+    assert logger.model_call_details["realtime_accounting_incomplete"] is True
     assert socket.closed
+    sink.log_messages.assert_awaited_once_with(wait_for_dispatch=True)
+
+
+@pytest.mark.asyncio
+async def test_start_rejects_terminal_session_while_accounting_is_pending():
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    dispatch_started = asyncio.Event()
+    allow_dispatch = asyncio.Event()
+
+    async def log_messages(*, wait_for_dispatch=False):
+        dispatch_started.set()
+        await allow_dispatch.wait()
+        logger.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
+
+    sink = MagicMock()
+    sink.log_messages = AsyncMock(side_effect=log_messages)
+    supervisor = CallSupervisor(socket, sink, logger, UserAPIKeyAuth(), AsyncMock())
+    await socket.messages.put({"type": "session.created"})
+    await socket.messages.put({"type": "session.closed"})
+    startup = asyncio.create_task(supervisor.start())
+    try:
+        await asyncio.wait_for(dispatch_started.wait(), timeout=1)
+    finally:
+        allow_dispatch.set()
+    with pytest.raises(RuntimeError, match="ended before"):
+        await asyncio.wait_for(startup, timeout=1)
+    assert socket.closed
+    sink.log_messages.assert_awaited_once_with(wait_for_dispatch=True)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_bounds_accounting_and_invalidates_partial_dispatch(monkeypatch):
+    from litellm.proxy.realtime_endpoints import call_supervision
+
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    dispatch_cancelled = asyncio.Event()
+    invalidate = AsyncMock()
+    release = AsyncMock()
+    monkeypatch.setattr(call_supervision, "invalidate_budget_reservation_counters", invalidate)
+    monkeypatch.setattr(call_supervision, "release_or_invalidate_budget_reservation", release)
+
+    async def log_messages(*, wait_for_dispatch=False):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            dispatch_cancelled.set()
+
+    async def hangup():
+        await socket.messages.put({"type": "session.closed", "usage": {"total_tokens": 42}})
+
+    sink = MagicMock()
+    sink.log_messages = AsyncMock(side_effect=log_messages)
+    supervisor = CallSupervisor(socket, sink, logger, UserAPIKeyAuth(), hangup, logging_timeout=0.01)
+    registry = CallSupervisors()
+    await socket.messages.put({"type": "session.created"})
+    await registry.start(supervisor)
+    await asyncio.wait_for(registry.shutdown(), timeout=1)
+    assert dispatch_cancelled.is_set()
+    assert socket.closed
+    assert logger.model_call_details["realtime_accounting_incomplete"] is True
+    assert not logger.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY)
+    invalidate.assert_awaited_once_with(budget_reservation=None)
+    release.assert_not_awaited()
     sink.log_messages.assert_awaited_once_with(wait_for_dispatch=True)
 
 

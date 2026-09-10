@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from websockets.exceptions import ConnectionClosedOK
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.proxy._types import UserAPIKeyAuth
@@ -45,23 +46,28 @@ class CallSupervisor:
         lifetime: float = 3600,
         drain_timeout: float = 5,
         termination_timeout: float = 60,
+        logging_timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
         terminal_usage_required: bool = True,
+        force_close_call: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._upstream = upstream
         self._stream = stream
         self._logging = logging_obj
         self._auth = auth
         self._close_call = close_call
+        self._force_close_call = force_close_call
         self._ready_timeout = ready_timeout
         self._lifetime = lifetime
         self._drain_timeout = drain_timeout
         self._termination_timeout = termination_timeout
+        self._logging_timeout = logging_timeout
         self._terminal_usage_required = terminal_usage_required
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._started = False
         self._terminal = False
         self._close_confirmed = False
+        self._accounting_complete = False
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -70,7 +76,7 @@ class CallSupervisor:
         self._task = asyncio.create_task(self._run())
         try:
             await asyncio.wait_for(self._ready.wait(), timeout=self._ready_timeout)
-            if not self._started or self._task.done():
+            if not self._started or self._terminal or self._task.done():
                 raise RuntimeError("Call observer ended before session became available")
         except BaseException:
             await self.close()
@@ -113,12 +119,21 @@ class CallSupervisor:
         finally:
             try:
                 if not self._terminal:
+                    deadline: Final = asyncio.get_running_loop().time() + self._termination_timeout
                     try:
                         await asyncio.wait_for(self._close_call(), timeout=self._termination_timeout)
                         self._close_confirmed = True
                     except Exception:  # noqa: BLE001  # provider exceptions can contain credentials
                         verbose_proxy_logger.error("Realtime observer could not terminate upstream call")
-                    await self._drain(reader)
+                    await self._drain(reader, timeout=max(0.0, deadline - asyncio.get_running_loop().time()))
+                    if self._terminal_usage_required and not self._terminal and self._force_close_call is not None:
+                        remaining: Final = max(0.0, deadline - asyncio.get_running_loop().time())
+                        try:
+                            await asyncio.wait_for(self._force_close_call(), timeout=remaining)
+                            self._close_confirmed = True
+                        except Exception:  # noqa: BLE001  # provider exceptions can contain credentials
+                            verbose_proxy_logger.error("Realtime observer independent hangup failed")
+                        await self._drain(reader, timeout=max(0.0, deadline - asyncio.get_running_loop().time()))
             finally:
                 stopped.cancel()
                 reader.cancel()
@@ -132,9 +147,16 @@ class CallSupervisor:
                     )
                 try:
                     try:
-                        await self._stream.log_messages(wait_for_dispatch=True)
+                        await asyncio.wait_for(
+                            self._stream.log_messages(wait_for_dispatch=True), timeout=self._logging_timeout
+                        )
+                        self._accounting_complete = True
+                    except asyncio.TimeoutError:
+                        verbose_proxy_logger.error("Realtime observer timed out dispatching usage accounting")
                     finally:
-                        if self._started and not self._usage_complete():
+                        if not self._accounting_complete:
+                            self._logging.model_call_details["realtime_accounting_incomplete"] = True
+                        if self._started and (not self._usage_complete() or not self._accounting_complete):
                             await invalidate_budget_reservation_counters(
                                 budget_reservation=self._auth.budget_reservation
                             )
@@ -145,9 +167,12 @@ class CallSupervisor:
                 finally:
                     self._ready.set()
 
-    async def _drain(self, reader: asyncio.Task[None]) -> None:
+    async def _drain(self, reader: asyncio.Task[None], *, timeout: float | None = None) -> None:
         try:
-            await asyncio.wait_for(asyncio.shield(reader), timeout=self._drain_timeout)
+            await asyncio.wait_for(
+                asyncio.shield(reader),
+                timeout=self._drain_timeout if timeout is None else min(self._drain_timeout, timeout),
+            )
         except asyncio.TimeoutError:
             if not self._usage_complete():
                 verbose_proxy_logger.error("Realtime observer timed out draining terminal usage")
