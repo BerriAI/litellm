@@ -56459,17 +56459,43 @@
         "supports_reasoning": true,
         "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
     },
-    "deepseek-v4-flash": {
+    "deepseek-flash": {
         "cache_creation_input_token_cost": 0.0,
-        "cache_read_input_token_cost": 1.4e-08,
-        "input_cost_per_token": 4.4e-07,
-        "input_cost_per_token_cache_hit": 1.4e-08,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_cache_hit": 6e-09,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 1.32e-06,
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://api-docs.deepseek.com/quick_start/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "deepseek-v4-flash": {
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_cache_hit": 6e-09,
+        "litellm_provider": "deepseek",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -56487,15 +56513,15 @@
     },
     "deepseek-v4-flash-vision-exp": {
         "cache_creation_input_token_cost": 0.0,
-        "cache_read_input_token_cost": 1.4e-08,
-        "input_cost_per_token": 4.4e-07,
-        "input_cost_per_token_cache_hit": 1.4e-08,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_cache_hit": 6e-09,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 1.32e-06,
+        "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -56539,15 +56565,15 @@
     },
     "deepseek/deepseek-v4-flash": {
         "cache_creation_input_token_cost": 0.0,
-        "cache_read_input_token_cost": 1.4e-08,
-        "input_cost_per_token": 4.4e-07,
-        "input_cost_per_token_cache_hit": 1.4e-08,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_cache_hit": 6e-09,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 1.32e-06,
+        "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -56565,15 +56591,15 @@
     },
     "deepseek/deepseek-v4-flash-vision-exp": {
         "cache_creation_input_token_cost": 0.0,
-        "cache_read_input_token_cost": 1.4e-08,
-        "input_cost_per_token": 4.4e-07,
-        "input_cost_per_token_cache_hit": 1.4e-08,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "input_cost_per_token_cache_hit": 6e-09,
         "litellm_provider": "deepseek",
         "max_input_tokens": 1000000,
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
-        "output_cost_per_token": 1.32e-06,
+        "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
             "/v1/chat/completions"
@@ -56928,6 +56954,23 @@
             "text"
         ],
         "supports_audio_input": true
+    },
+    "gpt-live-1": {
+        "input_cost_per_second": 0.0008333333333333334,
+        "litellm_provider": "openai",
+        "mode": "realtime",
+        "source": "https://developers.openai.com/api/docs/models/gpt-live-1",
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
     },
     "gpt-realtime-translate": {
         "input_cost_per_second": 0.0005666666666666667,
