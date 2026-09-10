@@ -64,6 +64,16 @@ async def test_non_exempt_llm_route_still_reserves_budget():
     assert reservation["reserved_cost"] > 0
 
 
+@pytest.mark.asyncio
+async def test_reservation_carries_the_admission_input_token_count():
+    reservation: Final = await _reserve("/v1/responses")
+    expected: Final = litellm.token_counter(model="gpt-4o", text="hello")
+
+    assert reservation is not None
+    assert expected > 0
+    assert reservation["input_tokens"] == expected
+
+
 ANTHROPIC_MESSAGES: Final = [{"role": "user", "content": "hello!!!"}]
 COUNT_TOKENS_REQUESTS: Final[tuple[tuple[str, dict[str, object]], ...]] = (
     ("/v1/messages/count_tokens", {"model": "claude-sonnet-5", "messages": ANTHROPIC_MESSAGES}),

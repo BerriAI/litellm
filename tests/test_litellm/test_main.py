@@ -2322,6 +2322,32 @@ def test_image_edit_merges_headers_and_extra_headers():
     assert "extra_headers" not in handler_kwargs["image_edit_optional_request_params"]
 
 
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+def test_mock_completion_usage_reports_admission_input_tokens(metadata_key: str):
+    response = litellm.completion(
+        model="anthropic/claude-sonnet-5",
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="ok",
+        api_key="mock",
+        **{metadata_key: {"user_api_key_budget_reservation": {"reserved_cost": 1.0, "input_tokens": 51234}}},
+    )
+
+    assert response.usage.prompt_tokens == 51234
+    assert response.usage.total_tokens == 51234 + response.usage.completion_tokens
+
+
+def test_mock_completion_usage_falls_back_to_default_without_admission_count():
+    response = litellm.completion(
+        model="anthropic/claude-sonnet-5",
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="ok",
+        api_key="mock",
+        metadata={"user_api_key_budget_reservation": {"reserved_cost": 1.0}},
+    )
+
+    assert response.usage.prompt_tokens == litellm_main.DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
+
+
 def test_mock_completion_stream_with_model_response():
     """Test that mock_completion correctly handles stream=True with a ModelResponse as mock_response."""
     from litellm import completion
