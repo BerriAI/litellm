@@ -95,6 +95,9 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	if key.BudgetDuration != "" {
 		updateData["budget_duration"] = key.BudgetDuration
 	}
+	if key.Duration != "" {
+		updateData["duration"] = key.Duration
+	}
 
 	// Only add pointer fields if they are explicitly set
 	if key.MaxBudget != nil {

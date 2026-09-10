@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
 func newKeyResourceData(t *testing.T, raw map[string]interface{}) *schema.ResourceData {
@@ -252,5 +253,58 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 	}
 	if key.RPMLimit == nil || *key.RPMLimit != 100 {
 		t.Errorf("RPMLimit not parsed: %+v", key.RPMLimit)
+	}
+}
+
+func applyKeyUpdate(t *testing.T, prior map[string]interface{}, next map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/key/update" {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &captured)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key": "hash-1", "info": {"key_alias": "a"}}`))
+	}))
+	defer srv.Close()
+
+	res := resourceKey()
+	priorData := schema.TestResourceDataRaw(t, res.Schema, prior)
+	priorData.SetId("hash-1")
+	diff, err := res.Diff(context.Background(), priorData.State(), terraform.NewResourceConfigRaw(next), nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(priorData.State(), diff)
+	if err != nil {
+		t.Fatalf("data failed: %v", err)
+	}
+	if diags := resourceKeyUpdate(context.Background(), d, NewClient(srv.URL, "test-key", true)); diags.HasError() {
+		t.Fatalf("update failed: %v", diags)
+	}
+	return captured
+}
+
+func TestUpdateKeySendsChangedDuration(t *testing.T) {
+	captured := applyKeyUpdate(t,
+		map[string]interface{}{"key_alias": "a", "duration": "30d"},
+		map[string]interface{}{"key_alias": "a", "duration": "90d"},
+	)
+	if captured["duration"] != "90d" {
+		t.Errorf("update payload duration = %v, want 90d", captured["duration"])
+	}
+}
+
+func TestUpdateKeyOmitsUnchangedDuration(t *testing.T) {
+	captured := applyKeyUpdate(t,
+		map[string]interface{}{"key_alias": "a", "duration": "30d"},
+		map[string]interface{}{"key_alias": "b", "duration": "30d"},
+	)
+	if captured["key_alias"] != "b" {
+		t.Fatalf("update payload key_alias = %v, want b", captured["key_alias"])
+	}
+	if v, present := captured["duration"]; present {
+		t.Errorf("update payload unexpectedly contains duration = %v", v)
 	}
 }
