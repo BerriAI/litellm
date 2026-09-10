@@ -1,0 +1,61 @@
+use serde_json::{Value, json};
+
+use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+
+fn request_body(request: &str) -> Value {
+    serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
+}
+
+#[tokio::test]
+async fn facade_executes_vertex_deepseek_at_the_openai_endpoint() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({
+        "choices":[{"message":{"content":"recognized"}}],
+        "usage":{"prompt_tokens":1}
+    }))])
+    .await;
+    let mut request = wire_request(
+        "vertex_ai/deepseek-ocr-maas",
+        &base,
+        json!({
+            "vertex_project":"project-1",
+            "vertex_location":"europe-west4",
+            "temperature":0.1
+        }),
+    );
+    request.document = request
+        .document
+        .with_source("gs://bucket/document.pdf".into());
+
+    let response = perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(response.pages[0]["markdown"], "recognized");
+    assert_eq!(response.usage_info.unwrap()["prompt_tokens"], 1);
+    let requests = seen.lock().unwrap();
+    assert!(requests[0].starts_with(
+        "POST /v1/projects/project-1/locations/europe-west4/endpoints/openapi/chat/completions "
+    ));
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-key")
+    );
+    let body = request_body(&requests[0]);
+    assert_eq!(body["model"], "deepseek-ai/deepseek-ocr-maas");
+    assert_eq!(body["temperature"], 0.1);
+    assert_eq!(
+        body["messages"][0]["content"][0],
+        json!({"type":"document_url","document_url":"gs://bucket/document.pdf"})
+    );
+}
+
+#[test]
+fn host_registration_selects_deepseek_without_affecting_mistral() {
+    assert!(crate::ocr::wire::is_supported_request(
+        "deepseek-ocr-maas",
+        Some("vertex_ai")
+    ));
+    assert!(crate::ocr::wire::is_supported_request(
+        "mistral-ocr-maas",
+        Some("vertex_ai")
+    ));
+}

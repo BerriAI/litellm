@@ -1,26 +1,35 @@
 use litellm_core::Error;
-use litellm_core::call_lifecycle::CallLifecycle;
+use litellm_core::ocr::{
+    OcrClient,
+    wire::{OcrWireRequest, decode_request},
+};
 use serde_json::Value;
 
-mod common_utils;
-mod handler;
-mod hooks;
-mod prepare;
 mod types;
 
 pub use types::OcrRequest;
 
-use handler::execute_ocr_provider_call;
-use prepare::{PreparedOcrCall, prepare_ocr_call};
-
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
-    let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
-    CallLifecycle::default()
-        .run_request(request, &hooks, |request| {
-            execute_ocr_provider_call(request, &hooks)
-        })
+    core_ocr(request).await
+}
+
+async fn core_ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
+    let client = OcrClient::new(crate::client::http_client().clone())?;
+    let core_request = decode_request(OcrWireRequest {
+        model: request.model.to_string(),
+        document: request.document,
+        api_key: request.api_key.map(str::to_string),
+        api_base: request.api_base.map(str::to_string),
+        custom_llm_provider: request.custom_llm_provider.map(str::to_string),
+        extra_headers: request.extra_headers,
+        optional_params: request.optional_params,
+        timeout_seconds: request.timeout.map(|timeout| timeout.as_secs_f64()),
+    })?;
+    client
+        .perform(core_request)
         .await
+        .map(|response| response.into_json())
 }
 
 #[cfg(test)]
@@ -37,6 +46,6 @@ mod tests {
         ));
         assert!(is_supported_request("parse-v3", Some("reducto")));
         assert!(is_supported_request("mistral-ocr", Some("vertex_ai")));
-        assert!(!is_supported_request("deepseek-ocr", Some("vertex_ai")));
+        assert!(is_supported_request("deepseek-ocr", Some("vertex_ai")));
     }
 }
