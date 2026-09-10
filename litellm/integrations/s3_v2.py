@@ -24,7 +24,7 @@ from litellm.integrations.s3 import (
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -366,7 +366,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Sign the request
             aws_request: Final = AWSRequest(method="PUT", url=url, data=json_string, headers=headers)
             aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=self.s3_region_name)
-            S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
+            await run_aws_signing(S3SigV4Auth(credentials, "s3", aws_region_name).add_auth, aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())
@@ -597,7 +597,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Sign the request
             aws_request: Final = AWSRequest(method="GET", url=url, headers=headers)
-            S3SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+            await run_aws_signing(S3SigV4Auth(credentials, "s3", self.s3_region_name).add_auth, aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())

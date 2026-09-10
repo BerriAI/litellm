@@ -37,17 +37,21 @@ Safe to enable globally:
 """
 
 import time
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
 
 import httpx
 
 from litellm._logging import verbose_router_logger
 from litellm.exceptions import (
-    BadRequestError,
     RateLimitError,
     ServiceUnavailableError,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    encrypted_content_of_block,
+    strip_encrypted_reasoning_from_messages,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.types.llms.openai import AllMessageValues
@@ -138,14 +142,47 @@ class EncryptedContentAffinityCheck(CustomLogger):
             # If no encoded ID, check if encrypted_content itself is wrapped
             encrypted_content = item.get("encrypted_content")
             if encrypted_content and isinstance(encrypted_content, str):
-                (
-                    model_id,
-                    _,
-                ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
+                model_id = EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(encrypted_content)
                 if model_id:
                     return model_id
 
         return None
+
+    @staticmethod
+    def _anthropic_content_blocks(messages: object) -> Iterator[Mapping[str, object]]:
+        if not isinstance(messages, list):
+            return iter(())
+        return (
+            cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
+            for message in cast(list[object], messages)  # cast-ok: narrowed by isinstance
+            if isinstance(message, Mapping)
+            for content in (cast(Mapping[str, object], message).get("content"),)  # cast-ok: narrowed by isinstance
+            if isinstance(content, list)
+            for block in cast(list[object], content)  # cast-ok: narrowed by isinstance
+            if isinstance(block, Mapping)
+        )
+
+    @staticmethod
+    def _model_id_from_wrapped_encrypted_content(encrypted_content: str) -> str | None:
+        model_id, _ = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
+        return model_id or None
+
+    @staticmethod
+    def _extract_model_id_from_anthropic_messages(messages: object) -> str | None:
+        return next(
+            (
+                model_id
+                for block in EncryptedContentAffinityCheck._anthropic_content_blocks(messages)
+                if (encrypted_content := encrypted_content_of_block(block)) is not None
+                if (
+                    model_id := EncryptedContentAffinityCheck._model_id_from_wrapped_encrypted_content(
+                        encrypted_content
+                    )
+                )
+                is not None
+            ),
+            None,
+        )
 
     @staticmethod
     def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
@@ -157,6 +194,23 @@ class EncryptedContentAffinityCheck(CustomLogger):
             if deployment_model_id is not None and str(deployment_model_id) == str(model_id):
                 return deployment
         return None
+
+    @staticmethod
+    def _request_team_id(request_kwargs: Mapping[str, object]) -> str | None:
+        containers: Final = (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
+        team_ids: Final = (c.get("user_api_key_team_id") for c in containers if isinstance(c, Mapping))
+        return next((tid for tid in team_ids if isinstance(tid, str)), None)
+
+    def _routed_group_candidate_model_ids(self, request_kwargs: Mapping[str, object], model: str) -> frozenset[str]:
+        """
+        Deployment ids that could serve this turn's routed ``model``, as the router
+        resolves a route (model_group_alias / routing group / model_name / team /
+        pattern). Delegates to the router so the full precedence is not re-derived here
+        and no deployment ids are written into request kwargs bound for the provider.
+        """
+        if self.router is None:
+            return frozenset()
+        return self.router.get_candidate_model_ids_for_route(model=model, team_id=self._request_team_id(request_kwargs))
 
     @staticmethod
     def _encryption_boundary_key(
@@ -223,12 +277,17 @@ class EncryptedContentAffinityCheck(CustomLogger):
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
-        If the request ``input`` contains litellm-encoded item IDs, decode the
-        embedded ``model_id`` and pin the request to that deployment. Raises
-        ``RateLimitError`` / ``ServiceUnavailableError`` / ``BadRequestError``
-        when the originating deployment is unavailable and no encryption-boundary
-        peer exists, rather than dispatching a doomed request to a non-peer
-        deployment. The 429/503 split mirrors the originating cooldown's status:
+        If the request ``input`` contains litellm-encoded item IDs, or its Anthropic
+        ``messages`` replay a bridge-tagged thinking block, decode the embedded
+        ``model_id`` and pin the request to that deployment. Raises
+        ``RateLimitError`` / ``ServiceUnavailableError`` when the originating
+        deployment is a member of the routed model group but currently unavailable
+        and no encryption-boundary peer exists, rather than dispatching a doomed
+        request to a non-peer deployment. When the origin is not a member of the
+        routed group (an auto-router tier change, a model switch with no peer, a
+        removed deployment, or an unknown/forged marker), the encrypted reasoning is
+        stripped and the request dispatches with its readable history instead. The
+        429/503 split mirrors the originating cooldown's status:
         a 429-induced cooldown surfaces as 429 (with ``Retry-After`` set to the
         remaining cooldown window) so OpenAI-compatible clients back off and
         retry after the deployment is eligible again.
@@ -249,12 +308,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
 
         request_input: Final = request_kwargs.get("input")
-        model_id: Final = self._extract_model_id_from_input(request_input)
+        anthropic_messages: Final = messages or request_kwargs.get("messages")
+        model_id: Final = self._extract_model_id_from_input(
+            request_input
+        ) or self._extract_model_id_from_anthropic_messages(anthropic_messages)
         if not model_id:
             return typed_healthy_deployments
 
         verbose_router_logger.debug(
-            "EncryptedContentAffinityCheck: decoded model_id=%s from input item IDs",
+            "EncryptedContentAffinityCheck: decoded model_id=%s from the request's encrypted content markers",
             model_id,
         )
 
@@ -285,12 +347,35 @@ class EncryptedContentAffinityCheck(CustomLogger):
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             return boundary_matches
 
-        # Dispatching to a non-peer would guarantee an upstream
-        # `invalid_encrypted_content` 400, so fail fast with a clearer error.
+        # The origin cannot serve this turn's routed group and no peer shares the boundary, so its
+        # encrypted reasoning can never decrypt here. Strip it, keep the readable history, and dispatch
+        # to the routed group instead of failing. Membership is tested by deployment id against the set
+        # the router actually resolved for this route, not by model-group name, so an alias, a
+        # provider-qualified spelling, a team-public name, or a pattern route of the same group is not
+        # mistaken for a tier change. An unknown origin (a removed deployment, or a forged marker) is
+        # treated the same as a cross-group one, which also denies an authenticated caller a
+        # deployment-id existence oracle: a real cross-group id and a nonexistent id both strip and
+        # dispatch rather than returning distinguishable responses. Only a genuine same-group member
+        # that is currently unavailable falls through to the fail-fast, preserving the cooldown contract.
+        routed_group_model_ids: Final = (
+            self._routed_group_candidate_model_ids(request_kwargs, model) if originating is not None else frozenset()
+        )
+        if str(model_id) not in routed_group_model_ids:
+            verbose_router_logger.debug(
+                "EncryptedContentAffinityCheck: model_id=%s is not a candidate for the routed group %s; "
+                "forwarding without its encrypted reasoning",
+                model_id,
+                model,
+            )
+            ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
+            strip_encrypted_reasoning_from_messages(anthropic_messages)
+            return typed_healthy_deployments
+
+        # The origin is a member of the routed group but currently unavailable (cooled down); fail fast
+        # rather than dispatching to a non-peer, which would guarantee an upstream 400.
         raise await self._unavailable_origin_error(
             model=model,
             model_id=model_id,
-            originating=originating,
             parent_otel_span=parent_otel_span,
         )
 
@@ -298,25 +383,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
         self,
         model: str,
         model_id: str,
-        originating: Deployment | None,
         parent_otel_span: Span | None,
     ) -> Exception:
         # Public error messages intentionally omit the originating ``model_id`` so
         # an authenticated caller forging encrypted-content markers cannot use the
         # error surface to enumerate which deployment IDs exist on this router.
-        if originating is None:
-            return BadRequestError(
-                message=(
-                    "The deployment that produced this encrypted_content is no "
-                    "longer configured on this router, and no deployment on the "
-                    "same encryption boundary is available. Re-issue the request "
-                    "without the stale encrypted_content items, or restore the "
-                    "originating deployment."
-                ),
-                model=model,
-                llm_provider="",
-            )
-
         cooldown: Final = await self._get_origin_cooldown(model_id=model_id, parent_otel_span=parent_otel_span)
 
         if cooldown is not None and str(cooldown.get("status_code")) == "429":
