@@ -36,6 +36,28 @@ pub enum Error {
     Unsupported(&'static str),
 }
 
+#[derive(Debug, ThisError)]
+pub(crate) enum MediaError {
+    #[error("media URL rejected by network policy")]
+    BlockedUrl,
+    #[error("media download is disabled")]
+    DownloadDisabled,
+    #[error("media download exceeds the maximum size")]
+    DownloadTooLarge,
+    #[error("too many redirects while fetching media")]
+    TooManyRedirects,
+    #[error("media redirect is missing a Location header")]
+    MissingRedirectLocation,
+    #[error("invalid media redirect")]
+    InvalidRedirect,
+    #[error("media download failed with status {0}")]
+    Http(u16),
+    #[error("media download timed out")]
+    Timeout,
+    #[error("{0}")]
+    Transport(#[from] TransportError),
+}
+
 #[derive(Clone, Debug, ThisError, PartialEq, Eq)]
 pub enum TransportError {
     #[error("upstream request failed with status {status}: {body}")]
