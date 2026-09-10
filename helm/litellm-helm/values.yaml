@@ -180,6 +180,16 @@ proxy_config:
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
 
+# Serve Prometheus /metrics from a separate process (PROMETHEUS_METRICS_PORT)
+# so a scrape never runs on an inference worker. Adds a `metrics` port to the
+# container and a dedicated ClusterIP `<release>-metrics` Service, and the
+# ServiceMonitor scrapes it instead of the proxy port. The separate port has
+# no virtual-key auth: keep it off public ingress. Needs the proxy image
+# v1.101.0 or newer.
+metricsServer:
+  enabled: false
+  port: 4001
+
 resources:
   {}
   # Unset by default so the chart installs on small clusters such as Minikube, and so an

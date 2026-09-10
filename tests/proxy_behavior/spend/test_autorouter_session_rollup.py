@@ -40,12 +40,26 @@ async def _turn(
     tokens: int = 100,
     spend: float = 0.01,
     saved: float = 0.02,
+    classifier_cost: float = 0.0,
     tier: "str | None" = None,
 ) -> None:
     touched: Final = 1 if (hit or ttl is not None or not covered) else 0
     await db.execute_raw(
         UPSERT_AUTOROUTER_SESSION_SQL,
-        key, session_id, router, router_type, model, at.isoformat(), tokens, spend, saved, covered, hit, ttl, touched,
+        key,
+        session_id,
+        router,
+        router_type,
+        model,
+        at.isoformat(),
+        tokens,
+        spend,
+        saved,
+        classifier_cost,
+        covered,
+        hit,
+        ttl,
+        touched,
         tier,
     )
 
@@ -53,7 +67,9 @@ async def _turn(
 async def _row(db, key: str, session_id: str = "s1", router: str = "auto-1") -> dict:
     rows = await db.query_raw(
         'SELECT * FROM "LiteLLM_AutoRouterSession" WHERE api_key = $1 AND session_id = $2 AND router_name = $3',
-        key, session_id, router,
+        key,
+        session_id,
+        router,
     )
     assert len(rows) == 1
     return rows[0]
@@ -143,9 +159,9 @@ async def test_out_of_order_turns_do_not_rewind_the_session(db):
 
 async def test_concurrent_writers_compose_without_losing_turns(db):
     key = f"k-{uuid.uuid4()}"
-    await _turn(db, key, "A", T0)
+    await _turn(db, key, "A", T0, classifier_cost=0.001)
     await asyncio.gather(
-        *(_turn(db, key, "A", T0 + timedelta(seconds=1 + offset), hit=1) for offset in range(30))
+        *(_turn(db, key, "A", T0 + timedelta(seconds=1 + offset), hit=1, classifier_cost=0.002) for offset in range(30))
     )
     row = await _row(db, key)
     assert row["turns"] == 31
@@ -154,6 +170,51 @@ async def test_concurrent_writers_compose_without_losing_turns(db):
         == row["turns"]
     )
     assert row["spend"] == pytest.approx(0.31)
+    assert row["saved_spend"] == pytest.approx(0.62)
+    assert row["classifier_cost"] == pytest.approx(0.061)
+    assert row["classifier_cost_recorded_turns"] == 31
+
+
+async def _legacy_turn(db, key: str, at: datetime, session_id: str = "s1", router: str = "auto-1") -> None:
+    await db.execute_raw(
+        """INSERT INTO "LiteLLM_AutoRouterSession" AS t (
+            api_key, session_id, router_name, router_type, first_turn_at, last_turn_at, last_model, turns, spend, saved_spend
+        ) VALUES ($1, $2, $3, 'complexity', $4::timestamp, $4::timestamp, 'A', 1, 0.01, 0.02)
+        ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
+            turns = t.turns + 1, spend = t.spend + EXCLUDED.spend, saved_spend = t.saved_spend + EXCLUDED.saved_spend,
+            last_turn_at = EXCLUDED.last_turn_at""",
+        key,
+        session_id,
+        router,
+        at.isoformat(),
+    )
+
+
+@pytest.mark.parametrize("writers", [(False,), (True,), (False, True), (True, False)])
+async def test_subtotal_coverage_survives_legacy_and_rolling_writers(db, writers: tuple[bool, ...]):
+    key: Final = f"k-{uuid.uuid4()}"
+    for offset, records_cost in enumerate(writers):
+        at: Final = T0 + timedelta(seconds=offset)
+        if records_cost:
+            await _turn(db, key, "A", at, classifier_cost=0.004)
+        else:
+            await _legacy_turn(db, key, at)
+
+    row: Final = await _row(db, key)
+    assert row["turns"] == len(writers)
+    assert row["spend"] == pytest.approx(0.01 * len(writers))
+    assert row["saved_spend"] == pytest.approx(0.02 * len(writers))
+    assert row["classifier_cost"] == pytest.approx(0.004 * sum(writers))
+    assert row["classifier_cost_recorded_turns"] == sum(writers)
+    groups: Final = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL, T0.isoformat(), (T0 + timedelta(days=1)).isoformat(), key
+    )
+    assert len(groups) == 1
+    assert groups[0]["classifier_cost"] == row["classifier_cost"]
+    assert groups[0]["classifier_cost_recorded_turns"] == sum(writers)
+    assert groups[0]["turns"] == len(writers)
+    assert groups[0]["spend"] == row["spend"]
+    assert groups[0]["saved_spend"] == row["saved_spend"]
 
 
 async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
@@ -161,14 +222,25 @@ async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
     router = f"r-{uuid.uuid4()}"
     in_window = f"s-{uuid.uuid4()}"
     out_of_window = f"s-{uuid.uuid4()}"
-    await _turn(db, key, "A", T0, session_id=in_window, router=router, saved=0.5, spend=0.25)
-    await _turn(db, key, "B", T0 + timedelta(seconds=60), session_id=in_window, router=router, saved=0.5, spend=0.25)
-    await _turn(db, key, "A", T0 - timedelta(days=40), session_id=out_of_window, router=router)
+    await _turn(
+        db,
+        key,
+        "B",
+        T0 + timedelta(seconds=60),
+        session_id=in_window,
+        router=router,
+        saved=0.5,
+        spend=0.25,
+        classifier_cost=0.01,
+    )
+    await _turn(db, key, "A", T0, session_id=in_window, router=router, saved=0.5, spend=0.25, classifier_cost=0.02)
+    await _turn(db, key, "A", T0 - timedelta(days=40), session_id=out_of_window, router=router, classifier_cost=9.0)
 
     rows = await db.query_raw(
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     matching = [row for row in rows if row["router_name"] == router]
     assert len(matching) == 1
@@ -178,19 +250,54 @@ async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
     assert grouped["turns"] == 2
     assert grouped["spend"] == pytest.approx(0.5)
     assert grouped["saved_spend"] == pytest.approx(1.0)
+    assert grouped["classifier_cost"] == pytest.approx(0.03)
+    assert grouped["classifier_cost_recorded_turns"] == 2
+    assert grouped["unordered_turns"] == 1
     assert grouped["session_seconds"] == pytest.approx(60.0)
+
+
+async def test_the_benchmarks_aggregate_can_filter_to_one_key(db):
+    router = f"r-{uuid.uuid4()}"
+    first_key = f"k-{uuid.uuid4()}"
+    second_key = f"k-{uuid.uuid4()}"
+    await _turn(db, first_key, "A", T0, router=router, saved=0.5, classifier_cost=0.01)
+    await _turn(db, second_key, "A", T0, router=router, saved=9.0, classifier_cost=0.09)
+
+    rows = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL,
+        (T0 - timedelta(days=1)).isoformat(),
+        (T0 + timedelta(days=1)).isoformat(),
+        first_key,
+    )
+    matching = [row for row in rows if row["router_name"] == router]
+    assert len(matching) == 1
+    assert matching[0]["sessions"] == 1
+    assert matching[0]["saved_spend"] == pytest.approx(0.5)
+    assert matching[0]["classifier_cost"] == pytest.approx(0.01)
+    assert matching[0]["classifier_cost_recorded_turns"] == 1
+
+    unknown_key_rows = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL,
+        (T0 - timedelta(days=1)).isoformat(),
+        (T0 + timedelta(days=1)).isoformat(),
+        f"k-{uuid.uuid4()}",
+    )
+    assert [row for row in unknown_key_rows if row["router_name"] == router] == []
 
 
 async def test_a_reconfigured_alias_reports_each_router_type_as_its_own_group(db):
     key = f"k-{uuid.uuid4()}"
     router = f"r-{uuid.uuid4()}"
     await _turn(db, key, "A", T0, session_id=f"s-{uuid.uuid4()}", router=router, router_type="complexity")
-    await _turn(db, key, "A", T0 + timedelta(seconds=10), session_id=f"s-{uuid.uuid4()}", router=router, router_type="quality")
+    await _turn(
+        db, key, "A", T0 + timedelta(seconds=10), session_id=f"s-{uuid.uuid4()}", router=router, router_type="quality"
+    )
 
     rows = await db.query_raw(
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     matching = sorted(
         (row for row in rows if row["router_name"] == router),
@@ -253,6 +360,7 @@ async def test_the_benchmarks_aggregate_sums_tier_turns_across_sessions(db):
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     grouped = next(row for row in rows if row["router_name"] == router)
     assert grouped["tier_turns"] == {"simple": 2, "complex": 1}
@@ -280,6 +388,7 @@ async def test_tier_maps_stay_separate_per_router_type_on_a_reconfigured_alias(d
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     by_type = {row["router_type"]: row["tier_turns"] for row in rows if row["router_name"] == router}
     assert by_type == {"complexity": {"medium": 1}, "quality": {"2": 1}}
@@ -294,6 +403,7 @@ async def test_a_window_with_no_tiered_turns_aggregates_to_an_empty_map(db):
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     grouped = next(row for row in rows if row["router_name"] == router)
     assert grouped["tier_turns"] == {}

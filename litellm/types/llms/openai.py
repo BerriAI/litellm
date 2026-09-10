@@ -632,7 +632,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     type: Required[Literal["reasoning"]]
     id: str
     encrypted_content: str | None
-    summary: list["ChatCompletionReasoningSummaryTextBlock"]
+    summary: ReadOnly[list[ChatCompletionReasoningSummaryTextBlock]]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
@@ -1562,6 +1562,9 @@ class ResponseFailedEvent(BaseLiteLLMOpenAIResponseObject):
 class ResponseIncompleteEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE]
     response: ResponsesAPIResponse
+
+
+ResponsesTerminalEvent: TypeAlias = ResponseCompletedEvent | ResponseIncompleteEvent | ResponseFailedEvent
 
 
 class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):

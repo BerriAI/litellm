@@ -6,8 +6,8 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Iterable, Mapping, Sequence
-from itertools import groupby
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from itertools import groupby, islice
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
@@ -227,6 +227,45 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
         if not frontier:
             return False
     return False
+
+
+def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> str | None:
+    """Data or remote URL for an Anthropic ``source`` block, in the form chat completions expects."""
+    source_type: Final = image_source.get("type")
+    if source_type == "base64":
+        media_type: Final = image_source.get("media_type") or "image/jpeg"
+        image_data: Final = image_source.get("data") or ""
+        return f"data:{media_type};base64,{image_data}" if image_data else None
+    if source_type == "url":
+        url: Final = image_source.get("url")
+        return url if isinstance(url, str) else ""
+    return None
+
+
+def _image_part_url(part: Mapping[str, object]) -> str | None:
+    """The image URL carried by one content part, whichever of the three dialects wrote it."""
+    part_type: Final = part.get("type")
+    if part_type == "image_url":
+        image_url: Final = part.get("image_url")
+        if isinstance(image_url, str):
+            return image_url
+        return image_url.get("url") if isinstance(image_url, Mapping) else None
+    if part_type == "input_image":
+        responses_url: Final = part.get("image_url")
+        return responses_url if isinstance(responses_url, str) else None
+    if part_type == "image":
+        source: Final = part.get("source")
+        return anthropic_image_source_to_openai_url(source) if isinstance(source, Mapping) else None
+    return None
+
+
+def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
+    """One image content part rewritten into chat-completions dialect, or None when it is not one.
+
+    Rebuilt rather than forwarded so no caller-controlled key beyond the URL rides along.
+    """
+    url: Final = _image_part_url(part)
+    return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
 def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> bool:
@@ -1281,17 +1320,128 @@ def flatten_top_level_schema_combinators(schema: Mapping[str, object]) -> Mappin
     return _flatten_schema_against_root(schema, schema, frozenset(), 0, {})  # mutable-ok: fresh per-call $ref memo
 
 
-def tool_with_flattened_parameters(tool: Mapping[str, object]) -> Mapping[str, object]:
+_SUBSCHEMA_KEYWORDS: Final = frozenset(
+    {
+        "additionalItems",
+        "additionalProperties",
+        "contains",
+        "else",
+        "if",
+        "items",
+        "not",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+)
+_SUBSCHEMA_LIST_KEYWORDS: Final = frozenset({"allOf", "anyOf", "items", "oneOf", "prefixItems"})
+_SUBSCHEMA_MAP_KEYWORDS: Final = frozenset(
+    {"$defs", "definitions", "dependentSchemas", "patternProperties", "properties"}
+)
+
+_MAX_SCHEMA_NESTING: Final = 1024
+
+
+def drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Drop every regex in a schema position that Python's ``re`` cannot compile.
+
+    OpenAI validates tool ``parameters`` against the 2020-12 metaschema with
+    ``jsonschema``'s format checker, which hands each ``pattern`` value and each
+    ``patternProperties`` key to ``re.compile``, so a regex written for an
+    ECMA-262 engine (Unicode property escapes such as ``\\p{Cc}``, as in Claude
+    Code's ``Artifact`` tool) is refused with "'...' is not a 'regex'" by every
+    model family on both the chat and Responses wires. Only schema positions are
+    walked (properties, items, combinators, ``$defs`` and the other applicators),
+    so a ``pattern`` key inside ``default``, ``examples``, ``const`` or vendor
+    extensions is data and stays. Outside strict mode the keyword is only a
+    hint, so dropping it costs the model a constraint and the caller nothing.
+    Compilable regexes and everything else pass through, the input is never
+    mutated, and the same object comes back when nothing was dropped. The walk
+    is level-order rather than recursive, rebuilt deepest level first, and stops
+    at more schema levels than a JSON parser admits, so a cyclic schema built in
+    code cannot spin it.
+    """
+    rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
+    for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
+        rebuilt.update(
+            (id(node), rewritten)
+            for node in level
+            if (rewritten := _node_without_non_python_regex(node, rebuilt)) is not node
+        )
+    return rebuilt.get(id(schema), schema)
+
+
+def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, object], ...]]:
+    frontier: tuple[Mapping[str, object], ...] = (schema,)  # rebind-ok: level-order cursor, one level a round
+    while frontier:
+        yield frontier
+        frontier = tuple(child for node in frontier for child in _subschemas(node))
+
+
+def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    for key, value in node.items():
+        if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+            yield from (sub for sub in value.values() if isinstance(sub, dict))
+        elif key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
+            yield from (sub for sub in value if isinstance(sub, dict))
+        elif key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
+            yield value
+
+
+def _node_without_non_python_regex(
+    node: Mapping[str, object], rebuilt: Mapping[int, Mapping[str, object]]
+) -> Mapping[str, object]:
+    kept: Final = {  # mutable-ok: tool parameters are JSON dicts
+        key: _keyword_value_rebuilt(key, value, rebuilt)
+        for key, value in node.items()
+        if key != "pattern" or not isinstance(value, str) or _is_python_regex(value)
+    }
+    return node if len(kept) == len(node) and all(kept[key] is node[key] for key in kept) else kept
+
+
+def _keyword_value_rebuilt(key: str, value: object, rebuilt: Mapping[int, Mapping[str, object]]) -> object:
+    if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+        kept: Final = {  # mutable-ok: tool parameters are JSON dicts
+            name: rebuilt.get(id(sub), sub)
+            for name, sub in value.items()
+            if key != "patternProperties" or not isinstance(name, str) or _is_python_regex(name)
+        }
+        return value if len(kept) == len(value) and all(kept[name] is value[name] for name in kept) else kept
+    if key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
+        items: Final = [rebuilt.get(id(sub), sub) for sub in value]  # mutable-ok: tool parameters are JSON lists
+        return value if all(new is old for new, old in zip(items, value, strict=True)) else items
+    if key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
+        return rebuilt.get(id(value), value)
+    return value
+
+
+def _is_python_regex(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+    except (re.error, RecursionError):
+        return False
+    return True
+
+
+def flatten_combinators_and_drop_non_python_regex_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
+    return flatten_top_level_schema_combinators(drop_non_python_regex_patterns(schema))
+
+
+def tool_with_sanitized_parameters(
+    tool: Mapping[str, object],
+    sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> Mapping[str, object]:
     function: Final = tool.get("function")
     if not isinstance(function, dict):
         return tool
     parameters: Final = function.get("parameters")
     if not isinstance(parameters, dict):
         return tool
-    flattened: Final = flatten_top_level_schema_combinators(parameters)
-    if flattened is parameters:
+    sanitized: Final = sanitize(parameters)
+    if sanitized is parameters:
         return tool
-    return {**tool, "function": {**function, "parameters": flattened}}  # mutable-ok: request tools are JSON dicts
+    return {**tool, "function": {**function, "parameters": sanitized}}  # mutable-ok: request tools are JSON dicts
 
 
 def _get_image_mime_type_from_url(url: str) -> str | None:
@@ -1784,14 +1934,11 @@ def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     return None, message_content
 
 
-def _readable_thinking_text(
-    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
-) -> str:
+def _readable_thinking_text(block: Mapping[str, object]) -> str:
     """The text a chat model can read back, empty for redacted blocks and malformed ones."""
     if block.get("type") != "thinking":
         return ""
-    thinking: Final = cast(ChatCompletionThinkingBlock, block).get("thinking")  # cast-ok: narrowed by the type tag
-    return str(thinking or "")
+    return str(block.get("thinking") or "")
 
 
 def reasoning_content_from_thinking_blocks(
@@ -1804,22 +1951,123 @@ def reasoning_content_from_thinking_blocks(
     return "\n".join(text for block in thinking_blocks if (text := _readable_thinking_text(block)))
 
 
-def responses_reasoning_item_from_thinking_blocks(
-    thinking_blocks: Iterable[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
-) -> ChatCompletionReasoningItem | None:
-    """Build a Responses API `reasoning` input item from Anthropic thinking blocks.
+ENCRYPTED_REASONING_SIGNATURE_PREFIX: Final = "litellm_encrypted_reasoning:"
 
-    The item carries no `id`: the Responses API rejects an empty one and 404s on any id it
-    did not mint itself, while an item without an id is always accepted.
+
+def encrypted_reasoning_signature(encrypted_content: str) -> str:
+    """The opaque value a Responses API reasoning item's `encrypted_content` travels in.
+
+    Anthropic clients echo a thinking block's `signature` and a redacted block's `data`
+    back verbatim, so either field can carry the encrypted reasoning across turns; the
+    prefix tells the two apart from a signature Anthropic minted.
     """
+    return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
+
+
+def _carries_encrypted_reasoning(signature: object) -> bool:
+    return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+
+
+def encrypted_content_from_signature(signature: object) -> str | None:
+    if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
+        return None
+    return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
+
+
+def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
+    match block.get("type"):
+        case "thinking":
+            return block.get("signature")
+        case "redacted_thinking":
+            return block.get("data")
+        case _:
+            return None
+
+
+def encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
+    return encrypted_content_from_signature(_encrypted_reasoning_field(block))
+
+
+def is_encrypted_reasoning_block(block: object) -> bool:
+    """A thinking or redacted_thinking block carrying Responses API encrypted reasoning.
+
+    Only the Responses API that minted the content can read it back, so an Anthropic
+    backend has to drop such a block rather than fail signature verification on it.
+    """
+    if not isinstance(block, Mapping):
+        return False
+    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
+    return _carries_encrypted_reasoning(_encrypted_reasoning_field(mapping))
+
+
+def strip_encrypted_reasoning_from_messages(messages: object) -> None:
+    """Drop the bridge-tagged reasoning blocks a routed deployment cannot decrypt from
+    Anthropic-shaped history.
+
+    The whole block goes, the way #40280 drops undecryptable Responses ``input`` items: a
+    provider that did not mint the block rejects it signed (a foreign signature) and unsigned
+    (a missing signature) alike, so keeping its text as an unsigned thinking block only moves
+    the 400 from the router to the provider.
+
+    Mutates the content lists in place: the router's fallback snapshot shares these
+    message objects, so a rebound list would replay the stripped blocks on the fallback hop.
+    """
+    if not isinstance(messages, list):
+        return
+    for content in _anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
+        _strip_encrypted_reasoning_from_blocks(content)
+
+
+def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
+    return (
+        cast(list[object], content)  # cast-ok: narrowed by isinstance
+        for message in messages
+        if isinstance(message, Mapping)
+        for content in (cast(Mapping[str, object], message).get("content"),)  # cast-ok: narrowed by isinstance
+        if isinstance(content, list)
+    )
+
+
+def _strip_encrypted_reasoning_from_blocks(content: object) -> None:
+    blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
+    kept: Final = tuple(block for block in blocks if not is_encrypted_reasoning_block(block))
+    blocks[:] = kept  # rebind-ok: shared with fallback snapshot
+
+
+def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
+    index, block = indexed_block
+    return f"encrypted:{index}" if is_encrypted_reasoning_block(block) else "summary"
+
+
+def _reasoning_item_from_block_group(group: tuple[Mapping[str, object], ...]) -> ChatCompletionReasoningItem | None:
     summary: Final[list[ChatCompletionReasoningSummaryTextBlock]] = [  # mutable-ok: API message payload
         ChatCompletionReasoningSummaryTextBlock(type="summary_text", text=text)
-        for block in thinking_blocks
+        for block in group
         if (text := _readable_thinking_text(block))
     ]
+    encrypted_content: Final = encrypted_content_of_block(group[0])
+    if encrypted_content is not None:
+        return ChatCompletionReasoningItem(type="reasoning", summary=summary, encrypted_content=encrypted_content)
     if not summary:
         return None
     return ChatCompletionReasoningItem(type="reasoning", summary=summary)
+
+
+def responses_reasoning_items_from_thinking_blocks(
+    thinking_blocks: Iterable[Mapping[str, object]],
+) -> tuple[ChatCompletionReasoningItem, ...]:
+    """Build Responses API `reasoning` input items from Anthropic thinking blocks.
+
+    A block carrying encrypted reasoning replays the item it came from byte for byte;
+    a run of plain thinking blocks collapses into one summary-only item. No item carries
+    an `id`: the Responses API 404s on any id it did not mint itself and rejects an empty
+    one, while an item without an id is always accepted.
+    """
+    return tuple(
+        item
+        for _, group in groupby(enumerate(thinking_blocks), key=_reasoning_replay_group_key)
+        if (item := _reasoning_item_from_block_group(tuple(block for _, block in group))) is not None
+    )
 
 
 def _parse_content_for_reasoning(

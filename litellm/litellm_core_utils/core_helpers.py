@@ -1,10 +1,12 @@
 # What is this?
 ## Helper utilities
 import copy
+import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
@@ -35,6 +37,41 @@ def safe_divide_seconds(seconds: float, denominator: float, default: float | Non
         return default
 
     return float(seconds / denominator)
+
+
+_DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
+
+
+def normalize_drop_params(value: object) -> bool | None:
+    if value is None or isinstance(value, bool):
+        return value
+    try:
+        return _DROP_PARAMS_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
+    except ValidationError:
+        return None
+
+
+def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool:
+    normalized: Final = normalize_drop_params(value)
+    if normalized is None and value is not None:
+        logger.warning("%s=%r is not a flag value, treating it as off", source, value)
+    return bool(normalized)
+
+
+DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
+
+
+def drop_params_env_flag(environ: Mapping[str, str], logger: logging.Logger) -> bool:
+    configured: Final = environ.get(DROP_PARAMS_ENV_VAR, "").strip()
+    if configured == "":
+        return False
+    normalized: Final = normalize_drop_params(configured)
+    if normalized is None:
+        logger.warning(
+            "%s=%r is not a flag value, treating it as on. Set it to true or false", DROP_PARAMS_ENV_VAR, configured
+        )
+        return True
+    return normalized
 
 
 def safe_divide(
@@ -419,7 +456,7 @@ def safe_deep_copy(data):
     if litellm.safe_memory_mode is True:
         return data
 
-    litellm_parent_otel_span: Any | None = None
+    litellm_parent_otel_span: object | None = None
     # Step 1: Remove the litellm_parent_otel_span
     litellm_parent_otel_span = None
     if isinstance(data, dict):
@@ -510,7 +547,7 @@ def independent_snapshot(
     }
 
 
-def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
+def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
     """
     Recursively filter out Exception objects and callable objects from dicts/lists.
 
@@ -542,7 +579,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return None
 
     if isinstance(data, dict):
-        result: Final[dict[str, Any]] = {}
+        result: Final[dict[str, object]] = {}
         for k, v in data.items():
             # Skip exception and callable values
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
@@ -556,7 +593,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
                 continue
         return result
     elif isinstance(data, list):
-        result_list: Final[list[Any]] = []
+        result_list: Final[list[object]] = []
         for item in data:
             # Skip exception and callable items
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
@@ -624,7 +661,7 @@ def redact_nested_match_and_regex_keys(
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
         seen: Final[set] = set()
-        stack: Final[list[Any]] = [redacted]
+        stack: Final[list[object]] = [redacted]
         while stack:
             node = stack.pop()
             node_id = id(node)

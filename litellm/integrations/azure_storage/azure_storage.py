@@ -36,7 +36,7 @@ AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
 def _cached_credential_chain_token_provider() -> Callable[[], str]:
     return get_azure_ad_token_provider(
         azure_scope=AZURE_STORAGE_TOKEN_SCOPE,
-        azure_credential=AzureCredentialType.DefaultAzureCredential,
+        azure_credential=AzureCredentialType.DeploymentIdentityCredential,
     )
 
 

@@ -495,7 +495,7 @@ def _closed_port() -> int:
         pytest.param(lambda c: c.async_get_ttl("lit4930"), id="async_get_ttl"),
     ],
 )
-async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no_ping, call_method):
+async def test_circuit_breaker_opens_when_method_swallows_redis_failure(call_method):
     """A guarded method that swallows its own Redis error must still count as a failure.
 
     These methods catch connection errors and return a default so callers degrade instead
@@ -506,7 +506,7 @@ async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no
     """
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
-    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+    cache = await asyncio.to_thread(RedisCache, host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
         await call_method(cache)
@@ -523,6 +523,50 @@ def test_circuit_breaker_open_keeps_sync_batch_get_cache_as_a_miss(sync_batch_re
         assert sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"]) == {}
 
     assert sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"]) == {}
+
+
+def test_batch_get_counts_raises_where_batch_get_cache_reports_a_miss(sync_batch_redis_cache):
+    """A caller that must fall back when Redis is unreachable needs the failure, not zeros.
+
+    The batch read answers a dead Redis with an empty dict, which a counting caller cannot tell
+    apart from "every counter is unset". Least-busy routing read that as an idle deployment and
+    kept sending traffic to it instead of falling back to this worker's own in-flight counts.
+    """
+    assert sync_batch_redis_cache.batch_get_cache(key_list=["lit7039"]) == {}
+
+    with pytest.raises(OSError, match="redis unavailable"):
+        sync_batch_redis_cache.batch_get_counts(["lit7039"])
+
+
+@pytest.mark.asyncio
+async def test_async_batch_get_counts_raises_where_async_batch_get_cache_reports_a_miss(redis_no_ping: None):
+    """Async twin: the async batch read hides the same failure behind an empty dict."""
+    failing_client = AsyncMock()
+    failing_client.mget.side_effect = OSError("redis unavailable")
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=MagicMock()
+    ):
+        cache = RedisCache(host="127.0.0.1", port=6379)
+
+    with patch.object(cache, "init_async_client", return_value=failing_client):
+        assert await cache.async_batch_get_cache(key_list=["lit7039"]) == {}
+
+        with pytest.raises(OSError, match="redis unavailable"):
+            await cache.async_batch_get_counts(["lit7039"])
+
+
+@pytest.mark.parametrize("stored", [b"3", "3"])
+def test_batch_get_counts_reads_counters_in_order_and_keeps_unset_keys_apart(stored, redis_no_ping: None):
+    """Counters come back positionally, so an unset key has to stay a hole rather than shift the
+    rest of the row onto the wrong deployments, and a count has to survive whether the client
+    hands it back as bytes or as text."""
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=MagicMock()
+    ):
+        cache = RedisCache(host="127.0.0.1", port=6379)
+    cache.redis_client.mget.return_value = [stored, None, b"0"]
+
+    assert cache.batch_get_counts(["dep-a", "dep-b", "dep-c"]) == (3, None, 0)
 
 
 @pytest.fixture
@@ -683,7 +727,7 @@ def test_call_stack_info_skips_guard_frames_when_deployed_without_sources(monkey
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_ping):
+async def test_circuit_breaker_success_still_resets_the_failure_streak():
     """A reachable Redis must keep the breaker closed, however many earlier calls failed.
 
     The guard now records success only when nothing failed while the method ran, so this
@@ -692,7 +736,7 @@ async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_
     """
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
-    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+    cache = await asyncio.to_thread(RedisCache, host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD - 1):
         await cache.async_get_cache("lit4930")
@@ -710,7 +754,7 @@ async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker_covers_lua_script_execution(redis_no_ping):
+async def test_circuit_breaker_covers_lua_script_execution():
     """Lua script execution must feed the breaker like every other Redis call.
 
     The v3 rate limiter issues all of its Redis traffic through async_register_script, so
@@ -722,7 +766,7 @@ async def test_circuit_breaker_covers_lua_script_execution(redis_no_ping):
 
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
-    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+    cache = await asyncio.to_thread(RedisCache, host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
     run_script = cache.async_register_script("return 1")
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
@@ -823,15 +867,26 @@ async def test_event_loop_stall_timeout_burst_keeps_breaker_closed():
     Every operation already waiting on the loop times out together when the loop resumes,
     so a purely consecutive threshold is satisfied instantly even though the Redis on the
     other end (here an in-process fake that answers immediately) is healthy.
+
+    The fake checks its own client deadline against the clock, the way a client library
+    does, rather than wrapping the call in asyncio.wait_for: before 3.12 wait_for returns
+    the inner result when the inner future also completed during the stall, so the burst
+    never materialises and the test cannot exercise the duration gate.
     """
     import time as time_mod
+
+    from redis.exceptions import TimeoutError as RedisTimeoutError
 
     from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
 
     breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
 
     async def healthy_redis_call_with_client_timeout():
-        return await asyncio.wait_for(asyncio.sleep(0.001, result="ok"), timeout=0.05)
+        deadline = time_mod.monotonic() + 0.05
+        await asyncio.sleep(0.001)
+        if time_mod.monotonic() > deadline:
+            raise RedisTimeoutError("read timed out")
+        return "ok"
 
     async def stall_the_loop():
         await asyncio.sleep(0)
@@ -842,7 +897,7 @@ async def test_event_loop_stall_timeout_burst_keeps_breaker_closed():
         stall_the_loop(),
         return_exceptions=True,
     )
-    timeouts = [r for r in results if isinstance(r, asyncio.TimeoutError)]
+    timeouts = [r for r in results if isinstance(r, RedisTimeoutError)]
     assert len(timeouts) >= breaker.failure_threshold, "the stall must time out a full burst"
 
     assert breaker.is_open() is False, "a healthy Redis behind one loop stall must stay in the pool"

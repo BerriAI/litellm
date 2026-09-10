@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
@@ -14,7 +15,9 @@ vi.mock("./useShadowEval", () => ({
 }));
 
 const authorizedRoleMock = vi.fn(() => ({ accessToken: "token", isViewOnly: false }));
-vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => authorizedRoleMock() }));
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ userId: "test-user-id", userRole: "Admin", ...authorizedRoleMock() }),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useInfiniteKeys: vi.fn(() => ({
@@ -68,26 +71,32 @@ vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
   })),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
+vi.mock("@/app/(dashboard)/hooks/models/useModels", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/models/useModels")>()),
   useAutoRouters: vi.fn(() => ({
     data: [
       { model_name: "claude-auto", litellm_params: { model: "auto_router/claude-auto" } },
       { model_name: "gpt-auto", litellm_params: { model: "auto_router/gpt-auto" } },
     ],
   })),
-  usePlainModelGroups: vi.fn(() => new Set(["prod-claude"])),
+  usePlainModelGroups: vi.fn(() => new Set(["prod-claude", "prod-judge"])),
+  usePlainChatModelGroups: vi.fn(() => new Set(["prod-claude", "prod-judge"])),
+  usePlainChatModelDeployments: vi.fn(() => [
+    {
+      model_name: "prod-judge",
+      litellm_params: { model: "anthropic/claude-sonnet-5" },
+      model_info: { mode: "chat" },
+    },
+  ]),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
-  useModelCostMap: vi.fn(() => ({
-    data: {
-      "claude-sonnet-5": { litellm_provider: "anthropic", mode: "chat" },
-      "gpt-4o": { litellm_provider: "openai", mode: "chat" },
-      "gemini/gemini-2.5-pro": { litellm_provider: "gemini", mode: "chat" },
-      "text-embedding-3-large": { litellm_provider: "openai", mode: "embedding" },
-    },
-  })),
+vi.mock("@/components/networking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/networking")>()),
+  modelInfoCall: vi.fn(),
 }));
+
+import { usePlainChatModelGroups, usePlainModelGroups } from "@/app/(dashboard)/hooks/models/useModels";
+import { modelInfoCall } from "@/components/networking";
 
 import ShadowEvalSection, { shadowedTargetLabel } from "./ShadowEvalSection";
 import {
@@ -104,9 +113,10 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   status: "running",
   router_name: "claude-auto",
   router_names: ["claude-auto"],
+  models: [],
   direction: "forward",
   baseline_model: null,
-  judge_model: "anthropic/claude-sonnet-5",
+  judge_model: "prod-judge",
   shadow_percentage: 10,
   targets: [
     {
@@ -246,6 +256,85 @@ describe("ShadowEvalSection", () => {
     expect(await screen.findByText("Keys could not be loaded. Refresh the page to retry.")).toBeInTheDocument();
     expect(screen.queryByText("No matching keys")).not.toBeInTheDocument();
     if (defaultKeysImpl) vi.mocked(useInfiniteKeys).mockImplementation(defaultKeysImpl);
+  });
+
+  it("labels only configured judge recommendations", async () => {
+    const user = userEvent.setup();
+    mockHooks({});
+    render(<ShadowEvalSection />);
+
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+    expect(screen.getByRole("option", { name: /prod-judge.*Recommended/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /openai\/gpt-4o/ })).not.toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await chooseSelectOption(
+      user,
+      screen.getByText("Adoption check: key's traffic vs the router"),
+      "Regression check: router's picks vs a baseline",
+    );
+    await user.click(screen.getByPlaceholderText("Select a baseline model"));
+    expect(screen.getByRole("option", { name: "prod-judge", exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
+  });
+
+  it("keeps custom models selectable through the real model hooks without widening chat choices to traffic filters", async () => {
+    const hooks = await vi.importActual<typeof import("@/app/(dashboard)/hooks/models/useModels")>(
+      "@/app/(dashboard)/hooks/models/useModels",
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const deployments = [
+      { model_name: "custom-chat", litellm_params: { model: "openai/private-chat" } },
+      { model_name: "custom-judge", litellm_params: { model: "openai/private-judge" }, model_info: { mode: null } },
+      {
+        model_name: "embedding",
+        litellm_params: { model: "openai/private-embedding" },
+        model_info: { mode: "embedding" },
+      },
+      {
+        model_name: "responses-only",
+        litellm_params: { model: "openai/private-responses" },
+        model_info: { mode: "responses" },
+      },
+      { model_name: "auto-router", litellm_params: { model: "auto_router/complexity_router" } },
+    ];
+    vi.mocked(modelInfoCall).mockResolvedValue({ data: deployments, total_pages: 1 });
+    const user = userEvent.setup();
+    const { start } = mockHooks({});
+    await vi.mocked(usePlainModelGroups).withImplementation(hooks.usePlainModelGroups, async () => {
+      await vi.mocked(usePlainChatModelGroups).withImplementation(hooks.usePlainChatModelGroups, async () => {
+        render(
+          <QueryClientProvider client={client}>
+            <ShadowEvalSection />
+          </QueryClientProvider>,
+        );
+        await chooseSelectOption(user, screen.getByPlaceholderText("Every model the targets use"), "responses-only");
+        await chooseSelectOption(user, screen.getByPlaceholderText("Every model the targets use"), "custom-chat");
+        await chooseSelectOption(
+          user,
+          screen.getByText("Adoption check: key's traffic vs the router"),
+          "Regression check: router's picks vs a baseline",
+        );
+        await user.click(screen.getByPlaceholderText("Search keys by alias"));
+        await user.click(within(await screen.findByTestId("paginated-multi-select-list")).getByText("prod-alpha"));
+        await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
+        await user.click(screen.getByPlaceholderText("Select a judge model"));
+        expect(screen.getAllByRole("option")).toHaveLength(2);
+        expect(screen.getByRole("option", { name: "custom-chat", exact: true })).toBeInTheDocument();
+        expect(screen.getByRole("option", { name: "custom-judge", exact: true })).toBeInTheDocument();
+        await user.click(screen.getByRole("option", { name: "custom-judge", exact: true }));
+        await user.click(screen.getByPlaceholderText("Select a baseline model"));
+        expect(screen.getAllByRole("option")).toHaveLength(2);
+        expect(screen.getByRole("option", { name: "custom-chat", exact: true })).toBeInTheDocument();
+        expect(screen.getByRole("option", { name: "custom-judge", exact: true })).toBeInTheDocument();
+        await user.click(screen.getByRole("option", { name: "custom-chat", exact: true }));
+        await user.click(screen.getByText("Start shadow eval"));
+        expect(start.mutate).toHaveBeenCalledWith(
+          expect.objectContaining({ judge_model: "custom-judge", baseline_model: "custom-chat", models: [] }),
+        );
+      });
+    });
+    client.clear();
   });
 
   it("offers the start form while the list is still loading", () => {
@@ -443,19 +532,21 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
 
     await user.click(screen.getByPlaceholderText("Select a judge model"));
-    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    expect(screen.queryByRole("option", { name: /openai\/gpt-4o/ })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: /prod-judge/ }));
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
       api_key_ids: ["hash-alpha", "hash-beta"],
       team_ids: [],
       user_ids: [],
+      models: [],
       router_names: ["gpt-auto"],
       direction: "forward",
       shadow_percentage: 10,
       duration_days: 7,
       max_budget: 10,
-      judge_model: "anthropic/claude-sonnet-5",
+      judge_model: "prod-judge",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
   });
@@ -472,21 +563,46 @@ describe("ShadowEvalSection", () => {
     await user.click(within(teamList).getByText("engineering"));
     await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
     await user.click(screen.getByPlaceholderText("Select a judge model"));
-    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(await screen.findByRole("option", { name: /prod-judge/ }));
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
       api_key_ids: [],
       team_ids: ["team-eng"],
       user_ids: [],
+      models: [],
       router_names: ["gpt-auto"],
       direction: "forward",
       shadow_percentage: 10,
       duration_days: 7,
       max_budget: 10,
-      judge_model: "anthropic/claude-sonnet-5",
+      judge_model: "prod-judge",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
+  });
+
+  it("narrows a job to the picked model groups and shows the scope on the job headline", async () => {
+    const user = userEvent.setup();
+    const { start } = mockHooks({});
+    render(<ShadowEvalSection />);
+
+    await user.click(screen.getByPlaceholderText("Search teams by alias"));
+    const teamList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(teamList).getByText("engineering"));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Every model the targets use"), "prod-claude");
+    await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+    await user.click(await screen.findByRole("option", { name: /prod-judge/ }));
+    await user.click(screen.getByText("Start shadow eval"));
+
+    expect(start.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ team_ids: ["team-eng"], models: ["prod-claude"] }),
+    );
+
+    const scoped = job({ models: ["prod-claude", "prod-haiku"] });
+    mockHooks({ jobs: [scoped], detailsById: { "job-1": scoped } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText("prod-claude, prod-haiku")).toBeInTheDocument();
   });
 
   it("requires a baseline model in reverse mode and submits it, while forward mode never shows the picker", async () => {
@@ -495,20 +611,25 @@ describe("ShadowEvalSection", () => {
     render(<ShadowEvalSection />);
 
     expect(screen.queryByPlaceholderText("Select a baseline model")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Every model the targets use")).toBeInTheDocument();
 
-    await user.click(screen.getByText("Adoption check: key's traffic vs the router"));
-    await user.click(await screen.findByText("Regression check: router's picks vs a baseline"));
+    await chooseSelectOption(
+      user,
+      screen.getByText("Adoption check: key's traffic vs the router"),
+      "Regression check: router's picks vs a baseline",
+    );
+    expect(screen.queryByPlaceholderText("Every model the targets use")).not.toBeInTheDocument();
     await user.click(screen.getByPlaceholderText("Search keys by alias"));
     const keyList = await screen.findByTestId("paginated-multi-select-list");
     await user.click(within(keyList).getByText("prod-alpha"));
     await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
     await user.click(screen.getByPlaceholderText("Select a judge model"));
-    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(await screen.findByRole("option", { name: /prod-judge/ }));
 
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
 
     await user.click(screen.getByPlaceholderText("Select a baseline model"));
-    expect(await screen.findByRole("option", { name: /openai\/gpt-4o/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /openai\/gpt-4o/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("option", { name: /prod-claude/ }));
     await user.click(screen.getByText("Start shadow eval"));
 
@@ -516,13 +637,14 @@ describe("ShadowEvalSection", () => {
       api_key_ids: ["hash-alpha"],
       team_ids: [],
       user_ids: [],
+      models: [],
       router_names: ["gpt-auto"],
       direction: "reverse",
       baseline_model: "prod-claude",
       shadow_percentage: 10,
       duration_days: 7,
       max_budget: 10,
-      judge_model: "anthropic/claude-sonnet-5",
+      judge_model: "prod-judge",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
   });
@@ -544,19 +666,20 @@ describe("ShadowEvalSection", () => {
       screen.getByText("Every router sees the same sampled requests, judged against the same live responses"),
     ).toBeInTheDocument();
     await user.click(screen.getByPlaceholderText("Select a judge model"));
-    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(await screen.findByRole("option", { name: /prod-judge/ }));
     await user.click(screen.getByText("Start shadow eval"));
 
     const expectedBody = {
       api_key_ids: ["hash-alpha"],
       team_ids: [],
       user_ids: [],
+      models: [],
       router_names: ["gpt-auto", "claude-auto"],
       direction: "forward",
       shadow_percentage: 10,
       duration_days: 7,
       max_budget: 10,
-      judge_model: "anthropic/claude-sonnet-5",
+      judge_model: "prod-judge",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
   });
@@ -574,10 +697,13 @@ describe("ShadowEvalSection", () => {
     await user.click(await screen.findByText("gpt-auto"));
     await user.click(routerInput);
     await user.click(await screen.findByText("claude-auto"));
-    await user.click(screen.getByText("Adoption check: key's traffic vs the router"));
-    await user.click(await screen.findByText("Regression check: router's picks vs a baseline"));
+    await chooseSelectOption(
+      user,
+      screen.getByText("Adoption check: key's traffic vs the router"),
+      "Regression check: router's picks vs a baseline",
+    );
     await user.click(screen.getByPlaceholderText("Select a judge model"));
-    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(await screen.findByRole("option", { name: /prod-judge/ }));
     await user.click(screen.getByPlaceholderText("Select a baseline model"));
     await user.click(screen.getByRole("option", { name: /prod-claude/ }));
 

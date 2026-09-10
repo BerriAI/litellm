@@ -162,6 +162,19 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             output_item["arguments"] = redacted_str
 
 
+def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Return a copy of a ``StandardLoggingPayload`` with its messages and response redacted.
+
+    The success path redacts through ``perform_redaction`` before a callback ever sees the
+    payload, but the failure path does not, so a callback that batches both has to redact
+    the ones it is handed.
+    """
+    redacted: Final = copy.deepcopy(dict(payload))  # mutable-ok: redacted in place below
+    _redact_standard_logging_object({"standard_logging_object": redacted})  # mutable-ok: the callee's shape
+    return redacted
+
+
 def _redact_standard_logging_object(model_call_details: dict):
     """Redact messages and response inside standard_logging_object if present."""
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
