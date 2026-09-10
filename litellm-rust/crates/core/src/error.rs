@@ -123,7 +123,10 @@ impl From<TransportError> for Error {
 
 impl From<crate::AuthError> for Error {
     fn from(error: crate::AuthError) -> Self {
-        Self::Auth(error.to_string())
+        match error {
+            crate::AuthError::MissingApiKey { provider } => Self::MissingApiKey { provider },
+            error => Self::Auth(error.to_string()),
+        }
     }
 }
 
@@ -141,6 +144,14 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
 #[cfg(test)]
 mod transport_tests {
     use super::*;
+
+    #[test]
+    fn missing_auth_key_preserves_provider_in_public_error() {
+        assert_eq!(
+            Error::from(crate::AuthError::MissingApiKey { provider: "Vertex" }),
+            Error::MissingApiKey { provider: "Vertex" }
+        );
+    }
 
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {
