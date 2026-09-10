@@ -1,10 +1,15 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+import traceback
+from collections.abc import Coroutine, Mapping, Sequence
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
+
+from typing_extensions import ReadOnly
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_logger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
@@ -17,9 +22,11 @@ from litellm.types.llms.openai import (
 from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
+from .realtime_errors import client_close_code, realtime_error_event, websocket_close_reason
 
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
+    from websockets.exceptions import ConnectionClosed
 
     from litellm.types.guardrails import GuardrailEventHooks
 
@@ -28,15 +35,79 @@ else:
     CLIENT_CONNECTION_CLASS = Any
 
 
-class _ClientWebSocketExceptions(Protocol):
-    ConnectionClosed: type[Exception]
+REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 
 
-class _ClientWebSocket(Protocol):
-    exceptions: _ClientWebSocketExceptions
+@dataclass(frozen=True, slots=True)
+class BackendClose:
+    code: int
+    reason: str
 
+    @property
+    def message(self) -> str:
+        if not self.reason:
+            return f"upstream websocket closed with code {self.code}"
+        return f"upstream websocket closed with code {self.code}: {self.reason}"
+
+
+class ClientLoopExit(Enum):
+    CLIENT_DISCONNECTED = auto()
+    BACKEND_CLOSED = auto()
+
+
+def backend_close_from(error: "ConnectionClosed") -> BackendClose:
+    if error.rcvd is None:
+        return BackendClose(code=1006, reason=str(error))
+    return BackendClose(code=error.rcvd.code, reason=error.rcvd.reason)
+
+
+class _ASGIScope(TypedDict, total=False):
+    """The part of an ASGI connection scope this module reads."""
+
+    headers: ReadOnly[Sequence[tuple[bytes | str, bytes | str]]]
+
+
+class _ClientEventItem(TypedDict, total=False):
+    """The ``item`` payload of a client ``conversation.item.create`` frame."""
+
+    type: ReadOnly[str]
+    role: ReadOnly[str]
+    output: ReadOnly[object]
+    content: ReadOnly[Sequence[object]]
+
+
+class _ClientEventFrame(TypedDict, total=False):
+    """The fields the proxy reads from a client realtime frame."""
+
+    type: ReadOnly[str]
+    item: ReadOnly[_ClientEventItem]
+    session: ReadOnly[Mapping[str, object]]
+
+
+class _ResponseDoneBody(TypedDict, total=False):
+    """The ``response`` body of a ``response.done`` event, as read for spend logging."""
+
+    output: ReadOnly[Sequence[Mapping[str, object]]]
+
+
+class _ScopedWebSocket(Protocol):
+    @property
+    def scope(self) -> _ASGIScope: ...
+
+
+class _ClientWebSocket(_ScopedWebSocket, Protocol):
     async def send_text(self, data: str) -> None: ...
     async def receive_text(self) -> str: ...
+    async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
+
+
+class _LoggingWorker(Protocol):
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None: ...
+
+
+def _decode_json_object(payload: str) -> Mapping[str, object]:
+    """Decode a realtime frame into its top-level field mapping."""
+    return json.loads(payload)
 
 
 class RealtimeEventNormalizer(Protocol):
@@ -67,11 +138,14 @@ class RealTimeStreaming:
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
+        logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
     ):
         self.websocket: _ClientWebSocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
+        self._logging_worker = logging_worker
         self.messages: list[OpenAIRealtimeEvents] = []
+        self._backend_sent_frames: bool = False
         self.input_message: dict = {}
         self.input_messages: list[dict[str, str]] = []
         self.session_tools: list[dict] = []
@@ -289,12 +363,30 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
+    def _flush_unbilled_transcription_usage(self) -> None:
+        if self.provider_config is None:
+            return
+        usage: Final = self.provider_config.unbilled_usage_on_session_close(self.model)
+        if usage is None:
+            return
+        flush_event: Final = (
+            cast(  # cast-ok: usage-only partial event, the same shape _capture_transcription_usage logs
+                OpenAIRealtimeEvents,
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "usage": usage,
+                },
+            )
+        )
+        self.store_message(flush_event)
+        self._capture_transcription_usage(flush_event)
+
     def _collect_tool_calls_from_response_done(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
         """Extract function_call items from response.done events for spend logging."""
         try:
             if event_obj.get("type") != "response.done":
                 return
-            response: Final = cast(dict[str, Any], event_obj.get("response", {}))
+            response: Final = cast(_ResponseDoneBody, event_obj.get("response", {}))
             item: Mapping[str, object]
             for item in response.get("output", []):
                 if item.get("type") == "function_call":
@@ -329,9 +421,10 @@ class RealTimeStreaming:
             # Route through the bounded logging worker (per-coroutine timeout +
             # concurrency cap) instead of a bare create_task, so a slow callback
             # can't leave suspended tasks pinning each call's response in memory.
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            self._logging_worker.ensure_initialized_and_enqueue(
                 self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True)
             )
+            self.logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
     async def _send_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
@@ -353,7 +446,7 @@ class RealTimeStreaming:
             sent = False
             for msg in transformed:
                 try:
-                    msg_obj = json.loads(msg)
+                    msg_obj = _decode_json_object(msg)
                 except (json.JSONDecodeError, TypeError):
                     msg_obj = None
                 if isinstance(msg_obj, dict) and self.provider_config.is_setup_message(msg_obj):
@@ -399,7 +492,7 @@ class RealTimeStreaming:
             return message
 
         try:
-            message_obj: Final[Mapping[str, object]] = json.loads(message)
+            message_obj: Final = _decode_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -468,7 +561,7 @@ class RealTimeStreaming:
 
         for message in messages:
             try:
-                msg_type = json.loads(message).get("type")
+                msg_type = _decode_json_object(message).get("type")
             except (json.JSONDecodeError, TypeError):
                 collapsed.extend(pending_appends)
                 pending_appends = []
@@ -502,14 +595,14 @@ class RealTimeStreaming:
         if self._backend_setup_complete and not self._flushing_pending_messages_until_setup:
             return False
         try:
-            msg_obj: Final[Mapping[str, object]] = json.loads(message)
+            msg_obj: Final = _decode_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return False
         return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
 
     def _buffer_pending_message_until_setup(self, message: str) -> None:
         try:
-            msg_type = json.loads(message).get("type")
+            msg_type = _decode_json_object(message).get("type")
         except (json.JSONDecodeError, TypeError):
             msg_type = None
 
@@ -602,7 +695,7 @@ class RealTimeStreaming:
         ``return_new_content_delta_events`` modality lookup, ...).
         """
         try:
-            message_obj: Final = json.loads(transformed_message)
+            message_obj: Final = _decode_json_object(transformed_message)
             if "setup" in message_obj:
                 self.session_configuration_request = transformed_message
         except (json.JSONDecodeError, TypeError):
@@ -744,6 +837,8 @@ class RealTimeStreaming:
 
         for callback in litellm.callbacks:
             if not isinstance(callback, CustomGuardrail):
+                continue
+            if callback.use_native_lifecycle_hooks:
                 continue
             if id(callback) in _already_run:
                 continue
@@ -912,6 +1007,7 @@ class RealTimeStreaming:
                 transcript = event.get("transcript", "")
                 self._collect_user_input_from_backend_event(cast(dict, event))
                 self.store_message(event_str)
+                self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
                 blocked = await self.run_realtime_guardrails(
                     cast(str, transcript),
@@ -928,7 +1024,7 @@ class RealTimeStreaming:
     def _parse_backend_event(raw_response: str) -> dict[str, object] | None:
         """Parse a backend frame once. Returns None for non-JSON or non-object frames."""
         try:
-            event: Final = json.loads(raw_response)
+            event: Final = _decode_json_object(raw_response)
         except (json.JSONDecodeError, TypeError):
             return None
         return event if isinstance(event, dict) else None
@@ -973,69 +1069,94 @@ class RealTimeStreaming:
             return True
         return False
 
-    async def backend_to_client_send_messages(self):
+    async def _relay_backend_messages(self) -> NoReturn:
+        while True:
+            try:
+                raw_response = await self.backend_ws.recv(decode=False)
+            except TypeError:
+                raw_response = await self.backend_ws.recv()
+            self._backend_sent_frames = True
+
+            if isinstance(raw_response, bytes):
+                try:
+                    raw_response = raw_response.decode("utf-8")
+                except UnicodeDecodeError:
+                    verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
+                    continue
+
+            if self.provider_config:
+                try:
+                    await self._handle_provider_config_message(raw_response)
+                except Exception as e:
+                    verbose_logger.exception("Error processing backend message, skipping: %s", e)
+                    continue
+            else:
+                event = self._parse_backend_event(raw_response)
+                if event is None:
+                    await self.websocket.send_text(raw_response)
+                    continue
+
+                if self._should_drop_event_from_client(event):
+                    continue
+
+                if await self._handle_raw_backend_message(event, raw_response):
+                    continue
+
+                event = self._normalize_event_for_ga_client(event)
+                self.store_message(event)
+
+                if not self._client_wants_beta:
+                    await self.websocket.send_text(json.dumps(event))
+                    continue
+
+                translated = self._translate_event_to_beta(event)
+                if translated is None:
+                    continue
+                await self.websocket.send_text(json.dumps(translated))
+
+    async def backend_to_client_send_messages(self) -> BackendClose:
         import websockets
 
         try:
-            while True:
-                try:
-                    raw_response = await self.backend_ws.recv(decode=False)
-                except TypeError:
-                    raw_response = await self.backend_ws.recv()
-
-                if isinstance(raw_response, bytes):
-                    try:
-                        raw_response = raw_response.decode("utf-8")
-                    except UnicodeDecodeError:
-                        verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
-                        continue
-
-                if self.provider_config:
-                    try:
-                        await self._handle_provider_config_message(raw_response)
-                    except Exception as e:
-                        verbose_logger.exception("Error processing backend message, skipping: %s", e)
-                        continue
-                else:
-                    event = self._parse_backend_event(raw_response)
-                    if event is None:
-                        await self.websocket.send_text(raw_response)
-                        continue
-
-                    if self._should_drop_event_from_client(event):
-                        continue
-
-                    if await self._handle_raw_backend_message(event, raw_response):
-                        continue
-
-                    event = self._normalize_event_for_ga_client(event)
-                    self.store_message(event)
-
-                    if not self._client_wants_beta:
-                        await self.websocket.send_text(json.dumps(event))
-                        continue
-
-                    translated = self._translate_event_to_beta(event)
-                    if translated is None:
-                        continue
-                    await self.websocket.send_text(json.dumps(translated))
-
+            await self._relay_backend_messages()
         except websockets.exceptions.ConnectionClosed as e:
             verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
+            close: Final = backend_close_from(e)
+            self._flush_unbilled_transcription_usage()
+            if self._backend_refused_session(close):
+                await self.log_backend_refusal(e)
+            else:
+                await self.log_messages()
+            return close
+        except asyncio.CancelledError:
+            self._flush_unbilled_transcription_usage()
+            await self.log_messages()
+            raise
         except Exception as e:
             verbose_logger.exception("Error in backend to client send messages: %s", e)
-        finally:
+            self._flush_unbilled_transcription_usage()
             await self.log_messages()
+            return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
+
+    def _backend_refused_session(self, close: BackendClose) -> bool:
+        return close.code != 1000 and not self._backend_sent_frames
+
+    async def log_backend_refusal(self, error: Exception) -> None:
+        if not self.logging_obj:
+            return
+        self._logging_worker.ensure_initialized_and_enqueue(
+            self.logging_obj.dispatch_failure_handlers(error, traceback.format_exc(), prefer_async_handlers=True)
+        )
 
     @staticmethod
-    def _detect_beta_header(websocket: Any) -> bool:
+    def _detect_beta_header(websocket: _ScopedWebSocket) -> bool:
         """Return True if the client sent 'OpenAI-Beta: realtime=v1'.
 
         Checks the raw ASGI scope headers so it works for both FastAPI WebSocket
         objects and any test doubles that expose a .scope dict.
         """
         try:
-            headers: Final[Sequence[tuple[bytes | str, bytes | str]]] = websocket.scope.get("headers", [])
+            headers: Final = websocket.scope.get("headers", [])
             for name, value in headers:
                 if isinstance(name, bytes):
                     name = name.decode("latin-1")
@@ -1180,10 +1301,22 @@ class RealTimeStreaming:
         item["content"] = new_content
         return item
 
-    async def client_ack_messages(self):
+    async def _receive_client_message(self) -> str | None:
+        try:
+            return await self.websocket.receive_text()
+        except Exception as e:  # noqa: BLE001  # whatever the client socket raises, the client is gone
+            verbose_logger.debug("Client disconnected: %s", e)
+            return None
+
+    async def client_ack_messages(self) -> ClientLoopExit:
+        import websockets
+
+        client_event: _ClientEventFrame
         try:
             while True:
-                message = await self.websocket.receive_text()
+                message = await self._receive_client_message()
+                if message is None:
+                    return ClientLoopExit.CLIENT_DISCONNECTED
 
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
                 guardrail_turn_detection_injected = False
@@ -1192,11 +1325,12 @@ class RealTimeStreaming:
                     from litellm.types.guardrails import GuardrailEventHooks
 
                     msg_obj = json.loads(message)
-                    msg_type = msg_obj.get("type")
+                    client_event = msg_obj
+                    msg_type = client_event.get("type")
 
                     if msg_type == "conversation.item.create":
                         # Check user text messages for prompt injection
-                        item = msg_obj.get("item", {})
+                        item = client_event.get("item", {})
                         # Check function_call_output first so a client cannot
                         # bypass the tool-result guardrail by also setting
                         # role="user" on a function_call_output item.
@@ -1295,7 +1429,7 @@ class RealTimeStreaming:
                         and not self._guardrail_turn_detection_update_sent
                         and self._has_audio_transcription_guardrails()
                     ):
-                        session: object = msg_obj.setdefault("session", {})
+                        session: Mapping[str, object] | None = msg_obj.setdefault("session", {})
                         if isinstance(session, dict):
                             existing_td = session.get("turn_detection")
                             if not isinstance(existing_td, dict):
@@ -1322,7 +1456,7 @@ class RealTimeStreaming:
                         and not guardrail_turn_detection_injected
                         and self._has_audio_transcription_guardrails()
                     ):
-                        session = msg_obj.get("session")
+                        session = client_event.get("session")
                         if isinstance(session, dict):
                             td_overridden = False
                             flat_td = session.get("turn_detection")
@@ -1365,14 +1499,14 @@ class RealTimeStreaming:
                     # the upstream is in GA mode. Beta upstreams expect the flat
                     # session shape unchanged.
                     if msg_type == "session.update" and not self._backend_uses_beta_protocol:
-                        session = msg_obj.get("session", {})
+                        session = client_event.get("session", {})
                         if isinstance(session, dict):
                             session = self._remap_beta_session_to_ga(session)
                             msg_obj["session"] = session
                             message = json.dumps(msg_obj)
 
                     if msg_type == "session.update" and self._event_normalizer:
-                        session = msg_obj.get("session")
+                        session = client_event.get("session")
                         if isinstance(session, dict):
                             msg_obj["session"] = self._event_normalizer.patch_outgoing_session(session)
                             message = json.dumps(msg_obj)
@@ -1416,25 +1550,40 @@ class RealTimeStreaming:
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
 
+        except websockets.exceptions.ConnectionClosed as e:
+            verbose_logger.debug("Backend closed while forwarding a client message: %s", e)
+            return ClientLoopExit.BACKEND_CLOSED
         except Exception as e:
             verbose_logger.debug("Error in client ack messages: %s", e)
+            return ClientLoopExit.CLIENT_DISCONNECTED
 
-    async def bidirectional_forward(self):
+    async def bidirectional_forward(self) -> None:
         forward_task: Final = asyncio.create_task(self.backend_to_client_send_messages())
+        client_task: Final = asyncio.create_task(self.client_ack_messages())
         try:
-            await self.client_ack_messages()
-        except self.websocket.exceptions.ConnectionClosed:
-            verbose_logger.debug("Connection closed")
-            forward_task.cancel()
+            await asyncio.wait((forward_task, client_task), return_when=asyncio.FIRST_COMPLETED)
+            if client_task.done() and client_task.result() is ClientLoopExit.CLIENT_DISCONNECTED:
+                return
+            await self._close_client(await forward_task)
         finally:
-            if not forward_task.done():
-                forward_task.cancel()
-                try:
-                    await forward_task
-                except asyncio.CancelledError:
-                    pass
+            forward_task.cancel()
+            client_task.cancel()
+            await asyncio.gather(forward_task, client_task, return_exceptions=True)
+
+    async def _close_client(self, close: BackendClose) -> None:
+        redacted_message: Final = redact_internal_details_from_client_message(close.message)
+        redacted_reason: Final = redact_internal_details_from_client_message(close.reason)
+        try:
+            if close.code != 1000:
+                await self.websocket.send_text(realtime_error_event(redacted_message, error_type="server_error"))
+            await self.websocket.close(
+                code=client_close_code(close.code),
+                reason=websocket_close_reason(redacted_reason, fallback=redacted_message),
+            )
+        except Exception as e:  # noqa: BLE001  # the client may already be gone; the session is over either way
+            verbose_logger.debug("Could not relay the upstream close to the client: %s", e)
 
 
-def client_sent_openai_beta_realtime_header(websocket: Any) -> bool:
+def client_sent_openai_beta_realtime_header(websocket: _ScopedWebSocket) -> bool:
     """True when the client WebSocket includes ``OpenAI-Beta: realtime=v1``."""
     return RealTimeStreaming._detect_beta_header(websocket)

@@ -157,7 +157,12 @@ class TestUpCommand:
         assert captured["settings"]["theme"] == "dark"
         assert captured["settings"]["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:5483"
         assert captured["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == "fixed-master-key"
+        assert captured["settings"]["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert "apiKeyHelper" not in captured["settings"]
+        # The ephemeral proxy serves only the autorouter, so a starting model left by
+        # `lite configure claude --model` or a user pin would 400 on the first message.
+        assert captured["settings"]["model"] == "autorouter"
+        assert captured["settings"]["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "autorouter"
         assert captured["settings_mode"] == 0o600
 
         assert terminate_calls == [99999]

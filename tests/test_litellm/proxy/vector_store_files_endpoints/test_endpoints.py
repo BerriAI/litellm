@@ -10,15 +10,12 @@ is attached to a vector store or read back under shared provider credentials.
 """
 
 import base64
-import os
-import sys
 from dataclasses import dataclass
 from typing import Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from fastapi import HTTPException
 

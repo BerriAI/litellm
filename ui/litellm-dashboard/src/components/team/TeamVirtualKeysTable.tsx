@@ -1,6 +1,6 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { Tooltip } from "@/components/atoms/Tooltip";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import CopyButton from "@/components/shared/CopyButton";
 import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
 import {
@@ -68,19 +68,17 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   const pageIndex = tablePagination.pageIndex;
   const pageSize = tablePagination.pageSize;
 
-  const {
-    data: keys,
-    isPending: isLoading,
-    isFetching,
-    refetch,
-  } = useKeys(pageIndex + 1, pageSize, {
+  const keyListOptions = {
     teamID: teamId,
-    selectedKeyAlias: searchQuery.trim() || undefined,
+    search: searchQuery.trim() || undefined,
     userID: getFilterValue("user_id"),
+    keyHash: getFilterValue("key_hash"),
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
-  });
+  };
+
+  const { data: keys, isPending: isLoading, isFetching, refetch } = useKeys(pageIndex + 1, pageSize, keyListOptions);
 
   const displayKeys = useMemo(() => {
     const kList = keys?.keys || [];
@@ -150,9 +148,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const value = info.getValue() as string;
           return (
-            <Tooltip content={value}>
+            <SimpleTooltip content={value}>
               <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
-            </Tooltip>
+            </SimpleTooltip>
           );
         },
       },
@@ -182,9 +180,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const user = info.getValue() as { user_email?: string } | undefined;
           const value = user?.user_email;
           return (
-            <Tooltip content={value}>
+            <SimpleTooltip content={value}>
               <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
-            </Tooltip>
+            </SimpleTooltip>
           );
         },
       },
@@ -198,9 +196,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const userId = info.getValue() as string | null;
           const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
           return (
-            <Tooltip content={displayValue}>
+            <SimpleTooltip content={displayValue}>
               <span className="block max-w-full truncate font-mono text-xs">{displayValue ?? "-"}</span>
-            </Tooltip>
+            </SimpleTooltip>
           );
         },
       },
@@ -336,11 +334,11 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const models = info.getValue() as string[];
           const scope = deriveKeyModelScope(info.row.original.allowed_routes, info.row.original.key_type);
           const emptyModelsBadge = !scope.hasModelAccess ? (
-            <Tooltip content={`Scoped to ${scope.label} routes; this key cannot call any models`}>
+            <SimpleTooltip content={`Scoped to ${scope.label} routes; this key cannot call any models`}>
               <Badge variant="secondary" className="mb-1">
                 No model access
               </Badge>
-            </Tooltip>
+            </SimpleTooltip>
           ) : (
             <Badge variant="destructive" className="mb-1">
               All Proxy Models
@@ -445,7 +443,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   }, []);
 
   return (
-    <div className="w-full h-full overflow-hidden">
+    <div className="w-full">
       {selectedKey ? (
         <KeyInfoView
           keyId={selectedKey.token}
@@ -455,7 +453,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           onDelete={refetch}
         />
       ) : (
-        <div className="py-4 flex-1 overflow-hidden">
+        <div className="py-4">
           <DataTable
             data={displayKeys}
             columns={columns}
@@ -473,7 +471,6 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
             columnResizeMode="onChange"
             isLoading={isLoading || isFetching}
             loadingMessage="Loading keys..."
-            maxBodyHeight="75vh"
             size="compact"
             toolbar={(table) => (
               <>
@@ -481,11 +478,11 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                   table={table}
                   searchValue={searchInput}
                   onSearchChange={handleSearchChange}
-                  searchPlaceholder="Search by key alias…"
+                  searchPlaceholder="Search by key alias or ID…"
                   onRefresh={() => refetch?.()}
                   isRefreshing={isFetching}
                   onOpenFilters={() => setFiltersOpen(true)}
-                  filterLabels={{ user_id: "User ID" }}
+                  filterLabels={{ user_id: "User ID", key_hash: "Key ID" }}
                 />
                 <DataTableFilterDrawer
                   table={table}
@@ -495,13 +492,22 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                   description={`Narrow down keys for ${teamAlias ?? "this team"}`}
                 >
                   {({ get, set }) => (
-                    <DataTableFilterField label="User ID">
-                      <Input
-                        value={(get("user_id") as string) ?? ""}
-                        onChange={(event) => set("user_id", event.target.value)}
-                        placeholder="Filter by user ID…"
-                      />
-                    </DataTableFilterField>
+                    <>
+                      <DataTableFilterField label="User ID">
+                        <Input
+                          value={(get("user_id") as string) ?? ""}
+                          onChange={(event) => set("user_id", event.target.value)}
+                          placeholder="Filter by user ID…"
+                        />
+                      </DataTableFilterField>
+                      <DataTableFilterField label="Key ID">
+                        <Input
+                          value={(get("key_hash") as string) ?? ""}
+                          onChange={(event) => set("key_hash", event.target.value)}
+                          placeholder="Enter Key ID…"
+                        />
+                      </DataTableFilterField>
+                    </>
                   )}
                 </DataTableFilterDrawer>
               </>

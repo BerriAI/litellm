@@ -1,42 +1,51 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from typing import Any, Final
 
 from pydantic import BaseModel
 
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+from litellm.litellm_core_utils.secret_redaction import REDACTED
+
+_DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
+    (
+        "password",
+        "secret",
+        "key",
+        "token",
+        "auth",
+        "authorization",
+        "credential",
+        # Plural form: Vertex uses ``vertex_credentials``; segment-exact
+        # matching otherwise misses it because "credential" != "credentials".
+        "credentials",
+        "access",
+        "private",
+        "certificate",
+        "fingerprint",
+        "tenancy",
+    )
+)
 
 
 class SensitiveDataMasker:
     def __init__(
         self,
-        sensitive_patterns: set[str] | None = None,
-        non_sensitive_overrides: set[str] | None = None,
+        sensitive_patterns: AbstractSet[str] | None = None,
+        non_sensitive_overrides: AbstractSet[str] | None = None,
         visible_prefix: int = 4,
         visible_suffix: int = 4,
         mask_char: str = "*",
         mask_short_values: bool = True,
+        extra_sensitive_patterns: AbstractSet[str] | None = None,
     ):
-        self.sensitive_patterns = sensitive_patterns or {
-            "password",
-            "secret",
-            "key",
-            "token",
-            "auth",
-            "authorization",
-            "credential",
-            # Plural form: Vertex uses ``vertex_credentials``; segment-exact
-            # matching otherwise misses it because "credential" != "credentials".
-            "credentials",
-            "access",
-            "private",
-            "certificate",
-            "fingerprint",
-            "tenancy",
-        }
+        self.sensitive_patterns = (sensitive_patterns or _DEFAULT_SENSITIVE_PATTERNS) | (
+            extra_sensitive_patterns or frozenset()
+        )
         # If any key segment matches one of these, the key is not considered sensitive
         # even if it also matches a sensitive pattern. For example, "input_cost_per_token"
         # contains "token" but "cost" overrides that — it's a pricing field, not a secret.
-        self.non_sensitive_overrides = non_sensitive_overrides or {"cost"}
+        self.non_sensitive_overrides = non_sensitive_overrides or frozenset(("cost",))
 
         self.visible_prefix = visible_prefix
         self.visible_suffix = visible_suffix
@@ -212,6 +221,46 @@ def mask_sensitive_keys(data: dict[str, Any], sensitive_fields: set[str]) -> dic
         else:
             masked[key] = value
     return masked
+
+
+def redact_credentials_in_payload(data: Mapping[str, object]) -> Mapping[str, object]:
+    """Return a copy of ``data`` where every value under a credential-named key is
+    replaced by the shared ``REDACTED`` marker, nested mappings are recursed into,
+    and every other value is preserved by identity.
+
+    Sensitive-key detection is delegated to the shared :class:`SensitiveDataMasker`,
+    so the credential names stay in one place. Unlike
+    :func:`mask_credentials_in_payload`, no prefix or suffix of the secret survives
+    and non-string secrets are covered too, which is what a payload rendered
+    straight to stdout needs. ``None`` is preserved so an unset credential still
+    reads as unset, and lists and tuples are rebuilt element by element so a
+    credential nested inside one is caught as well. The walk is bounded only to stop
+    runaway recursion, and a container sitting at that bound is replaced wholesale
+    rather than passed through, so burying a credential deeper than the walk goes
+    hides it instead of exposing it.
+    """
+    return _redact_mapping(data, 0)
+
+
+def _redact_mapping(data: Mapping[str, object], depth: int) -> Mapping[str, object]:
+    return {key: _redact_entry(key, value, depth) for key, value in data.items()}
+
+
+def _redact_entry(key: str, value: object, depth: int) -> object:
+    if value is not None and _default_masker.is_sensitive_key(key):
+        return REDACTED
+    if not isinstance(value, (Mapping, list, tuple)):
+        return value
+    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
+        return REDACTED
+    if isinstance(value, Mapping):
+        return _redact_mapping(value, depth + 1)
+    return _redact_sequence(value, depth + 1)
+
+
+def _redact_sequence(values: Sequence[object], depth: int) -> Sequence[object]:
+    redacted: Final = tuple(_redact_entry("", item, depth) for item in values)
+    return redacted if isinstance(values, tuple) else list(redacted)
 
 
 # Usage example:

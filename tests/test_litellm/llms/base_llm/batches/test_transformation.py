@@ -18,12 +18,9 @@ filter, dropping the staticmethod/classmethod filter, or widening the prefix
 filter to all single-underscore names) makes a test fail.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.types.utils import LlmProviders

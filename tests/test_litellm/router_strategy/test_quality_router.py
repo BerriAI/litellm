@@ -9,14 +9,11 @@ Covers:
 - Decision metadata stash + Router.set_response_headers lift.
 """
 
-import os
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.router_strategy.quality_router.config import (
     DEFAULT_COMPLEXITY_TO_QUALITY,

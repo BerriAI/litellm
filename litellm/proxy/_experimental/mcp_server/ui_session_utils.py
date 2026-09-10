@@ -91,7 +91,7 @@ async def admitted_user_context(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKey
     )
 
     try:
-        admitted: Final = await MCPRequestHandler._reload_admitted_user(user_id)
+        admitted: Final = await MCPRequestHandler.reload_admitted_user(user_id)
     except HTTPException as e:
         verbose_logger.warning("MCP dashboard session: admitted-subject reload failed for %s: %s", user_id, e.detail)
         return None

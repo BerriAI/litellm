@@ -37,6 +37,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -436,7 +438,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -468,6 +470,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
 
     def validate_environment(
@@ -483,7 +486,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         return headers
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
-        return BedrockError(status_code=status_code, message=error_message)
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def should_fake_stream(
         self,

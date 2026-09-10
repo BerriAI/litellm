@@ -13,6 +13,7 @@ Authentication priority:
 import os
 import re
 from typing import Any, Final, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -176,19 +177,13 @@ class DatabricksBase:
         # Default: just litellm
         return f"litellm/{version}"
 
-    def _get_api_base(self, api_base: str | None) -> str:
-        """
-        Get the Databricks API base URL.
-
-        If not provided, attempts to get it from the Databricks SDK.
-        """
+    def _get_api_base(self, api_base: str | None, use_ai_gateway: bool = False) -> str:
         if api_base is None:
             try:
                 from databricks.sdk import WorkspaceClient
 
                 databricks_client: Final = WorkspaceClient()
                 api_base = f"{databricks_client.config.host}/serving-endpoints"
-                return api_base
             except ImportError:
                 raise DatabricksException(
                     status_code=400,
@@ -197,6 +192,18 @@ class DatabricksBase:
                         "or install the databricks-sdk Python library."
                     ),
                 )
+
+        if not use_ai_gateway:
+            return api_base
+
+        normalized_api_base: Final = api_base.rstrip("/")
+        if normalized_api_base.endswith("/ai-gateway/mlflow/v1"):
+            return normalized_api_base
+        if normalized_api_base.endswith("/serving-endpoints"):
+            return f"{normalized_api_base.removesuffix('/serving-endpoints')}/ai-gateway/mlflow/v1"
+        api_base_parts: Final = urlsplit(normalized_api_base)
+        if api_base_parts.path in ("", "/"):
+            return f"{normalized_api_base}/ai-gateway/mlflow/v1"
         return api_base
 
     def _get_oauth_m2m_token(
@@ -224,11 +231,8 @@ class DatabricksBase:
         """
         import requests
 
-        # Extract workspace URL from api_base
-        workspace_url = api_base.rstrip("/")
-        if "/serving-endpoints" in workspace_url:
-            workspace_url = workspace_url.replace("/serving-endpoints", "")
-
+        api_base_parts: Final = urlsplit(api_base)
+        workspace_url: Final = urlunsplit((api_base_parts.scheme, api_base_parts.netloc, "", "", ""))
         token_url: Final = f"{workspace_url}/oidc/v1/token"
 
         try:

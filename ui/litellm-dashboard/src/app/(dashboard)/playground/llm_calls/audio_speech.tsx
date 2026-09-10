@@ -1,6 +1,6 @@
 import openai from "openai";
 import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import type { OpenAIVoice } from "../components/chat_ui/chatConstants";
 
 export async function makeOpenAIAudioSpeechRequest(
@@ -49,7 +49,7 @@ export async function makeOpenAIAudioSpeechRequest(
   } catch (error) {
     if (signal?.aborted) {
     } else {
-      NotificationManager.fromBackend(`Error occurred while generating speech. Please try again. Error: ${error}`);
+      toast.fromError(`Error occurred while generating speech. Please try again. Error: ${error}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

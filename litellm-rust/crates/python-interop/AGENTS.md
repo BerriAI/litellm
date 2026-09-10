@@ -1,0 +1,1 @@
+litellm-python-interop is the domain-neutral PyO3 foundation. Keep generic Python/Serde conversion and interpreter primitives here. Do not add LiteLLM domain crates, route types, API registration, or cdylib build features.

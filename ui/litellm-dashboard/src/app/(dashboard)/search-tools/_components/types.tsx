@@ -1,15 +1,9 @@
-export interface SearchToolLiteLLMParams {
-  search_provider: string;
-  api_key?: string;
-  api_base?: string;
-  timeout?: number;
-  max_retries?: number;
-  [key: string]: any;
-}
+import type { components } from "@/lib/http/schema";
+
+export type SearchToolLiteLLMParams = components["schemas"]["SearchToolLiteLLMParams"];
 
 export interface SearchToolInfo {
-  description?: string;
-  [key: string]: any;
+  description?: string | null;
 }
 
 export interface SearchTool {

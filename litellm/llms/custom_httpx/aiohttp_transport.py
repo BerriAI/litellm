@@ -3,22 +3,41 @@ import concurrent.futures
 import contextlib
 import os
 import ssl
+import sys
 import typing
 import urllib.request
-from collections.abc import Callable
-from typing import Any, ClassVar, Final
+from collections.abc import Callable, Generator
+from typing import ClassVar, Final
 
 import aiohttp
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
 from aiohttp.client import ClientResponse, ClientSession
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.secret_managers.main import str_to_bool
 
-AIOHTTP_EXC_MAP: Final[dict] = {
+
+class HttpxTimeoutExtension(BaseModel):
+    connect: float | None = None
+    read: float | None = None
+    write: float | None = None
+    pool: float | None = None
+
+
+class AiohttpSslRequestOption(TypedDict, total=False):
+    ssl: ReadOnly[bool | ssl.SSLContext]
+
+
+_TIMEOUT_EXTENSION: Final = TypeAdapter(HttpxTimeoutExtension)
+_EMPTY_TIMEOUT: Final[HttpxTimeoutExtension] = HttpxTimeoutExtension()
+_NO_SSL_OVERRIDE: Final[AiohttpSslRequestOption] = {}
+
+AIOHTTP_EXC_MAP: Final[dict[type[BaseException], type[Exception]]] = {
     # Order matters here, most specific exception first
     # Timeout related exceptions
     asyncio.TimeoutError: httpx.TimeoutException,
@@ -57,12 +76,24 @@ except ImportError:
     pass
 
 
+def _current_task_is_cancelling() -> bool:
+    task: Final = asyncio.current_task()
+    if task is None or sys.version_info < (3, 11):
+        return True
+    return task.cancelling() > 0
+
+
 @contextlib.contextmanager
-def map_aiohttp_exceptions() -> typing.Iterator[None]:
+def map_aiohttp_exceptions() -> Generator[None, None, None]:
     try:
         yield
+    except asyncio.CancelledError as exc:
+        # a closing connector cancels its shielded DNS task; that surfaces here without the request task being cancelled
+        if _current_task_is_cancelling():
+            raise
+        raise httpx.ConnectError("aiohttp transport cancelled the request internally") from exc
     except Exception as exc:
-        mapped_exc = None
+        mapped_exc: type[Exception] | None = None
 
         for from_exc, to_exc in AIOHTTP_EXC_MAP.items():
             if not isinstance(exc, from_exc):
@@ -222,7 +253,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         if session.closed:
             return
 
-        session_loop: Final = getattr(session, "_loop", None)
+        session_loop: Final[asyncio.AbstractEventLoop | None] = getattr(session, "_loop", None)
         try:
             current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
@@ -278,7 +309,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
         # Check if the existing session is still valid for the current event loop
         try:
-            session_loop: Final = getattr(self.client, "_loop", None)
+            session_loop: Final[asyncio.AbstractEventLoop | None] = getattr(self.client, "_loop", None)
             current_loop: Final = asyncio.get_running_loop()
 
             # If session is from a different or closed loop, recreate it
@@ -312,7 +343,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         self,
         client_session: ClientSession,
         request: httpx.Request,
-        timeout: dict,
+        timeout: HttpxTimeoutExtension,
         proxy: str | None,
         sni_hostname: str | None,
         ssl_verify: bool | ssl.SSLContext | None = None,
@@ -323,7 +354,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         Args:
             client_session: The aiohttp ClientSession to use
             request: The httpx Request to send
-            timeout: Timeout settings dict with 'connect', 'read', 'pool' keys
+            timeout: Timeout settings with 'connect', 'read', 'pool' fields
             proxy: Optional proxy URL
             sni_hostname: Optional SNI hostname for SSL
             ssl_verify: Optional SSL verification setting (False to disable, SSLContext for custom)
@@ -346,25 +377,24 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Only pass ssl kwarg when explicitly configured, to avoid
         # overriding the session/connector defaults with None (which is
         # not a valid value for aiohttp's ssl parameter).
-        request_kwargs: Final[dict[str, Any]] = {
-            "method": request.method,
-            "url": YarlURL(str(request.url), encoded=True),
-            "headers": request.headers,
-            "data": data,
-            "allow_redirects": False,
-            "auto_decompress": False,
-            "timeout": ClientTimeout(
-                sock_connect=timeout.get("connect"),
-                sock_read=timeout.get("read"),
-                connect=timeout.get("pool"),
-            ),
-            "proxy": proxy,
-            "server_hostname": sni_hostname,
-        }
-        if ssl_verify is not None:
-            request_kwargs["ssl"] = ssl_verify
+        ssl_option: Final[AiohttpSslRequestOption] = _NO_SSL_OVERRIDE if ssl_verify is None else {"ssl": ssl_verify}
 
-        response: Final = await client_session.request(**request_kwargs).__aenter__()
+        response: Final = await client_session.request(
+            method=request.method,
+            url=YarlURL(str(request.url), encoded=True),
+            headers=request.headers,
+            data=data,
+            allow_redirects=False,
+            auto_decompress=False,
+            timeout=ClientTimeout(
+                sock_connect=timeout.connect,
+                sock_read=timeout.read,
+                connect=timeout.pool,
+            ),
+            proxy=proxy,
+            server_hostname=sni_hostname,
+            **ssl_option,
+        ).__aenter__()
 
         return response
 
@@ -372,8 +402,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         self,
         request: httpx.Request,
     ) -> httpx.Response:
-        timeout: Final = request.extensions.get("timeout", {})
-        sni_hostname: Final = request.extensions.get("sni_hostname")
+        timeout: Final = _TIMEOUT_EXTENSION.validate_python(request.extensions.get("timeout", _EMPTY_TIMEOUT))
+        sni_hostname: Final[str | None] = request.extensions.get("sni_hostname")
 
         # Use helper to ensure we have a valid session for the current event loop
         client_session = self._get_valid_client_session()

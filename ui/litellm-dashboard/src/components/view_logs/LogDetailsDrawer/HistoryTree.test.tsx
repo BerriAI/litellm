@@ -8,7 +8,7 @@ import { ParsedMessage } from "./prettyMessagesTypes";
 describe("HistoryTree", () => {
   it("should return null when messages array is empty", () => {
     const { container } = render(<HistoryTree messages={[]} />);
-    expect(container.innerHTML).toBe("");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('should render message count with plural "messages" for multiple messages', () => {

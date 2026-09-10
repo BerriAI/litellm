@@ -33,6 +33,6 @@ class DomainModel(BaseModel):
             return cls(**record.dict())
         return cls(**dict(record))
 
-    def to_db_dict(self, exclude_unset: bool = False) -> dict[str, Any]:
+    def to_db_dict(self, exclude_unset: bool = False) -> dict[str, object]:
         """Convert domain model to a dictionary for database operations."""
         return self.model_dump(exclude_none=True, exclude_unset=exclude_unset)

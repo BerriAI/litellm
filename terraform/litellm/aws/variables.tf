@@ -272,6 +272,47 @@ variable "gateway_memory_target" {
   default     = 80
 }
 
+variable "gateway_target_requests_per_second" {
+  description = <<-EOT
+    Requests per second one gateway task should serve. Adds an
+    ALBRequestCountPerTarget target-tracking policy next to the CPU/memory
+    ones (Application Auto Scaling follows whichever asks for more tasks).
+    CloudWatch publishes that metric as a 1-minute count, so the policy
+    targets 60x this value and ECS reacts on a ~1 minute cadence. 0 skips
+    the policy.
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "gateway_target_tokens_per_second" {
+  description = <<-EOT
+    Tokens per second one gateway task should serve. Adds a target-tracking
+    policy on gateway_tokens_metric summed over each 60s period, divided by
+    60 and by the service's Container Insights RunningTaskCount. Tokens are
+    counted when a response completes, so the signal trails long streams.
+    0 skips the policy.
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "gateway_tokens_metric" {
+  description = <<-EOT
+    CloudWatch metric carrying the gateway's litellm_total_tokens_metric_total
+    counter, as published by the CloudWatch agent's Prometheus scraper (it
+    emits the delta between scrapes, so Sum over a period is the tokens
+    served in it). Required when gateway_target_tokens_per_second > 0.
+    dimensions must match the metric_declaration the agent publishes with.
+  EOT
+  type = object({
+    namespace  = string
+    name       = optional(string, "litellm_total_tokens_metric_total")
+    dimensions = optional(map(string), {})
+  })
+  default = null
+}
+
 variable "backend_autoscaling_enabled" {
   description = "Toggle Application Auto Scaling target-tracking on the backend service."
   type        = bool
@@ -547,6 +588,44 @@ variable "proxy_config" {
   EOT
   type        = any
   default     = {}
+}
+
+# ---------- Prometheus metrics sidecar ----------
+
+variable "gateway_metrics_port" {
+  description = <<-EOT
+    Serve Prometheus /metrics from a `metrics` sidecar container in the
+    gateway task on this port (1-65535, not 4000), so a scrape never runs on
+    an inference worker. The sidecar runs the gateway image with
+    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
+    workers' PROMETHEUS_MULTIPROC_DIR samples over a task volume. Null (the
+    default) leaves /metrics on the gateway port only. The sidecar port has
+    no virtual-key auth and is not routed through the ALB; open it to your
+    scrapers with gateway_metrics_scrape_cidrs. Needs gateway_image v1.101.0
+    or newer.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.gateway_metrics_port == null || (var.gateway_metrics_port >= 1 && var.gateway_metrics_port <= 65535 && var.gateway_metrics_port != 4000)
+    error_message = "gateway_metrics_port must be between 1 and 65535 and must not be 4000 (the gateway port)."
+  }
+}
+
+variable "gateway_metrics_scrape_cidrs" {
+  description = <<-EOT
+    CIDR blocks allowed to reach gateway_metrics_port on the gateway tasks
+    (your Prometheus or collector subnets). Empty by default, so only the
+    ALB can reach the tasks. Ignored when gateway_metrics_port is null.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.gateway_metrics_scrape_cidrs : can(cidrnetmask(c))])
+    error_message = "gateway_metrics_scrape_cidrs must contain valid IPv4 CIDR blocks."
+  }
 }
 
 variable "log_retention_days" {
