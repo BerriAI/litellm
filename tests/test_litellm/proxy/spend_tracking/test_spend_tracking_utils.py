@@ -1,8 +1,8 @@
 import asyncio
 import datetime
 import json
-from datetime import timezone
 from collections.abc import Mapping
+from datetime import timezone
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,7 +19,7 @@ from litellm.constants import (
     SESSION_ID_OMITTED_METADATA_KEY,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_messages_for_spend_logs_payload,
@@ -39,7 +39,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_logging_payload,
     get_spend_logs_id,
 )
-from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.utils import hash_token
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
@@ -79,6 +78,48 @@ def test_get_logging_payload_maps_openai_cached_tokens_to_cache_read_input_token
 
     assert additional_usage_values["cache_read_input_tokens"] == 123
     assert additional_usage_values["prompt_tokens_details"]["cached_tokens"] == 123
+
+
+class _HashingCache(litellm.Cache):
+    def __init__(self) -> None:
+        pass
+
+    def get_cache_key(self, **kwargs) -> str:
+        raise AssertionError("a preset cache key must be reused instead of hashing the request")
+
+
+def _cache_key_in_spend_log(monkeypatch: pytest.MonkeyPatch, cache: litellm.Cache | None, preset: str | None) -> str:
+    monkeypatch.setattr(litellm, "cache", cache)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "x" * 10_000}],
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}, "preset_cache_key": preset},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    return payload["cache_key"]
+
+
+def test_get_logging_payload_reuses_the_preset_cache_key_instead_of_hashing_the_body(monkeypatch):
+    assert _cache_key_in_spend_log(monkeypatch, _HashingCache(), "preset-key") == "preset-key"
+
+
+def test_get_logging_payload_records_cache_off_without_hashing(monkeypatch):
+    assert _cache_key_in_spend_log(monkeypatch, None, None) == "Cache OFF"
+
+
+def test_get_logging_payload_still_hashes_when_caching_is_on_and_no_preset_key_exists(monkeypatch):
+    class _RecordingCache(litellm.Cache):
+        def __init__(self) -> None:
+            pass
+
+        def get_cache_key(self, **kwargs) -> str:
+            return "hashed-from-" + kwargs["model"]
+
+    assert _cache_key_in_spend_log(monkeypatch, _RecordingCache(), None) == "hashed-from-gpt-4o-mini"
 
 
 _TRACE_ONLY_STANDARD_LOGGING: Final = cast(

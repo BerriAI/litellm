@@ -533,10 +533,12 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
                 additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens
     clean_metadata["additional_usage_values"] = additional_usage_values
 
-    if litellm.cache is not None:
-        cache_key = litellm.cache.get_cache_key(**kwargs)
-    else:
+    if litellm.cache is None:
         cache_key = "Cache OFF"
+    elif litellm_params.get("preset_cache_key") is not None:
+        cache_key = litellm_params["preset_cache_key"]
+    else:
+        cache_key = litellm.cache.get_cache_key(**kwargs)
     if cache_hit is True:
         import time
 
