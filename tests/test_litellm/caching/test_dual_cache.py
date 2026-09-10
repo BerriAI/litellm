@@ -581,8 +581,6 @@ async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
 
 
 class _OpenBreakerRedis:
-    """A RedisCache whose breaker is open, so every guarded call is refused before it starts."""
-
     def __init__(self) -> None:
         from litellm.caching.redis_cache import RedisCircuitBreaker
 
@@ -639,9 +637,6 @@ class _OpenBreakerRedis:
     ids=["get", "batch_get", "set", "set_pipeline", "increment_pipeline", "increment"],
 )
 async def test_an_open_circuit_breaker_is_not_an_error_per_request(caplog, call):
-    """While the breaker is open every request is refused by design, and the breaker already
-    said so once when it opened; logging each refusal as an ERROR traceback was the storm that
-    pinned every worker's CPU during a Redis latency blip."""
     cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
     caplog.clear()
 

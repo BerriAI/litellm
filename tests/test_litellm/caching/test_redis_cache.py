@@ -1016,11 +1016,6 @@ async def test_breaker_metrics_track_state_and_failure_class():
 
 
 def test_sync_guard_counts_a_timeout_as_a_timeout():
-    """A sync Redis timeout must wait out the timeout-only min duration exactly like the async guard.
-
-    Recording it as a hard connectivity failure opened the breaker on the fifth slow reply,
-    which is how a latency blip took the shared cache out for every worker.
-    """
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
     from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker_sync

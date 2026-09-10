@@ -393,17 +393,12 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
 
 
 class RedisCircuitBreakerOpenError(Exception):
-    """Raised in place of a Redis call while the circuit breaker is open."""
+    pass
 
 
 def log_redis_failure(
     logger: logging.Logger, level: int, message: str, exc: BaseException, with_traceback: bool = False
 ) -> None:
-    """Log a Redis failure the caller is about to swallow.
-
-    An open breaker refuses every call until Redis recovers and announced itself once when it
-    opened, so the calls it refuses are logged at debug instead of once per request at ``level``.
-    """
     if isinstance(exc, RedisCircuitBreakerOpenError):
         logger.debug("%s: %s", message, exc)
         return
