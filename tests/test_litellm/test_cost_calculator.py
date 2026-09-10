@@ -4661,8 +4661,8 @@ def _ocr_response(model: str, pages_processed: int, credits: float | None = None
     )
 
 
-def _ocr_logging_obj(litellm_params: dict[str, dict[str, ModelInfo]]) -> Logging:
-    logging_obj = Logging(
+def _ocr_logging_obj(litellm_params: dict[str, object]) -> Logging:
+    logging_obj: Final = Logging(
         model=UNMAPPED_OCR_MODEL,
         messages=[],
         stream=False,
@@ -4671,7 +4671,7 @@ def _ocr_logging_obj(litellm_params: dict[str, dict[str, ModelInfo]]) -> Logging
         litellm_call_id="test-ocr-custom-pricing",
         function_id="1234",
     )
-    logging_obj.litellm_params = litellm_params
+    logging_obj.update_environment_variables(litellm_params=litellm_params, optional_params={})
     return logging_obj
 
 
@@ -4791,6 +4791,34 @@ def test_completion_cost_ocr_prefers_pricing_registered_under_router_model_id(mo
         call_type="ocr",
         custom_pricing=True,
         router_model_id=deployment_id,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(0.05 * 3)
+
+
+def test_completion_cost_ocr_bills_request_level_pricing_for_direct_sdk_call():
+    logging_obj = _ocr_logging_obj({"ocr_cost_per_page": 0.05})
+
+    cost = completion_cost(
+        completion_response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=3),
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(0.05 * 3)
+
+
+def test_completion_cost_ocr_request_level_pricing_fills_in_deployment_model_info_without_ocr_pricing():
+    logging_obj = _ocr_logging_obj({"ocr_cost_per_page": 0.05, "metadata": {"model_info": {"mode": "ocr"}}})
+
+    cost = completion_cost(
+        completion_response=_ocr_response(UNMAPPED_OCR_MODEL, pages_processed=3),
+        model=UNMAPPED_OCR_MODEL,
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+        custom_pricing=True,
         litellm_logging_obj=logging_obj,
     )
     assert cost == pytest.approx(0.05 * 3)

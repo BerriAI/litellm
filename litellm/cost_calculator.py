@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
 from pydantic import BaseModel
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 import litellm._logging
@@ -306,6 +307,15 @@ def _transcription_usage_has_token_details(
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
 
 
+OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
+
+
+class OCRPricing(TypedDict, total=False):
+    ocr_cost_per_page: ReadOnly[float | None]
+    ocr_cost_per_credit: ReadOnly[float | None]
+    annotation_cost_per_page: ReadOnly[float | None]
+
+
 def cost_per_token(
     model: str = "",
     prompt_tokens: int = 0,
@@ -341,7 +351,7 @@ def cost_per_token(
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
     ### DEPLOYMENT-SPECIFIC PRICING ###
-    custom_model_info: ModelInfo | None = None,
+    custom_model_info: OCRPricing | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -1652,7 +1662,7 @@ def completion_cost(
                     vertex_location=vertex_location,
                     response=completion_response,
                     request_model=request_model_for_cost,
-                    custom_model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                    custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
@@ -1911,6 +1921,35 @@ def _deployment_model_info(
     )
 
 
+def _ocr_model_info(
+    litellm_logging_obj: LitellmLoggingObject | None,
+    custom_pricing: bool | None,
+    router_model_id: str | None,
+) -> OCRPricing | None:
+    deployment_info: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
+    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None) if custom_pricing else None
+    if litellm_params is None:
+        return deployment_info
+    return OCRPricing(
+        ocr_cost_per_page=_request_or_deployment_price("ocr_cost_per_page", litellm_params, deployment_info),
+        ocr_cost_per_credit=_request_or_deployment_price("ocr_cost_per_credit", litellm_params, deployment_info),
+        annotation_cost_per_page=_request_or_deployment_price(
+            "annotation_cost_per_page", litellm_params, deployment_info
+        ),
+    )
+
+
+def _request_or_deployment_price(
+    field: OCRPricingField,
+    litellm_params: Mapping[str, object],
+    deployment_info: ModelInfo | None,
+) -> float | None:
+    request_price: Final = litellm_params.get(field)
+    if isinstance(request_price, int | float):
+        return request_price
+    return deployment_info.get(field) if deployment_info is not None else None
+
+
 def _cost_map_model_info(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     try:
         return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
@@ -1922,14 +1961,14 @@ def ocr_cost(
     model: str,
     custom_llm_provider: str | None,
     response: object | None = None,
-    model_info: ModelInfo | None = None,
+    model_info: OCRPricing | None = None,
 ) -> tuple[float, float]:
     """
     Args:
         model: str - model name
         custom_llm_provider: Optional[str] - custom LLM provider
         response: Optional[Any] - response object
-        model_info: Optional[ModelInfo] - deployment-specific model info; its OCR pricing
+        model_info: Optional[OCRPricing] - deployment-specific model info; its OCR pricing
             takes precedence over the model cost map
 
     Returns:
