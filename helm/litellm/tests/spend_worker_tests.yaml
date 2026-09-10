@@ -1,0 +1,189 @@
+suite: test gateway spend worker sidecar
+templates:
+  - gateway/configmap.yaml
+  - gateway/deployment.yaml
+  - gateway/hpa.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: adds no sidecar, env, volume or container metric when the spend worker is off
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_ENABLED
+            value: "true"
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: spend-worker-socket
+          any: true
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.metrics[0].type
+          value: Resource
+        template: gateway/hpa.yaml
+
+  - it: runs the spend worker as a sidecar sharing env, config and a unix socket emptyDir, and scales on the gateway container only
+    set:
+      gateway.spendWorker.enabled: true
+      gateway.spendWorker.bufferSize: 250
+      gateway.spendWorker.onUnavailable: drop
+      gateway.image.tag: v1.102.0
+      gateway.numWorkers: 4
+      gateway.extraEnv:
+        - name: LITELLM_PGBOUNCER_ENABLED
+          value: "true"
+      gateway.envSecrets:
+        - litellm-license
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_ADDRESS
+            value: unix:///var/run/litellm/spend-worker.sock
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_BUFFER_SIZE
+            value: "250"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_ON_UNAVAILABLE
+            value: drop
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: spend-worker-socket
+            mountPath: /var/run/litellm
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: spend-worker
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: ghcr.io/berriai/litellm-gateway:v1.102.0
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].command
+          value:
+            - python
+            - -m
+            - gateway.spend_worker
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: spend_worker
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: CONFIG_FILE_PATH
+            value: /app/config/config.yaml
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATABASE_HOST
+            value: postgres.example.com
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_SPEND_WORKER_ADDRESS
+            value: unix:///var/run/litellm/spend-worker.sock
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: NUM_WORKERS
+          any: true
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].envFrom
+          value:
+            - secretRef:
+                name: litellm-license
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: gateway-config
+            mountPath: /app/config/config.yaml
+            subPath: config.yaml
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: spend-worker-socket
+            mountPath: /var/run/litellm
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.containers[1].resources.limits.cpu
+          value: "1"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: spend-worker-socket
+            emptyDir:
+              sizeLimit: 1Mi
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.metrics[0]
+          value:
+            type: ContainerResource
+            containerResource:
+              name: cpu
+              container: gateway
+              target:
+                type: Utilization
+                averageUtilization: 70
+        template: gateway/hpa.yaml
+
+  - it: uses loopback tcp without a socket volume and keeps the pod-wide cpu metric when asked
+    set:
+      gateway.spendWorker.enabled: true
+      gateway.spendWorker.address: tcp://127.0.0.1:4010
+      gateway.spendWorker.scaleOnGatewayContainerCpu: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_SPEND_WORKER_ADDRESS
+            value: tcp://127.0.0.1:4010
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: spend-worker-socket
+          any: true
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: spend-worker-socket
+          any: true
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.metrics[0].type
+          value: Resource
+        template: gateway/hpa.yaml

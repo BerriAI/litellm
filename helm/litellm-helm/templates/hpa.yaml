@@ -18,12 +18,22 @@ spec:
   {{- end }}
   metrics:
     {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- if and .Values.spendWorker.enabled .Values.spendWorker.scaleOnProxyContainerCpu }}
+    - type: ContainerResource
+      containerResource:
+        name: cpu
+        container: {{ include "litellm.name" . }}
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- else }}
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
     {{- end }}
     {{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
     - type: Resource

@@ -1,0 +1,214 @@
+suite: test spend worker sidecar
+templates:
+  - deployment.yaml
+  - hpa.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: should run the proxy alone with no spend worker env by default
+    template: deployment.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_ENABLED
+            value: "true"
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: spend-worker-socket
+          any: true
+
+  - it: should add the sidecar on the same image and point both containers at the unix socket
+    template: deployment.yaml
+    set:
+      image.tag: test
+      db.connectionPool.enabled: true
+      spendWorker.enabled: true
+      spendWorker.resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: litellm-spend-worker
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: ghcr.io/berriai/litellm:test
+      - equal:
+          path: spec.template.spec.containers[1].command
+          value: [python, -m, gateway.spend_worker]
+      - equal:
+          path: spec.template.spec.containers[1].resources.requests.cpu
+          value: 500m
+      - equal:
+          path: spec.template.spec.containers[1].resources.limits.memory
+          value: 2Gi
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_ADDRESS
+            value: unix:///var/run/litellm/spend-worker.sock
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_BUFFER_SIZE
+            value: "1000"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_ON_UNAVAILABLE
+            value: fallback
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: spend_worker
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: spend_worker
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_SPEND_WORKER_ADDRESS
+            value: unix:///var/run/litellm/spend-worker.sock
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: CONFIG_FILE_PATH
+            value: /etc/litellm/config.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATABASE_HOST
+            value: RELEASE-NAME-postgresql
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-litellm-dbcredentials
+                key: password
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "20"
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: spend-worker-socket
+            mountPath: /var/run/litellm
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: spend-worker-socket
+            mountPath: /var/run/litellm
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: litellm-config
+            mountPath: /etc/litellm/config.yaml
+            subPath: config.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: spend-worker-socket
+            emptyDir:
+              sizeLimit: 1Mi
+
+  - it: should skip the socket volume and pass the policy through on tcp transport
+    template: deployment.yaml
+    set:
+      spendWorker.enabled: true
+      spendWorker.address: tcp://127.0.0.1:4100
+      spendWorker.onUnavailable: drop
+      spendWorker.bufferSize: 50
+      envVars:
+        CONFIG_FILE_PATH: /custom/config.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: CONFIG_FILE_PATH
+            value: /etc/litellm/config.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: CONFIG_FILE_PATH
+            value: /custom/config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_ADDRESS
+            value: tcp://127.0.0.1:4100
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_ON_UNAVAILABLE
+            value: drop
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_SPEND_WORKER_BUFFER_SIZE
+            value: "50"
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: spend-worker-socket
+          any: true
+
+  - it: should keep the pod-wide cpu metric unless asked to scale on the proxy container
+    template: hpa.yaml
+    set:
+      autoscaling.enabled: true
+      spendWorker.enabled: true
+    asserts:
+      - equal: { path: "spec.metrics[0].type", value: Resource }
+      - equal: { path: "spec.metrics[0].resource.name", value: cpu }
+
+  - it: should scale on the proxy container's cpu only when opted in
+    template: hpa.yaml
+    set:
+      autoscaling.enabled: true
+      spendWorker.enabled: true
+      spendWorker.scaleOnProxyContainerCpu: true
+    asserts:
+      - equal: { path: "spec.metrics[0].type", value: ContainerResource }
+      - equal: { path: "spec.metrics[0].containerResource.name", value: cpu }
+      - equal: { path: "spec.metrics[0].containerResource.container", value: litellm }
+      - equal: { path: "spec.metrics[0].containerResource.target.averageUtilization", value: 60 }
+      - isNull: { path: "spec.metrics[0].resource" }
+
+  - it: should not switch to the container metric while the sidecar is off
+    template: hpa.yaml
+    set:
+      autoscaling.enabled: true
+      spendWorker.scaleOnProxyContainerCpu: true
+    asserts:
+      - equal: { path: "spec.metrics[0].type", value: Resource }

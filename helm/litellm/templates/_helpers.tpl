@@ -457,3 +457,34 @@ ImplementationSpecific
 {{- end -}}
 
 {{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
+
+{{/*
+Directory of the spend worker's unix socket, shared by the gateway and
+spend-worker containers through an emptyDir. Empty when the sidecar is off
+or gateway.spendWorker.address is a tcp://127.0.0.1:<port> address.
+*/}}
+{{- define "litellm.gateway.spendWorkerSocketDir" -}}
+{{- if and .Values.gateway.spendWorker.enabled (hasPrefix "unix://" .Values.gateway.spendWorker.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.spendWorker.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_SPEND_WORKER_* env shared by the producer (gateway container) and the
+consumer (spend-worker container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.spendWorkerEnv" -}}
+{{- with .Values.gateway.spendWorker }}
+- name: LITELLM_SPEND_WORKER_ENABLED
+  value: "true"
+- name: LITELLM_SPEND_WORKER_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_SPEND_WORKER_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_SPEND_WORKER_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_SPEND_WORKER_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
+{{- end }}
+{{- end -}}

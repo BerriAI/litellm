@@ -74,8 +74,11 @@ spec:
             - name: PROMETHEUS_MULTIPROC_DIR
               value: {{ include "litellm.gateway.prometheusMultiprocDir" . }}
             {{- end }}
+            {{- if .Values.gateway.spendWorker.enabled }}
+            {{- include "litellm.gateway.spendWorkerEnv" . | nindent 12 }}
+            {{- end }}
           {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
-          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled }}
+          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled (include "litellm.gateway.spendWorkerSocketDir" .) }}
           volumeMounts:
             {{- if .Values.gateway.config.create }}
             - name: gateway-config
@@ -85,6 +88,10 @@ spec:
             {{- if .Values.gateway.metricsServer.enabled }}
             - name: prometheus-multiproc
               mountPath: {{ include "litellm.gateway.prometheusMultiprocDir" . }}
+            {{- end }}
+            {{- if include "litellm.gateway.spendWorkerSocketDir" . }}
+            - name: spend-worker-socket
+              mountPath: {{ include "litellm.gateway.spendWorkerSocketDir" . }}
             {{- end }}
             {{- if .Values.billingMetrics.enabled }}
             {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
@@ -145,10 +152,47 @@ spec:
           resources:
             {{- toYaml .Values.gateway.metricsServer.resources | nindent 12 }}
         {{- end }}
+        {{- if .Values.gateway.spendWorker.enabled }}
+        - name: spend-worker
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          {{- with .Values.gateway.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command:
+            - python
+            - -m
+            - gateway.spend_worker
+          env:
+            {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
+            {{- if .Values.gateway.config.create }}
+            - name: CONFIG_FILE_PATH
+              value: /app/config/config.yaml
+            {{- end }}
+            {{- include "litellm.gateway.spendWorkerEnv" . | nindent 12 }}
+            - name: LITELLM_JOB_ROLE
+              value: spend_worker
+          {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
+          {{- if or .Values.gateway.config.create (include "litellm.gateway.spendWorkerSocketDir" .) }}
+          volumeMounts:
+            {{- if .Values.gateway.config.create }}
+            - name: gateway-config
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+            {{- end }}
+            {{- if include "litellm.gateway.spendWorkerSocketDir" . }}
+            - name: spend-worker-socket
+              mountPath: {{ include "litellm.gateway.spendWorkerSocketDir" . }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.gateway.spendWorker.resources | nindent 12 }}
+        {{- end }}
       {{- with .Values.gateway.extraContainers }}
         {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }}
-      {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled }}
+      {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled (include "litellm.gateway.spendWorkerSocketDir" .) }}
       volumes:
         {{- if .Values.gateway.config.create }}
         - name: gateway-config
@@ -158,6 +202,11 @@ spec:
         {{- if .Values.gateway.metricsServer.enabled }}
         - name: prometheus-multiproc
           emptyDir: {}
+        {{- end }}
+        {{- if include "litellm.gateway.spendWorkerSocketDir" . }}
+        - name: spend-worker-socket
+          emptyDir:
+            sizeLimit: 1Mi
         {{- end }}
         {{- if .Values.billingMetrics.enabled }}
         {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
