@@ -22,34 +22,12 @@
       </header>
 
       <section class="workspace">
-        <aside class="docs">
-          <p class="section-label">GUIDE.md</p>
-          <h2>Prove the connection</h2>
-          <p>
-            Cmd-click <code>build_proof</code> in <code>main.rs</code>. The editor opens its
-            definition in <code>proof.rs</code>. Hover <code>litellm_core::Error</code> for
-            dependency type information
-          </p>
-          <h3>What this uses</h3>
-          <dl>
-            <div>
-              <dt>Editor</dt>
-              <dd>CodeMirror 6</dd>
-            </div>
-            <div>
-              <dt>Language server</dt>
-              <dd>rust-analyzer over WebSocket</dd>
-            </div>
-            <div>
-              <dt>Dependency</dt>
-              <dd>In-repo litellm-core path dependency</dd>
-            </div>
-            <div>
-              <dt>Proc macro</dt>
-              <dd>Serde Serialize and Deserialize derives</dd>
-            </div>
-          </dl>
-          <p class="hint">The source is saved in this browser. Reset restores the checked-in example</p>
+        <aside class="docs" aria-label="Markdown document">
+          <div class="docbar">
+            <span>GUIDE.md</span>
+            <span class="document-language">Markdown</span>
+          </div>
+          <div id="markdown-editor"></div>
         </aside>
 
         <section class="editor-panel" aria-label="Rust editor">

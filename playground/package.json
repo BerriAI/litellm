@@ -7,6 +7,7 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/lang-rust": "^6.0.2",
     "@codemirror/lsp-client": "^6.2.5",
     "@codemirror/theme-one-dark": "^6.1.3",

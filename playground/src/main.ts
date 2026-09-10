@@ -1,4 +1,5 @@
 import { rust } from '@codemirror/lang-rust';
+import { markdown } from '@codemirror/lang-markdown';
 import {
   languageServerExtensions,
   jumpToDefinition,
@@ -14,6 +15,22 @@ import { EditorView, basicSetup } from 'codemirror';
 import './style.css';
 
 const STORAGE_KEY = 'litellm-rust-playground-files';
+const GUIDE_PATH = 'GUIDE.md';
+const DEFAULT_GUIDE = `# Prove the connection
+
+Cmd-click \`build_proof\` in \`src/main.rs\`. The Rust editor opens its definition in \`src/proof.rs\`.
+
+Hover \`litellm_core::Error\` for dependency type information.
+
+## What this uses
+
+- **Editor:** CodeMirror 6
+- **Language server:** rust-analyzer over WebSocket
+- **Dependency:** in-repo \`litellm-core\` path dependency
+- **Proc macro:** Serde \`Serialize\` and \`Deserialize\` derives
+
+> This Markdown and the Rust source are saved in this browser. Reset restores the example.
+`;
 
 type PlaygroundFile = {
   path: string;
@@ -108,6 +125,7 @@ const resetButton = requireElement<HTMLButtonElement>('reset-button');
 const runStatus = requireElement<HTMLSpanElement>('run-status');
 const output = requireElement<HTMLPreElement>('output');
 const editorsParent = requireElement<HTMLDivElement>('editors');
+const markdownEditorParent = requireElement<HTMLDivElement>('markdown-editor');
 const fileNav = requireElement<HTMLElement>('file-nav');
 const activePath = requireElement<HTMLSpanElement>('active-path');
 
@@ -183,6 +201,10 @@ const loadStoredFiles = (): StoredFiles => {
   }
 };
 
+const saveStoredFile = (path: string, source: string) => {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...loadStoredFiles(), [path]: source }));
+};
+
 const main = async () => {
   const info = await loadInfo();
   const storedFiles = loadStoredFiles();
@@ -190,6 +212,22 @@ const main = async () => {
   const containers = new Map<string, HTMLDivElement>();
   const buttons = new Map<string, HTMLButtonElement>();
   let activeUri = info.files[0]?.uri ?? '';
+
+  const markdownView = new EditorView({
+    doc: storedFiles[GUIDE_PATH] ?? DEFAULT_GUIDE,
+    extensions: [
+      basicSetup,
+      markdown(),
+      oneDark,
+      EditorView.lineWrapping,
+      EditorView.updateListener.of(update => {
+        if (update.docChanged) {
+          saveStoredFile(GUIDE_PATH, update.state.doc.toString());
+        }
+      }),
+    ],
+    parent: markdownEditorParent,
+  });
 
   const showFile = (uri: string) => {
     const view = views.get(uri);
@@ -256,13 +294,7 @@ const main = async () => {
           if (!update.docChanged) {
             return;
           }
-          const saved = Object.fromEntries(
-            [...views.entries()].map(([uri, editor]) => [
-              info.files.find(candidate => candidate.uri === uri)?.path ?? uri,
-              editor.state.doc.toString(),
-            ]),
-          );
-          localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, [file.path]: update.state.doc.toString() }));
+          saveStoredFile(file.path, update.state.doc.toString());
         }),
       ],
       parent: container,
@@ -298,6 +330,9 @@ const main = async () => {
     info.files.forEach(file => {
       const view = views.get(file.uri);
       view?.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: file.source } });
+    });
+    markdownView.dispatch({
+      changes: { from: 0, to: markdownView.state.doc.length, insert: DEFAULT_GUIDE },
     });
   });
 };
