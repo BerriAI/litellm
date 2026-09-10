@@ -3340,6 +3340,133 @@ class TestBedrockFileListTransformation:
         assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
         assert [file.id for file in files] == [self.OUTPUT_BUCKET_ID]
 
+    def test_file_list_without_purpose_also_walks_a_separate_output_bucket(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with respx.mock:
+            input_route = respx.get(self.BUCKET_URL, params__contains=self.MANAGED_QUERY).mock(
+                return_value=httpx.Response(200, content=self.LISTING)
+            )
+            output_route = respx.get(self.OUTPUT_BUCKET_URL, params__contains=self.OUTPUT_QUERY).mock(
+                return_value=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING)
+            )
+
+            files = litellm.file_list(
+                custom_llm_provider="bedrock",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+            )
+
+        assert (input_route.call_count, output_route.call_count) == (1, 1)
+        output_request = output_route.calls[0].request
+        assert _sent_signature(output_request.headers) == _s3_signature_for(
+            "GET", str(output_request.url), output_request.headers
+        )
+        assert [file.id for file in files] == [*self.BATCH_IDS, self.OUTPUT_ID, self.OUTPUT_BUCKET_ID]
+
+    def test_file_list_without_purpose_walks_the_output_bucket_after_the_last_input_page(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with respx.mock:
+            respx.get(self.BUCKET_URL, params__contains={"continuation-token": self.CONTINUATION_TOKEN}).mock(
+                return_value=httpx.Response(200, content=self.LAST_PAGE)
+            )
+            respx.get(self.BUCKET_URL, params__contains=self.MANAGED_QUERY).mock(
+                return_value=httpx.Response(200, content=self.FIRST_PAGE)
+            )
+            respx.get(self.OUTPUT_BUCKET_URL, params__contains=self.OUTPUT_QUERY).mock(
+                return_value=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING)
+            )
+
+            files = litellm.file_list(
+                custom_llm_provider="bedrock",
+                **_trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-output-bucket"),
+            )
+            requested_urls = [str(call.request.url) for call in respx.calls]
+
+        assert requested_urls == [
+            f"{self.BUCKET_URL}?list-type=2&prefix=litellm-b",
+            f"{self.BUCKET_URL}?list-type=2&prefix=litellm-b"
+            "&continuation-token=1ueGcxLPRx1Tr%2FXYExHnhbYLgveDs2J%2Fwm36Hy4vbOwM%3D",
+            f"{self.OUTPUT_BUCKET_URL}?list-type=2&prefix=litellm-batch-outputs%2F",
+        ]
+        assert [file.id for file in files] == [*self.PAGED_IDS, self.OUTPUT_BUCKET_ID]
+
+    @pytest.mark.parametrize(
+        ("purpose", "bucket_snapshot"),
+        [
+            pytest.param(None, {"s3_bucket_name": "my-bucket"}, id="outputs-share-the-input-bucket"),
+            pytest.param(
+                "batch",
+                {"s3_bucket_name": "my-bucket", "s3_output_bucket_name": "my-output-bucket"},
+                id="input-purpose-requested",
+            ),
+        ],
+    )
+    def test_file_list_leaves_the_output_bucket_alone_unless_an_unfiltered_list_needs_it(
+        self, monkeypatch, purpose, bucket_snapshot
+    ):
+        import httpx
+        import respx
+
+        import litellm
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with respx.mock:
+            input_route = respx.get(self.BUCKET_URL).mock(return_value=httpx.Response(200, content=self.LISTING))
+            output_route = respx.get(self.OUTPUT_BUCKET_URL).mock(
+                return_value=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING)
+            )
+
+            files = litellm.file_list(
+                custom_llm_provider="bedrock", purpose=purpose, **_trusted_bucket_snapshot(**bucket_snapshot)
+            )
+
+        assert (input_route.call_count, output_route.call_count) == (1, 0)
+        assert [file.id for file in files] == [*self.BATCH_IDS, *(() if purpose else (self.OUTPUT_ID,))]
+
+    def test_transform_list_files_next_request_walks_an_output_prefix_inside_the_input_bucket(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        litellm_params = _trusted_bucket_snapshot(s3_bucket_name="my-bucket", s3_output_bucket_name="my-bucket/out")
+        config = BedrockFilesConfig()
+        config.transform_list_files_request(purpose=None, optional_params={}, litellm_params=litellm_params)
+        litellm_params.pop(S3_SIGNED_REQUEST_HEADERS_PARAM)
+
+        output_request = config.transform_list_files_next_request(
+            raw_response=httpx.Response(200, content=self.LISTING), optional_params={}, litellm_params=litellm_params
+        )
+        after_output_request = config.transform_list_files_next_request(
+            raw_response=httpx.Response(200, content=self.LISTING), optional_params={}, litellm_params=litellm_params
+        )
+
+        assert output_request == (self.BUCKET_URL, {"list-type": "2", "prefix": "out/litellm-batch-outputs/"})
+        signed_headers = litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]
+        assert _sent_signature(signed_headers) == _s3_signature_for(
+            "GET", f"{self.BUCKET_URL}?list-type=2&prefix=out%2Flitellm-batch-outputs%2F", signed_headers
+        )
+        assert after_output_request is None
+
     def test_transform_list_files_next_request_signs_the_continuation_page(self, monkeypatch):
         import httpx
 

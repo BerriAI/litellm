@@ -69,6 +69,8 @@ S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
 
 LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 
+LIST_FILES_LOCATION_PARAM: Final = "_s3_list_files_location"
+
 
 class _S3DeleteContext(BaseModel):
     file_id: str = Field(min_length=1)
@@ -320,6 +322,17 @@ def _listing_query(configured_prefix: str, purpose: str | None) -> tuple[tuple[s
 def _requested_listing_purpose(litellm_params: Mapping[str, object]) -> str | None:
     requested_purpose: Final = litellm_params.get(LIST_FILES_PURPOSE_PARAM)
     return requested_purpose if isinstance(requested_purpose, str) else None
+
+
+def _walked_listing_purpose(litellm_params: Mapping[str, object]) -> str | None:
+    walked_purpose: Final = litellm_params.get(LIST_FILES_LOCATION_PARAM)
+    return walked_purpose if isinstance(walked_purpose, str) else _requested_listing_purpose(litellm_params)
+
+
+def _output_location_still_unlisted(litellm_params: Mapping[str, object]) -> bool:
+    if _walked_listing_purpose(litellm_params) is not None:
+        return False
+    return _listing_bucket_name(litellm_params, "batch_output") != _listing_bucket_name(litellm_params, None)
 
 
 def _listing_bucket_name(litellm_params: Mapping[str, object], purpose: str | None) -> str:
@@ -1342,6 +1355,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         litellm_params: MutableMapping[str, object],
     ) -> tuple[str, dict[str, str]]:
         litellm_params[LIST_FILES_PURPOSE_PARAM] = purpose  # rebind-ok: handed to the response transform
+        litellm_params[LIST_FILES_LOCATION_PARAM] = purpose  # rebind-ok: names the location the next page walks
         return self._signed_listing_request(purpose, optional_params, litellm_params, continuation_token=None)
 
     def transform_list_files_next_request(
@@ -1353,11 +1367,14 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if raw_response.status_code >= 400:
             return None
         continuation_token: Final = ET.fromstring(raw_response.content).findtext("{*}NextContinuationToken")
-        if not continuation_token:
+        if continuation_token:
+            return self._signed_listing_request(
+                _walked_listing_purpose(litellm_params), optional_params, litellm_params, continuation_token
+            )
+        if not _output_location_still_unlisted(litellm_params):
             return None
-        return self._signed_listing_request(
-            _requested_listing_purpose(litellm_params), optional_params, litellm_params, continuation_token
-        )
+        litellm_params[LIST_FILES_LOCATION_PARAM] = "batch_output"  # rebind-ok: the input location is fully listed
+        return self._signed_listing_request("batch_output", optional_params, litellm_params, continuation_token=None)
 
     def _signed_listing_request(
         self,
@@ -1399,7 +1416,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 response=raw_response,
             )
         purpose: Final = _requested_listing_purpose(litellm_params)
-        configured_bucket_name: Final = _listing_bucket_name(litellm_params, purpose)
+        configured_bucket_name: Final = _listing_bucket_name(litellm_params, _walked_listing_purpose(litellm_params))
         allow_legacy_cloud_file_ids: Final = should_allow_legacy_cloud_file_ids(litellm_params)
         listing: Final = ET.fromstring(raw_response.content)
         bucket_name: Final = (
