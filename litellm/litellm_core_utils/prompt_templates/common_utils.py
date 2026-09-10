@@ -6,7 +6,7 @@ import io
 import json
 import mimetypes
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from itertools import groupby
 from os import PathLike
 from pathlib import Path
@@ -1887,6 +1887,47 @@ def is_encrypted_reasoning_block(block: object) -> bool:
         return False
     mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
     return _carries_encrypted_reasoning(_encrypted_reasoning_field(mapping))
+
+
+def strip_encrypted_reasoning_from_messages(messages: object) -> None:
+    """Drop the encrypted reasoning a routed deployment cannot decrypt from Anthropic-shaped
+    history, keeping the readable thinking text.
+
+    Mutates the content lists in place: the router's fallback snapshot shares these
+    message objects, so a rebound list would replay the stripped blocks on the fallback hop.
+    """
+    if not isinstance(messages, list):
+        return
+    for content in _anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
+        _strip_encrypted_reasoning_from_blocks(content)
+
+
+def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
+    return (
+        cast(list[object], content)  # cast-ok: narrowed by isinstance
+        for message in messages
+        if isinstance(message, Mapping)
+        for content in (cast(Mapping[str, object], message).get("content"),)  # cast-ok: narrowed by isinstance
+        if isinstance(content, list)
+    )
+
+
+def _strip_encrypted_reasoning_from_blocks(content: object) -> None:
+    blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
+    stripped: Final = tuple(_without_encrypted_reasoning_block(block) for block in blocks)
+    blocks[:] = (block for block in stripped if block is not None)  # rebind-ok: list shared with fallback snapshot
+
+
+def _without_encrypted_reasoning_block(block: object) -> object | None:
+    if not is_encrypted_reasoning_block(block):
+        return block
+    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by is_encrypted_reasoning_block
+    if mapping.get("type") != "thinking" or not mapping.get("thinking"):
+        return None
+    kept: Final[dict[str, object]] = {  # mutable-ok: thinking block rebuilt without the undecryptable signature
+        key: value for key, value in mapping.items() if key != "signature"
+    }
+    return kept
 
 
 def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
