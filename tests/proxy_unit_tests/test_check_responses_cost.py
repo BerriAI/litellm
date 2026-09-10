@@ -42,6 +42,17 @@ def _release_calls(mock_prisma_client):
     )
 
 
+def _routed_response_id(provider_response_id):
+    """A LiteLLM-encoded id names a deployment, which is what sends the poll's read through the router."""
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai",
+        model_id="deployment-xyz",
+        response_id=provider_response_id,
+    )
+
+
 class TestCheckResponsesCost:
     """Test suite for CheckResponsesCost class"""
 
@@ -804,7 +815,7 @@ class TestCheckResponsesCost:
         spend log, so losing the claim has to skip the read entirely or the job is billed twice."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_claimed_elsewhere"
-        mock_job.model_object_id = "resp_test_claimed_elsewhere"
+        mock_job.model_object_id = _routed_response_id("resp_test_claimed_elsewhere")
         mock_job.created_by = "test-user"
         mock_job.id = "job-claimed-elsewhere"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_claimed_elsewhere"}
@@ -816,10 +827,8 @@ class TestCheckResponsesCost:
             return_value=0
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
-            await check_responses_cost_instance.check_responses_cost()
+        await check_responses_cost_instance.check_responses_cost()
 
-        mock_sdk_aget.assert_not_awaited()
         mock_llm_router.aget_responses.assert_not_awaited()
         assert _completion_calls(mock_prisma_client) == []
         assert _release_calls(mock_prisma_client) == []
@@ -832,7 +841,7 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_claim_is_taken_back_from_a_pod_that_died_holding_it(
-        self, check_responses_cost_instance, mock_prisma_client
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
         """A pod that dies between claiming and billing releases nothing, and the row's status
         never reaches terminal, so without a lease every later cycle re-selects it and loses.
@@ -845,7 +854,7 @@ class TestCheckResponsesCost:
 
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_abandoned"
-        mock_job.model_object_id = "resp_test_abandoned"
+        mock_job.model_object_id = _routed_response_id("resp_test_abandoned")
         mock_job.created_by = "test-user"
         mock_job.id = "job-abandoned"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_abandoned"}
@@ -866,9 +875,9 @@ class TestCheckResponsesCost:
             usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
-            await check_responses_cost_instance.check_responses_cost()
+        mock_llm_router.aget_responses = AsyncMock(return_value=mock_response)
+
+        await check_responses_cost_instance.check_responses_cost()
 
         claim_where = _claim_calls(mock_prisma_client)[0].kwargs["where"]
         abandoned_arm = next(arm for arm in claim_where["OR"] if "updated_at" in arm)
@@ -881,13 +890,13 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_claim_is_taken_before_the_billing_read_and_kept_on_a_terminal_status(
-        self, check_responses_cost_instance, mock_prisma_client
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
         """The read prices the job, so the claim has to be taken before it, and keeping the claim
         afterwards is what stops a second pod reading and billing the same row again."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_ordering"
-        mock_job.model_object_id = "resp_test_ordering"
+        mock_job.model_object_id = _routed_response_id("resp_test_ordering")
         mock_job.created_by = "test-user"
         mock_job.id = "job-ordering"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_ordering"}
@@ -919,10 +928,9 @@ class TestCheckResponsesCost:
             side_effect=record_update_many
         )
 
-        with patch(
-            "litellm.aget_responses", new_callable=AsyncMock, side_effect=record_read
-        ):
-            await check_responses_cost_instance.check_responses_cost()
+        mock_llm_router.aget_responses = AsyncMock(side_effect=record_read)
+
+        await check_responses_cost_instance.check_responses_cost()
 
         assert len(writes_and_reads) == 3
         assert writes_and_reads[0] == {"batch_processed": True}
@@ -932,13 +940,13 @@ class TestCheckResponsesCost:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("provider_status", ["queued", "in_progress"])
     async def test_non_terminal_status_releases_the_claim(
-        self, check_responses_cost_instance, mock_prisma_client, provider_status
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router, provider_status
     ):
         """A response the provider has not finished yet has no spend to record, so its row must go
         back to batch_processed=False; holding the claim retires it before it is ever billed."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_still_running"
-        mock_job.model_object_id = "resp_test_still_running"
+        mock_job.model_object_id = _routed_response_id("resp_test_still_running")
         mock_job.created_by = "test-user"
         mock_job.id = "job-still-running"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_still_running"}
@@ -959,9 +967,9 @@ class TestCheckResponsesCost:
             usage=None,
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
-            await check_responses_cost_instance.check_responses_cost()
+        mock_llm_router.aget_responses = AsyncMock(return_value=mock_response)
+
+        await check_responses_cost_instance.check_responses_cost()
 
         assert _completion_calls(mock_prisma_client) == []
         release_calls = _release_calls(mock_prisma_client)
@@ -973,13 +981,13 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_failed_provider_read_releases_the_claim(
-        self, check_responses_cost_instance, mock_prisma_client
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
         """A read that raised billed nothing, so the claim has to be handed back or the row is
         retired unbilled and no later poll cycle ever retries it."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_read_error"
-        mock_job.model_object_id = "resp_test_read_error"
+        mock_job.model_object_id = _routed_response_id("resp_test_read_error")
         mock_job.created_by = "test-user"
         mock_job.id = "job-read-error"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_read_error"}
@@ -991,12 +999,9 @@ class TestCheckResponsesCost:
             return_value=1
         )
 
-        with patch(
-            "litellm.aget_responses",
-            new_callable=AsyncMock,
-            side_effect=Exception("Provider error"),
-        ):
-            await check_responses_cost_instance.check_responses_cost()
+        mock_llm_router.aget_responses = AsyncMock(side_effect=Exception("Provider error"))
+
+        await check_responses_cost_instance.check_responses_cost()
 
         assert _completion_calls(mock_prisma_client) == []
         release_calls = _release_calls(mock_prisma_client)
@@ -1008,20 +1013,20 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_a_job_claimed_elsewhere_does_not_block_the_next_job(
-        self, check_responses_cost_instance, mock_prisma_client
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
         """Losing one row to another pod must skip only that row: the rest of the poll page still
         has to be read and billed in the same cycle."""
         mock_job1 = MagicMock()
         mock_job1.unified_object_id = "resp_test_first"
-        mock_job1.model_object_id = "resp_test_first"
+        mock_job1.model_object_id = _routed_response_id("resp_test_first")
         mock_job1.created_by = "user1"
         mock_job1.id = "job-first"
         mock_job1.file_object = {"model": "gpt-5", "id": "resp_test_first"}
 
         mock_job2 = MagicMock()
         mock_job2.unified_object_id = "resp_test_second"
-        mock_job2.model_object_id = "resp_test_second"
+        mock_job2.model_object_id = _routed_response_id("resp_test_second")
         mock_job2.created_by = "user2"
         mock_job2.id = "job-second"
         mock_job2.file_object = {"model": "gpt-5", "id": "resp_test_second"}
@@ -1042,12 +1047,14 @@ class TestCheckResponsesCost:
             usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
-            await check_responses_cost_instance.check_responses_cost()
+        mock_llm_router.aget_responses = AsyncMock(return_value=mock_response)
 
-        mock_aget.assert_awaited_once()
-        assert mock_aget.await_args.kwargs["response_id"] == "resp_test_second"
+        await check_responses_cost_instance.check_responses_cost()
+
+        mock_llm_router.aget_responses.assert_awaited_once()
+        assert mock_llm_router.aget_responses.await_args.kwargs["response_id"] == _routed_response_id(
+            "resp_test_second"
+        )
 
         assert _completed_job_ids(mock_prisma_client) == ["job-second"]
 
@@ -1095,13 +1102,13 @@ class TestCheckResponsesCost:
 
     @pytest.mark.asyncio
     async def test_old_schema_without_the_claim_column_still_bills_and_completes(
-        self, check_responses_cost_instance, mock_prisma_client
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
         """End to end on a pre-migration schema: the claim write fails, the response is still read
         (which is what bills it) and the row is still marked completed."""
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_old_schema"
-        mock_job.model_object_id = "resp_test_old_schema"
+        mock_job.model_object_id = _routed_response_id("resp_test_old_schema")
         mock_job.created_by = "test-user"
         mock_job.id = "job-old-schema"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_old_schema"}
@@ -1131,29 +1138,29 @@ class TestCheckResponsesCost:
             usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
-            await check_responses_cost_instance.check_responses_cost()
+        mock_llm_router.aget_responses = AsyncMock(return_value=mock_response)
 
-        mock_aget.assert_awaited_once()
+        await check_responses_cost_instance.check_responses_cost()
+
+        mock_llm_router.aget_responses.assert_awaited_once()
         assert _completed_job_ids(mock_prisma_client) == ["job-old-schema"]
 
     @pytest.mark.asyncio
     async def test_a_failed_persist_does_not_abort_the_rest_of_the_poll_cycle(
-        self, check_responses_cost_instance, mock_prisma_client
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
         """One row's write failing must not take the whole cycle down with it: the jobs behind it
         are already read and billed, so losing their write loses their usage for good."""
         mock_job1 = MagicMock()
         mock_job1.unified_object_id = "resp_test_persist_fails"
-        mock_job1.model_object_id = "resp_test_persist_fails"
+        mock_job1.model_object_id = _routed_response_id("resp_test_persist_fails")
         mock_job1.created_by = "user1"
         mock_job1.id = "job-persist-fails"
         mock_job1.file_object = {"model": "gpt-5", "id": "resp_test_persist_fails"}
 
         mock_job2 = MagicMock()
         mock_job2.unified_object_id = "resp_test_persist_works"
-        mock_job2.model_object_id = "resp_test_persist_works"
+        mock_job2.model_object_id = _routed_response_id("resp_test_persist_works")
         mock_job2.created_by = "user2"
         mock_job2.id = "job-persist-works"
         mock_job2.file_object = {"model": "gpt-5", "id": "resp_test_persist_works"}
@@ -1174,11 +1181,11 @@ class TestCheckResponsesCost:
             usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
         )
 
-        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
-            mock_aget.return_value = mock_response
-            await check_responses_cost_instance.check_responses_cost()
+        mock_llm_router.aget_responses = AsyncMock(return_value=mock_response)
 
-        assert mock_aget.await_count == 2
+        await check_responses_cost_instance.check_responses_cost()
+
+        assert mock_llm_router.aget_responses.await_count == 2
         assert _completed_job_ids(mock_prisma_client) == [
             "job-persist-fails",
             "job-persist-works",
@@ -1194,16 +1201,11 @@ class TestCheckResponsesCost:
         is no handle on the generation.
         """
         from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-        from litellm.responses.utils import ResponsesAPIRequestUtils
         from litellm.types.utils import SpecialEnums
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
 
-        provider_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
-            custom_llm_provider="openai",
-            model_id="deployment-xyz",
-            response_id="resp_upstream_stable",
-        )
+        provider_response_id = _routed_response_id("resp_upstream_stable")
         stale_advertised_id = "resp_" + str(
             encrypt_value_helper(
                 value=SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
@@ -1243,16 +1245,11 @@ class TestCheckResponsesCost:
     ):
         """Rows created earlier carry the encrypted advertised id in both columns."""
         from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-        from litellm.responses.utils import ResponsesAPIRequestUtils
         from litellm.types.utils import SpecialEnums
 
         monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
 
-        provider_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
-            custom_llm_provider="openai",
-            model_id="deployment-xyz",
-            response_id="resp_legacy_upstream",
-        )
+        provider_response_id = _routed_response_id("resp_legacy_upstream")
         legacy_id = "resp_" + str(
             encrypt_value_helper(
                 value=SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
