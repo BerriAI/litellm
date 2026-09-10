@@ -327,6 +327,11 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 	key.Metadata = metadata
 
 	if _, err := c.UpdateKey(key); err != nil {
+		// The proxy rejected the whole update, so nothing was applied
+		// server-side. Keep prior state instead of persisting the
+		// rejected values: without partial mode the SDK writes the
+		// proposed config into state even when Update returns an error.
+		d.Partial(true)
 		return diag.FromErr(fmt.Errorf("error updating key: %s", err))
 	}
 
