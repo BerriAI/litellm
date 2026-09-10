@@ -12,7 +12,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
-    attach_user_emails,
+    attach_user_details,
     recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
     recover_key_metadata_from_spend_logs,
@@ -515,7 +515,7 @@ async def get_api_key_metadata(
         else _EMPTY_KEY_METADATA
     )
     combined: Final = MappingProxyType({**after_token_recovery, **from_spend_logs})
-    return await attach_user_emails(prisma_client, combined)
+    return await attach_user_details(prisma_client, combined)
 
 
 def _adjust_dates_for_timezone(

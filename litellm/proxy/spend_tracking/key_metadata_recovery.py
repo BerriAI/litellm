@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final, TypeVar
@@ -110,7 +111,6 @@ _SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
 )
 _SPEND_LOG_QUERY_LOCK: Final = asyncio.Lock()
 _EMPTY_KEY_METADATA: Final[Mapping[str, KeyMetadataDict]] = MappingProxyType({})
-_EMPTY_EMAILS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 async def _db_or_empty(
@@ -150,54 +150,85 @@ async def _reverse_hash_key_metadata(
     )
 
 
-async def _emails_for_user_ids(
+@dataclass(frozen=True, slots=True)
+class _UserDetails:
+    email: str | None
+    first_team: str | None
+
+
+_EMPTY_USER_DETAILS: Final[Mapping[str, _UserDetails]] = MappingProxyType({})
+
+
+async def _details_for_user_ids(
     prisma_client: PrismaClient,
     user_ids: AbstractSet[str],
-) -> Mapping[str, str]:
+) -> Mapping[str, _UserDetails]:
     if not user_ids:
-        return _EMPTY_EMAILS
+        return _EMPTY_USER_DETAILS
     users: Final = await _db_or_empty(
         lambda: UserRepository(prisma_client).table.find_many(
             where={"user_id": {"in": list(user_ids)}},  # mutable-ok: Prisma find_many where= is a dict
         ),
-        "Failed user_email recovery for %d user ids: %s",
+        "Failed user detail recovery for %d user ids: %s",
         len(user_ids),
     )
     if users is None:
-        return _EMPTY_EMAILS
+        return _EMPTY_USER_DETAILS
     return MappingProxyType(
         {
-            user.user_id: user.user_email
+            user.user_id: _UserDetails(
+                email=getattr(user, "user_email", None) or None,
+                first_team=next(iter(getattr(user, "teams", None) or ()), None),
+            )
             for user in users
-            if getattr(user, "user_id", None) and getattr(user, "user_email", None)
+            if getattr(user, "user_id", None)
         }
     )
 
 
-def _meta_with_email(meta: KeyMetadataDict, emails: Mapping[str, str]) -> KeyMetadataDict:
-    if meta.get("user_email"):
-        return meta
+def _is_cli_session_key(api_key: str) -> bool:
+    return api_key.startswith(_CLI_SESSION_KEY_PREFIX) and len(api_key) > len(_CLI_SESSION_KEY_PREFIX)
+
+
+def _meta_with_user_details(
+    api_key: str, meta: KeyMetadataDict, details: Mapping[str, _UserDetails]
+) -> KeyMetadataDict:
     user_id: Final = meta.get("user_id")
-    if not isinstance(user_id, str) or user_id not in emails:
+    if not isinstance(user_id, str) or user_id not in details:
         return meta
-    updated: Final[KeyMetadataDict] = {**meta, "user_email": emails[user_id]}
+    user: Final = details[user_id]
+    email: Final = meta.get("user_email") or user.email
+    team_id: Final = meta.get("team_id") or (user.first_team if _is_cli_session_key(api_key) else None)
+    updated: Final[KeyMetadataDict] = {
+        **meta,
+        **({"user_email": email} if email else {}),
+        **({"team_id": team_id} if team_id else {}),
+    }
     return updated
 
 
-async def attach_user_emails(
+async def attach_user_details(
     prisma_client: PrismaClient,
     recovered: Mapping[str, KeyMetadataDict],
 ) -> Mapping[str, KeyMetadataDict]:
-    needing_email: Final = frozenset(
+    """
+    Fill user_email from the owner's user row, and for a cli-session key also
+    the team the CLI login attaches to that user (its first team).
+    """
+    needing_details: Final = frozenset(
         user_id
-        for meta in recovered.values()
+        for api_key, meta in recovered.items()
         for user_id in (meta.get("user_id"),)
-        if isinstance(user_id, str) and user_id and not meta.get("user_email")
+        if isinstance(user_id, str)
+        and user_id
+        and (not meta.get("user_email") or (_is_cli_session_key(api_key) and not meta.get("team_id")))
     )
-    emails: Final = await _emails_for_user_ids(prisma_client, needing_email)
-    if not emails:
+    details: Final = await _details_for_user_ids(prisma_client, needing_details)
+    if not details:
         return recovered
-    return MappingProxyType({api_key: _meta_with_email(meta, emails) for api_key, meta in recovered.items()})
+    return MappingProxyType(
+        {api_key: _meta_with_user_details(api_key, meta, details) for api_key, meta in recovered.items()}
+    )
 
 
 def recover_cli_session_key_metadata(missing_keys: AbstractSet[str]) -> Mapping[str, KeyMetadataDict]:
@@ -205,7 +236,7 @@ def recover_cli_session_key_metadata(missing_keys: AbstractSet[str]) -> Mapping[
         {
             key: KeyMetadataDict(key_alias=key, user_id=key.removeprefix(_CLI_SESSION_KEY_PREFIX))
             for key in missing_keys
-            if key.startswith(_CLI_SESSION_KEY_PREFIX) and len(key) > len(_CLI_SESSION_KEY_PREFIX)
+            if _is_cli_session_key(key)
         }
     )
 
@@ -396,7 +427,7 @@ async def fill_missing_api_key_aliases(
         return tuple(rows)
 
     from_session_keys: Final = recover_cli_session_key_metadata(missing_keys)
-    recovered: Final = await attach_user_emails(
+    recovered: Final = await attach_user_details(
         prisma_client,
         MappingProxyType(
             {
