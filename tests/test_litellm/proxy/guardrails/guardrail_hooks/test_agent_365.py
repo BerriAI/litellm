@@ -659,6 +659,27 @@ class TestAgentIdentityMode:
         assert handler.calls[-1].headers["Authorization"] == "Bearer reminted"
 
     @pytest.mark.asyncio
+    async def test_stale_401_does_not_evict_newer_agent_user_token(self):
+        class ReplacingHandler(FakeHandler):
+            guardrail: Agent365Guardrail
+
+            async def post(self, *, url, headers=None, data=None, json=None, timeout=None):
+                if url == EVALUATE_URL and headers["Authorization"] == "Bearer stale":
+                    self.guardrail._store_token("agent_user", "newer", time.time() + 3600)
+                return await super().post(url=url, headers=headers, data=data, json=json, timeout=timeout)
+
+        handler: Final = ReplacingHandler(
+            [*_agent_id_chain(agent_user_token="stale"), _response(401, text="token revoked"), _allow_response()]
+        )
+        guardrail: Final = _make_guardrail(handler, agent_identity=AGENT_IDENTITY)
+        handler.guardrail = guardrail
+        with pytest.raises(HTTPException):
+            await _run(guardrail, _mcp_data(incoming_bearer_token=None))
+        await _run(guardrail, _mcp_data(incoming_bearer_token=None))
+        assert len([c for c in handler.calls if c.url == TOKEN_URL]) == 3
+        assert handler.calls[-1].headers["Authorization"] == "Bearer newer"
+
+    @pytest.mark.asyncio
     async def test_chain_rejected_is_gateway_fault_not_caller_fault(self):
         handler: Final = FakeHandler(
             [_response(401, {"error": "invalid_client", "error_description": "AADSTS7000215: bad secret"})]

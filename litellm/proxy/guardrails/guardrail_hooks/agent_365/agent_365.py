@@ -253,6 +253,7 @@ class Agent365Guardrail(CustomGuardrail):
             data=data,
             tool_name=tool_name,
             token_cache_key=self._token_cache_key(principal),
+            token=token,
             response=response,
             latency_ms=latency_ms,
         )
@@ -285,6 +286,7 @@ class Agent365Guardrail(CustomGuardrail):
         data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         token_cache_key: str,
+        token: str,
         response: httpx.Response,
         latency_ms: float,
     ) -> dict | None:  # mutable-ok: returns the request data dict per hook contract on fail_open
@@ -297,7 +299,7 @@ class Agent365Guardrail(CustomGuardrail):
             )
         if 400 <= response.status_code < 500:
             if response.status_code == 401:
-                self._evict_token(token_cache_key)
+                self._evict_token(token_cache_key, token)
             self._record_verdict(
                 data=data,
                 verdict="Rejected",
@@ -608,9 +610,11 @@ class Agent365Guardrail(CustomGuardrail):
         }
         raise HTTPException(status_code=503, detail=throttled_detail)
 
-    def _evict_token(self, cache_key: str) -> None:
+    def _evict_token(self, cache_key: str, token: str) -> None:
         with self._obo_cache_lock:
-            self._obo_token_cache.pop(cache_key, None)
+            cached: Final = self._obo_token_cache.get(cache_key)
+            if cached is not None and cached[0] == token:
+                self._obo_token_cache.pop(cache_key)
 
     def _handle_unavailable(
         self,
