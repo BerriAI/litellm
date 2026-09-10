@@ -6,10 +6,10 @@ Plugins are stored as metadata + git source references in LiteLLM database.
 Actual plugin files are hosted on GitHub/GitLab/Bitbucket.
 
 Endpoints:
-/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated)
+/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated; `?key=` adds the key's granted skills)
 /claude-code/plugins           - POST - Register a new plugin (create-only, proxy admin only)
-/claude-code/plugins           - GET  - List plugins (any authenticated key)
-/claude-code/plugins/{name}    - GET  - Get plugin details (any authenticated key)
+/claude-code/plugins           - GET  - List plugins visible to the key (enabled, plus granted disabled ones)
+/claude-code/plugins/{name}    - GET  - Get plugin details (403 on a disabled plugin the key is not granted)
 /claude-code/plugins/{name}    - PUT  - Update an existing plugin (proxy admin only)
 /claude-code/plugins/{name}/enable  - POST - Enable a plugin (proxy admin only)
 /claude-code/plugins/{name}/disable - POST - Disable a plugin (proxy admin only)
@@ -22,11 +22,15 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Annotated, Final, Protocol, TypedDict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, ProxyException, UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
+    SkillVisibility,
+    skill_visibility,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
@@ -82,7 +86,7 @@ async def _get_prisma_client() -> object:
     "/claude-code/marketplace.json",
     tags=["Claude Code Marketplace"],
 )
-async def get_marketplace():
+async def get_marketplace(request: Request, key: str | None = None):
     """
     Serve marketplace.json for Claude Code plugin discovery.
 
@@ -90,24 +94,35 @@ async def get_marketplace():
     - claude plugin marketplace add <url>
     - claude plugin install <name>@<marketplace>
 
+    Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
+    the key is authenticated and the catalog also holds the disabled plugins granted
+    to it through `object_permission.skills` on the key or its team.
+
     Returns:
         Marketplace catalog with list of available plugins and their git sources.
 
     Example:
         ```bash
         claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json
+        claude plugin marketplace add "http://localhost:4000/claude-code/marketplace.json?key=sk-..."
         claude plugin install my-plugin@litellm
         ```
     """
     try:
         prisma_client: Final = await _get_prisma_client()
 
+        caller: Final[UserAPIKeyAuth | None] = (
+            await user_api_key_auth(request=request, api_key=f"Bearer {key}") if key else None
+        )
+        visibility: Final[SkillVisibility] = skill_visibility(caller)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
-            where={"enabled": True}
+            where=visibility.where()
         )
 
         plugin_list: Final = []
         for plugin in plugins:
+            if not visibility.allows(plugin):
+                continue
             try:
                 manifest: Mapping[str, object] = json.loads(plugin.manifest_json or "{}")
             except json.JSONDecodeError:
@@ -147,7 +162,7 @@ async def get_marketplace():
 
         return JSONResponse(content=marketplace)
 
-    except HTTPException:
+    except (HTTPException, ProxyException):
         raise
     except Exception as e:
         verbose_proxy_logger.exception("Error generating marketplace: %s", e)
@@ -370,13 +385,15 @@ async def list_plugins(
     try:
         prisma_client: Final = await _get_prisma_client()
 
-        where: Final = {"enabled": True} if enabled_only else {}
+        visibility: Final[SkillVisibility] = skill_visibility(user_api_key_dict)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
-            where=where
+            where={"enabled": True} if enabled_only else visibility.where()
         )
 
         plugin_list: Final = []
         for p in plugins:
+            if not visibility.allows(p):
+                continue
             # Parse manifest to get additional fields
             manifest = json.loads(p.manifest_json) if p.manifest_json else {}
 
@@ -446,6 +463,12 @@ async def get_plugin(
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Plugin '{plugin_name}' not found"},
+            )
+
+        if not skill_visibility(user_api_key_dict).allows(plugin):
+            raise HTTPException(
+                status_code=403,
+                detail={"error": f"Plugin '{plugin_name}' is not granted to this key"},
             )
 
         manifest: Final[Mapping[str, object]] = json.loads(plugin.manifest_json or "{}") if plugin.manifest_json else {}

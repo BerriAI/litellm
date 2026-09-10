@@ -2110,12 +2110,17 @@ export interface paths {
          *     - claude plugin marketplace add <url>
          *     - claude plugin install <name>@<marketplace>
          *
+         *     Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
+         *     the key is authenticated and the catalog also holds the disabled plugins granted
+         *     to it through `object_permission.skills` on the key or its team.
+         *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
          *
          *     Example:
          *         ```bash
          *         claude plugin marketplace add http://localhost:4000/claude-code/marketplace.json
+         *         claude plugin marketplace add "http://localhost:4000/claude-code/marketplace.json?key=sk-..."
          *         claude plugin install my-plugin@litellm
          *         ```
          */
@@ -29324,6 +29329,8 @@ export interface components {
             models?: string[] | null;
             /** Search Tools */
             search_tools?: string[] | null;
+            /** Skills */
+            skills?: string[] | null;
             /** Vector Stores */
             vector_stores?: string[] | null;
         };
@@ -29377,6 +29384,8 @@ export interface components {
              * @default []
              */
             search_tools: string[] | null;
+            /** Skills */
+            skills?: string[] | null;
             /**
              * Vector Stores
              * @default []
@@ -43191,7 +43200,9 @@ export interface operations {
     };
     get_marketplace_claude_code_marketplace_json_get: {
         parameters: {
-            query?: never;
+            query?: {
+                key?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -43205,6 +43216,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
