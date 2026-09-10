@@ -345,7 +345,7 @@ class Agent365Guardrail(CustomGuardrail):
         tool_name: Final = str(data.get("mcp_tool_name") or "")
         arguments: Final = data.get("mcp_arguments")
         server_name: Final = str(data.get("mcp_server_name") or "litellm")
-        agent_id: Final = self.agent_id or getattr(user_api_key_dict, "key_alias", None)
+        agent_id: Final = self.agent_id or user_api_key_dict.key_alias
         tool_reference: Final[_ToolReference] = {"name": tool_name}
         payload: Final[dict[str, object]] = {  # mutable-ok: JSON body with optional fields added below
             "tool": tool_reference,
