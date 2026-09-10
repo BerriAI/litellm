@@ -25,7 +25,6 @@ pub(crate) struct AzureDocumentIntelligenceAdapter;
 impl OcrAdapter for AzureDocumentIntelligenceAdapter {
     type ProviderResponse = AzureDocumentIntelligenceOperation;
     const PROVIDER: OcrProvider = OcrProvider::AzureAi;
-    const SUPPORTS_NATIVE_RESPONSE: bool = true;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     async fn transform_ocr_request(
