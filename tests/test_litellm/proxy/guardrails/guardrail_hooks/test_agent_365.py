@@ -752,6 +752,16 @@ class TestOboTokenCache:
         assert len(token_calls) == 2
         assert handler.calls[3].headers["Authorization"] == "Bearer fresh"
 
+    def test_cache_drops_least_recently_used_beyond_1000_entries(self):
+        guardrail: Final = _make_guardrail(FakeHandler([]))
+        expires_at: Final = time.time() + 3600
+        for i in range(1001):
+            guardrail._store_token(f"key-{i}", f"token-{i}", expires_at)
+        assert len(guardrail._obo_token_cache) == 1000
+        assert guardrail._cached_token("key-0") is None
+        assert guardrail._cached_token("key-1") == "token-1"
+        assert guardrail._cached_token("key-1000") == "token-1000"
+
 
 class TestEarlyPhasePassthrough:
     @pytest.mark.asyncio
