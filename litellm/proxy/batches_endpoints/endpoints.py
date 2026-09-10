@@ -34,9 +34,9 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_batch_response_ids,
     encode_file_id_with_model,
     ensure_batch_response_managed_file_ids,
+    get_authorized_credentials_for_model,
     get_batch_from_database,
     get_batch_id_from_unified_batch_id,
-    get_credentials_for_model,
     get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
@@ -218,9 +218,10 @@ async def create_batch(
 
         # SCENARIO 1: File ID is encoded with model info
         if model_from_file_id is not None and input_file_id:
-            credentials = get_credentials_for_model(
+            credentials = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_file_id,
+                user_api_key_dict=user_api_key_dict,
                 operation_context="batch creation (file created with model)",
             )
 
@@ -310,9 +311,10 @@ async def create_batch(
             # SCENARIO 2 & 3: Model from header/query OR custom_llm_provider fallback
             if model_param:
                 # SCENARIO 2: Use model-based routing from header/query/body
-                credentials = get_credentials_for_model(
+                credentials = await get_authorized_credentials_for_model(
                     llm_router=llm_router,
                     model_id=model_param,
+                    user_api_key_dict=user_api_key_dict,
                     operation_context="batch creation",
                 )
 
@@ -540,9 +542,10 @@ async def retrieve_batch(
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
-            credentials: Final = get_credentials_for_model(
+            credentials: Final = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_id,
+                user_api_key_dict=user_api_key_dict,
                 operation_context="batch retrieval (batch created with model)",
             )
 
@@ -764,9 +767,10 @@ async def list_batches(
             data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
         ):
             # SCENARIO 2: Use model-based routing from header/query/body
-            credentials: Final = get_credentials_for_model(
+            credentials: Final = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_param,
+                user_api_key_dict=user_api_key_dict,
                 operation_context="batch listing",
             )
 
@@ -952,9 +956,10 @@ async def cancel_batch(
 
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
-            credentials: Final = get_credentials_for_model(
+            credentials: Final = await get_authorized_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_from_id,
+                user_api_key_dict=user_api_key_dict,
                 operation_context="batch cancellation (batch created with model)",
             )
 

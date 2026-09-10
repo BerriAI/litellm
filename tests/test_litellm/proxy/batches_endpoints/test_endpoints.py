@@ -177,6 +177,8 @@ def harness():
     logging.get_proxy_hook = MagicMock(return_value=None)
 
     router = MagicMock(spec=Router)
+    router.model_group_alias = {}
+    router.get_model_access_groups = MagicMock(return_value={})
     router.acreate_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -1161,6 +1163,8 @@ def retrieve_harness():
     logging.get_proxy_hook = MagicMock(return_value=None)
 
     router = MagicMock(spec=Router)
+    router.model_group_alias = {}
+    router.get_model_access_groups = MagicMock(return_value={})
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -1616,6 +1620,8 @@ def list_harness():
     logging.get_proxy_hook = MagicMock(return_value=None)
 
     router = MagicMock(spec=Router)
+    router.model_group_alias = {}
+    router.get_model_access_groups = MagicMock(return_value={})
     router.alist_batches = AsyncMock(return_value=FakeListPage([]))
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -2012,6 +2018,8 @@ def cancel_harness():
     logging.get_proxy_hook = MagicMock(return_value=None)
 
     router = MagicMock(spec=Router)
+    router.model_group_alias = {}
+    router.get_model_access_groups = MagicMock(return_value={})
     router.acancel_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
 
@@ -2733,8 +2741,6 @@ async def test_cancel__unified_batch_id_allowed_when_managed_files_required(canc
     assert cancel_harness.router_acancel.call_count == 1
 
 
-
-
 @pytest.mark.asyncio
 async def test_retrieve__managed_batch_defers_cost_to_the_poller_when_it_is_running(retrieve_harness):
     with patch.object(endpoints, "batch_cost_poller_is_active", MagicMock(return_value=True)):
@@ -2762,3 +2768,51 @@ async def test_retrieve__raw_batch_id_is_untouched_by_the_poller_handoff(retriev
 
     metadata = retrieve_harness.litellm_aretrieve.await_args.kwargs.get("litellm_metadata") or {}
     assert metadata.get("batch_ignore_default_logging") is None
+
+
+def _key_restricted_to(*models: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="sk-restricted", team_id="team-a", team_models=list(models), models=list(models))
+
+
+@pytest.mark.asyncio
+async def test_create__header_model_rejects_key_without_model_grant(harness):
+    """A key not granted the model named in x-litellm-model must not receive that deployment's credentials."""
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_create(harness, user=_key_restricted_to("azure/gpt-4o"), headers={"x-litellm-model": "vertex-model"})
+
+    assert exc_info.value.code == "403"
+    harness.creds_resolver.assert_not_called()
+    harness.litellm_acreate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create__header_model_allows_key_with_model_grant(harness):
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+
+    await call_create(harness, user=_key_restricted_to("vertex-model"), headers={"x-litellm-model": "vertex-model"})
+
+    harness.creds_resolver.assert_called_once_with(model_id="vertex-model")
+    assert harness.acreate_kwargs()["custom_llm_provider"] == "vertex_ai"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_id_rejects_key_without_model_grant(retrieve_harness):
+    """The model embedded in a batch id is caller-controlled, so it is checked against the key's grants too."""
+    with pytest.raises(ProxyException) as exc_info:
+        await call_retrieve(retrieve_harness, AZURE_BATCH_ID, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    retrieve_harness.creds_resolver.assert_not_called()
+    retrieve_harness.litellm_aretrieve.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__model_encoded_id_rejects_key_without_model_grant(cancel_harness):
+    with pytest.raises(ProxyException) as exc_info:
+        await call_cancel(cancel_harness, AZURE_BATCH_ID, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    cancel_harness.creds_resolver.assert_not_called()
+    cancel_harness.litellm_acancel.assert_not_called()
