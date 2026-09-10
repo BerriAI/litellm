@@ -315,6 +315,7 @@ async def reserve_budget_for_request(
         "entries": applied_entries,
         "finalized": False,
         "input_cost": min(float(input_cost or 0.0), reservation_cost),
+        "input_tokens": max(input_token_counts.values(), default=None),
     }
 
 
