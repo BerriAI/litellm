@@ -287,6 +287,40 @@ the gateway on GKE with the Helm chart's `targetTokensPerSecond` (see
 "Dependencies only" below) rather than wiring the counter into Cloud
 Monitoring, which the autoscaler would ignore
 
+### In-container connection pool
+
+Each of the `gateway_num_workers` uvicorn workers opens its own Prisma pool
+straight to Cloud SQL, so one instance holds `workers x connection_limit`
+connections and the fleet's footprint against the database ceiling grows with
+every instance Cloud Run adds. `gateway_connection_pool_enabled` runs a
+PgBouncer (transaction mode, loopback) inside the gateway container that all
+workers share, capping the instance at `gateway_pool_max_db_connections`
+upstream connections however many workers it runs.
+`gateway_pool_max_client_conn` bounds the worker-side connections the pooler
+accepts. The module sets `LITELLM_PGBOUNCER_ENABLED`,
+`LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS` and `LITELLM_PGBOUNCER_MAX_CLIENT_CONN`
+on the gateway service only; the backend service and the migrations job keep
+the direct connection
+
+```hcl
+gateway_num_workers             = 4
+gateway_connection_pool_enabled = true
+gateway_pool_max_db_connections = 20
+gateway_pool_max_client_conn    = 1000
+```
+
+The pooler holds one static database password for the life of the instance.
+This stack authenticates to Cloud SQL with the Secret Manager password (see
+[Database authentication](#database-authentication)), so nothing else is
+needed; a Cloud SQL Auth Proxy sidecar with IAM auth would not work with the
+pool
+
+The gateway container starts through `python -m gateway.launch` (the
+componentized image's own entrypoint) rather than `uvicorn` directly. The
+launcher reads these variables, starts the pooler once per instance before
+uvicorn forks the workers and hands them its loopback `DATABASE_URL`. It also
+honours `KEEPALIVE_TIMEOUT` from `gateway_extra_env` the way the image does
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or
