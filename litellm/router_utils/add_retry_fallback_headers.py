@@ -50,6 +50,12 @@ def prepare_response_for_header_attachment(response: object) -> object | None:
     return response
 
 
+def response_has_hidden_params(response: object) -> bool:
+    if isinstance(response, dict):
+        return "_hidden_params" in response
+    return hasattr(response, "_hidden_params")
+
+
 def ensure_response_additional_headers(response: object) -> dict[str, object]:
     hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
     _write_hidden_params(response, hidden_params)
