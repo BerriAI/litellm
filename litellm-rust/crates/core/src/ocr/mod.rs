@@ -21,6 +21,9 @@ mod azure_ai_tests;
 #[path = "../../tests/azure_document_intelligence_ocr.rs"]
 mod azure_document_intelligence_tests;
 #[cfg(test)]
+#[path = "../../tests/reducto_ocr.rs"]
+mod reducto_tests;
+#[cfg(test)]
 #[path = "../../tests/ocr/support.rs"]
 pub(crate) mod test_support;
 #[cfg(test)]

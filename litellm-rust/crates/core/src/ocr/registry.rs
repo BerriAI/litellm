@@ -25,6 +25,7 @@ super::adapters::for_each_ocr_adapter!(define_adapter_types);
 pub(crate) enum OcrProvider {
     Mistral,
     AzureAi,
+    Reducto,
 }
 
 impl OcrProvider {
@@ -32,6 +33,7 @@ impl OcrProvider {
         match self {
             Self::Mistral => "mistral",
             Self::AzureAi => "azure_ai",
+            Self::Reducto => "reducto",
         }
     }
 }
@@ -48,6 +50,7 @@ pub(crate) fn resolve_wire_adapter(
     let typed_provider = match provider.custom_llm_provider {
         "mistral" => OcrProvider::Mistral,
         "azure_ai" => OcrProvider::AzureAi,
+        "reducto" => OcrProvider::Reducto,
         value => return Err(Error::InvalidProvider(value.to_string())),
     };
     match typed_provider {
@@ -57,6 +60,10 @@ pub(crate) fn resolve_wire_adapter(
             OcrAdapterKind::AzureDocumentIntelligence,
         )),
         OcrProvider::AzureAi => Ok((provider.model.to_string(), OcrAdapterKind::AzureMistral)),
+        OcrProvider::Reducto if provider.model.eq_ignore_ascii_case("parse-legacy") => {
+            Ok((provider.model.to_string(), OcrAdapterKind::ReductoLegacy))
+        }
+        OcrProvider::Reducto => Ok((provider.model.to_string(), OcrAdapterKind::ReductoV3)),
     }
 }
 

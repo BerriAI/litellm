@@ -34,14 +34,14 @@ mod tests {
     use litellm_core::ocr::wire::is_supported_request;
 
     #[test]
-    fn core_activation_includes_azure_document_intelligence() {
+    fn core_activation_includes_migrated_providers() {
         assert!(is_supported_request("model", Some("mistral")));
         assert!(is_supported_request("pixtral-12b", Some("azure_ai")));
         assert!(is_supported_request(
             "doc-intelligence/prebuilt-layout",
             Some("azure_ai")
         ));
-        assert!(!is_supported_request("parse-v3", Some("reducto")));
+        assert!(is_supported_request("parse-v3", Some("reducto")));
     }
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(response["pages"][1]["markdown"], "Page 2 block A");
         assert_eq!(response["pages"][2]["markdown"], "Page 3 block A");
         assert_eq!(response["usage_info"]["pages_processed"], 3);
-        assert_eq!(response["usage_info"]["credits"], 3);
+        assert_eq!(response["usage_info"]["credits"], 3.0);
         assert_eq!(response["provider_native_response"]["job_id"], "job_123");
         let (upload_request, parse_request) = server.await.expect("server task completes");
         assert!(

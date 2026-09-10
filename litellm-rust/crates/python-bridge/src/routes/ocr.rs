@@ -102,13 +102,15 @@ mod tests {
     use litellm_core::ocr::wire::is_supported_request;
 
     #[test]
-    fn native_activation_includes_azure_document_intelligence() {
+    fn native_activation_includes_migrated_providers() {
         assert!(is_supported_request("model", Some("mistral")));
         assert!(is_supported_request("pixtral-12b", Some("azure_ai")));
         assert!(is_supported_request(
             "documentintelligence/prebuilt-read",
             Some("azure_ai")
         ));
+        assert!(is_supported_request("parse-v3", Some("reducto")));
+        assert!(is_supported_request("parse-legacy", Some("reducto")));
         assert!(!is_supported_request("mistral-ocr", Some("vertex_ai")));
     }
 }
