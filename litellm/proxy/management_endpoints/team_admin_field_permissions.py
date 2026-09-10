@@ -3,10 +3,11 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, assert_never
+from typing import Final, Literal, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.models.team import LiteLLM_TeamTable

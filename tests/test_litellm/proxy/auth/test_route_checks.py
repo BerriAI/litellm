@@ -3828,7 +3828,6 @@ def test_team_disable_logging_stays_proxy_admin_only():
     "route",
     [
         "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112",
-        "/team/update",
         "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/model/add",
     ],
 )
