@@ -1,6 +1,6 @@
 use super::super::OcrAdapter;
 use crate::Error;
-use crate::auth::vertex::{self, VertexAuthInputs};
+use crate::auth::vertex::{self, VertexConfig};
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::deepseek::{self, DeepSeekOcrParams, DeepSeekOcrResponse};
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
@@ -21,8 +21,7 @@ impl OcrAdapter for VertexDeepSeekAdapter {
     type ProviderResponse = DeepSeekOcrResponse;
     const PROVIDER: OcrProvider = OcrProvider::VertexAi;
 
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    async fn transform_ocr_request(
+    async fn prepare_request(
         &self,
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
@@ -31,17 +30,19 @@ impl OcrAdapter for VertexDeepSeekAdapter {
             known: params,
             extra_params: _extra_params,
         } = _prepare_ocr_request::<DeepSeekOcrParams>(request)?;
-        let config = VertexAuthInputs::from_optional_params(&request.optional_params)
+        let config =
+            VertexConfig::from_optional_params(&request.optional_params).map_err(Error::from)?;
+        let authentication = client
+            .vertex_auth()
+            .validate_environment(
+                request.connection.extra_headers.clone(),
+                request.connection.api_key.as_deref(),
+                &config,
+                &credential_env,
+            )
+            .await
             .map_err(Error::from)?;
-        let authentication = vertex::authenticate(
-            request.connection.extra_headers.clone(),
-            request.connection.api_key.as_deref(),
-            &config,
-            &credential_env,
-        )
-        .await
-        .map_err(Error::from)?;
-        let location = vertex::resolve_location(&config, &credential_env)
+        let location = vertex::get_vertex_ai_location(&config, &credential_env)
             .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         let url = get_complete_url(
             request.connection.api_base.as_deref(),

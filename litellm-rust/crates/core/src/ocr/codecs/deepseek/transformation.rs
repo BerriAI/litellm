@@ -5,6 +5,7 @@ use super::types::*;
 use crate::ocr::error::{OcrRequestError, OcrResponseError};
 use crate::ocr::types::{LiteLLMOcrResponse, OcrDocument};
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) fn transform_ocr_request(
     provider_model: &str,
     document: OcrDocument,

@@ -131,11 +131,11 @@ async fn adapters_build_complete_requests_and_share_mistral_normalization() {
     );
     let vertex = wire_request("vertex_ai/mistral-ocr-maas", "https://vertex.test", options);
     let direct_http = MistralAdapter
-        .transform_ocr_request(&direct, &client)
+        .prepare_request(&direct, &client)
         .await
         .unwrap();
     let vertex_http = VertexMistralAdapter
-        .transform_ocr_request(&vertex, &client)
+        .prepare_request(&vertex, &client)
         .await
         .unwrap();
     assert_eq!(direct_http.url().as_str(), "https://mistral.test/v1/ocr");
