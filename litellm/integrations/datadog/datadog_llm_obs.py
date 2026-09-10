@@ -9,39 +9,392 @@ API Reference: https://docs.datadoghq.com/llm_observability/setup/api/?tab=examp
 import asyncio
 import json
 import os
-from litellm._uuid import uuid
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from types import MappingProxyType
+from typing import Any, Final, Literal
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm._uuid import uuid
+from litellm.constants import REDACTED_BY_LITELLM, REDACTED_BY_LITELM_STRING
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.integrations.datadog.datadog_mock_client import (
-    should_use_datadog_mock,
-    create_mock_datadog_client,
-)
 from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_base_url_from_env,
     get_datadog_service,
     get_datadog_tags,
-    get_datadog_base_url_from_env,
+    normalize_datadog_tag_value,
+)
+from litellm.integrations.datadog.datadog_mock_client import (
+    create_mock_datadog_client,
+    should_use_datadog_mock,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
     handle_any_messages_to_chat_completion_str_messages_conversion,
 )
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
 from litellm.types.integrations.datadog_llm_obs import *
 from litellm.types.utils import (
+    AUDIT_GUARDRAIL_FIELDS,
+    PROMPT_CARRYING_GUARDRAIL_FIELDS,
+    PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CallTypes,
-    StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
+
+_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_MESSAGE: Final[Message] = {"role": "", "content": ""}
+_MAX_PARSED_TOOL_ARGUMENT_CHARS: Final = 256 * 1024
+_SAFE_REDACTED_MESSAGE_ROLES: Final = frozenset(
+    {"agent", "assistant", "developer", "function", "model", "system", "tool", "user"}
+)
+
+_CLASSIFIED_GUARDRAIL_FIELDS: Final = AUDIT_GUARDRAIL_FIELDS | PROMPT_CARRYING_GUARDRAIL_FIELDS
+
+_PROMPT_CARRYING_METADATA_FIELDS: Final = frozenset(
+    {
+        "routing_decision",
+        "requester_metadata",
+        "prompt_management_metadata",
+        "mcp_tool_call_metadata",
+        "vector_store_request_metadata",
+    }
+)
+
+_ROUTER_SPAN_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "tier": "router_tier",
+        "cause": "router_cause",
+        "score": "router_score",
+        "escalated": "router_escalated",
+        "signals": "router_signals",
+        "routed_model": "routed_model",
+    }
+)
+_ROUTER_DIMENSIONS: Final[tuple[str, ...]] = ("router_tier", "router_cause", "router_escalated", "routed_model")
+_COST_DIMENSIONS: Final[tuple[str, ...]] = ("team", "user", "key_alias", "model_group", *_ROUTER_DIMENSIONS)
+
+
+def _metadata_of(standard_logging_payload: StandardLoggingPayload) -> Mapping[str, Any]:
+    metadata: Final = standard_logging_payload.get("metadata")
+    return metadata or _EMPTY_MAPPING
+
+
+def _router_span_fields(
+    standard_logging_payload: StandardLoggingPayload, redact_prompt_text: bool
+) -> Mapping[str, object]:
+    """Flatten the auto-router decision, omitting prompt-quoting fields when redaction is enabled."""
+    routing_decision: Final = _mapping_field(_metadata_of(standard_logging_payload), "routing_decision")
+    if not routing_decision:
+        return _EMPTY_MAPPING
+    escalated: Final = bool(routing_decision.get("escalated") or routing_decision.get("context_escalated"))
+    return MappingProxyType(
+        {
+            _ROUTER_SPAN_FIELDS[record_field]: value
+            for record_field, value in (*routing_decision.items(), ("escalated", escalated))
+            if record_field in _ROUTER_SPAN_FIELDS
+            and value is not None
+            and not (redact_prompt_text and record_field in PROMPT_QUOTING_ROUTING_DECISION_FIELDS)
+        }
+    )
+
+
+def _guardrail_entries(guardrail_information: object) -> tuple[Mapping[str, object], ...]:
+    """The guardrail records as a sequence, whatever shape the payload carries.
+
+    `guardrail_information` is typed as a list, but a guardrail that writes the metadata key itself
+    can leave a single record there; Prometheus normalizes the same shape at
+    `_guardrail_overhead_seconds`.
+    """
+    if isinstance(guardrail_information, Mapping):
+        return (guardrail_information,)
+    if isinstance(guardrail_information, (list, tuple)):
+        return tuple(entry for entry in guardrail_information if isinstance(entry, Mapping))
+    return ()
+
+
+def _guardrail_entry_without_prompt_carriers(entry: Mapping[str, object]) -> Mapping[str, object]:
+    """One guardrail record kept as its audit fields, with the prompt-quoting ones marked redacted.
+
+    Built as an allow-list rather than a deny-list: a key neither set classifies is dropped, so a
+    guardrail that records its own extra detail cannot put the caller's prompt on a redacted span.
+    """
+    return {  # mutable-ok: a fresh record built per entry, handed straight to the span serializer
+        field: REDACTED_BY_LITELM_STRING if field in PROMPT_CARRYING_GUARDRAIL_FIELDS else value
+        for field, value in entry.items()
+        if field in _CLASSIFIED_GUARDRAIL_FIELDS
+    }
+
+
+def _guardrail_information_without_prompt_carriers(
+    guardrail_information: object,
+) -> tuple[Mapping[str, object], ...] | None:
+    """The guardrail records reduced to what a redacted span may carry.
+
+    Redaction removes the prompt, not the record that a guardrail ran: the name, mode, status,
+    timings and masked-entity counts are what an operator reads to answer whether a guardrail
+    caught anything on a request, and none of them reproduce the prompt. Field-level rather than
+    dropping the list, which is what `_sanitize_guardrail_information_for_spend_logs` already does
+    for spend logs.
+    """
+    if guardrail_information is None:
+        return None
+    return tuple(_guardrail_entry_without_prompt_carriers(entry) for entry in _guardrail_entries(guardrail_information))
+
+
+def _metadata_without_prompt_carriers(standard_logging_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The metadata minus the records that quote prompts, tool arguments, tool results, or retrieved text."""
+    return MappingProxyType(
+        {
+            field: value
+            for field, value in standard_logging_metadata.items()
+            if field not in _PROMPT_CARRYING_METADATA_FIELDS
+        }
+    )
+
+
+def _redact_messages(messages: Sequence[Message]) -> tuple[Message, ...]:
+    """Each message's shape with its content replaced and tool payloads dropped; no message is invented."""
+    return tuple(
+        {
+            "role": role if isinstance(role, str) and role in _SAFE_REDACTED_MESSAGE_ROLES else "",
+            "content": REDACTED_BY_LITELLM,
+        }
+        for message in messages
+        for role in (message.get("role", ""),)
+    )
+
+
+def _cost_dimension_tags(
+    standard_logging_payload: StandardLoggingPayload, router_fields: Mapping[str, object]
+) -> tuple[str, ...]:
+    """The dimensions LLM Obs breaks token and cost metrics down by, as span tags."""
+    metadata: Final = _metadata_of(standard_logging_payload)
+    dimensions: Final = (
+        ("user", metadata.get("user_api_key_user_id")),
+        ("key_alias", metadata.get("user_api_key_alias")),
+        ("model_group", standard_logging_payload.get("model_group")),
+        *((dimension, router_fields.get(dimension)) for dimension in _ROUTER_DIMENSIONS),
+    )
+    return tuple(
+        f"{key}:{normalized}"
+        for key, value in dimensions
+        if value is not None and (normalized := normalize_datadog_tag_value(value)) != ""
+    )
+
+
+def _declared_cost_tags(span_tags: Sequence[str]) -> tuple[str, ...]:
+    """Declare only cost dimensions carrying a value on this span."""
+    present: Final = frozenset(key for tag in span_tags if (key := tag.partition(":")[0]) and tag.partition(":")[2])
+    return tuple(dimension for dimension in _COST_DIMENSIONS if dimension in present)
+
+
+def _reasoning_output_tokens(usage_object: Mapping[str, Any] | None) -> float:
+    """The provider's reasoning-token count, from either the chat or the responses spelling."""
+    if usage_object is None:
+        return 0.0
+    return next(
+        (
+            float(reasoning_tokens)
+            for details_field in ("completion_tokens_details", "output_tokens_details")
+            if isinstance(
+                reasoning_tokens := _mapping_field(usage_object, details_field).get("reasoning_tokens"), (int, float)
+            )
+            and not isinstance(reasoning_tokens, bool)
+        ),
+        0.0,
+    )
+
+
+def _mapping_field(source: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    """The value at `key` when it is a mapping, else an empty one."""
+    value: Final = source.get(key)
+    return value if isinstance(value, dict) else _EMPTY_MAPPING
+
+
+def _content_blocks(message: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return ()
+    return tuple(block for block in content if isinstance(block, dict))
+
+
+def _to_dd_arguments(raw_arguments: object) -> dict[str, Any] | str:
+    """
+    Arguments as the object LLM Obs types them as, or the raw string when they are not one.
+
+    Strings past the size bound ship unparsed: decoding multiplies memory on hostile compact
+    JSON, and the raw string is what the intake receives either way.
+    """
+    if not isinstance(raw_arguments, str):
+        return raw_arguments if isinstance(raw_arguments, dict) else str(raw_arguments)
+    if len(raw_arguments) > _MAX_PARSED_TOOL_ARGUMENT_CHARS:
+        return raw_arguments
+    parsed: Final = safe_json_loads(raw_arguments)
+    return parsed if isinstance(parsed, dict) else raw_arguments
+
+
+def _to_dd_tool_calls(message: Mapping[str, Any]) -> tuple[ToolCall, ...]:
+    """
+    The tool calls a message carries, in LLM Obs' ToolCall schema, from either dialect.
+
+    OpenAI puts them in `tool_calls` with the callee nested under `function` and `arguments`
+    serialized; Anthropic puts them in `content` as `tool_use` blocks with `input` already an
+    object. LLM Obs reads `name` / `arguments` / `tool_id` either way.
+    """
+    raw_tool_calls: Final = message.get("tool_calls")
+    openai_calls: Final = tuple(
+        ToolCall(
+            name=function.get("name", ""),
+            arguments=_to_dd_arguments(function.get("arguments", "")),
+            tool_id=tool_call.get("id", ""),
+            type=tool_call.get("type", "function"),
+        )
+        for tool_call in (raw_tool_calls if isinstance(raw_tool_calls, list) else ())
+        if isinstance(tool_call, dict)
+        for function in [_mapping_field(tool_call, "function")]
+    )
+    anthropic_calls: Final = tuple(
+        ToolCall(
+            name=block.get("name", ""),
+            arguments=_to_dd_arguments(block.get("input") or {}),
+            tool_id=block.get("id", ""),
+            type="tool_use",
+        )
+        for block in _content_blocks(message)
+        if block.get("type") == "tool_use"
+    )
+    return openai_calls + anthropic_calls
+
+
+def _to_dd_tool_results(message: Mapping[str, Any], tool_call_names: Mapping[str, str]) -> tuple[ToolResult, ...]:
+    """
+    The tool results a message carries, linked back to the call each answers.
+
+    OpenAI models a result as a whole `role: "tool"` message keyed by `tool_call_id`;
+    Anthropic nests `tool_result` blocks inside a user message, keyed by `tool_use_id`.
+    """
+
+    def to_result(tool_id: str, result: object) -> ToolResult:
+        return ToolResult(
+            name=tool_call_names.get(tool_id, ""),
+            result=result if isinstance(result, str) else safe_dumps(result),
+            tool_id=tool_id,
+            type="function",
+        )
+
+    if message.get("role") == "tool":
+        return (to_result(str(message.get("tool_call_id", "")), message.get("content") or ""),)
+    return tuple(
+        to_result(str(block.get("tool_use_id", "")), block.get("content") or "")
+        for block in _content_blocks(message)
+        if block.get("type") == "tool_result"
+    )
+
+
+def _tool_call_names_by_id(messages: Sequence[object]) -> Mapping[str, str]:
+    """Ids to tool names for result linking; reads names structurally and parses nothing."""
+    openai_pairs: Final = tuple(
+        (tool_call.get("id"), function.get("name", ""))
+        for message in messages
+        if isinstance(message, dict) and isinstance(message.get("tool_calls"), list)
+        for tool_call in message["tool_calls"]
+        if isinstance(tool_call, dict)
+        for function in [_mapping_field(tool_call, "function")]
+    )
+    anthropic_pairs: Final = tuple(
+        (block.get("id"), block.get("name", ""))
+        for message in messages
+        if isinstance(message, dict)
+        for block in _content_blocks(message)
+        if block.get("type") == "tool_use"
+    )
+    return MappingProxyType({str(tool_id): str(name) for tool_id, name in openai_pairs + anthropic_pairs if tool_id})
+
+
+def _to_dd_message(message: object, tool_call_names: Mapping[str, str]) -> Message:
+    """
+    Map one chat message onto LLM Obs' Message schema, adding fields and never destroying content.
+
+    Content collapses to its text only when it has text; a content list with none (tool blocks,
+    images) rides along unchanged so nothing the caller logged is lost. Tool calls and results
+    move into the fields the LLM Obs Tools panel reads, from both the OpenAI and Anthropic shapes.
+    """
+    if not isinstance(message, dict):
+        converted: Final = handle_any_messages_to_chat_completion_str_messages_conversion(message)
+        return converted[0] if converted else _EMPTY_MESSAGE
+
+    text: Final = convert_content_list_to_str(message)  # pyright: ignore[reportArgumentType]  # caller-supplied dict
+    original_content: Final = message.get("content")
+    content: Final = (
+        text if text or not isinstance(original_content, list) or not original_content else original_content
+    )
+    reasoning: Final = message.get("reasoning_content")
+    tool_calls: Final = _to_dd_tool_calls(message)
+    tool_results: Final = _to_dd_tool_results(message, tool_call_names)
+    dd_message: Final[Message] = {
+        "role": message.get("role", ""),
+        "content": content,
+        **({"reasoning_content": reasoning} if reasoning is not None else {}),
+        **({"tool_calls": tool_calls} if tool_calls else {}),
+        **({"tool_results": tool_results} if tool_results else {}),
+    }
+    return dd_message
+
+
+def _to_dd_messages(messages: object) -> tuple[Message, ...]:
+    """Map a whole conversation, resolving each tool result against the calls that precede it."""
+    if messages is None:
+        return ()
+    if not isinstance(messages, list):
+        return tuple(handle_any_messages_to_chat_completion_str_messages_conversion(messages))
+    tool_call_names: Final = _tool_call_names_by_id(messages)
+    return tuple(_to_dd_message(message, tool_call_names) for message in messages)
+
+
+def _to_dd_tool_definition(entry: Mapping[str, Any]) -> ToolDefinition | None:
+    function: Final = entry.get("function")
+    declared: Final[Mapping[str, Any]] = function if isinstance(function, dict) else entry
+    name: Final = declared.get("name")
+    if not name:
+        return None
+    schema: Final = declared.get("parameters") or declared.get("input_schema")
+    description: Final = declared.get("description", "")
+    if not isinstance(schema, dict):
+        return ToolDefinition(name=name, description=description)
+    return ToolDefinition(name=name, description=description, schema=schema)
+
+
+def _to_dd_tool_definitions(model_parameters: object) -> tuple[ToolDefinition, ...]:
+    """
+    Map the request's declared tools onto LLM Obs' ToolDefinition schema.
+
+    Handles the wrapped chat-completions shape and the bare shape the Anthropic and
+    Responses surfaces use, since both reach this logger through `model_parameters`.
+    """
+    if not isinstance(model_parameters, dict):
+        return ()
+    raw_tools: Final = model_parameters.get("tools") or model_parameters.get("functions")
+    if not isinstance(raw_tools, list):
+        return ()
+    return tuple(
+        definition
+        for entry in raw_tools
+        if isinstance(entry, dict)
+        if (definition := _to_dd_tool_definition(entry)) is not None
+    )
 
 
 class DataDogLLMObsLogger(CustomBatchLogger):
@@ -58,7 +411,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             # Configure DataDog endpoint (Agent or Direct API)
             # Use LITELLM_DD_AGENT_HOST to avoid conflicts with ddtrace's DD_AGENT_HOST
             # Check for agent mode FIRST - agent mode doesn't require DD_API_KEY or DD_SITE
-            dd_agent_host = os.getenv("LITELLM_DD_AGENT_HOST")
+            dd_agent_host: Final = os.getenv("LITELLM_DD_AGENT_HOST")
 
             self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
             self.DD_API_KEY = os.getenv("DD_API_KEY")
@@ -74,22 +427,22 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 self._configure_dd_direct_api()
 
             # Optional override for testing
-            dd_base_url = get_datadog_base_url_from_env()
+            dd_base_url: Final = get_datadog_base_url_from_env()
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/intake/llm-obs/v1/trace/spans"
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
-            self.log_queue: List[LLMObsPayload] = []
+            self.log_queue: list[LLMObsPayload] = []
 
             #########################################################
             # Handle datadog_llm_observability_params set as litellm.datadog_llm_observability_params
             #########################################################
-            dict_datadog_llm_obs_params = self._get_datadog_llm_obs_params()
+            dict_datadog_llm_obs_params: Final = self._get_datadog_llm_obs_params()
             kwargs.update(dict_datadog_llm_obs_params)
             CustomBatchLogger.__init__(self, **kwargs, flush_lock=self.flush_lock)
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
+            verbose_logger.exception("DataDogLLMObs: Error initializing - %s", e)
             raise e
 
     def _configure_dd_agent(self, dd_agent_host: str):
@@ -100,10 +453,10 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         # Reference: https://docs.datadoghq.com/llm_observability/setup/sdk/#agent-setup
 
         # Use specific port for LLM Obs (Trace Agent) to avoid conflict with Logs Agent (10518)
-        agent_port = os.getenv("LITELLM_DD_LLM_OBS_PORT", "8126")
+        agent_port: Final = os.getenv("LITELLM_DD_LLM_OBS_PORT", "8126")
         self.DD_SITE = "localhost"  # Not used for URL construction in agent mode
         self.intake_url = f"http://{dd_agent_host}:{agent_port}/api/intake/llm-obs/v1/trace/spans"
-        verbose_logger.debug(f"DataDogLLMObs: Using DD Agent at {self.intake_url}")
+        verbose_logger.debug("DataDogLLMObs: Using DD Agent at %s", self.intake_url)
 
     def _configure_dd_direct_api(self):
         """
@@ -118,59 +471,59 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         self.intake_url = f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
 
-    def _get_datadog_llm_obs_params(self) -> Dict:
+    def _get_datadog_llm_obs_params(self) -> dict:
         """
         Get the datadog_llm_observability_params from litellm.datadog_llm_observability_params
 
         These are params specific to initializing the DataDogLLMObsLogger e.g. turn_off_message_logging
         """
-        dict_datadog_llm_obs_params: Dict = {}
+        dict_datadog_llm_obs_params: dict = {}
         if litellm.datadog_llm_observability_params is not None:
             if isinstance(litellm.datadog_llm_observability_params, DatadogLLMObsInitParams):
-                dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump()
-            elif isinstance(litellm.datadog_llm_observability_params, Dict):
+                dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump(exclude_unset=True)
+            elif isinstance(litellm.datadog_llm_observability_params, dict):
                 # only allow params that are of DatadogLLMObsInitParams
                 dict_datadog_llm_obs_params = DatadogLLMObsInitParams(
                     **litellm.datadog_llm_observability_params
-                ).model_dump()
+                ).model_dump(exclude_unset=True)
         return dict_datadog_llm_obs_params
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            verbose_logger.debug(f"DataDogLLMObs: Logging success event for model {kwargs.get('model', 'unknown')}")
-            payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
-            verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
+            verbose_logger.debug("DataDogLLMObs: Logging success event for model %s", kwargs.get("model", "unknown"))
+            payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)
+            verbose_logger.debug("DataDogLLMObs: Payload: %s", payload)
             self.log_queue.append(payload)
 
             if len(self.log_queue) >= self.batch_size:
                 await self.async_send_batch()
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error logging success event - {str(e)}")
+            verbose_logger.exception("DataDogLLMObs: Error logging success event - %s", e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            verbose_logger.debug(f"DataDogLLMObs: Logging failure event for model {kwargs.get('model', 'unknown')}")
-            payload = self.create_llm_obs_payload(kwargs, start_time, end_time)
-            verbose_logger.debug(f"DataDogLLMObs: Payload: {payload}")
+            verbose_logger.debug("DataDogLLMObs: Logging failure event for model %s", kwargs.get("model", "unknown"))
+            payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)
+            verbose_logger.debug("DataDogLLMObs: Payload: %s", payload)
             self.log_queue.append(payload)
 
             if len(self.log_queue) >= self.batch_size:
                 await self.async_send_batch()
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error logging failure event - {str(e)}")
+            verbose_logger.exception("DataDogLLMObs: Error logging failure event - %s", e)
 
     async def async_send_batch(self):
         try:
             if not self.log_queue:
                 return
 
-            verbose_logger.debug(f"DataDogLLMObs: Flushing {len(self.log_queue)} events")
+            verbose_logger.debug("DataDogLLMObs: Flushing %s events", len(self.log_queue))
 
             if self.is_mock_mode:
                 verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
 
             # Prepare the payload
-            payload = {
+            payload: Final = {
                 "data": DDIntakePayload(
                     type="span",
                     attributes=DDSpanAttributes(
@@ -189,13 +542,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             except Exception as debug_error:
                 verbose_logger.debug("payload serialization failed: %s", str(debug_error))
 
-            json_payload = safe_dumps(payload)
+            json_payload: Final = safe_dumps(payload)
 
-            headers = {"Content-Type": "application/json"}
+            headers: Final = {"Content-Type": "application/json"}
             if self.DD_API_KEY:
                 headers["DD-API-KEY"] = self.DD_API_KEY
 
-            response = await self.async_client.post(
+            response: Final = await self.async_client.post(
                 url=self.intake_url,
                 content=json_payload,
                 headers=headers,
@@ -207,57 +560,67 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 )
 
             if self.is_mock_mode:
-                verbose_logger.debug(f"[DATADOG MOCK] Batch of {len(self.log_queue)} events successfully mocked")
+                verbose_logger.debug("[DATADOG MOCK] Batch of %s events successfully mocked", len(self.log_queue))
             else:
-                verbose_logger.debug(f"DataDogLLMObs: Successfully sent batch - status_code: {response.status_code}")
+                verbose_logger.debug("DataDogLLMObs: Successfully sent batch - status_code: %s", response.status_code)
             self.log_queue.clear()
         except httpx.HTTPStatusError as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {e.response.text}")
+            verbose_logger.exception("DataDogLLMObs: Error sending batch - %s", e.response.text)
         except Exception as e:
-            verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {str(e)}")
+            verbose_logger.exception("DataDogLLMObs: Error sending batch - %s", e)
 
-    def create_llm_obs_payload(self, kwargs: Dict, start_time: datetime, end_time: datetime) -> LLMObsPayload:
-        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+    def create_llm_obs_payload(self, kwargs: dict, start_time: datetime, end_time: datetime) -> LLMObsPayload:
+        standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
         if standard_logging_payload is None:
             raise Exception("DataDogLLMObs: standard_logging_object is not set")
 
-        messages = standard_logging_payload["messages"]
-        messages = self._ensure_string_content(messages=messages)
+        raw_metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
+        metadata: Final = raw_metadata if isinstance(raw_metadata, dict) else {}
+        redact_payload: Final = self._payload_logging_is_off(kwargs)
 
-        metadata = kwargs.get("litellm_params", {}).get("metadata", {})
-
-        input_meta = InputMeta(messages=handle_any_messages_to_chat_completion_str_messages_conversion(messages))
-        output_meta = OutputMeta(
-            messages=self._get_response_messages(
-                standard_logging_payload=standard_logging_payload,
-                call_type=standard_logging_payload.get("call_type"),
-            )
+        input_messages: Final = _to_dd_messages(standard_logging_payload.get("messages"))
+        output_messages: Final = self._get_response_messages(
+            standard_logging_payload=standard_logging_payload,
+            call_type=standard_logging_payload.get("call_type"),
+        )
+        input_meta: Final = InputMeta(messages=_redact_messages(input_messages) if redact_payload else input_messages)
+        output_meta: Final = OutputMeta(
+            messages=_redact_messages(output_messages) if redact_payload else output_messages
         )
 
-        error_info = self._assemble_error_info(standard_logging_payload)
+        error_info: Final = self._assemble_error_info(standard_logging_payload)
 
-        metadata_parent_id: Optional[str] = None
-        if isinstance(metadata, dict):
-            metadata_parent_id = metadata.get("parent_id")
+        raw_parent_id: Final = metadata.get("parent_id")
+        metadata_parent_id: Final[str | None] = str(raw_parent_id) if raw_parent_id else None
 
-        meta = Meta(
-            kind=self._get_datadog_span_kind(standard_logging_payload.get("call_type"), metadata_parent_id),
-            input=input_meta,
-            output=output_meta,
-            metadata=self._get_dd_llm_obs_payload_metadata(standard_logging_payload),
-            error=error_info,
+        tool_definitions: Final = (
+            () if redact_payload else _to_dd_tool_definitions(standard_logging_payload.get("model_parameters"))
+        )
+        span_kind: Final = self._get_datadog_span_kind(standard_logging_payload.get("call_type"), metadata_parent_id)
+        router_fields: Final = _router_span_fields(standard_logging_payload, redact_prompt_text=redact_payload)
+        span_tags: Final = [
+            *get_datadog_tags(standard_logging_object=standard_logging_payload),
+            *_cost_dimension_tags(standard_logging_payload, router_fields),
+        ]
+        payload_metadata: Final = self._get_dd_llm_obs_payload_metadata(
+            standard_logging_payload,
+            router_fields=router_fields,
+            cost_tags=_declared_cost_tags(span_tags),
+            redact_prompt_text=redact_payload,
         )
 
-        # Calculate metrics (you may need to adjust these based on available data)
-        metrics = LLMMetrics(
-            input_tokens=float(standard_logging_payload.get("prompt_tokens", 0)),
-            output_tokens=float(standard_logging_payload.get("completion_tokens", 0)),
-            total_tokens=float(standard_logging_payload.get("total_tokens", 0)),
-            total_cost=float(standard_logging_payload.get("response_cost", 0)),
-            time_to_first_token=self._get_time_to_first_token_seconds(standard_logging_payload),
-        )
+        meta: Final[Meta] = {
+            "kind": span_kind,
+            "input": input_meta,
+            "output": output_meta,
+            "metadata": payload_metadata,
+            "error": error_info,
+            **({"tool_definitions": tool_definitions} if tool_definitions else {}),
+        }
 
-        payload: LLMObsPayload = LLMObsPayload(
+        metrics: Final = self._assemble_metrics(standard_logging_payload)
+
+        payload: Final[LLMObsPayload] = LLMObsPayload(
             parent_id=metadata_parent_id if metadata_parent_id else "undefined",
             trace_id=standard_logging_payload.get("trace_id", str(uuid.uuid4())),
             span_id=metadata.get("span_id", str(uuid.uuid4())),
@@ -267,39 +630,39 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             duration=int((end_time - start_time).total_seconds() * 1e9),
             metrics=metrics,
             status="error" if error_info else "ok",
-            tags=get_datadog_tags(standard_logging_object=standard_logging_payload),
+            tags=span_tags,
         )
 
-        apm_trace_id = self._get_apm_trace_id()
+        apm_trace_id: Final = self._get_apm_trace_id()
         if apm_trace_id is not None:
             payload["apm_id"] = apm_trace_id
 
         return payload
 
-    def _get_apm_trace_id(self) -> Optional[str]:
+    def _get_apm_trace_id(self) -> str | None:
         """Retrieve the current APM trace ID if available."""
         try:
-            current_span_fn = getattr(tracer, "current_span", None)
+            current_span_fn: Final = getattr(tracer, "current_span", None)
             if callable(current_span_fn):
-                current_span = current_span_fn()
+                current_span: Final = current_span_fn()
                 if current_span is not None:
-                    trace_id = getattr(current_span, "trace_id", None)
+                    trace_id: Final = getattr(current_span, "trace_id", None)
                     if trace_id is not None:
                         return str(trace_id)
         except Exception:
             pass
         return None
 
-    def _assemble_error_info(self, standard_logging_payload: StandardLoggingPayload) -> Optional[DDLLMObsError]:
+    def _assemble_error_info(self, standard_logging_payload: StandardLoggingPayload) -> DDLLMObsError | None:
         """
         Assemble error information for failure cases according to DD LLM Obs API spec
         """
         # Handle error information for failure cases according to DD LLM Obs API spec
-        error_info: Optional[DDLLMObsError] = None
+        error_info: DDLLMObsError | None = None
 
         if standard_logging_payload.get("status") == "failure":
             # Try to get structured error information first
-            error_information: Optional[StandardLoggingPayloadErrorInformation] = standard_logging_payload.get(
+            error_information: Final[StandardLoggingPayloadErrorInformation | None] = standard_logging_payload.get(
                 "error_information"
             )
 
@@ -313,6 +676,54 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 )
         return error_info
 
+    def _payload_logging_is_off(self, kwargs: Mapping[str, Any]) -> bool:
+        return (
+            bool(self.turn_off_message_logging)
+            or self.message_logging is not True
+            or should_redact_message_logging(dict(kwargs))
+        )
+
+    def _assemble_metrics(self, standard_logging_payload: StandardLoggingPayload) -> LLMMetrics:
+        """
+        Build the span metrics, including the prompt-cache counts LLM Obs charts cache savings from.
+
+        Cache counts resolve through the same owners the savings dashboard uses, so every provider
+        spelling is covered, and `non_cached_input_tokens` subtracts BOTH cache categories because
+        litellm's normalized prompt count includes both (the invariant the cost calculator's custom
+        pricing helper documents). A zero residual on a fully cached request is real data and is
+        emitted; a zero read or write count is absence and is not.
+        """
+        prompt_tokens: Final = float(standard_logging_payload.get("prompt_tokens", 0))
+        completion_tokens: Final = float(standard_logging_payload.get("completion_tokens", 0))
+        total_tokens: Final = float(standard_logging_payload.get("total_tokens", 0))
+        total_cost: Final = float(standard_logging_payload.get("response_cost", 0))
+        time_to_first_token: Final = self._get_time_to_first_token_seconds(standard_logging_payload)
+
+        raw_usage: Final = _metadata_of(standard_logging_payload).get("usage_object")
+        usage_object: Final = raw_usage if isinstance(raw_usage, dict) else None
+        cache_read: Final = float(extract_cache_read_tokens(usage_object))
+        cache_write: Final = float(extract_cache_creation_tokens(usage_object))
+        reasoning_output_tokens: Final = _reasoning_output_tokens(usage_object)
+
+        metrics: Final[LLMMetrics] = {
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "total_cost": total_cost,
+            "time_to_first_token": time_to_first_token,
+            **(
+                {
+                    **({"cache_read_input_tokens": cache_read} if cache_read else {}),
+                    **({"cache_write_input_tokens": cache_write} if cache_write else {}),
+                    "non_cached_input_tokens": max(prompt_tokens - cache_read - cache_write, 0.0),
+                }
+                if cache_read or cache_write
+                else {}
+            ),
+            **({"reasoning_output_tokens": reasoning_output_tokens} if reasoning_output_tokens else {}),
+        }
+        return metrics
+
     def _get_time_to_first_token_seconds(self, standard_logging_payload: StandardLoggingPayload) -> float:
         """
         Get the time to first token in seconds
@@ -321,9 +732,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         For non streaming calls, CompletionStartTime is time we get the response back
         """
-        start_time: Optional[float] = standard_logging_payload.get("startTime")
-        completion_start_time: Optional[float] = standard_logging_payload.get("completionStartTime")
-        end_time: Optional[float] = standard_logging_payload.get("endTime")
+        start_time: Final[float | None] = standard_logging_payload.get("startTime")
+        completion_start_time: Final[float | None] = standard_logging_payload.get("completionStartTime")
+        end_time: Final[float | None] = standard_logging_payload.get("endTime")
 
         if completion_start_time is not None and start_time is not None:
             return completion_start_time - start_time
@@ -333,8 +744,8 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             return 0.0
 
     def _get_response_messages(
-        self, standard_logging_payload: StandardLoggingPayload, call_type: Optional[str]
-    ) -> List[Any]:
+        self, standard_logging_payload: StandardLoggingPayload, call_type: str | None
+    ) -> tuple[Message, ...]:
         """
         Get the messages from the response object
 
@@ -343,7 +754,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         response_obj = standard_logging_payload.get("response")
         if response_obj is None:
-            return []
+            return ()
 
         # edge case: handle response_obj is a string representation of a dict
         if isinstance(response_obj, str):
@@ -356,7 +767,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     # fallback to json parsing
                     response_obj = json.loads(str(response_obj))
                 except json.JSONDecodeError:
-                    return []
+                    return ()
 
         if call_type in [
             CallTypes.completion.value,
@@ -372,17 +783,17 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             try:
                 # Safely extract message from response_obj, handle failure cases
                 if isinstance(response_obj, dict) and "choices" in response_obj:
-                    choices = response_obj["choices"]
+                    choices: Final = response_obj["choices"]
                     if choices and len(choices) > 0 and "message" in choices[0]:
-                        return [choices[0]["message"]]
-                return []
+                        return _to_dd_messages([choices[0]["message"]])
+                return ()
             except (KeyError, IndexError, TypeError):
                 # In case of any error accessing the response structure, return empty list
-                return []
-        return []
+                return ()
+        return ()
 
     def _get_datadog_span_kind(
-        self, call_type: Optional[str], parent_id: Optional[str] = None
+        self, call_type: str | None, parent_id: str | None = None
     ) -> Literal["llm", "tool", "task", "embedding", "retrieval"]:
         """
         Map liteLLM call_type to appropriate DataDog LLM Observability span kind.
@@ -484,22 +895,21 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         # Default fallback for unknown or passthrough operations
         return "llm"
 
-    def _ensure_string_content(self, messages: Optional[Union[str, List[Any], Dict[Any, Any]]]) -> List[Any]:
-        if messages is None:
-            return []
-        if isinstance(messages, str):
-            return [messages]
-        elif isinstance(messages, list):
-            return [message for message in messages]
-        elif isinstance(messages, dict):
-            return [str(messages.get("content", ""))]
-        return []
-
-    def _get_dd_llm_obs_payload_metadata(self, standard_logging_payload: StandardLoggingPayload) -> Dict[str, Any]:
+    def _get_dd_llm_obs_payload_metadata(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        router_fields: Mapping[str, object] | None = None,
+        cost_tags: Sequence[str] = (),
+        redact_prompt_text: bool = False,
+    ) -> dict[str, object]:
         """
         Fields to track in DD LLM Observability metadata from litellm standard logging payload
         """
-        _metadata: Dict[str, Any] = {
+        raw_metadata: Final = _metadata_of(standard_logging_payload)
+        standard_logging_metadata: Final = (
+            _metadata_without_prompt_carriers(raw_metadata) if redact_prompt_text else raw_metadata
+        )
+        return {
             "model_name": standard_logging_payload.get("model", "unknown"),
             "model_provider": standard_logging_payload.get("custom_llm_provider", "unknown"),
             "id": standard_logging_payload.get("id", "unknown"),
@@ -507,56 +917,47 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             "cache_hit": standard_logging_payload.get("cache_hit", "unknown"),
             "cache_key": standard_logging_payload.get("cache_key", "unknown"),
             "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
-            "guardrail_information": standard_logging_payload.get("guardrail_information", None),
+            "guardrail_information": (
+                _guardrail_information_without_prompt_carriers(standard_logging_payload.get("guardrail_information"))
+                if redact_prompt_text
+                else standard_logging_payload.get("guardrail_information", None)
+            ),
             "is_streamed_request": self._get_stream_value_from_payload(standard_logging_payload),
+            "latency_metrics": dict(self._get_latency_metrics(standard_logging_payload)),
+            "spend_metrics": dict(self._get_spend_metrics(standard_logging_payload)),
+            **standard_logging_metadata,
+            **(router_fields or _EMPTY_MAPPING),
+            **(
+                {"_dd": {**_mapping_field(standard_logging_metadata, "_dd"), "cost_tags": list(cost_tags)}}
+                if cost_tags
+                else _EMPTY_MAPPING
+            ),
         }
-
-        #########################################################
-        # Add latency metrics to metadata
-        #########################################################
-        latency_metrics = self._get_latency_metrics(standard_logging_payload)
-        _metadata.update({"latency_metrics": dict(latency_metrics)})
-
-        #########################################################
-        # Add spend metrics to metadata
-        #########################################################
-        spend_metrics = self._get_spend_metrics(standard_logging_payload)
-        _metadata.update({"spend_metrics": dict(spend_metrics)})
-
-        ## extract tool calls and add to metadata
-        tool_call_metadata = self._extract_tool_call_metadata(standard_logging_payload)
-        _metadata.update(tool_call_metadata)
-
-        _standard_logging_metadata: dict = dict(standard_logging_payload.get("metadata", {})) or {}
-        _metadata.update(_standard_logging_metadata)
-        return _metadata
 
     def _get_latency_metrics(self, standard_logging_payload: StandardLoggingPayload) -> DDLLMObsLatencyMetrics:
         """
         Get the latency metrics from the standard logging payload
         """
-        latency_metrics: DDLLMObsLatencyMetrics = DDLLMObsLatencyMetrics()
+        latency_metrics: Final[DDLLMObsLatencyMetrics] = DDLLMObsLatencyMetrics()
         # Add latency metrics to metadata
         # Time to first token (convert from seconds to milliseconds for consistency)
-        time_to_first_token_seconds = self._get_time_to_first_token_seconds(standard_logging_payload)
+        time_to_first_token_seconds: Final = self._get_time_to_first_token_seconds(standard_logging_payload)
         if time_to_first_token_seconds > 0:
             latency_metrics["time_to_first_token_ms"] = time_to_first_token_seconds * 1000
 
         # LiteLLM overhead time
-        hidden_params = standard_logging_payload.get("hidden_params", {})
-        litellm_overhead_ms = hidden_params.get("litellm_overhead_time_ms")
+        hidden_params: Final = standard_logging_payload.get("hidden_params", {})
+        litellm_overhead_ms: Final = hidden_params.get("litellm_overhead_time_ms")
         if litellm_overhead_ms is not None:
             latency_metrics["litellm_overhead_time_ms"] = litellm_overhead_ms
 
         # Guardrail overhead latency
-        guardrail_info: Optional[list[StandardLoggingGuardrailInformation]] = standard_logging_payload.get(
-            "guardrail_information"
-        )
-        if guardrail_info is not None:
+        guardrail_info: Final = _guardrail_entries(standard_logging_payload.get("guardrail_information"))
+        if guardrail_info:
             total_duration = 0.0
             for info in guardrail_info:
-                _guardrail_duration_seconds: Optional[float] = info.get("duration")
-                if _guardrail_duration_seconds is not None:
+                _guardrail_duration_seconds = info.get("duration")
+                if isinstance(_guardrail_duration_seconds, (int, float, str)):
                     total_duration += float(_guardrail_duration_seconds)
 
             if total_duration > 0:
@@ -581,7 +982,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             return True
 
         # Fallback to model_parameters.stream for original request parameters
-        model_params = standard_logging_payload.get("model_parameters", {})
+        model_params: Final = standard_logging_payload.get("model_parameters", {})
         if isinstance(model_params, dict):
             stream_value = model_params.get("stream")
             if stream_value is True:
@@ -594,29 +995,29 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         """
         Get the spend metrics from the standard logging payload
         """
-        spend_metrics: DDLLMObsSpendMetrics = DDLLMObsSpendMetrics()
+        spend_metrics: Final[DDLLMObsSpendMetrics] = DDLLMObsSpendMetrics()
 
         # send response cost
         spend_metrics["response_cost"] = standard_logging_payload.get("response_cost", 0.0)
 
         # Get budget information from metadata
-        metadata = standard_logging_payload.get("metadata", {})
+        metadata: Final = _metadata_of(standard_logging_payload)
 
         # API key max budget
-        user_api_key_max_budget = metadata.get("user_api_key_max_budget")
+        user_api_key_max_budget: Final = metadata.get("user_api_key_max_budget")
         if user_api_key_max_budget is not None:
             spend_metrics["user_api_key_max_budget"] = float(user_api_key_max_budget)
 
         # API key spend
-        user_api_key_spend = metadata.get("user_api_key_spend")
+        user_api_key_spend: Final = metadata.get("user_api_key_spend")
         if user_api_key_spend is not None:
             try:
                 spend_metrics["user_api_key_spend"] = float(user_api_key_spend)
             except (ValueError, TypeError):
-                verbose_logger.debug(f"Invalid user_api_key_spend value: {user_api_key_spend}")
+                verbose_logger.debug("Invalid user_api_key_spend value: %s", user_api_key_spend)
 
         # API key budget reset datetime
-        user_api_key_budget_reset_at = metadata.get("user_api_key_budget_reset_at")
+        user_api_key_budget_reset_at: Final = metadata.get("user_api_key_budget_reset_at")
         if user_api_key_budget_reset_at is not None:
             try:
                 from datetime import datetime, timezone
@@ -640,113 +1041,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     spend_metrics["user_api_key_budget_reset_at"] = iso_string
 
                     # Debug logging to verify the conversion
-                    verbose_logger.debug(f"Converted budget_reset_at to ISO format: {iso_string}")
+                    verbose_logger.debug("Converted budget_reset_at to ISO format: %s", iso_string)
             except Exception as e:
-                verbose_logger.debug(f"Error processing budget reset datetime: {e}")
-                verbose_logger.debug(f"Original value: {user_api_key_budget_reset_at}")
+                verbose_logger.debug("Error processing budget reset datetime: %s", e)
+                verbose_logger.debug("Original value: %s", user_api_key_budget_reset_at)
 
         return spend_metrics
-
-    def _process_input_messages_preserving_tool_calls(self, messages: List[Any]) -> List[Dict[str, Any]]:
-        """
-        Process input messages while preserving tool_calls and tool message types.
-
-        This bypasses the lossy string conversion when tool calls are present,
-        allowing complex nested tool_calls objects to be preserved for Datadog.
-        """
-        processed = []
-        for msg in messages:
-            if isinstance(msg, dict):
-                # Preserve messages with tool_calls or tool role as-is
-                if "tool_calls" in msg or msg.get("role") == "tool":
-                    processed.append(msg)
-                else:
-                    # For regular messages, still apply string conversion
-                    converted = handle_any_messages_to_chat_completion_str_messages_conversion([msg])
-                    processed.extend(converted)
-            else:
-                # For non-dict messages, apply string conversion
-                converted = handle_any_messages_to_chat_completion_str_messages_conversion([msg])
-                processed.extend(converted)
-        return processed
-
-    @staticmethod
-    def _tool_calls_kv_pair(tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Extract tool call information into key-value pairs for Datadog metadata.
-
-        Similar to OpenTelemetry's implementation but adapted for Datadog's format.
-        """
-        kv_pairs: Dict[str, Any] = {}
-        for idx, tool_call in enumerate(tool_calls):
-            try:
-                # Extract tool call ID
-                tool_id = tool_call.get("id")
-                if tool_id:
-                    kv_pairs[f"tool_calls.{idx}.id"] = tool_id
-
-                # Extract tool call type
-                tool_type = tool_call.get("type")
-                if tool_type:
-                    kv_pairs[f"tool_calls.{idx}.type"] = tool_type
-
-                # Extract function information
-                function = tool_call.get("function")
-                if function:
-                    function_name = function.get("name")
-                    if function_name:
-                        kv_pairs[f"tool_calls.{idx}.function.name"] = function_name
-
-                    function_arguments = function.get("arguments")
-                    if function_arguments:
-                        # Store arguments as JSON string for Datadog
-                        if isinstance(function_arguments, str):
-                            kv_pairs[f"tool_calls.{idx}.function.arguments"] = function_arguments
-                        else:
-                            import json
-
-                            kv_pairs[f"tool_calls.{idx}.function.arguments"] = json.dumps(function_arguments)
-            except (KeyError, TypeError, ValueError) as e:
-                verbose_logger.debug(f"DataDogLLMObs: Error processing tool call {idx}: {str(e)}")
-                continue
-
-        return kv_pairs
-
-    def _extract_tool_call_metadata(self, standard_logging_payload: StandardLoggingPayload) -> Dict[str, Any]:
-        """
-        Extract tool call information from both input messages and response for Datadog metadata.
-        """
-        tool_call_metadata: Dict[str, Any] = {}
-
-        try:
-            # Extract tool calls from input messages
-            messages = standard_logging_payload.get("messages", [])
-            if messages and isinstance(messages, list):
-                for message in messages:
-                    if isinstance(message, dict) and "tool_calls" in message:
-                        tool_calls = message.get("tool_calls")
-                        if tool_calls:
-                            input_tool_calls_kv = self._tool_calls_kv_pair(tool_calls)
-                            # Prefix with "input_" to distinguish from response tool calls
-                            for key, value in input_tool_calls_kv.items():
-                                tool_call_metadata[f"input_{key}"] = value
-
-            # Extract tool calls from response
-            response_obj = standard_logging_payload.get("response")
-            if response_obj and isinstance(response_obj, dict):
-                choices = response_obj.get("choices", [])
-                for choice in choices:
-                    if isinstance(choice, dict):
-                        message = choice.get("message")
-                        if message and isinstance(message, dict):
-                            tool_calls = message.get("tool_calls")
-                            if tool_calls:
-                                response_tool_calls_kv = self._tool_calls_kv_pair(tool_calls)
-                                # Prefix with "output_" to distinguish from input tool calls
-                                for key, value in response_tool_calls_kv.items():
-                                    tool_call_metadata[f"output_{key}"] = value
-
-        except Exception as e:
-            verbose_logger.debug(f"DataDogLLMObs: Error extracting tool call metadata: {str(e)}")
-
-        return tool_call_metadata

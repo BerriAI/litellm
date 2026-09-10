@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { ShieldCheck, ShieldAlert, FlaskConical, CircleDollarSign, CheckCircle2 } from "lucide-react";
 import { getPolicyTemplates } from "@/components/networking";
 
@@ -159,7 +159,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
         onTemplatesLoaded?.(data);
       } catch (error) {
         console.error("Error fetching policy templates:", error);
-        MessageManager.error("Failed to fetch policy templates");
+        toast.error("Failed to fetch policy templates");
       } finally {
         setIsLoading(false);
       }

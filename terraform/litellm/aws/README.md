@@ -2,9 +2,9 @@
 
 Deploys the componentized LiteLLM proxy on AWS:
 
-- **VPC** with public + private subnets across the AZs you pass in, one NAT gateway
-- **Aurora Postgres** cluster — one writer instance + one reader instance, **IAM database authentication enabled**
-- **ElastiCache Redis** (private, replication group with multi-AZ failover and at-rest + in-transit encryption) for caching + rate limiting
+- **VPC** with public + private subnets across the AZs you pass in, one NAT gateway (skipped when you pass an existing `vpc_id`)
+- **Aurora Postgres** cluster — one writer instance + one reader instance, **IAM database authentication enabled** (skipped when `create_database = false`)
+- **ElastiCache Redis** (private, replication group with multi-AZ failover and at-rest + in-transit encryption) for caching + rate limiting (skipped when `create_redis = false`)
 - **S3 bucket** (private, versioned, SSE-S3) — exposed to gateway + backend as `S3_BUCKET_NAME` / `S3_REGION_NAME` for cache backend, request log archival, and `/v1/files` storage
 - **Secrets Manager** entries for `LITELLM_MASTER_KEY` (auto-generated, `sk-…`) and the Aurora master password (bootstrap-only)
 - **ECS Fargate cluster** running three services — `gateway`, `backend`, `ui`
@@ -13,6 +13,58 @@ Deploys the componentized LiteLLM proxy on AWS:
   - UI assets (`/`, `/_next/*`, `/litellm-asset-prefix/*`, …) → `ui`
   - Everything else (management API: `/key/*`, `/user/*`, …) → `backend`
 - **One-off migration task** (`litellm-migrations`) that runs `prisma migrate deploy` from the dedicated `ghcr.io/berriai/litellm-migrations` image
+
+## Bring your own networking, database, and Redis
+
+The three infrastructure pieces the stack would otherwise own are each
+optional, so it can slot into an account where networking and data stores are
+already provisioned (often by another team, in another Terraform state).
+
+**Networking.** Set `vpc_id` plus `public_subnet_ids` and `private_subnet_ids`
+and no VPC, subnet, route table, internet gateway, or NAT gateway is created.
+The ALB goes in the public subnets, the ECS tasks and any subnet group the
+stack still needs go in the private ones, and `vpc_cidr` / `azs` go unused.
+The private subnets need their own egress (NAT gateway, or VPC endpoints
+covering ECR, S3, CloudWatch Logs, and Secrets Manager) since tasks pull
+images, resolve secrets, and call LLM providers.
+
+Security groups stay module-owned in either mode: the ALB group, the tasks
+group, and the database/cache groups when it creates those. To let the tasks
+reach infrastructure the module doesn't manage, either allow inbound from the
+group named by the `task_security_group_id` output, or attach a group of your
+own with `additional_task_security_group_ids`.
+
+```hcl
+vpc_id             = "vpc-0123456789abcdef0"
+public_subnet_ids  = ["subnet-aaa", "subnet-bbb"]
+private_subnet_ids = ["subnet-ccc", "subnet-ddd"]
+```
+
+**Database and Redis.** `create_database` and `create_redis` default to `true`
+(today's behavior). Set one to `false` and pass a connection string to use
+something you already run: the value lands in a Secrets Manager entry and
+reaches gateway, backend, and the migration task as `DATABASE_URL` /
+`REDIS_URL`, both of which outrank the discrete `DATABASE_*` / `REDIS_*` vars
+in the proxy, so nothing appears in plain text in a task definition.
+
+```hcl
+create_database = false
+database_url    = "postgresql://litellm:...@db.internal:5432/litellm"
+create_redis    = false
+redis_url       = "rediss://:...@cache.internal:6379"
+```
+
+The schema migration still runs on every apply against an existing database;
+only the Aurora-specific IAM-user bootstrap drops out, since those credentials
+are already in the URL.
+
+Leaving the URL empty runs without the component entirely:
+
+- No database: no virtual keys, teams, spend tracking, or UI persistence, and
+  `STORE_MODEL_IN_DB` is not set, so models come from `proxy_config`. Requests
+  authenticate with `LITELLM_MASTER_KEY` only.
+- No Redis: rate limits, budgets, and router cooldowns are per-task rather
+  than cluster-wide, which is only sane at one task per service.
 
 ## Aurora + IAM auth
 
@@ -190,6 +242,77 @@ this with `litellm_license`. To tune the export cadence, set
 `LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS` through `gateway_extra_env` /
 `backend_extra_env`
 
+### Prometheus metrics sidecar
+
+`gateway_metrics_port` adds a `metrics` sidecar
+(`python -m litellm.proxy.prometheus_metrics_server`) to the gateway task that
+aggregates the workers' samples over a shared task volume, so a scrape never
+runs on an inference worker. The ALB never routes to that port and the tasks
+security group only opens it to `gateway_metrics_scrape_cidrs`. Needs
+`gateway_image` v1.101.0 or newer. See
+[Prometheus metrics](https://docs.litellm.ai/docs/proxy/prometheus) for the
+metrics themselves.
+
+```hcl
+gateway_metrics_port         = 4001
+gateway_metrics_scrape_cidrs = ["10.0.0.0/16"]
+```
+
+### Scaling the gateway on requests and tokens
+
+By default the gateway service target-tracks CPU (`gateway_cpu_target`) and
+memory (`gateway_memory_target`). Two more targets add workload signals next
+to them. Application Auto Scaling evaluates every attached policy and follows
+the one asking for the most tasks, so the resource policies keep working as a
+floor while requests or tokens drive scale-out
+
+Both targets are per task per second, the way load is usually quoted (1k
+rps, 75M tok/s). CloudWatch is the limit on how fast they react: target
+tracking evaluates every metric, predefined or custom, aggregated over
+60-second periods and has no period setting, so ECS reacts on a roughly
+one-minute cadence whatever unit the variable is written in. The Kubernetes
+charts get a faster signal because the Prometheus `rate()` window and scrape
+interval are theirs to shorten
+
+`gateway_target_requests_per_second` adds an `ALBRequestCountPerTarget`
+policy on the gateway target group. The ALB publishes that metric as requests
+per minute per registered task, so the policy's target value is 60 times the
+variable: 90 rps becomes a target of 5,400 per minute. No agent or sidecar is
+needed
+
+`gateway_target_tokens_per_second` adds a metric-math policy over a
+CloudWatch metric of the gateway's `litellm_total_tokens_metric_total`
+counter and the service's `RunningTaskCount` from Container Insights. Nothing
+native to ECS carries token throughput, so you publish that metric yourself
+with the CloudWatch agent's Prometheus scraper pointed at the metrics sidecar
+above. The agent emits the delta of a counter between scrapes, so `Sum` over
+the 60-second period is the tokens served in that minute; the expression
+divides by 60 (`tokens_per_second`) and then by the task count
+(`tokens_per_second_per_task`). Tokens are counted when a response completes,
+so long streams show up late in this signal. `gateway_tokens_metric` tells the
+policy where the agent publishes: the namespace, the metric name (defaults to
+the counter name) and the dimensions from your `metric_declaration`
+
+```hcl
+gateway_metrics_port               = 4001
+gateway_target_requests_per_second = 90
+gateway_target_tokens_per_second   = 6000000
+gateway_tokens_metric = {
+  namespace  = "LiteLLM/Prometheus"
+  dimensions = { ClusterName = "acme-litellm-prod", TaskDefinitionFamily = "acme-litellm-prod-gateway" }
+}
+```
+
+Worked example for the request policy: 1,000 rps across 10 tasks is 100 rps
+per task (the ALB reports it as 6,000 per minute per target) against a target
+of 90 (5,400), so target tracking sizes the service to
+`ceil(10 * 100 / 90) = 12` tasks. The token policy does the same arithmetic:
+ten tasks handle 4,200,000,000 tokens in a minute, `tokens / 60` is
+70,000,000 tokens per second and `tokens_per_second / running_tasks` is
+7,000,000 against a target of 6,000,000, so the service grows to
+`ceil(10 * 7000000 / 6000000) = 12`. Container Insights must be enabled on the
+cluster for `RunningTaskCount` to exist
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or
@@ -345,7 +468,7 @@ trial / dev stacks only.
 
 ## Storage and database retention
 
-Three opt-in tripwires guard against accidental data loss on
+Two opt-in tripwires guard against accidental data loss on
 `terraform destroy`:
 
 - **`skip_final_snapshot`** (Aurora; default `false`) — destroying the
@@ -353,6 +476,9 @@ Three opt-in tripwires guard against accidental data loss on
 - **`s3_force_destroy`** (S3 bucket holding request log archives,
   `/v1/files` content, and the S3 cache backend; default `false`) —
   `terraform destroy` against a non-empty bucket fails.
+
+Neither applies to a database you brought yourself: its lifecycle stays with
+whoever provisioned it, and `terraform destroy` leaves it alone.
 
 Flip either to `true` only for ephemeral / CI stacks where you accept
 losing the contents.
@@ -365,7 +491,7 @@ losing the contents.
 | `examples/default/` | Thin root: `aws` provider (with an optional `default_tags` slot for org-wide tags) + a call to the module. The one-command deploy path. |
 | `variables.tf`    | All input variables                                                   |
 | `locals.tf`       | Path-prefix lists for ALB routing (mirror of `helm/.../ingress.yaml`) |
-| `network.tf`      | VPC, subnets, IGW, NAT, route tables, security groups                 |
+| `network.tf`      | VPC, subnets, IGW, NAT, route tables (all optional), security groups   |
 | `secrets.tf`      | Secrets Manager entries + random passwords                            |
 | `rds.tf`          | Aurora Postgres cluster + writer / reader instances                   |
 | `redis.tf`        | ElastiCache Redis                                                     |

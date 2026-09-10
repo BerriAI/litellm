@@ -10,11 +10,155 @@ legacy internal names with `general_settings.use_team_public_model_name: false`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, cast
+import re
+from collections.abc import Container, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, cast
+
+import litellm
 
 if TYPE_CHECKING:
     from litellm.router import Router
+    from litellm.types.proxy.model_listing import ModelInfoResponse
+
+CLAUDE_CODE_PICKER_PATTERN: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
+GATEWAY_CLIENT_HEADER: Final = "x-gateway-client"
+CLAUDE_CODE_CLIENT: Final = "claude-code"
+_CLAUDE_CODE_ALIAS_PREFIX: Final = "claude-router-"
+_ONE_MILLION_SUFFIX: Final = "[1m]"
+_ONE_MILLION_TOKENS: Final = 1_000_000
+
+
+def configured_display_names(
+    entries: Sequence[tuple[str, str]],
+    llm_router: Router | None,
+) -> Mapping[str, str]:
+    """response_id -> configured `model_info.display_name` for the listing entries
+    that have one.
+
+    Metadata is looked up by each entry's internal lookup id (so team-scoped rows
+    resolve), while the returned map is keyed by the public response id the
+    Anthropic-shaped listing is built from. Entries without a configured name are
+    omitted so the listing falls back to the id itself.
+    """
+    if llm_router is None:
+        return MappingProxyType({})
+    resolved: Final = (
+        (response_id, llm_router.get_configured_display_name(lookup_id)) for response_id, lookup_id in entries
+    )
+    return MappingProxyType(
+        {response_id: display_name for response_id, display_name in resolved if display_name is not None}
+    )
+
+
+def _unmarked(name: str) -> str:
+    return name[: -len(_ONE_MILLION_SUFFIX)] if name.lower().endswith(_ONE_MILLION_SUFFIX) else name
+
+
+def _compatibility_id(model_id: str) -> str:
+    return f"{_CLAUDE_CODE_ALIAS_PREFIX}{model_id.encode().hex()}"
+
+
+def _decoded_compatibility_id(view_id: str) -> str | None:
+    encoded: Final = _unmarked(view_id).removeprefix(_CLAUDE_CODE_ALIAS_PREFIX)
+    if encoded == _unmarked(view_id):
+        return None
+    try:
+        model_id: Final = bytes.fromhex(encoded).decode()
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return model_id if _compatibility_id(model_id) == _unmarked(view_id) else None
+
+
+def claude_code_model_id(
+    model_id: str,
+    max_input_tokens: float | None,
+    routing_names: Container[str],
+) -> str:
+    """The collision-free id Claude Code's picker lists a model under."""
+    if "*" in model_id:
+        return model_id
+    shaped: Final = model_id if CLAUDE_CODE_PICKER_PATTERN.search(model_id) else _compatibility_id(model_id)
+    one_million: Final = max_input_tokens is not None and max_input_tokens >= _ONE_MILLION_TOKENS
+    marked: Final = (
+        f"{shaped}{_ONE_MILLION_SUFFIX}" if one_million and not shaped.lower().endswith(_ONE_MILLION_SUFFIX) else shaped
+    )
+    return next(
+        (
+            name
+            for name in (marked, shaped)
+            if name == model_id or claude_code_group_name(name, routing_names) == model_id
+        ),
+        model_id,
+    )
+
+
+def claude_code_group_name(view_id: str, routing_names: Container[str]) -> str | None:
+    """Decode a canonical compatibility id only when no configured route claims it."""
+    if view_id in routing_names:
+        return None
+    unmarked: Final = _unmarked(view_id)
+    if unmarked != view_id and unmarked in routing_names:
+        return unmarked
+    model_id: Final = _decoded_compatibility_id(view_id)
+    return model_id if model_id and model_id in routing_names else None
+
+
+def is_claude_code_client(headers: Mapping[str, str]) -> bool:
+    """Claude Code itself, or a client asking for its view of the listing the way Ramp Router's does"""
+    from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
+
+    return (
+        is_claude_code_user_agent(headers.get("user-agent", ""))
+        or headers.get(GATEWAY_CLIENT_HEADER, "").lower() == CLAUDE_CODE_CLIENT
+    )
+
+
+def claude_code_view_ids(
+    rows: Sequence[ModelInfoResponse],
+    headers: Mapping[str, str],
+    routing_names: Container[str],
+) -> Mapping[str, str]:
+    """served id -> Claude Code id for the requested listing view"""
+    if not is_claude_code_client(headers):
+        return MappingProxyType({})
+    return MappingProxyType(
+        {row["id"]: claude_code_model_id(row["id"], row.get("max_input_tokens"), routing_names) for row in rows}
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ClaudeCodeRoutingNames:
+    """Existing routes always own their names, including aliases and wildcard routes."""
+
+    llm_router: Router | None
+    team_id: str | None = None
+    alias_maps: tuple[object, ...] = ()
+
+    def __contains__(self, name: object) -> bool:
+        if not isinstance(name, str):
+            return False
+        if name in litellm.model_alias_map or any(
+            isinstance(aliases, Mapping) and name in aliases for aliases in self.alias_maps
+        ):
+            return True
+        if self.llm_router is None:
+            return False
+        return (
+            name in self.llm_router.model_group_alias
+            or self.llm_router.has_model_id(name)
+            or bool(self.llm_router.get_candidate_model_ids_for_route(name, self.team_id))
+        )
+
+
+def claude_code_requested_group(
+    requested: str,
+    llm_router: Router,
+    team_id: str | None,
+    alias_maps: tuple[object, ...] = (),
+) -> str | None:
+    return claude_code_group_name(requested, ClaudeCodeRoutingNames(llm_router, team_id, alias_maps))
 
 
 class TeamModelNameTranslator:
@@ -28,14 +172,14 @@ class TeamModelNameTranslator:
         """`(internal_routing_key, public_name)` for a team-scoped row, else None."""
         if not isinstance(model, dict):
             return None
-        model_dict = cast(dict[str, object], model)  # any-ok: checked
-        model_info_raw: object = model_dict.get("model_info")
+        model_dict: Final = cast(dict[str, object], model)  # any-ok: checked
+        model_info_raw: Final[object] = model_dict.get("model_info")
         if not isinstance(model_info_raw, Mapping):
             return None
-        model_info = cast(Mapping[str, object], model_info_raw)  # any-ok: checked
-        team_id = model_info.get("team_id")
-        team_public = model_info.get("team_public_model_name")
-        name = model_dict.get("model_name")
+        model_info: Final = cast(Mapping[str, object], model_info_raw)  # any-ok: checked
+        team_id: Final = model_info.get("team_id")
+        team_public: Final = model_info.get("team_public_model_name")
+        name: Final = model_dict.get("model_name")
         if (
             isinstance(team_id, str)
             and isinstance(team_public, str)
@@ -53,7 +197,7 @@ class TeamModelNameTranslator:
 
     @staticmethod
     def build_internal_to_public_map(
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> dict[str, str]:
         """Internal team routing key -> public `team_public_model_name`.
@@ -63,7 +207,7 @@ class TeamModelNameTranslator:
         """
         if llm_router is None or not TeamModelNameTranslator._is_enabled(general_settings):
             return {}
-        router_model_list = llm_router.get_model_list()
+        router_model_list: Final = llm_router.get_model_list()
         if not isinstance(router_model_list, list):
             return {}
         return dict(
@@ -84,7 +228,7 @@ class TeamModelNameTranslator:
         the listed entry, and sibling team rows collapse to their first
         occurrence.
         """
-        result: dict[str, str] = {}
+        result: Final[dict[str, str]] = {}
         for name in model_names:
             result.setdefault(internal_to_public.get(name, name), name)
         return result
@@ -92,7 +236,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def listing_entries(
         model_names: list[str],
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> list[tuple[str, str]]:
         """`(response_id, metadata_lookup_id)` for each listed model, de-duplicated
@@ -106,7 +250,7 @@ class TeamModelNameTranslator:
         internal key. Both ids are identical for unmapped names (globals,
         access-group keys).
         """
-        internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+        internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
         if not internal_to_public:
             return [(name, name) for name in model_names]
         return list(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
@@ -114,7 +258,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def translate_listing(
         model_names: list[str],
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> list[str]:
         """Public-name view of `model_names` (the `response_id` of each listing
@@ -129,7 +273,7 @@ class TeamModelNameTranslator:
     def resolve_public_name(
         model_id: str,
         available_models: list[str],
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> str:
         """Resolve a public team name back to the internal routing key the router
@@ -143,7 +287,7 @@ class TeamModelNameTranslator:
         unchanged when it is not an accessible public team name (already-internal
         names and globals pass through).
         """
-        internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+        internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
         if not internal_to_public:
             return model_id
         return TeamModelNameTranslator._response_to_lookup_map(available_models, internal_to_public).get(

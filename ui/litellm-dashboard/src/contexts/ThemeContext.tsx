@@ -4,6 +4,8 @@ import { getProxyBaseUrl } from "@/components/networking";
 interface ThemeContextType {
   logoUrl: string | null;
   setLogoUrl: (url: string | null) => void;
+  logoUrlDark: string | null;
+  setLogoUrlDark: (url: string | null) => void;
   faviconUrl: string | null;
   setFaviconUrl: (url: string | null) => void;
 }
@@ -25,6 +27,7 @@ interface ThemeProviderProps {
 
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessToken }) => {
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [logoUrlDark, setLogoUrlDark] = useState<string | null>(null);
   const [faviconUrl, setFaviconUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,6 +44,9 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
           const data = await response.json();
           if (data.values?.logo_url) {
             setLogoUrl(data.values.logo_url);
+          }
+          if (data.values?.logo_url_dark) {
+            setLogoUrlDark(data.values.logo_url_dark);
           }
           if (data.values?.favicon_url) {
             setFaviconUrl(data.values.favicon_url);
@@ -71,6 +77,8 @@ export const ThemeProvider: React.FC<ThemeProviderProps> = ({ children, accessTo
   }, [faviconUrl]);
 
   return (
-    <ThemeContext.Provider value={{ logoUrl, setLogoUrl, faviconUrl, setFaviconUrl }}>{children}</ThemeContext.Provider>
+    <ThemeContext.Provider value={{ logoUrl, setLogoUrl, logoUrlDark, setLogoUrlDark, faviconUrl, setFaviconUrl }}>
+      {children}
+    </ThemeContext.Provider>
   );
 };

@@ -30,6 +30,14 @@ describe("SpendBudgetCell", () => {
     expect(screen.getByText("of $100")).toBeInTheDocument();
   });
 
+  it("supports matching spend and budget precision for summary views", () => {
+    render(<SpendBudgetCell spend={98.854} maxBudget={3000} spendDecimals={2} budgetDecimals={2} />);
+
+    expect(screen.getByText("$98.85")).toBeInTheDocument();
+    expect(screen.getByText("of $3,000.00")).toBeInTheDocument();
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuetext", "$98.85 of $3,000.00");
+  });
+
   it("keeps the default tone below 80% usage", () => {
     const { container } = render(<SpendBudgetCell spend={50} maxBudget={100} />);
     expect(indicator(container)?.className).toContain("bg-primary");
@@ -37,7 +45,7 @@ describe("SpendBudgetCell", () => {
 
   it("switches to the warning tone at 80% usage", () => {
     const { container } = render(<SpendBudgetCell spend={80} maxBudget={100} />);
-    expect(indicator(container)?.className).toContain("bg-amber-500");
+    expect(indicator(container)?.className).toContain("bg-warning");
   });
 
   it("switches to the over tone above 100% usage", () => {
@@ -45,9 +53,24 @@ describe("SpendBudgetCell", () => {
     expect(indicator(container)?.className).toContain("bg-destructive");
   });
 
-  it("falls back to the team budget and labels it", () => {
-    render(<SpendBudgetCell spend={10} maxBudget={null} teamMaxBudget={200} />);
-    expect(screen.getByText("of $200 (Team)")).toBeInTheDocument();
-    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuemax", "200");
+  it("never meters key spend against an inherited team/org budget", () => {
+    const gates = [{ scope: "Team" as const, alias: "Team A", maxBudget: 200, budgetDuration: "30d" }];
+    render(<SpendBudgetCell spend={10} maxBudget={null} inheritedGates={gates} />);
+    expect(screen.getByText("· Unlimited")).toBeInTheDocument();
+    expect(screen.queryByText(/\(Team\)/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("question-circle")).toBeInTheDocument();
+  });
+
+  it("shows no inherited-budget hint when there is nothing to inherit", () => {
+    render(<SpendBudgetCell spend={10} maxBudget={null} inheritedGates={[]} />);
+    expect(screen.queryByLabelText("question-circle")).not.toBeInTheDocument();
+  });
+
+  it("shows no inherited-budget hint when the key has its own budget", () => {
+    const gates = [{ scope: "Team" as const, alias: "Team A", maxBudget: 200, budgetDuration: null }];
+    render(<SpendBudgetCell spend={10} maxBudget={50} inheritedGates={gates} />);
+    expect(screen.getByText("of $50")).toBeInTheDocument();
+    expect(screen.queryByLabelText("question-circle")).not.toBeInTheDocument();
   });
 });
