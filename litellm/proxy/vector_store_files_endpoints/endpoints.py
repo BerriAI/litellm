@@ -144,11 +144,12 @@ async def _update_request_data_with_managed_file_id(
         model_used,
         original_file_id,
         credentials,
-    ) = handle_model_based_routing(
+    ) = await handle_model_based_routing(
         file_id=file_id,
         request=request,
         llm_router=llm_router,
         data=data,
+        user_api_key_dict=user_api_key_dict,
         check_file_id_encoding=True,
     )
 
@@ -273,11 +274,12 @@ async def _update_request_data_with_model_routing_hint(
             _model_used,
             _original_file_id,
             credentials,
-        ) = handle_model_based_routing(
+        ) = await handle_model_based_routing(
             file_id="",
             request=request,
             llm_router=llm_router,
             data=data,
+            user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=False,
         )
 
