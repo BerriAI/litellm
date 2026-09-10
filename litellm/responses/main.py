@@ -4,10 +4,11 @@ from collections.abc import Coroutine, Generator, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
 
 import httpx
 from pydantic import BaseModel
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -405,6 +406,37 @@ def _bridges_to_chat_completions(
 ) -> bool:
     """Whether the request reaches its provider as a chat completion, not a Responses call."""
     return responses_api_provider_config is None or use_chat_completions_api is True
+
+
+_ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
+
+
+def _encrypted_task_support_failure(
+    responses_api_provider_config: BaseResponsesAPIConfig | None, use_chat_completions_api: bool
+) -> _ResponsesCompatibilityFailure | None:
+    if (
+        responses_api_provider_config is None
+        or _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
+        or not responses_api_provider_config.supports_encrypted_agent_messages()
+    ):
+        return "encrypted_task_unsupported"
+    return None
+
+
+def _raise_responses_compatibility_failure(
+    failure: _ResponsesCompatibilityFailure, model: str, custom_llm_provider: str | None
+) -> NoReturn:
+    match failure:
+        case "encrypted_task_unsupported":
+            raise litellm.exception_type(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                original_exception=ValueError(
+                    "Encrypted task classification requires a compatible native Responses deployment"
+                ),
+            )
+        case _:
+            assert_never(failure)
 
 
 def _deployment_passes_through_responses(model_info: object) -> bool:
@@ -1187,12 +1219,16 @@ def responses(
                 model, custom_llm_provider, deployment_model_info
             )
 
-        if require_encrypted_task_support and (
-            _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
-            or responses_api_provider_config is None
-            or not responses_api_provider_config.supports_encrypted_agent_messages()
+        if (
+            require_encrypted_task_support
+            and (
+                compatibility_failure := _encrypted_task_support_failure(
+                    responses_api_provider_config, use_chat_completions_api
+                )
+            )
+            is not None
         ):
-            raise ValueError("Encrypted task classification requires a compatible native Responses deployment")
+            _raise_responses_compatibility_failure(compatibility_failure, model, custom_llm_provider)
 
         local_vars.update(kwargs)
         # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set

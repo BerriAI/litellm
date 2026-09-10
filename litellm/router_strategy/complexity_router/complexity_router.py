@@ -1690,7 +1690,7 @@ class ComplexityRouter(CustomLogger):
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type in ("heuristic_first", "hybrid") and _encrypted_classifier_task(
-            request_kwargs, self._reminder_markers
+            request_kwargs, self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
         ):
             return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
@@ -2028,7 +2028,7 @@ class ComplexityRouter(CustomLogger):
             > 1
         )
 
-        encrypted_task: Final = _encrypted_classifier_task(request_kwargs, self._reminder_markers)
+        encrypted_task: Final = _encrypted_classifier_task(request_kwargs, marker_pairs)
         user_payload: Final = self._build_classifier_user_payload(
             prompt="The delegated task in the following agent_message." if encrypted_task is not None else prompt,
             system_prompt=system_prompt,
