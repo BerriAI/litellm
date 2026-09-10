@@ -495,9 +495,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # bool is an int subclass, so exclude it explicitly.
         if isinstance(rate, bool) or not isinstance(rate, int):
             return
-        if not (
-            MIN_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ <= rate <= MAX_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ
-        ):
+        if not (MIN_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ <= rate <= MAX_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ):
             verbose_logger.warning(
                 "Gemini Realtime: ignoring declared input audio rate %s, outside the accepted "
                 "%s-%s Hz range; keeping %s Hz",
