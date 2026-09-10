@@ -1090,6 +1090,93 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     ]
 
 
+@pytest.mark.asyncio
+async def test_v1_models_team_alias_inherits_token_limits_and_chat_mode(monkeypatch):
+    team_dep = {
+        "model_name": "model_name_teamX_terra_uuid",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {
+            "id": "id-terra",
+            "team_id": "teamX",
+            "team_public_model_name": "GPT Terra",
+            "access_groups": ["grp-a"],
+            "mode": "chat",
+            "max_input_tokens": 876000,
+            "max_output_tokens": 128000,
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_terra_uuid"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_terra_uuid"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.get_configured_token_limits.return_value = (876000, 128000)
+    router.get_configured_mode.return_value = "chat"
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+    router.get_model_group_info.return_value = None
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": True})
+
+    key = UserAPIKeyAuth(user_id="user", api_key="***", models=["grp-a"], team_models=[])
+    response = await ps.model_list(user_api_key_dict=key, include_metadata=True)
+
+    assert response["data"] == [
+        {
+            "id": "GPT Terra",
+            "object": "model",
+            "created": 1677610602,
+            "owned_by": "openai",
+            "mode": "chat",
+            "max_input_tokens": 876000,
+            "max_output_tokens": 128000,
+            "metadata": {"fallbacks": []},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_v1_models_team_image_alias_inherits_image_generation_mode(monkeypatch):
+    team_dep = {
+        "model_name": "model_name_teamX_image_uuid",
+        "litellm_params": {"model": "openai/gpt-image-1"},
+        "model_info": {
+            "id": "id-image",
+            "team_id": "teamX",
+            "team_public_model_name": "image",
+            "access_groups": ["grp-a"],
+            "mode": "image_generation",
+        },
+    }
+    router = MagicMock()
+    router.get_model_names.return_value = ["model_name_teamX_image_uuid"]
+    router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_image_uuid"]}
+    router.get_fully_blocked_model_names.return_value = set()
+    router.get_configured_token_limits.return_value = (None, None)
+    router.get_configured_mode.return_value = "image_generation"
+    router.model_list = [team_dep]
+    router.get_model_list.return_value = [team_dep]
+    router.get_model_group_info.return_value = None
+
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "general_settings", {"use_team_public_model_name": True})
+
+    key = UserAPIKeyAuth(user_id="user", api_key="***", models=["grp-a"], team_models=[])
+    response = await ps.model_list(user_api_key_dict=key)
+
+    assert response["data"] == [
+        {
+            "id": "image",
+            "object": "model",
+            "created": 1677610602,
+            "owned_by": "openai",
+            "mode": "image_generation",
+        }
+    ]
+
+
 def test_translate_team_model_names_for_listing_swaps_and_dedupes():
     """Internal team routing keys -> public name; sibling deployments sharing a
     public name collapse to one entry (order preserved); globals untouched."""
