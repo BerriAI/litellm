@@ -67,7 +67,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
@@ -98,6 +98,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_credentials_in_payload,
     mask_sensitive_structure,
 )
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
@@ -11155,28 +11156,31 @@ class Router:
 
     def get_candidate_model_ids_for_route(self, model: str, team_id: str | None = None) -> frozenset[str]:
         """
-        Deployment ids that could serve ``model`` for ``team_id``, unioned across the paths
-        the router resolves a route through: ``model_group_alias``, a routing group, the
-        ``model_name`` and team indexes, and wildcard pattern routes. Read-only and
-        side-effect-free, unlike ``_common_checks_available_deployment`` which also applies
-        fallbacks and can raise. Lets a pre-call check tell a genuine cross-group route from
-        same-group unavailability without re-deriving that precedence at the call site, and
-        without leaking deployment ids into request kwargs bound for the provider.
+        Deployment ids that could serve ``model`` for ``team_id``, following the same
+        precedence ``_common_checks_available_deployment`` uses to build a candidate pool:
+        ``model_group_alias``, then a routing group, then the first matching early-resolve
+        path for a name that is not a ``model_name`` (team route, wildcard pattern via
+        ``get_deployments_by_pattern``, team pattern router, default deployment), then the
+        ``model_name`` and team indexes. Delegating to the router's own resolvers keeps this
+        aligned with how a route actually resolves rather than re-deriving it, and unlike
+        ``_common_checks_available_deployment`` it is read-only: it does not apply request
+        fallbacks and (with ``include_team_models`` left off) does not raise. Lets a pre-call
+        check tell a genuine cross-group route from same-group unavailability without leaking
+        deployment ids into request kwargs bound for the provider.
         """
         resolved: Final = self._get_model_from_alias(model=model) or model
         routing_group_members: Final = self._get_routing_group_deployments(model=resolved, team_id=team_id)
         if routing_group_members is not None:
             return self._deployment_ids(routing_group_members)
-        if resolved in self.model_names:
-            return self._deployment_ids(self._get_all_deployments(model_name=resolved, team_id=team_id))
-        team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
-        return self._deployment_ids(
-            (
-                *self._get_all_deployments(model_name=resolved, team_id=team_id),
-                *(self.pattern_router.route(resolved) or ()),
-                *((team_router.route(resolved) or ()) if team_router is not None else ()),
-            )
+        early: Final = self._try_early_resolve_deployments_for_model_not_in_names(
+            model=resolved, request_team_id=team_id
         )
+        if early is not None:
+            early_deployments: Final = early[1]
+            return self._deployment_ids(
+                (early_deployments,) if isinstance(early_deployments, Mapping) else early_deployments
+            )
+        return self._deployment_ids(self._get_all_deployments(model_name=resolved, team_id=team_id))
 
     @staticmethod
     def _deployment_ids(deployments: Sequence[Mapping[str, object]]) -> frozenset[str]:
@@ -12095,7 +12099,7 @@ class Router:
         try:
             if not self._pre_call_checks_need_token_count(model, healthy_deployments):
                 return None
-            return await asyncify(self._count_pre_call_check_tokens)(
+            return await offload_token_count(self._count_pre_call_check_tokens)(
                 messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
                 input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
                 request_kwargs=request_kwargs,

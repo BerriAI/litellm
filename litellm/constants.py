@@ -398,6 +398,18 @@ TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS: Final = get_env_int_in_range(
     minimum=1,
     maximum=TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS,
 )
+TOKEN_COUNTER_MAX_EXACT_CHARS: Final = get_env_int_in_range(
+    "TOKEN_COUNTER_MAX_EXACT_CHARS",
+    default=4_000_000,
+    minimum=1,
+    maximum=1_000_000_000,
+)
+TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
+    "TOKEN_COUNTER_MAX_CONCURRENT_COUNTS",
+    default=4,
+    minimum=1,
+    maximum=256,
+)
 MAX_TILE_WIDTH: Final = int(os.getenv("MAX_TILE_WIDTH", 512))
 MAX_TILE_HEIGHT: Final = int(os.getenv("MAX_TILE_HEIGHT", 512))
 OPENAI_FILE_SEARCH_COST_PER_1K_CALLS: Final = float(os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000))

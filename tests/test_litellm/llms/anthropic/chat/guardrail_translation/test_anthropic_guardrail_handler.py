@@ -2270,3 +2270,29 @@ class TestAnthropicMessagesHandlerStreamingScanKey:
         assert open_key == StreamingScanKey(texts=("hi",))
         assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
         assert ended_key != open_key
+
+
+class TestAnthropicMessagesHandlerPostCallHookResponse:
+    def test_openai_shaped_stream_assembly_reaches_the_hook_as_a_messages_response(self):
+        from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+        assembled = ModelResponse(
+            id="msg_1",
+            model="claude",
+            choices=[Choices(message=Message(role="assistant", content="hello world"), finish_reason="stop")],
+            usage=Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+        )
+
+        hook_response = AnthropicMessagesHandler().post_call_hook_response(assembled)
+
+        assert hook_response["type"] == "message"
+        assert hook_response["role"] == "assistant"
+        assert hook_response["content"] == [{"type": "text", "text": "hello world"}]
+        assert hook_response["stop_reason"] == "end_turn"
+        assert hook_response["usage"]["input_tokens"] == 1
+        assert hook_response["usage"]["output_tokens"] == 2
+
+    def test_anything_else_reaches_the_hook_untouched(self):
+        native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+
+        assert AnthropicMessagesHandler().post_call_hook_response(native) is native
