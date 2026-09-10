@@ -2152,8 +2152,8 @@ export interface paths {
          * @description Register a new plugin in the LiteLLM marketplace.
          *
          *     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-         *     GitHub/GitLab/Bitbucket. Claude Code will clone from the git source
-         *     when users install.
+         *     GitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).
+         *     Claude Code clones the git source or downloads the archive when users install.
          *
          *     This endpoint is create-only and never overwrites. If a plugin with
          *     the same name already exists it returns 409 Conflict; use
@@ -2163,7 +2163,7 @@ export interface paths {
          *
          *     Parameters:
          *         - name: Plugin name (kebab-case)
-         *         - source: Git source reference (github, url, or git-subdir format)
+         *         - source: Plugin source reference (github, url, git-subdir, or archive format)
          *         - version: Semantic version (optional)
          *         - description: Plugin description (optional)
          *         - author: Author information (optional)
@@ -2229,7 +2229,7 @@ export interface paths {
          *
          *     Parameters:
          *         - plugin_name: Name of the plugin to update (path parameter)
-         *         - source: Git source reference (github, url, or git-subdir format)
+         *         - source: Plugin source reference (github, url, git-subdir, or archive format)
          *         - version: Semantic version (optional)
          *         - description: Plugin description (optional)
          *         - author: Author information (optional)
@@ -33638,7 +33638,7 @@ export interface components {
             name: string;
             /**
              * Source
-             * @description Git source reference
+             * @description Plugin source reference
              */
             source: {
                 [key: string]: string;
@@ -34887,7 +34887,7 @@ export interface components {
          * @description Request body for registering a plugin in the marketplace.
          *
          *     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-         *     GitHub/GitLab/Bitbucket and referenced by their git source.
+         *     GitHub/GitLab/Bitbucket or as a zip archive on any https host and referenced by their source.
          */
         RegisterPluginRequest: {
             /** @description Plugin author */
@@ -34929,10 +34929,11 @@ export interface components {
             namespace?: string | null;
             /**
              * Source
-             * @description Git source reference. Supported formats:
+             * @description Plugin source reference. Supported formats:
              *     - GitHub: {'source': 'github', 'repo': 'org/repo'}
              *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
              *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
+             *     - Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}
              */
             source: {
                 [key: string]: string;
@@ -38211,10 +38212,11 @@ export interface components {
             namespace?: string | null;
             /**
              * Source
-             * @description Git source reference. Supported formats:
+             * @description Plugin source reference. Supported formats:
              *     - GitHub: {'source': 'github', 'repo': 'org/repo'}
              *     - Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}
              *     - Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}
+             *     - Zip archive on any https host (e.g. S3): {'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}
              */
             source: {
                 [key: string]: string;
