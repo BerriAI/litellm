@@ -1,14 +1,11 @@
 use std::sync::Arc;
 
 use super::OcrClient;
-use super::backends::{MappedParams, OcrIntegration};
 use super::formats::{OcrFormat, request_error};
 use super::hooks::{OcrDuringCallRequest, OcrHooks, OcrLifecycleHooks};
+use super::integrations::{GuardrailStage, MappedParams, OcrIntegration};
 use super::prepare::{MappedOcrRequest, prepare_ocr_call};
-use super::registry::{
-    AZURE_DOCUMENT_INTELLIGENCE, AZURE_MISTRAL, MISTRAL, OcrIntegrationInput,
-    OcrIntegrationRequest, REDUCTO_LEGACY, REDUCTO_V3, VERTEX_DEEPSEEK, VERTEX_MISTRAL,
-};
+use super::registry::{OcrIntegrationInput, OcrIntegrationRequest};
 use super::types::{OcrConnection, OcrDocument, OcrRequest, OcrResponseData};
 use crate::Error;
 use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
@@ -42,17 +39,15 @@ pub(crate) async fn perform_ocr_request(
         lifecycle_context: context,
         hooks: request.hooks,
     };
-    match request.integration {
-        OcrIntegrationRequest::Mistral(input) => execution.run(MISTRAL, input).await,
-        OcrIntegrationRequest::AzureMistral(input) => execution.run(AZURE_MISTRAL, input).await,
-        OcrIntegrationRequest::AzureDocumentIntelligence(input) => {
-            execution.run(AZURE_DOCUMENT_INTELLIGENCE, input).await
-        }
-        OcrIntegrationRequest::VertexMistral(input) => execution.run(VERTEX_MISTRAL, input).await,
-        OcrIntegrationRequest::VertexDeepSeek(input) => execution.run(VERTEX_DEEPSEEK, input).await,
-        OcrIntegrationRequest::ReductoV3(input) => execution.run(REDUCTO_V3, input).await,
-        OcrIntegrationRequest::ReductoLegacy(input) => execution.run(REDUCTO_LEGACY, input).await,
+    macro_rules! execute_selected_integration {
+        ($( $variant:ident, $integration:ty, $instance:expr, $provider:ident; )+) => {
+            match request.integration {
+                $( OcrIntegrationRequest::$variant(input) => execution.run($instance, input).await, )+
+            }
+        };
     }
+
+    super::integrations::for_each_ocr_integration!(execute_selected_integration)
 }
 
 impl OcrExecution<'_> {
@@ -121,7 +116,7 @@ where
         .await?;
     let url = prepared_backend.url;
     let headers = prepared_backend.headers;
-    let document = if backend.guard_document_before_preparation() && hooks.has_guardrails() {
+    let document = if I::GUARDRAIL_STAGE == GuardrailStage::Document && hooks.has_guardrails() {
         let guarded = hooks
             .during_call(OcrDuringCallRequest {
                 model: request.model.clone(),
@@ -139,7 +134,7 @@ where
         .prepare_document(client, document, &request.connection, &headers)
         .await?;
     let body = format.transform_request(&request.model, document.into(), &request.params)?;
-    let body = if !backend.guard_document_before_preparation() && hooks.has_guardrails() {
+    let body = if I::GUARDRAIL_STAGE == GuardrailStage::RequestBody && hooks.has_guardrails() {
         let guarded = hooks
             .during_call(OcrDuringCallRequest {
                 model: request.model.clone(),
@@ -221,14 +216,13 @@ async fn send_ocr_call<I: OcrIntegration>(
     } = request;
     let backend = &integration;
     let format = I::FORMAT;
-    let mut builder = client
+    let builder = client
         .provider_http()
         .post(&url)
         .json(&body)
         .timeout(connection.timeout);
-    for (name, value) in &headers {
-        builder = builder.header(name, value);
-    }
+    let builder =
+        crate::http_utils::with_headers(builder, &headers, crate::http_utils::HeaderPolicy::All);
     let response = crate::http_utils::http_request(builder)
         .await
         .map_err(crate::error::TransportError::from)?;

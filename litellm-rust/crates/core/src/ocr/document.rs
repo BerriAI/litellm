@@ -8,6 +8,47 @@ use crate::constants::OCR_MAX_FETCH_REDIRECTS;
 use crate::error::{MediaError, TransportError};
 use crate::media::{DownloadPolicy, MediaFetcher};
 
+pub trait DocumentPreparation: Send + Sync + 'static {
+    type Output: Send;
+
+    fn prepare(
+        client: &super::OcrClient,
+        document: OcrDocument,
+        connection: &OcrConnection,
+        headers: &[(String, String)],
+    ) -> impl std::future::Future<Output = Result<Self::Output, OcrError>> + Send;
+}
+
+pub struct PassThrough;
+
+impl DocumentPreparation for PassThrough {
+    type Output = OcrDocument;
+
+    async fn prepare(
+        _client: &super::OcrClient,
+        document: OcrDocument,
+        _connection: &OcrConnection,
+        _headers: &[(String, String)],
+    ) -> Result<Self::Output, OcrError> {
+        Ok(document)
+    }
+}
+
+pub struct RequireInline;
+
+impl DocumentPreparation for RequireInline {
+    type Output = InlineOcrDocument;
+
+    async fn prepare(
+        client: &super::OcrClient,
+        document: OcrDocument,
+        connection: &OcrConnection,
+        _headers: &[(String, String)],
+    ) -> Result<Self::Output, OcrError> {
+        inline_remote_document(client.document_fetcher(), document, connection).await
+    }
+}
+
 pub(crate) struct InlineDocument<'a>(DataUrl<'a>);
 
 impl<'a> InlineDocument<'a> {

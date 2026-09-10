@@ -1,6 +1,6 @@
-use crate::ocr::backends::OcrIntegration;
-use crate::ocr::registry::{MISTRAL, VERTEX_MISTRAL};
-use crate::ocr::tests::body;
+use crate::ocr::integrations::OcrIntegration;
+use crate::ocr::integrations::{MistralDirect as MISTRAL, VertexMistral as VERTEX_MISTRAL};
+use crate::ocr::test_support::body;
 use crate::ocr::types::OcrConnection;
 use crate::providers::vertex_ai::auth::VertexAuthInputs;
 use serde_json::json;

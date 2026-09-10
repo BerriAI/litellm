@@ -56,16 +56,14 @@ async fn poll_document_intelligence(
             .checked_duration_since(Instant::now())
             .filter(|remaining| !remaining.is_zero())
             .ok_or(OcrPollingError::PollTimeout)?;
-        let mut builder = http_client
+        let builder = http_client
             .get(url.clone())
             .timeout(remaining.min(connection.timeout));
-        for (name, value) in headers {
-            if name.eq_ignore_ascii_case(AZURE_DI_SUBSCRIPTION_HEADER)
-                || name.eq_ignore_ascii_case("authorization")
-            {
-                builder = builder.header(name, value);
-            }
-        }
+        let builder = crate::http_utils::with_headers(
+            builder,
+            headers,
+            crate::http_utils::HeaderPolicy::Only(&[AZURE_DI_SUBSCRIPTION_HEADER, "authorization"]),
+        );
         let response = tokio::time::timeout_at(deadline, crate::http_utils::http_request(builder))
             .await
             .map_err(|_| OcrPollingError::PollTimeout)?

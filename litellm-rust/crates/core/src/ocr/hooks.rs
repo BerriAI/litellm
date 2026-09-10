@@ -2,8 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use super::backends::OcrIntegration;
 use super::formats::OcrFormat;
+use super::integrations::OcrIntegration;
 use super::prepare::MappedOcrRequest;
 use super::types::{OcrDocument, OcrResponseData};
 use crate::Error;

@@ -1,14 +1,13 @@
+use crate::Error;
 use crate::constants::{REDUCTO_ID_PREFIX, REDUCTO_OCR_API_BASE};
-use crate::ocr::backends::{BackendConfig, OcrBackend, OcrIntegration, PreparedOcrBackend};
-use crate::ocr::document::InlineDocument;
-use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
-use crate::ocr::formats::reducto::{
-    ReductoParseLegacyFormat, ReductoParseV3Format,
-    types::{ReductoFileId, ReductoLegacyParams, ReductoUploadResponse, ReductoV3Params},
-};
+use crate::ocr::backends::OcrBackend;
+use crate::ocr::document::{DocumentPreparation, InlineDocument};
+use crate::ocr::error::{OcrError, OcrRequestError};
+use crate::ocr::formats::reducto::types::{ReductoFileId, ReductoUploadResponse};
 use crate::ocr::types::{OcrConnection, OcrDocument};
 use crate::providers::reducto::auth;
 use crate::url_utils::ApiUrl;
+use serde_json::{Map, Value};
 
 #[derive(Clone, Debug)]
 pub struct ReductoBackend;
@@ -16,9 +15,24 @@ pub struct ReductoBackend;
 impl OcrBackend for ReductoBackend {
     type Config = ();
     const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::Reducto;
+
+    fn decode_config(_params: &Map<String, Value>) -> Result<Self::Config, Error> {
+        Ok(())
+    }
 }
 
-pub fn complete_url(api_base: Option<&str>, path: &str) -> Result<String, OcrError> {
+pub(crate) fn resolve_integration(
+    model: &crate::ocr::registry::OcrModel,
+) -> crate::ocr::registry::OcrIntegrationKind {
+    match model {
+        crate::ocr::registry::OcrModel::ReductoLegacy => {
+            crate::ocr::registry::OcrIntegrationKind::ReductoLegacy
+        }
+        _ => crate::ocr::registry::OcrIntegrationKind::ReductoV3,
+    }
+}
+
+pub(crate) fn complete_url(api_base: Option<&str>, path: &str) -> Result<String, OcrError> {
     let base = api_base
         .map(str::trim)
         .filter(|base| !base.is_empty())
@@ -34,100 +48,64 @@ pub fn complete_url(api_base: Option<&str>, path: &str) -> Result<String, OcrErr
         })
 }
 
-async fn prepare_reducto_document(
+pub struct ReductoUpload;
+
+impl DocumentPreparation for ReductoUpload {
+    type Output = ReductoFileId;
+
+    async fn prepare(
+        client: &crate::ocr::OcrClient,
+        document: OcrDocument,
+        connection: &OcrConnection,
+        headers: &[(String, String)],
+    ) -> Result<Self::Output, OcrError> {
+        let source = document.source();
+        if source.starts_with(REDUCTO_ID_PREFIX) {
+            return Ok(ReductoFileId(source.to_string()));
+        }
+        let document = InlineDocument::parse(source)?.ok_or(OcrRequestError::ReductoSource)?;
+        upload_document(client, document, connection, headers).await
+    }
+}
+
+async fn upload_document(
     client: &crate::ocr::OcrClient,
-    document: OcrDocument,
+    document: InlineDocument<'_>,
     connection: &OcrConnection,
     headers: &[(String, String)],
 ) -> Result<ReductoFileId, OcrError> {
-    let source = document.source();
-    if source.starts_with(REDUCTO_ID_PREFIX) {
-        return Ok(ReductoFileId(source.to_string()));
-    }
-    let document = InlineDocument::parse(source)?.ok_or(OcrRequestError::ReductoSource)?;
     let mime = document.mime_type().to_string();
     let bytes = document.decode(crate::constants::OCR_INLINE_MAX_BYTES)?;
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name("document")
         .mime_str(&mime)
         .map_err(|_| OcrRequestError::InvalidDataUri)?;
-    let mut builder = client
+    let builder = client
         .provider_http()
         .post(complete_url(connection.api_base.as_deref(), "upload")?)
         .multipart(reqwest::multipart::Form::new().part("file", part))
         .timeout(connection.timeout);
-    for (name, value) in headers {
-        if !name.eq_ignore_ascii_case("content-type")
-            && !name.eq_ignore_ascii_case("content-length")
-        {
-            builder = builder.header(name, value);
-        }
-    }
+    let builder = crate::http_utils::with_headers(
+        builder,
+        headers,
+        crate::http_utils::HeaderPolicy::Except(&["content-type", "content-length"]),
+    );
     let response = crate::http_utils::http_request(builder)
         .await
         .map_err(crate::error::TransportError::from)?;
     let response = crate::ocr::client::read_json_response::<ReductoUploadResponse>(response, false)
         .await?
         .data;
-    if response.file_id.is_empty() {
-        return Err(OcrResponseError::ResponseField {
-            path: "file_id".into(),
-        }
-        .into());
-    }
-    Ok(ReductoFileId(response.file_id))
+    response.try_into()
 }
 
-macro_rules! impl_reducto_backend {
-    ($integration:ident, $format:ident, $params:ty) => {
-        #[derive(Clone, Debug)]
-        pub struct $integration;
-
-        impl OcrIntegration for $integration {
-            type Backend = ReductoBackend;
-            type Format = $format;
-            type PreparedDocument = ReductoFileId;
-            const FORMAT: Self::Format = $format;
-
-            async fn prepare(
-                &self,
-                connection: &OcrConnection,
-                _config: &BackendConfig<Self>,
-                _model: &str,
-                _params: &$params,
-                env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-            ) -> Result<PreparedOcrBackend, OcrError> {
-                let headers = auth::validate_environment(
-                    connection.extra_headers.clone(),
-                    connection.api_key.as_deref(),
-                    env_lookup,
-                )?;
-                Ok(PreparedOcrBackend {
-                    url: complete_url(connection.api_base.as_deref(), "parse")?,
-                    headers,
-                })
-            }
-
-            async fn prepare_document(
-                &self,
-                client: &crate::ocr::OcrClient,
-                document: OcrDocument,
-                connection: &OcrConnection,
-                headers: &[(String, String)],
-            ) -> Result<ReductoFileId, OcrError> {
-                prepare_reducto_document(client, document, connection, headers).await
-            }
-
-            fn guard_document_before_preparation(&self) -> bool {
-                true
-            }
-
-            fn preserve_native_response(&self, _params: &$params) -> bool {
-                true
-            }
-        }
-    };
+pub(crate) fn authenticate(
+    connection: &OcrConnection,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<Vec<(String, String)>, OcrError> {
+    Ok(auth::validate_environment(
+        connection.extra_headers.clone(),
+        connection.api_key.as_deref(),
+        env_lookup,
+    )?)
 }
-
-impl_reducto_backend!(ReductoV3, ReductoParseV3Format, ReductoV3Params);
-impl_reducto_backend!(ReductoLegacy, ReductoParseLegacyFormat, ReductoLegacyParams);

@@ -1,11 +1,12 @@
-use crate::ocr::backends::OcrIntegration;
 use crate::ocr::formats::OcrFormat;
+use crate::ocr::integrations::AzureDocumentIntelligence as AZURE_DOCUMENT_INTELLIGENCE;
+use crate::ocr::integrations::OcrIntegration;
 use crate::ocr::prepare::OcrIntegrationKind;
-use crate::ocr::registry::{AZURE_DOCUMENT_INTELLIGENCE, decode_integration_request};
-use crate::ocr::tests::perform_ocr;
-use crate::ocr::tests::{MockResponse, body, mock_server, params, transform, wire_request};
+use crate::ocr::registry::decode_integration_request;
+use crate::ocr::test_support::perform_ocr;
+use crate::ocr::test_support::{MockResponse, body, mock_server, params, transform, wire_request};
 use crate::ocr::types::OcrConnection;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
 fn connection() -> OcrConnection {
@@ -15,6 +16,7 @@ fn connection() -> OcrConnection {
         ..Default::default()
     }
 }
+#[fixture]
 fn operation() -> Value {
     json!({"status":"succeeded","operationExtension":42,"analyzeResult":{
         "content":"A\n\nB","tables":[{"cells":[]}],"keyValuePairs":[{"key":{"content":"A"}}],
@@ -164,12 +166,12 @@ async fn azure_document_intelligence_dot_segment_model_id_is_rejected() {
         assert!(prepared_url(model, &mapped).await.is_err());
     }
 }
-#[test]
-fn document_intelligence_response_normalizes_pages() {
+#[rstest]
+fn document_intelligence_response_normalizes_pages(operation: Value) {
     let result = transform(
         &AZURE_DOCUMENT_INTELLIGENCE,
         "model",
-        operation(),
+        operation.clone(),
         json!({}),
     )
     .unwrap();
@@ -179,7 +181,7 @@ fn document_intelligence_response_normalizes_pages() {
         json!({"width":816,"height":1056,"dpi":96})
     );
     assert_eq!(result["usage_info"]["pages_processed"], 1);
-    assert_eq!(result["tables"], operation()["analyzeResult"]["tables"]);
+    assert_eq!(result["tables"], operation["analyzeResult"]["tables"]);
 }
 #[test]
 fn document_intelligence_response_tolerates_missing_native_fields() {
@@ -255,21 +257,21 @@ fn document_intelligence_non_succeeded_status_is_rejected() {
         );
     }
 }
-#[test]
-fn document_intelligence_native_format_carries_raw_operation() {
+#[rstest]
+fn document_intelligence_native_format_carries_raw_operation(operation: Value) {
     let response = transform(
         &AZURE_DOCUMENT_INTELLIGENCE,
         "model",
-        operation(),
+        operation.clone(),
         json!({"req_format":"native"}),
     )
     .unwrap();
-    assert_eq!(response["provider_native_response"], operation());
+    assert_eq!(response["provider_native_response"], operation);
     assert!(
         transform(
             &AZURE_DOCUMENT_INTELLIGENCE,
             "model",
-            operation(),
+            operation.clone(),
             json!({"req_format":"litellm"})
         )
         .unwrap()
@@ -301,7 +303,10 @@ fn document_intelligence_rejects_unknown_req_format() {
 #[case(false)]
 #[case(true)]
 #[tokio::test]
-async fn polling_forwards_subscription_or_bearer_and_preserves_native(#[case] bearer: bool) {
+async fn polling_forwards_subscription_or_bearer_and_preserves_native(
+    operation: Value,
+    #[case] bearer: bool,
+) {
     let (base, requests, server) = mock_server(vec![
         MockResponse {
             status: 202,
@@ -313,7 +318,7 @@ async fn polling_forwards_subscription_or_bearer_and_preserves_native(#[case] be
             headers: vec![("Retry-After", "0".into())],
             body: json!({"status":"running"}),
         },
-        MockResponse::json(operation()),
+        MockResponse::json(operation.clone()),
     ])
     .await;
     let mut request = wire_request(
@@ -325,15 +330,21 @@ async fn polling_forwards_subscription_or_bearer_and_preserves_native(#[case] be
         request.connection.api_key = None;
         request.connection.extra_headers = vec![("Authorization".into(), "Bearer token".into())];
     }
+    request
+        .connection
+        .extra_headers
+        .push(("X-Trace".into(), "initial-request-only".into()));
     let result = perform_ocr(request).await.unwrap();
     server.await.unwrap();
     assert_eq!(
         result.provider_native_response,
-        Some(operation().as_object().unwrap().clone())
+        Some(operation.as_object().unwrap().clone())
     );
     let seen = requests.lock().unwrap();
     assert!(seen[0].contains("&pages=1%2C3"));
+    assert!(seen[0].contains("x-trace: initial-request-only"));
     for poll in &seen[1..] {
+        assert!(!poll.to_ascii_lowercase().contains("x-trace:"));
         assert!(poll.to_ascii_lowercase().contains(if bearer {
             "authorization: bearer token"
         } else {

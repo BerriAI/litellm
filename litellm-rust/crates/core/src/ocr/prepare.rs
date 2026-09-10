@@ -1,5 +1,5 @@
-use super::backends::{BackendConfig, InputParams, MappedParams, OcrIntegration};
 use super::formats::OcrFormat;
+use super::integrations::{BackendConfig, InputParams, MappedParams, OcrIntegration};
 
 use super::types::{OcrConnection, OcrDocument};
 use crate::Error;

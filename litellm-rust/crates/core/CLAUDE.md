@@ -56,6 +56,15 @@ handler.rs         the provider call
 client.rs          the shared reqwest client
 ```
 
+OCR keeps each concern independently changeable:
+
+```
+ocr/formats/<format>/        typed wire shape and transforms
+ocr/backends/<backend>.rs    shared auth, upload, polling, and hosting behavior
+ocr/integrations/<name>.rs   one typed format/backend pairing
+ocr/registry.rs              provider/model resolution and generated dispatch
+```
+
 ## Parity Rules
 
 - Every shared type used by a provider transform needs unit tests for

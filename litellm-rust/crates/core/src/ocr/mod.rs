@@ -5,6 +5,7 @@ pub mod error;
 pub mod formats;
 mod handler;
 pub mod hooks;
+pub mod integrations;
 pub mod prepare;
 pub mod registry;
 pub mod types;
@@ -25,6 +26,9 @@ mod mistral_tests;
 #[cfg(test)]
 #[path = "../../tests/reducto_ocr.rs"]
 mod reducto_tests;
+#[cfg(test)]
+#[path = "../../tests/ocr/support.rs"]
+pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "../../tests/ocr.rs"]
 pub(crate) mod tests;

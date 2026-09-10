@@ -2,41 +2,14 @@ use serde_json::{Map, Value};
 use strum::EnumString;
 
 use crate::Error;
-use crate::auth::azure::AzureAuthInputs;
-use crate::providers::vertex_ai::auth::VertexAuthInputs;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
-pub use super::backends::azure_ai::{AzureDocumentIntelligence, AzureMistral};
-pub use super::backends::mistral::MistralDirect;
-pub use super::backends::reducto::{ReductoLegacy, ReductoV3};
-pub use super::backends::vertex_ai::{VertexDeepSeek, VertexMistral};
-use super::backends::{BackendConfig, InputParams};
-pub use super::backends::{OcrBackend, OcrIntegration};
-use super::types::OcrRequestFormat;
-
-pub(crate) fn validate_request_format(
-    params: &Map<String, Value>,
-    supports_native: bool,
-    provider: &'static str,
-) -> Result<(), super::error::OcrRequestError> {
-    let Some(format) = params.get("req_format") else {
-        return Ok(());
-    };
-    let format: OcrRequestFormat = serde_json::from_value(format.clone())
-        .map_err(|_| super::error::OcrRequestError::RequestFormat)?;
-    if format == OcrRequestFormat::Native && !supports_native {
-        return Err(super::error::OcrRequestError::NativeUnsupported(provider));
-    }
-    Ok(())
-}
-
-pub(crate) const MISTRAL: MistralDirect = MistralDirect;
-pub(crate) const AZURE_MISTRAL: AzureMistral = AzureMistral;
-pub(crate) const AZURE_DOCUMENT_INTELLIGENCE: AzureDocumentIntelligence = AzureDocumentIntelligence;
-pub(crate) const VERTEX_MISTRAL: VertexMistral = VertexMistral;
-pub(crate) const VERTEX_DEEPSEEK: VertexDeepSeek = VertexDeepSeek;
-pub(crate) const REDUCTO_V3: ReductoV3 = ReductoV3;
-pub(crate) const REDUCTO_LEGACY: ReductoLegacy = ReductoLegacy;
+pub use super::backends::OcrBackend;
+pub use super::integrations::{
+    AzureDocumentIntelligence, AzureMistral, MistralDirect, ReductoLegacy, ReductoV3,
+    VertexDeepSeek, VertexMistral,
+};
+use super::integrations::{BackendConfig, InputParams, OcrIntegration};
 
 /// ```
 /// use litellm_core::ocr::registry::{MistralDirect, OcrIntegrationInput};
@@ -70,27 +43,37 @@ pub struct OcrIntegrationInput<I: OcrIntegration> {
     pub backend_config: BackendConfig<I>,
 }
 
-#[derive(Clone, Debug)]
-pub enum OcrIntegrationRequest {
-    Mistral(OcrIntegrationInput<MistralDirect>),
-    AzureMistral(OcrIntegrationInput<AzureMistral>),
-    AzureDocumentIntelligence(OcrIntegrationInput<AzureDocumentIntelligence>),
-    VertexMistral(OcrIntegrationInput<VertexMistral>),
-    VertexDeepSeek(OcrIntegrationInput<VertexDeepSeek>),
-    ReductoV3(OcrIntegrationInput<ReductoV3>),
-    ReductoLegacy(OcrIntegrationInput<ReductoLegacy>),
+macro_rules! define_integration_types {
+    ($( $variant:ident, $integration:ty, $instance:expr, $provider:ident; )+) => {
+        #[derive(Clone, Debug)]
+        pub enum OcrIntegrationRequest {
+            $( $variant(OcrIntegrationInput<$integration>), )+
+        }
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum OcrIntegrationKind {
+            $( $variant, )+
+        }
+
+        impl OcrIntegrationKind {
+            pub const fn provider(self) -> OcrProvider {
+                match self {
+                    $( Self::$variant => OcrProvider::$provider, )+
+                }
+            }
+        }
+
+        impl OcrIntegrationRequest {
+            pub fn kind(&self) -> OcrIntegrationKind {
+                match self {
+                    $( Self::$variant(_) => OcrIntegrationKind::$variant, )+
+                }
+            }
+        }
+    };
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OcrIntegrationKind {
-    Mistral,
-    AzureMistral,
-    AzureDocumentIntelligence,
-    VertexMistral,
-    VertexDeepSeek,
-    ReductoV3,
-    ReductoLegacy,
-}
+super::integrations::for_each_ocr_integration!(define_integration_types);
 
 #[derive(Clone, Copy, Debug, EnumString, PartialEq, Eq)]
 #[strum(serialize_all = "snake_case")]
@@ -108,17 +91,6 @@ impl OcrProvider {
             Self::AzureAi => "azure_ai",
             Self::VertexAi => "vertex_ai",
             Self::Reducto => "reducto",
-        }
-    }
-}
-
-impl OcrIntegrationKind {
-    pub const fn provider(self) -> OcrProvider {
-        match self {
-            Self::Mistral => OcrProvider::Mistral,
-            Self::AzureMistral | Self::AzureDocumentIntelligence => OcrProvider::AzureAi,
-            Self::VertexMistral | Self::VertexDeepSeek => OcrProvider::VertexAi,
-            Self::ReductoV3 | Self::ReductoLegacy => OcrProvider::Reducto,
         }
     }
 }
@@ -143,37 +115,13 @@ impl OcrModel {
     }
 }
 
-impl OcrIntegrationRequest {
-    pub fn kind(&self) -> OcrIntegrationKind {
-        match self {
-            Self::Mistral(_) => OcrIntegrationKind::Mistral,
-            Self::AzureMistral(_) => OcrIntegrationKind::AzureMistral,
-            Self::AzureDocumentIntelligence(_) => OcrIntegrationKind::AzureDocumentIntelligence,
-            Self::VertexMistral(_) => OcrIntegrationKind::VertexMistral,
-            Self::VertexDeepSeek(_) => OcrIntegrationKind::VertexDeepSeek,
-            Self::ReductoV3(_) => OcrIntegrationKind::ReductoV3,
-            Self::ReductoLegacy(_) => OcrIntegrationKind::ReductoLegacy,
-        }
-    }
-}
-
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub fn resolve_ocr_integration(provider: OcrProvider, model: &OcrModel) -> OcrIntegrationKind {
-    let lower = model.as_str().to_ascii_lowercase();
-    match (provider, model) {
-        (OcrProvider::Mistral, _) => OcrIntegrationKind::Mistral,
-        (OcrProvider::AzureAi, _)
-            if lower.contains("doc-intelligence") || lower.contains("documentintelligence") =>
-        {
-            OcrIntegrationKind::AzureDocumentIntelligence
-        }
-        (OcrProvider::AzureAi, _) => OcrIntegrationKind::AzureMistral,
-        (OcrProvider::VertexAi, _) if lower.contains("deepseek") => {
-            OcrIntegrationKind::VertexDeepSeek
-        }
-        (OcrProvider::VertexAi, _) => OcrIntegrationKind::VertexMistral,
-        (OcrProvider::Reducto, OcrModel::ReductoLegacy) => OcrIntegrationKind::ReductoLegacy,
-        (OcrProvider::Reducto, _) => OcrIntegrationKind::ReductoV3,
+    match provider {
+        OcrProvider::Mistral => OcrIntegrationKind::Mistral,
+        OcrProvider::AzureAi => super::backends::azure_ai::resolve_integration(model),
+        OcrProvider::VertexAi => super::backends::vertex_ai::resolve_integration(model),
+        OcrProvider::Reducto => super::backends::reducto::resolve_integration(model),
     }
 }
 
@@ -199,50 +147,34 @@ pub fn decode_integration_request(
     kind: OcrIntegrationKind,
     params: Map<String, Value>,
 ) -> Result<OcrIntegrationRequest, Error> {
-    let request = match kind {
-        OcrIntegrationKind::Mistral => OcrIntegrationRequest::Mistral(OcrIntegrationInput {
-            params: MISTRAL.decode_input_params(params, "optional_params")?,
-            backend_config: (),
-        }),
-        OcrIntegrationKind::AzureMistral => {
-            let backend = AzureAuthInputs::from_optional_params(&params)?;
-            OcrIntegrationRequest::AzureMistral(OcrIntegrationInput {
-                params: AZURE_MISTRAL.decode_input_params(params, "optional_params")?,
-                backend_config: backend,
-            })
-        }
-        OcrIntegrationKind::AzureDocumentIntelligence => {
-            let backend = AzureAuthInputs::from_optional_params(&params)?;
-            OcrIntegrationRequest::AzureDocumentIntelligence(OcrIntegrationInput {
-                params: AZURE_DOCUMENT_INTELLIGENCE
-                    .decode_input_params(params, "optional_params")?,
-                backend_config: backend,
-            })
-        }
-        OcrIntegrationKind::VertexMistral => {
-            let backend = VertexAuthInputs::from_optional_params(&params)?;
-            OcrIntegrationRequest::VertexMistral(OcrIntegrationInput {
-                params: VERTEX_MISTRAL.decode_input_params(params, "optional_params")?,
-                backend_config: backend,
-            })
-        }
-        OcrIntegrationKind::VertexDeepSeek => {
-            let backend = VertexAuthInputs::from_optional_params(&params)?;
-            OcrIntegrationRequest::VertexDeepSeek(OcrIntegrationInput {
-                params: VERTEX_DEEPSEEK.decode_input_params(params, "optional_params")?,
-                backend_config: backend,
-            })
-        }
-        OcrIntegrationKind::ReductoV3 => OcrIntegrationRequest::ReductoV3(OcrIntegrationInput {
-            params: REDUCTO_V3.decode_input_params(params, "optional_params")?,
-            backend_config: (),
-        }),
-        OcrIntegrationKind::ReductoLegacy => {
-            OcrIntegrationRequest::ReductoLegacy(OcrIntegrationInput {
-                params: REDUCTO_LEGACY.decode_input_params(params, "optional_params")?,
-                backend_config: (),
-            })
-        }
-    };
-    Ok(request)
+    macro_rules! decode_selected_integration {
+        ($( $variant:ident, $integration:ty, $instance:expr, $provider:ident; )+) => {
+            match kind {
+                $(
+                    OcrIntegrationKind::$variant => OcrIntegrationRequest::$variant(
+                        decode_input::<$integration>($instance, params)?,
+                    ),
+                )+
+            }
+        };
+    }
+
+    Ok(super::integrations::for_each_ocr_integration!(
+        decode_selected_integration
+    ))
+}
+
+fn decode_input<I>(
+    integration: I,
+    params: Map<String, Value>,
+) -> Result<OcrIntegrationInput<I>, Error>
+where
+    I: OcrIntegration,
+{
+    let backend_config = I::Backend::decode_config(&params)?;
+    let params = integration.decode_input_params(params, "optional_params")?;
+    Ok(OcrIntegrationInput {
+        params,
+        backend_config,
+    })
 }

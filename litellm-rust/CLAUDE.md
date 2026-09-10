@@ -46,9 +46,11 @@ Route-level Rust structure mirrors LiteLLM's Python responsibilities:
   provider-specific transform. For Anthropic Messages, this means
   `core/src/providers/anthropic/messages/transformation.rs`.
 - OCR separates API shape from hosting. `core/src/ocr/formats/` owns wire types
-  and transforms, `core/src/ocr/backends/` owns OCR transport behavior, and
-  `core/src/ocr/registry.rs` lists supported format/backend pairings. Shared
-  provider authentication remains in `core/src/providers/<provider>/auth.rs`.
+  and transforms, `core/src/ocr/backends/` owns reusable hosting behavior, and
+  each file in `core/src/ocr/integrations/` owns one format/backend pairing,
+  while `core/src/ocr/registry.rs` resolves providers and models through the shared
+  integration declaration. Shared provider authentication remains in
+  `core/src/providers/<provider>/auth.rs`.
 - Handlers live in `core`, never in a host. `ai-gateway` must not contain a
   route handler that talks to a provider; its axum route reads the HTTP request,
   picks a deployment, and calls the `core` entrypoint. `python-bridge` marshals

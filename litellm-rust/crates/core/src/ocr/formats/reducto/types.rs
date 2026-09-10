@@ -28,6 +28,21 @@ pub struct ReductoLegacyRequest {
     pub options: Option<ReductoLegacyParams>,
 }
 pub struct ReductoFileId(pub(crate) String);
+
+impl TryFrom<ReductoUploadResponse> for ReductoFileId {
+    type Error = crate::ocr::error::OcrError;
+
+    fn try_from(response: ReductoUploadResponse) -> Result<Self, Self::Error> {
+        if response.file_id.is_empty() {
+            return Err(crate::ocr::error::OcrResponseError::ResponseField {
+                path: "file_id".into(),
+            }
+            .into());
+        }
+        Ok(Self(response.file_id))
+    }
+}
+
 #[derive(Deserialize)]
 pub struct ReductoUploadResponse {
     pub file_id: String,

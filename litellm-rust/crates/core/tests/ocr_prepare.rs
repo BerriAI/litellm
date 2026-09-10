@@ -1,77 +1,48 @@
 use super::*;
+use rstest::rstest;
 
-#[test]
-fn typed_provider_and_model_select_the_request_contract() {
-    let cases = [
-        ("mistral", "future-model", OcrIntegrationKind::Mistral),
-        (
-            "azure_ai",
-            "doc-intelligence/prebuilt-read",
-            OcrIntegrationKind::AzureDocumentIntelligence,
-        ),
-        ("azure_ai", "future-model", OcrIntegrationKind::AzureMistral),
-        (
-            "vertex_ai",
-            "deepseek-ocr",
-            OcrIntegrationKind::VertexDeepSeek,
-        ),
-        (
-            "vertex_ai",
-            "future-model",
-            OcrIntegrationKind::VertexMistral,
-        ),
-        ("reducto", "parse-legacy", OcrIntegrationKind::ReductoLegacy),
-        ("reducto", "parse-v3", OcrIntegrationKind::ReductoV3),
-        ("reducto", "future-model", OcrIntegrationKind::ReductoV3),
-    ];
-
-    for (provider, model, expected) in cases {
-        let provider = provider.parse().expect("known provider");
-        let model = OcrModel::from(model);
-        assert_eq!(resolve_ocr_integration(provider, &model), expected);
-    }
+#[rstest]
+#[case::mistral_default("mistral", "future-model", OcrIntegrationKind::Mistral)]
+#[case::azure_document_intelligence(
+    "azure_ai",
+    "doc-intelligence/prebuilt-read",
+    OcrIntegrationKind::AzureDocumentIntelligence
+)]
+#[case::azure_mistral("azure_ai", "future-model", OcrIntegrationKind::AzureMistral)]
+#[case::vertex_deepseek("vertex_ai", "deepseek-ocr", OcrIntegrationKind::VertexDeepSeek)]
+#[case::vertex_mistral("vertex_ai", "future-model", OcrIntegrationKind::VertexMistral)]
+#[case::reducto_legacy("reducto", "parse-legacy", OcrIntegrationKind::ReductoLegacy)]
+#[case::reducto_v3("reducto", "parse-v3", OcrIntegrationKind::ReductoV3)]
+#[case::reducto_default("reducto", "future-model", OcrIntegrationKind::ReductoV3)]
+fn typed_provider_and_model_select_the_request_contract(
+    #[case] provider: &str,
+    #[case] model: &str,
+    #[case] expected: OcrIntegrationKind,
+) {
+    let provider = provider.parse().expect("known provider");
+    let model = OcrModel::from(model);
+    assert_eq!(resolve_ocr_integration(provider, &model), expected);
 }
 
-#[test]
-fn integration_kind_exposes_its_routing_provider() {
-    let cases = [
-        (OcrIntegrationKind::Mistral, OcrProvider::Mistral, "mistral"),
-        (
-            OcrIntegrationKind::AzureMistral,
-            OcrProvider::AzureAi,
-            "azure_ai",
-        ),
-        (
-            OcrIntegrationKind::AzureDocumentIntelligence,
-            OcrProvider::AzureAi,
-            "azure_ai",
-        ),
-        (
-            OcrIntegrationKind::VertexMistral,
-            OcrProvider::VertexAi,
-            "vertex_ai",
-        ),
-        (
-            OcrIntegrationKind::VertexDeepSeek,
-            OcrProvider::VertexAi,
-            "vertex_ai",
-        ),
-        (
-            OcrIntegrationKind::ReductoV3,
-            OcrProvider::Reducto,
-            "reducto",
-        ),
-        (
-            OcrIntegrationKind::ReductoLegacy,
-            OcrProvider::Reducto,
-            "reducto",
-        ),
-    ];
-
-    for (integration, expected_provider, expected_name) in cases {
-        assert_eq!(integration.provider(), expected_provider);
-        assert_eq!(integration.provider().as_str(), expected_name);
-    }
+#[rstest]
+#[case::mistral(OcrIntegrationKind::Mistral, OcrProvider::Mistral, "mistral")]
+#[case::azure_mistral(OcrIntegrationKind::AzureMistral, OcrProvider::AzureAi, "azure_ai")]
+#[case::azure_document_intelligence(
+    OcrIntegrationKind::AzureDocumentIntelligence,
+    OcrProvider::AzureAi,
+    "azure_ai"
+)]
+#[case::vertex_mistral(OcrIntegrationKind::VertexMistral, OcrProvider::VertexAi, "vertex_ai")]
+#[case::vertex_deepseek(OcrIntegrationKind::VertexDeepSeek, OcrProvider::VertexAi, "vertex_ai")]
+#[case::reducto_v3(OcrIntegrationKind::ReductoV3, OcrProvider::Reducto, "reducto")]
+#[case::reducto_legacy(OcrIntegrationKind::ReductoLegacy, OcrProvider::Reducto, "reducto")]
+fn integration_kind_exposes_its_routing_provider(
+    #[case] integration: OcrIntegrationKind,
+    #[case] expected_provider: OcrProvider,
+    #[case] expected_name: &str,
+) {
+    assert_eq!(integration.provider(), expected_provider);
+    assert_eq!(integration.provider().as_str(), expected_name);
 }
 
 #[test]

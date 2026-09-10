@@ -1,6 +1,6 @@
-use crate::ocr::backends::OcrIntegration;
-use crate::ocr::registry::{AZURE_MISTRAL, MISTRAL};
-use crate::ocr::tests::body;
+use crate::ocr::integrations::OcrIntegration;
+use crate::ocr::integrations::{AzureMistral as AZURE_MISTRAL, MistralDirect as MISTRAL};
+use crate::ocr::test_support::body;
 use crate::ocr::types::OcrConnection;
 use serde_json::json;
 

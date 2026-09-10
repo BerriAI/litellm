@@ -1,13 +1,35 @@
-use crate::constants::{VERTEX_DEEPSEEK_API_BASE, VERTEX_OCR_DEFAULT_LOCATION};
-use crate::ocr::backends::{BackendConfig, OcrBackend, OcrIntegration, PreparedOcrBackend};
-use crate::ocr::error::OcrError;
-use crate::ocr::formats::deepseek::{DeepSeekOcrFormat, types::DeepSeekOcrParams};
-use crate::ocr::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
-use crate::ocr::types::{OcrConnection, OcrDocument};
-use crate::providers::vertex_ai::auth::{self, VertexAuthInputs};
-use crate::url_utils::ApiUrl;
+use serde_json::{Map, Value};
 
-async fn authenticate(
+use crate::Error;
+use crate::constants::VERTEX_OCR_DEFAULT_LOCATION;
+use crate::ocr::backends::OcrBackend;
+use crate::ocr::error::OcrError;
+use crate::ocr::types::OcrConnection;
+use crate::providers::vertex_ai::auth::{self, VertexAuthInputs};
+
+#[derive(Clone, Debug)]
+pub struct VertexBackend;
+
+impl OcrBackend for VertexBackend {
+    type Config = VertexAuthInputs;
+    const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::VertexAi;
+
+    fn decode_config(params: &Map<String, Value>) -> Result<Self::Config, Error> {
+        Ok(VertexAuthInputs::from_optional_params(params)?)
+    }
+}
+
+pub(crate) fn resolve_integration(
+    model: &crate::ocr::registry::OcrModel,
+) -> crate::ocr::registry::OcrIntegrationKind {
+    if model.as_str().to_ascii_lowercase().contains("deepseek") {
+        crate::ocr::registry::OcrIntegrationKind::VertexDeepSeek
+    } else {
+        crate::ocr::registry::OcrIntegrationKind::VertexMistral
+    }
+}
+
+pub(crate) async fn authenticate(
     connection: &OcrConnection,
     config: &VertexAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -22,141 +44,10 @@ async fn authenticate(
     .await?)
 }
 
-fn location(config: &VertexAuthInputs, env_lookup: &dyn Fn(&str) -> Option<String>) -> String {
+pub(crate) fn location(
+    config: &VertexAuthInputs,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> String {
     auth::resolve_location(config, env_lookup)
         .unwrap_or_else(|| VERTEX_OCR_DEFAULT_LOCATION.to_string())
-}
-
-#[derive(Clone, Debug)]
-pub struct VertexMistral;
-
-impl OcrIntegration for VertexMistral {
-    type Backend = VertexBackend;
-    type Format = MistralOcrFormat;
-    type PreparedDocument = crate::ocr::document::InlineOcrDocument;
-    const FORMAT: Self::Format = MistralOcrFormat;
-
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    async fn prepare(
-        &self,
-        connection: &OcrConnection,
-        config: &BackendConfig<Self>,
-        model: &str,
-        _params: &MistralOcrParams,
-        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<PreparedOcrBackend, OcrError> {
-        let authentication = authenticate(connection, config, env_lookup).await?;
-        let location = location(config, env_lookup);
-        let default_base = format!("https://{location}-aiplatform.googleapis.com");
-        let base = connection.api_base.as_deref().unwrap_or(&default_base);
-        let prediction = format!("{model}:rawPredict");
-        let path = [
-            "v1",
-            "projects",
-            authentication.project_id.as_str(),
-            "locations",
-            location.as_str(),
-            "publishers",
-            "mistralai",
-            "models",
-            prediction.as_str(),
-        ];
-        Ok(PreparedOcrBackend {
-            url: ApiUrl::parse(base)
-                .and_then(|url| url.complete_path(&path))
-                .map(|url| url.into_string())
-                .map_err(|_| crate::ocr::error::OcrRequestError::RequestField {
-                    path: "api_base".into(),
-                })?,
-            headers: authentication.headers,
-        })
-    }
-
-    fn validate_request_body(
-        &self,
-        body: &crate::ocr::formats::mistral::types::MistralOcrRequest,
-    ) -> Result<(), crate::ocr::error::OcrRequestError> {
-        crate::ocr::document::InlineOcrDocument::try_from(body.document.clone())?;
-        Ok(())
-    }
-
-    async fn prepare_document(
-        &self,
-        client: &crate::ocr::OcrClient,
-        document: OcrDocument,
-        connection: &OcrConnection,
-        _headers: &[(String, String)],
-    ) -> Result<Self::PreparedDocument, OcrError> {
-        crate::ocr::document::inline_remote_document(
-            client.document_fetcher(),
-            document,
-            connection,
-        )
-        .await
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct VertexDeepSeek;
-
-impl OcrIntegration for VertexDeepSeek {
-    type Backend = VertexBackend;
-    type Format = DeepSeekOcrFormat;
-    type PreparedDocument = OcrDocument;
-    const FORMAT: Self::Format = DeepSeekOcrFormat;
-
-    async fn prepare(
-        &self,
-        connection: &OcrConnection,
-        config: &BackendConfig<Self>,
-        _model: &str,
-        _params: &DeepSeekOcrParams,
-        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-    ) -> Result<PreparedOcrBackend, OcrError> {
-        let authentication = authenticate(connection, config, env_lookup).await?;
-        let location = location(config, env_lookup);
-        let base = connection
-            .api_base
-            .as_deref()
-            .unwrap_or(VERTEX_DEEPSEEK_API_BASE);
-        Ok(PreparedOcrBackend {
-            url: ApiUrl::parse(base)
-                .and_then(|url| {
-                    url.complete_path(&[
-                        "v1",
-                        "projects",
-                        authentication.project_id.as_str(),
-                        "locations",
-                        location.as_str(),
-                        "endpoints",
-                        "openapi",
-                        "chat",
-                        "completions",
-                    ])
-                })
-                .map(|url| url.into_string())
-                .map_err(|_| crate::ocr::error::OcrRequestError::RequestField {
-                    path: "api_base".into(),
-                })?,
-            headers: authentication.headers,
-        })
-    }
-
-    async fn prepare_document(
-        &self,
-        _client: &crate::ocr::OcrClient,
-        document: OcrDocument,
-        _connection: &OcrConnection,
-        _headers: &[(String, String)],
-    ) -> Result<Self::PreparedDocument, OcrError> {
-        Ok(document)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct VertexBackend;
-
-impl OcrBackend for VertexBackend {
-    type Config = VertexAuthInputs;
-    const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::VertexAi;
 }
