@@ -49,12 +49,18 @@ mod tests {
 
     #[rstest]
     fn extract_header_is_a_supported_ocr_param() {
-        assert_eq!(mapped_params(json!({"extract_header":true}))["extract_header"], true);
+        assert_eq!(
+            mapped_params(json!({"extract_header":true}))["extract_header"],
+            true
+        );
     }
 
     #[rstest]
     fn extract_footer_is_a_supported_ocr_param() {
-        assert_eq!(mapped_params(json!({"extract_footer":false}))["extract_footer"], false);
+        assert_eq!(
+            mapped_params(json!({"extract_footer":false}))["extract_footer"],
+            false
+        );
     }
 
     #[rstest]
@@ -77,12 +83,18 @@ mod tests {
 
     #[rstest]
     fn map_ocr_params_forwards_extract_header() {
-        assert_eq!(mapped_params(json!({"extract_header":true}))["extract_header"], true);
+        assert_eq!(
+            mapped_params(json!({"extract_header":true}))["extract_header"],
+            true
+        );
     }
 
     #[rstest]
     fn map_ocr_params_forwards_extract_footer() {
-        assert_eq!(mapped_params(json!({"extract_footer":true}))["extract_footer"], true);
+        assert_eq!(
+            mapped_params(json!({"extract_footer":true}))["extract_footer"],
+            true
+        );
     }
 
     #[rstest]
@@ -206,8 +218,11 @@ mod tests {
             "header":"header",
             "footer":"footer"
         });
-        let response: MistralOcrResponse = serde_json::from_value(json!({"pages":[page.clone()]})).unwrap();
-        let result = transform_ocr_response("model", response).unwrap().into_json();
+        let response: MistralOcrResponse =
+            serde_json::from_value(json!({"pages":[page.clone()]})).unwrap();
+        let result = transform_ocr_response("model", response)
+            .unwrap()
+            .into_json();
         assert_eq!(result["pages"][0], page);
     }
 }
