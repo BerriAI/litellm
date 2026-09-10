@@ -593,6 +593,37 @@ class TestMalformedResponses:
         assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "verdict",
+        [{}, {"allowed": None}, {"allowed": "true"}, {"allowed": 1}, {"allowed": "false"}],
+        ids=["missing", "null", "string-true", "int-one", "string-false"],
+    )
+    async def test_evaluate_non_boolean_allowed_fail_closed(self, verdict: dict):
+        handler: Final = FakeHandler([_token_response(), _response(200, verdict)])
+        guardrail: Final = _make_guardrail(handler)
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        assert "boolean 'allowed'" in exc_info.value.detail["message"]
+        assert _guardrail_info(data)["guardrail_response"]["verdict"] == "Unavailable"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "verdict",
+        [{}, {"allowed": None}, {"allowed": "true"}, {"allowed": 1}, {"allowed": "false"}],
+        ids=["missing", "null", "string-true", "int-one", "string-false"],
+    )
+    async def test_evaluate_non_boolean_allowed_fail_open(self, verdict: dict):
+        handler: Final = FakeHandler([_token_response(), _response(200, verdict)])
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        result: Final = await _run(guardrail, data)
+        assert result is data
+        assert _guardrail_info(data)["guardrail_response"]["verdict"] == "Unscanned"
+        assert _guardrail_info(data)["guardrail_status"] == "guardrail_failed_to_respond"
+
+    @pytest.mark.asyncio
     async def test_bad_expires_in_still_allows(self):
         handler: Final = FakeHandler(
             [_response(200, {"access_token": "tok-1", "expires_in": "soon"}), _allow_response()]
