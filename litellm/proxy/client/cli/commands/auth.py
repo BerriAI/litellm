@@ -41,9 +41,9 @@ from litellm.litellm_core_utils.cli_token_utils import (
 )
 
 from .claude_settings import (
-    SETTINGS_FILE_OWNERS,
     ClaudeSettingsError,
     claude_settings_path,
+    settings_file_owners,
     write_claude_settings,
 )
 from .pkce_login import (
@@ -782,7 +782,7 @@ def _configure_claude_code(base_url: str) -> None:
     """Point Claude Code at base_url by patching the settings.json it reads."""
     settings_path: Final = claude_settings_path(os.environ)
     try:
-        write_claude_settings(base_url, settings_path, SETTINGS_FILE_OWNERS)
+        write_claude_settings(base_url, settings_path, settings_file_owners(settings_path))
     except ClaudeSettingsError as e:
         raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
     click.echo(f"\nConfigured Claude Code: {settings_path} now routes through {base_url.rstrip('/')}.")
