@@ -292,9 +292,7 @@ def pooled_database_url(upstream_url: str, settings: PgBouncerSettings) -> str |
     password: Final = urllib.parse.urlsplit(upstream_url).password or ""
     credentials: Final = f"{urllib.parse.quote(plan.upstream_user, safe='')}:{password}"
     return urllib.parse.urlunsplit(
-        urllib.parse.urlsplit(plan.pooled_url)._replace(
-            netloc=f"{credentials}@{PGBOUNCER_LISTEN_ADDR}:{settings.port}"
-        )
+        urllib.parse.urlsplit(plan.pooled_url)._replace(netloc=f"{credentials}@{PGBOUNCER_LISTEN_ADDR}:{settings.port}")
     )
 
 
