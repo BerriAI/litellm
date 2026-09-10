@@ -11,6 +11,7 @@ import {
 } from '@codemirror/lsp-client';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { Decoration, MatchDecorator, ViewPlugin } from '@codemirror/view';
+import { FileTree } from '@pierre/trees';
 import { EditorView, basicSetup } from 'codemirror';
 
 import './style.css';
@@ -128,6 +129,7 @@ const editorsParent = requireElement<HTMLDivElement>('editors');
 const markdownEditorParent = requireElement<HTMLDivElement>('markdown-editor');
 const exampleNav = requireElement<HTMLElement>('example-nav');
 const fileNav = requireElement<HTMLElement>('file-nav');
+const fileTreeTitle = requireElement<HTMLParagraphElement>('file-tree-title');
 const activePath = requireElement<HTMLSpanElement>('active-path');
 const guidePath = requireElement<HTMLSpanElement>('guide-path');
 
@@ -264,43 +266,46 @@ const main = async () => {
   const views = new Map<string, EditorView>();
   const containers = new Map<string, HTMLDivElement>();
   const exampleButtons = new Map<string, HTMLButtonElement>();
-  const fileButtons = new Map<string, HTMLButtonElement>();
+  let fileTree: FileTree | null = null;
+  let syncingTreeSelection = false;
   let activeExampleId = initialExample.id;
   let activeUri = '';
 
   const renderFileTree = (example: PlaygroundExample) => {
+    fileTree?.cleanUp();
     fileNav.replaceChildren();
-    fileButtons.clear();
+    fileTreeTitle.textContent = `FILES · ${example.id}://`;
+    fileNav.setAttribute('aria-label', `${example.title} files`);
 
-    const root = document.createElement('div');
-    root.className = 'tree-folder tree-root';
-    root.textContent = `${example.id}://`;
-    fileNav.append(root);
+    const directories = new Set<string>();
+    example.files.forEach(file => {
+      const segments = file.path.split('/');
+      for (let index = 1; index < segments.length; index += 1) {
+        directories.add(`${segments.slice(0, index).join('/')}/`);
+      }
+    });
 
-    const rootFiles = example.files.filter(file => !file.path.includes('/'));
-    const sourceFiles = example.files.filter(file => file.path.startsWith('src/'));
-
-    const addFileButton = (file: PlaygroundFile, depth: 'root' | 'child') => {
-      const button = document.createElement('button');
-      button.className = 'file-tree-item';
-      button.dataset.active = String(file.uri === activeUri);
-      button.dataset.depth = depth;
-      button.dataset.kind = file.languageId === 'rust' ? 'rs' : 'toml';
-      button.type = 'button';
-      button.textContent = depth === 'child' ? file.path.replace('src/', '') : file.path;
-      button.addEventListener('click', () => showFile(file.uri));
-      fileNav.append(button);
-      fileButtons.set(file.uri, button);
-    };
-
-    rootFiles.forEach(file => addFileButton(file, 'root'));
-    if (sourceFiles.length > 0) {
-      const sourceFolder = document.createElement('div');
-      sourceFolder.className = 'tree-folder tree-child-folder';
-      sourceFolder.textContent = 'src';
-      fileNav.append(sourceFolder);
-      sourceFiles.forEach(file => addFileButton(file, 'child'));
-    }
+    const activeFile = fileByUri.get(activeUri);
+    const activePathInExample = activeFile?.example.id === example.id ? activeFile.file.path : undefined;
+    fileTree = new FileTree({
+      paths: [...directories, ...example.files.map(file => file.path)],
+      initialExpansion: 'open',
+      initialSelectedPaths: activePathInExample ? [activePathInExample] : [],
+      icons: { set: 'complete', colored: true },
+      density: 'compact',
+      stickyFolders: true,
+      onSelectionChange(selectedPaths) {
+        if (syncingTreeSelection) {
+          return;
+        }
+        const selectedPath = selectedPaths.at(-1);
+        const selectedFile = example.files.find(file => file.path === selectedPath);
+        if (selectedFile) {
+          showFile(selectedFile.uri);
+        }
+      },
+    });
+    fileTree.render({ containerWrapper: fileNav });
   };
 
   const selectExample = (exampleId: string, selectDefaultFile = true) => {
@@ -323,7 +328,7 @@ const main = async () => {
     return true;
   };
 
-  const showFile = (uri: string) => {
+  function showFile(uri: string) {
     const entry = fileByUri.get(uri);
     const view = views.get(uri);
     if (!entry || !view) {
@@ -336,13 +341,19 @@ const main = async () => {
     containers.forEach((container, candidate) => {
       container.hidden = candidate !== uri;
     });
-    fileButtons.forEach((button, candidate) => {
-      button.dataset.active = String(candidate === uri);
+    syncingTreeSelection = true;
+    fileTree?.getSelectedPaths().forEach(path => {
+      if (path !== entry.file.path) {
+        fileTree?.getItem(path)?.deselect();
+      }
     });
+    fileTree?.getItem(entry.file.path)?.select();
+    fileTree?.scrollToPath(entry.file.path, { focus: false, offset: 'nearest' });
+    syncingTreeSelection = false;
     activePath.textContent = `${entry.example.id}://${entry.file.path}`;
     view.focus();
     return view;
-  };
+  }
 
   const openFileTarget = (target: string) => {
     const match = /^([a-z][a-z0-9+.-]*):\/\/(.+?)(?:#L(\d+))?$/i.exec(target);

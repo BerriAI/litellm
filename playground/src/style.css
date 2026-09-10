@@ -212,8 +212,11 @@ h1 {
 }
 
 .file-tree {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
   border-left: 1px solid #292e36;
   background: #0f1216;
   color: #aeb4bd;
@@ -241,6 +244,33 @@ h1 {
   flex-direction: column;
 }
 
+.example-nav {
+  flex: 0 0 auto;
+}
+
+.file-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  --trees-accent-override: #bd5b2f;
+  --trees-bg-override: #0f1216;
+  --trees-bg-muted-override: #191d23;
+  --trees-border-color-override: #292e36;
+  --trees-fg-override: #aeb4bd;
+  --trees-fg-muted-override: #777f8b;
+  --trees-focus-ring-color-override: #d06a3a;
+  --trees-font-family-override: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --trees-font-size-override: 0.78rem;
+  --trees-selected-bg-override: #252029;
+  --trees-selected-fg-override: #eef0f3;
+  --trees-selected-focused-border-color-override: #bd5b2f;
+}
+
+.file-nav > file-tree-container {
+  display: block;
+  height: 100%;
+}
+
 .example-item {
   width: 100%;
   padding: 0.48rem 0.75rem;
@@ -260,68 +290,6 @@ h1 {
 }
 
 .example-item[data-active='true'] {
-  border-left-color: #bd5b2f;
-}
-
-.tree-folder {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.35rem 0.75rem;
-  color: #d3d7dd;
-  font-weight: 650;
-}
-
-.tree-root {
-  color: #eef0f3;
-}
-
-.tree-child-folder {
-  padding-left: 1.25rem;
-}
-
-.tree-folder::before {
-  color: #777f8b;
-  content: '\25BE';
-  font-size: 0.65rem;
-}
-
-.file-tree-item {
-  position: relative;
-  width: 100%;
-  padding: 0.42rem 0.55rem 0.42rem 2.05rem;
-  border: 0;
-  border-left: 2px solid transparent;
-  color: #858c97;
-  background: transparent;
-  cursor: pointer;
-  font-family: inherit;
-  text-align: left;
-}
-
-.file-tree-item::before {
-  position: absolute;
-  left: 0.85rem;
-  color: #c96f43;
-  content: attr(data-kind);
-  font-size: 0.62rem;
-}
-
-.file-tree-item[data-depth='child'] {
-  padding-left: 2.55rem;
-}
-
-.file-tree-item[data-depth='child']::before {
-  left: 1.35rem;
-}
-
-.file-tree-item:hover,
-.file-tree-item[data-active='true'] {
-  color: #eef0f3;
-  background: #191d23;
-}
-
-.file-tree-item[data-active='true'] {
   border-left-color: #bd5b2f;
 }
 
