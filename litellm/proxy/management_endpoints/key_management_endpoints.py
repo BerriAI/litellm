@@ -4559,6 +4559,23 @@ async def delete_verification_tokens(
                 litellm_changed_by=litellm_changed_by,
             )
 
+            # Snapshot before the delete: the FK cascade drops the mapping rows, but their
+            # cached jwt_key_mapping entries still resolve to the now-dead token (LIT-5380).
+            jwt_mapping_cache_keys: Final[tuple[str, ...]] = tuple(
+                cache_key
+                for keys_for_token in await asyncio.gather(
+                    *(
+                        get_jwt_key_mapping_cache_keys_for_token(
+                            hashed_token=key.token,
+                            prisma_client=prisma_client,
+                        )
+                        for key in authorized_keys
+                        if key.token is not None
+                    )
+                )
+                for cache_key in keys_for_token
+            )
+
             if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
                 deleted_tokens = await prisma_client.delete_data(tokens=tokens)
                 if deleted_tokens is not None and len(deleted_tokens) != len(tokens):
@@ -4570,6 +4587,8 @@ async def delete_verification_tokens(
                 deleted_tokens = [key.token for key in authorized_keys]
                 if len(deleted_tokens) != len(tokens):
                     failed_tokens = [token for token in tokens if token not in deleted_tokens]
+
+            await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
         else:
             raise Exception("DB not connected. prisma_client is None")

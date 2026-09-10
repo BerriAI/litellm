@@ -1,13 +1,17 @@
+import asyncio
 import base64
+import contextvars
 import hashlib
 import json
 import os
 import re
 import urllib.parse
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import partial
 from threading import Lock
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, get_args, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -16,6 +20,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
+    AWS_SIGNING_MAX_THREADS,
     BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
     BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES,
     BEDROCK_IAM_CACHE_MAX_ENTRIES,
@@ -80,7 +85,11 @@ class AwsAuthError(Exception):
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
-class BaseAWSLLM:
+class SignsRequestsWithAWS:
+    pass
+
+
+class BaseAWSLLM(SignsRequestsWithAWS):
     # Process-wide IAM credential cache (shared across instances — Bedrock passthrough is per-request).
     # Storage is in-process memory only: no Redis backend unless attached elsewhere. Entry TTL: static
     # access-key + secret + region use ``_get_default_ttl_for_boto3_credentials`` (~59 minutes); ambient
@@ -1668,3 +1677,52 @@ class BaseAWSLLM:
             request_headers_dict["Authorization"] = incoming_authorization
 
         return request_headers_dict, request.body
+
+
+def sign_aws_json_post(
+    get_credentials: Callable[[], Credentials],
+    service_name: str,
+    aws_region_name: str | None,
+    url: str,
+    body: str,
+    headers: Mapping[str, str],
+) -> AWSPreparedRequest:
+    try:
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+    except ImportError:
+        raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.")
+
+    aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
+    SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
+    return aws_request.prepare()
+
+
+_SignParams = ParamSpec("_SignParams")
+_SignedRequest = TypeVar("_SignedRequest")
+
+AWS_SIGNING_EXECUTOR: Final = ThreadPoolExecutor(max_workers=AWS_SIGNING_MAX_THREADS, thread_name_prefix="aws-signing")
+
+
+async def run_aws_signing(
+    sign: Callable[_SignParams, _SignedRequest],
+    /,
+    *args: _SignParams.args,
+    **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped signing signature
+) -> _SignedRequest:
+    context: Final = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(
+        AWS_SIGNING_EXECUTOR, partial(context.run, sign, *args, **kwargs)
+    )
+
+
+async def sign_request_off_loop_if_aws(
+    provider_config: object,
+    sign_request: Callable[_SignParams, _SignedRequest],
+    /,
+    *args: _SignParams.args,
+    **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped sign_request signature
+) -> _SignedRequest:
+    if isinstance(provider_config, SignsRequestsWithAWS):
+        return await run_aws_signing(sign_request, *args, **kwargs)
+    return sign_request(*args, **kwargs)
