@@ -12,10 +12,6 @@ use crate::constants::{
 };
 use crate::error::Error;
 
-/// OpenAI parameter names paired with the Ollama `options` names the Rust path
-/// places verbatim into the body. The host runs `map_openai_params` before the
-/// gate, so these arrive already translated, and the gate only needs the
-/// translated names to recognize them.
 const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("max_tokens", "num_predict"),
     ("max_completion_tokens", "num_predict"),
