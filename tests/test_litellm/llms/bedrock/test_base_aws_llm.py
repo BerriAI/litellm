@@ -3278,3 +3278,113 @@ def test_run_aws_signing_leaves_the_default_executor_free_for_other_providers():
     other_provider, signing_thread = asyncio.run(scenario())
     assert other_provider != signing_thread
     assert signing_thread.startswith("aws-signing")
+
+
+def _recording_boto3_client(recorded: Dict[str, Any]):
+    """boto3.client replacement that records the STS client kwargs and the assume-role params."""
+
+    def _client(service_name, **client_kwargs):
+        recorded["client_kwargs"] = client_kwargs
+        sts = MagicMock()
+
+        def _assume(**params):
+            recorded["assume_role"] = params
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAASSUMED",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(minutes=30),
+                }
+            }
+
+        def _assume_web_identity(**params):
+            recorded["assume_role_with_web_identity"] = params
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAWEBIDENTITY",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(minutes=30),
+                },
+                "PackedPolicySize": 10,
+            }
+
+        sts.assume_role.side_effect = _assume
+        sts.assume_role_with_web_identity.side_effect = _assume_web_identity
+        return sts
+
+    return _client
+
+
+def test_resolve_credentials_forwards_static_keys_role_session_and_external_id():
+    """Every field the role-assumption route reads must reach STS, so a dropped struct field fails here."""
+    from litellm.types.llms.bedrock import AwsAuthParams
+
+    auth_params = AwsAuthParams(
+        aws_access_key_id="AKIACALLER",
+        aws_secret_access_key="caller-secret",
+        aws_session_token="caller-token",
+        aws_role_name="arn:aws:iam::123456789012:role/litellm-target",
+        aws_session_name="litellm-session",
+        aws_external_id="litellm-external-id",
+        aws_sts_endpoint="https://custom-sts.example",
+    )
+    recorded: Dict[str, Any] = {}
+
+    with (
+        patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
+        patch("boto3.client", side_effect=_recording_boto3_client(recorded)),
+    ):
+        credentials = BaseAWSLLM().resolve_credentials(auth_params, "us-east-1")
+
+    assert recorded["client_kwargs"]["aws_access_key_id"] == "AKIACALLER"
+    assert recorded["client_kwargs"]["aws_secret_access_key"] == "caller-secret"
+    assert recorded["client_kwargs"]["aws_session_token"] == "caller-token"
+    assert recorded["client_kwargs"]["endpoint_url"] == "https://custom-sts.example"
+    assert recorded["assume_role"]["RoleArn"] == "arn:aws:iam::123456789012:role/litellm-target"
+    assert recorded["assume_role"]["RoleSessionName"] == "litellm-session"
+    assert recorded["assume_role"]["ExternalId"] == "litellm-external-id"
+    assert credentials.access_key == "ASIAASSUMED"
+
+
+def test_resolve_credentials_forwards_web_identity_token():
+    """A struct carrying a web-identity token must take the web-identity route, not plain role assumption."""
+    from litellm.types.llms.bedrock import AwsAuthParams
+
+    auth_params = AwsAuthParams(
+        aws_web_identity_token="unresolvable-oidc-token",
+        aws_role_name="arn:aws:iam::123456789012:role/litellm-wif",
+        aws_session_name="litellm-wif-session",
+    )
+    recorded: Dict[str, Any] = {}
+
+    with (
+        patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
+        patch("boto3.client", side_effect=_recording_boto3_client(recorded)),
+    ):
+        with pytest.raises(AwsAuthError) as exc:
+            BaseAWSLLM().resolve_credentials(auth_params, "us-east-1")
+
+    assert exc.value.status_code == 401
+    assert "assume_role" not in recorded
+
+
+def test_resolve_credentials_forwards_profile_name():
+    """The profile route must receive the struct's profile name rather than the ambient session."""
+    from litellm.types.llms.bedrock import AwsAuthParams
+
+    auth_params = AwsAuthParams(aws_profile_name="litellm-qa-profile")
+    session_instance = MagicMock()
+    session_instance.get_credentials.return_value = Credentials(
+        access_key="AKIAPROFILE", secret_key="profile-secret", token=None
+    )
+
+    with (
+        patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
+        patch("boto3.Session", return_value=session_instance) as mock_session_cls,
+    ):
+        credentials = BaseAWSLLM().resolve_credentials(auth_params, "us-east-1")
+
+    assert mock_session_cls.call_args.kwargs["profile_name"] == "litellm-qa-profile"
+    assert credentials.access_key == "AKIAPROFILE"

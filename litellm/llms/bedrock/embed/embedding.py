@@ -26,7 +26,14 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 
-from ..base_aws_llm import AWSPreparedRequest, BaseAWSLLM, Credentials, bedrock_bearer_token, run_aws_signing
+from ..base_aws_llm import (
+    AWSPreparedRequest,
+    BaseAWSLLM,
+    Credentials,
+    bedrock_bearer_token,
+    pop_aws_auth_params,
+    run_aws_signing,
+)
 from ..common_utils import BedrockError
 from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
@@ -75,18 +82,8 @@ class BedrockEmbedding(BaseAWSLLM):
         optional_params: dict,
         bearer_token: str | None = None,
     ) -> tuple[Credentials | None, str]:
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.pop("aws_session_token", None)
+        auth_params: Final = pop_aws_auth_params(optional_params)
         aws_region_name = optional_params.pop("aws_region_name", None)
-        aws_role_name: Final = optional_params.pop("aws_role_name", None)
-        aws_session_name: Final = optional_params.pop("aws_session_name", None)
-        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
-        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
-        aws_external_id: Final = optional_params.pop("aws_external_id", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -104,20 +101,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 aws_region_name = "us-west-2"
 
         credentials: Final[Credentials | None] = (
-            None
-            if bearer_token is not None
-            else self.get_credentials(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_session_token=aws_session_token,
-                aws_region_name=aws_region_name,
-                aws_session_name=aws_session_name,
-                aws_profile_name=aws_profile_name,
-                aws_role_name=aws_role_name,
-                aws_web_identity_token=aws_web_identity_token,
-                aws_sts_endpoint=aws_sts_endpoint,
-                aws_external_id=aws_external_id,
-            )
+            None if bearer_token is not None else self.resolve_credentials(auth_params, aws_region_name)
         )
         return credentials, aws_region_name
 

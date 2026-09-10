@@ -6,11 +6,12 @@ import json
 import os
 import re
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
 from threading import Lock
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
@@ -31,6 +32,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -51,6 +53,14 @@ _STS_REGION_FROM_ENDPOINT_PATTERN: Final = re.compile(
 )
 
 SIGV4_COMPUTED_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "date"})
+
+
+def pop_aws_auth_params(
+    optional_params: MutableMapping[str, object],  # mutable-ok: pops the aws_* keys out of the caller's mapping
+) -> AwsAuthParams:
+    return AwsAuthParams.model_validate(
+        MappingProxyType({key: optional_params.pop(key, None) for key in AWS_AUTH_PARAM_KEYS})
+    )
 
 
 class BedrockRequestTarget(BaseModel):
@@ -378,6 +388,20 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             )
         else:
             return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
+
+    def resolve_credentials(self, auth_params: AwsAuthParams, aws_region_name: str | None) -> Credentials:
+        return self.get_credentials(
+            aws_access_key_id=auth_params.aws_access_key_id,
+            aws_secret_access_key=auth_params.aws_secret_access_key,
+            aws_session_token=auth_params.aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=auth_params.aws_session_name,
+            aws_profile_name=auth_params.aws_profile_name,
+            aws_role_name=auth_params.aws_role_name,
+            aws_web_identity_token=auth_params.aws_web_identity_token,
+            aws_sts_endpoint=auth_params.aws_sts_endpoint,
+            aws_external_id=auth_params.aws_external_id,
+        )
 
     def _get_aws_region_from_model_arn(self, model: str | None) -> str | None:
         try:
@@ -1453,22 +1477,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.pop("aws_session_token", None)
         aws_region_name: Final = self._get_aws_region_name(optional_params, model)
         optional_params.pop("aws_region_name", None)
-        aws_role_name: Final = optional_params.pop("aws_role_name", None)
-        aws_session_name: Final = optional_params.pop("aws_session_name", None)
-        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
-        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
-        aws_bedrock_runtime_endpoint: Final = optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_external_id: Final = optional_params.pop("aws_external_id", None)
+        auth_params: Final = pop_aws_auth_params(optional_params)
+        aws_bedrock_runtime_endpoint: Final = optional_params.pop("aws_bedrock_runtime_endpoint", None)
 
         if bearer_token is not None:
             return BearerRequestTarget(
@@ -1476,18 +1488,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             )
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
-        )
+        credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
         return Boto3CredentialsInfo(
             credentials=credentials,
             aws_region_name=aws_region_name,
@@ -1621,31 +1622,9 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.get("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.get("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.get("aws_session_token", None)
-        aws_role_name: Final = optional_params.get("aws_role_name", None)
-        aws_session_name: Final = optional_params.get("aws_session_name", None)
-        aws_profile_name: Final = optional_params.get("aws_profile_name", None)
-        aws_web_identity_token: Final = optional_params.get("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.get("aws_sts_endpoint", None)
-        aws_external_id: Final = optional_params.get("aws_external_id", None)
+        auth_params: Final = AwsAuthParams.model_validate(optional_params)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
-
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
-        )
+        credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
 
         sigv4: Final = SigV4Auth(credentials, service_name, aws_region_name)
         headers = headers or {}
