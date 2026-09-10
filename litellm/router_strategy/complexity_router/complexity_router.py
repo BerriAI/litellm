@@ -36,6 +36,7 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -1987,11 +1988,8 @@ class ComplexityRouter(CustomLogger):
         Call the configured classifier model with a system/user role split and prior-turn context.
 
         Builds a structured classification prompt with:
-        - System message: the stable classifier rubric AND the caller's own system prompt (task
-          constraints). This is the largest, most repeated part of the call, so keeping it in the
-          system role lets the provider prompt-cache it across a session's classifier calls.
-        - User message: the variable payload -- a few prior user turns for context and the current
-          ask to classify.
+        - System message: the stable classifier rubric.
+        - User message: the caller's system prompt quoted as task context, prior turns, and the current ask.
 
         Args:
             prompt: The current user ask text (already extracted as the real human ask, not tool results)
@@ -2066,9 +2064,14 @@ class ComplexityRouter(CustomLogger):
         payload: Final = (
             self._native_classifier_payload(messages_for_call, response_format, encrypted_task)
             if encrypted_task is not None
-            else {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
+            else MappingProxyType(
+                {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
+            )
         )
-        proxy_server_request: Final = {"body": {"model": llm_config.model, **payload}}
+        proxy_server_request: Final = {
+            "originating_request_masked": masked_originating_request(request_kwargs),
+            "body": {"model": llm_config.model, **payload},
+        }
         classify: Final = (
             self.litellm_router_instance.aresponses
             if encrypted_task is not None

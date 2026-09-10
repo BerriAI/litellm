@@ -15,6 +15,7 @@ _DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
         "token",
         "auth",
         "authorization",
+        "cookie",
         "credential",
         # Plural form: Vertex uses ``vertex_credentials``; segment-exact
         # matching otherwise misses it because "credential" != "credentials".
