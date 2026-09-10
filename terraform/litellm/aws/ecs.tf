@@ -278,6 +278,62 @@ locals {
       "${local.proxy_config_fetch_cmd} && ${local.backend_launch_cmd}"
     ]
   } : {}
+
+  spend_worker_address = "tcp://127.0.0.1:${var.spend_worker_port}"
+  spend_worker_env = var.spend_worker_enabled ? [
+    { name = "LITELLM_SPEND_WORKER_ENABLED", value = "true" },
+    { name = "LITELLM_SPEND_WORKER_ADDRESS", value = local.spend_worker_address },
+    { name = "LITELLM_SPEND_WORKER_BUFFER_SIZE", value = tostring(var.spend_worker_buffer_size) },
+    { name = "LITELLM_SPEND_WORKER_ON_UNAVAILABLE", value = var.spend_worker_on_unavailable },
+    { name = "LITELLM_SPEND_WORKER_DRAIN_TIMEOUT_SECONDS", value = tostring(var.spend_worker_drain_timeout_seconds) },
+  ] : []
+
+  gateway_environment = concat(
+    local.shared_env,
+    local.gateway_otel_env,
+    local.billing_metrics_env,
+    local.gateway_extra_env_list,
+    local.proxy_config_env,
+    local.metrics_env,
+    local.gateway_pool_env,
+    local.spend_worker_env,
+  )
+
+  spend_worker_launch_cmd = "exec python -m gateway.spend_worker"
+  spend_worker_command = [
+    local.proxy_config_enabled ? "${local.proxy_config_fetch_cmd} && ${local.spend_worker_launch_cmd}" : local.spend_worker_launch_cmd
+  ]
+
+  spend_worker_container = var.spend_worker_enabled ? [{
+    name      = "spend-worker"
+    image     = var.gateway_image
+    essential = false
+    cpu       = var.spend_worker_cpu
+    memory    = var.spend_worker_memory
+
+    restartPolicy = { enabled = true }
+
+    entryPoint = ["sh", "-c"]
+    command    = local.spend_worker_command
+    environment = concat(
+      local.shared_env,
+      local.gateway_extra_env_list,
+      local.proxy_config_env,
+      local.gateway_pool_env,
+      local.spend_worker_env,
+      [{ name = "LITELLM_JOB_ROLE", value = "spend_worker" }],
+    )
+    secrets = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.gateway.name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "spend-worker"
+      }
+    }
+  }] : []
 }
 
 # ---------- Gateway ----------
@@ -309,6 +365,11 @@ resource "aws_ecs_task_definition" "gateway" {
       condition     = !var.gateway_connection_pool_enabled || local.database_enabled
       error_message = "gateway_connection_pool_enabled needs a database: set create_database = true or pass database_url."
     }
+
+    precondition {
+      condition     = !var.spend_worker_enabled || (var.spend_worker_cpu < var.gateway_cpu && var.spend_worker_memory < var.gateway_memory)
+      error_message = "spend_worker_cpu and spend_worker_memory are carved out of gateway_cpu / gateway_memory and must leave room for the gateway container."
+    }
   }
 
   family                   = "${local.name}-gateway"
@@ -327,17 +388,9 @@ resource "aws_ecs_task_definition" "gateway" {
         essential = true
 
         portMappings = [{ containerPort = 4000, protocol = "tcp" }]
-        environment = concat(
-          local.shared_env,
-          local.gateway_otel_env,
-          local.billing_metrics_env,
-          local.gateway_extra_env_list,
-          local.proxy_config_env,
-          local.metrics_env,
-          local.gateway_pool_env,
-        )
-        secrets     = concat(local.shared_secrets, local.gateway_extra_secrets_list)
-        mountPoints = local.metrics_mount_points
+        environment  = local.gateway_environment
+        secrets      = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+        mountPoints  = local.metrics_mount_points
 
         # Container-level healthCheck intentionally omitted — the wolfi
         # runtime image doesn't ship curl/wget. The ALB target group polls
@@ -354,7 +407,7 @@ resource "aws_ecs_task_definition" "gateway" {
       },
       local.gateway_proxy_overrides,
     )
-  ], local.gateway_metrics_container))
+  ], local.gateway_metrics_container, local.spend_worker_container))
 
   dynamic "volume" {
     for_each = local.metrics_enabled ? [1] : []

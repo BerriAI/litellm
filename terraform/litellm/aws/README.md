@@ -345,6 +345,39 @@ ten tasks handle 4,200,000,000 tokens in a minute, `tokens / 60` is
 `ceil(10 * 7000000 / 6000000) = 12`. Container Insights must be enabled on the
 cluster for `RunningTaskCount` to exist
 
+### Spend-worker sidecar
+
+`spend_worker_enabled = true` adds a second container to the gateway task
+that runs `python -m gateway.spend_worker` from the gateway image, and sets
+`LITELLM_SPEND_WORKER_ENABLED=true` on the gateway so its uvicorn workers
+ship spend events (SpendLogs writes, key/team/user spend updates, budget
+alerts) to the sidecar instead of running that pipeline in the request
+path. This is the Terraform counterpart of helm's `gateway.spendWorker`.
+The default (`false`) leaves the task definition exactly as before.
+
+Fargate tasks share one network namespace, so the sidecar listens on
+loopback TCP (`tcp://127.0.0.1:${spend_worker_port}`, default 4010) instead
+of the Unix socket helm uses; the proxy rejects any non-loopback address.
+The sidecar gets the same database, Redis, master-key, license, proxy
+config, and `gateway_extra_env` / `gateway_extra_secrets` values as the
+gateway container, runs with `LITELLM_JOB_ROLE=spend_worker`, and is
+non-essential with an ECS restart policy, so a sidecar crash restarts it in
+place while the gateway falls back to in-process spend tracking.
+
+```hcl
+spend_worker_enabled = true
+# spend_worker_cpu               = 512    # carved out of gateway_cpu
+# spend_worker_memory            = 2048   # MiB, carved out of gateway_memory
+# spend_worker_buffer_size       = 1000
+# spend_worker_on_unavailable    = "fallback"  # or "drop"
+# spend_worker_drain_timeout_seconds = 10
+```
+
+Both sidecar reservations must leave room for the gateway container inside
+`gateway_cpu` / `gateway_memory` (the plan fails otherwise). Service
+autoscaling keeps tracking the whole task's CPU and memory, sidecar
+included
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or

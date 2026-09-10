@@ -183,6 +183,7 @@ only where the underlying cloud forces it.
 | Extra secret-backed env          | `gateway_extra_secrets`, `backend_extra_secrets` (ARNs) | `gateway_extra_secrets`, `backend_extra_secrets` (resource IDs) |
 | Uvicorn `--workers` on gateway   | `gateway_num_workers`                                   | `gateway_num_workers`                                     |
 | OpenTelemetry v2 (opt-in)        | `otel_endpoint`, `otel_exporter`, `otel_environment_name`, `otel_capture_message_content`, `otel_headers_secret_arn` | `otel_endpoint`, `otel_exporter`, `otel_environment_name`, `otel_capture_message_content`, `otel_headers_secret` |
+| Spend-worker sidecar (opt-in)    | `spend_worker_enabled`, `spend_worker_port`, `spend_worker_cpu`, `spend_worker_memory`, `spend_worker_buffer_size`, `spend_worker_on_unavailable`, `spend_worker_drain_timeout_seconds` | same names; `spend_worker_cpu` / `spend_worker_memory` take Cloud Run strings |
 
 Each module stamps its own stack-identity tag (`litellm:stack` on AWS,
 `litellm-stack` on GCP — GCP label keys forbid colons) plus

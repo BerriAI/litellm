@@ -808,3 +808,73 @@ variable "billing_metrics_ca_cert_pem" {
   default     = ""
   sensitive   = true
 }
+
+# ---------- Spend-worker sidecar ----------
+#
+# Opt-in offload of spend tracking from the gateway's uvicorn workers to a
+# `python -m gateway.spend_worker` sidecar in the same Fargate task (helm's
+# `gateway.spendWorker`). Fargate awsvpc tasks share one network namespace,
+# so the sidecar listens on loopback TCP. Disabled (the default) adds nothing
+# to the task definition.
+
+variable "spend_worker_enabled" {
+  description = "Run the spend-worker sidecar next to the gateway container and have the gateway ship spend events to it (sets LITELLM_SPEND_WORKER_ENABLED=true on both). Autoscaling still targets the whole task's CPU/memory, sidecar included."
+  type        = bool
+  default     = false
+}
+
+variable "spend_worker_port" {
+  description = "Loopback TCP port the sidecar listens on (LITELLM_SPEND_WORKER_ADDRESS=tcp://127.0.0.1:<port>)."
+  type        = number
+  default     = 4010
+
+  validation {
+    condition     = var.spend_worker_port >= 1024 && var.spend_worker_port <= 65535 && var.spend_worker_port != 4000
+    error_message = "spend_worker_port must be in 1024-65535 and not 4000."
+  }
+}
+
+variable "spend_worker_cpu" {
+  description = "CPU units reserved for the sidecar container, carved out of gateway_cpu. Matches helm's spendWorker.resources.requests.cpu (500m)."
+  type        = number
+  default     = 512
+}
+
+variable "spend_worker_memory" {
+  description = "Hard memory limit (MiB) for the sidecar container, carved out of gateway_memory. Matches helm's spendWorker.resources.limits.memory (2Gi)."
+  type        = number
+  default     = 2048
+}
+
+variable "spend_worker_buffer_size" {
+  description = "Per-worker in-memory queue of spend events waiting to be shipped to the sidecar (LITELLM_SPEND_WORKER_BUFFER_SIZE)."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.spend_worker_buffer_size >= 1
+    error_message = "spend_worker_buffer_size must be >= 1."
+  }
+}
+
+variable "spend_worker_on_unavailable" {
+  description = "What the gateway does with spend events when the sidecar is unreachable or the buffer is full (LITELLM_SPEND_WORKER_ON_UNAVAILABLE): `fallback` runs the pipeline in-process, `drop` discards them."
+  type        = string
+  default     = "fallback"
+
+  validation {
+    condition     = contains(["fallback", "drop"], var.spend_worker_on_unavailable)
+    error_message = "spend_worker_on_unavailable must be one of: fallback, drop."
+  }
+}
+
+variable "spend_worker_drain_timeout_seconds" {
+  description = "Seconds a gateway worker waits on shutdown for its buffered spend events to reach the sidecar (LITELLM_SPEND_WORKER_DRAIN_TIMEOUT_SECONDS)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.spend_worker_drain_timeout_seconds > 0
+    error_message = "spend_worker_drain_timeout_seconds must be > 0."
+  }
+}
