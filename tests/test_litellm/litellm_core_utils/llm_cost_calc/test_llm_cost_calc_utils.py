@@ -5215,3 +5215,23 @@ def test_cached_audio_tokens_fall_back_to_cache_read_input_token_cost() -> None:
     )
     expected = 52 * 4e-6 + 64 * 5e-7 + 39 * 32e-6 + 128 * 5e-7
     assert prompt_cost == pytest.approx(expected)
+
+
+def test_cached_audio_tokens_capped_at_cached_tokens(_local_model_cost_map: None) -> None:
+    """Nested cached_tokens_details exceeding cached_tokens must not over-subtract the audio bucket."""
+    usage = Usage(
+        prompt_tokens=283,
+        completion_tokens=0,
+        total_tokens=283,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=116,
+            audio_tokens=167,
+            cached_tokens=100,
+            cached_tokens_details={"audio_tokens": 128},
+        ),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-realtime-2", usage=usage, custom_llm_provider="openai"
+    )
+    assert prompt_cost == pytest.approx(116 * 4e-6 + (167 - 100) * 32e-6 + 100 * 4e-7)
