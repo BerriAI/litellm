@@ -1633,7 +1633,7 @@ class TestEncryptedReasoningReplay:
     def test_is_encrypted_reasoning_block(self, block, expected):
         assert is_encrypted_reasoning_block(block) is expected
 
-    def test_strip_keeps_the_readable_thinking_and_drops_the_undecryptable_bytes(self):
+    def test_strip_drops_every_bridge_tagged_block_and_leaves_no_unsigned_thinking_behind(self):
         assistant_content = [
             {"type": "thinking", "thinking": "minted by Anthropic", "signature": "ErcBCkgIValid"},
             {"type": "thinking", "thinking": "packed by the bridge", "signature": encrypted_reasoning_signature("g1")},
@@ -1652,9 +1652,9 @@ class TestEncryptedReasoningReplay:
         assert messages[1]["content"] is assistant_content
         assert assistant_content == [
             {"type": "thinking", "thinking": "minted by Anthropic", "signature": "ErcBCkgIValid"},
-            {"type": "thinking", "thinking": "packed by the bridge"},
             {"type": "text", "text": "answer"},
         ]
+        assert all(block["signature"] for block in assistant_content if block["type"] == "thinking")
         assert messages[0] == {"role": "user", "content": "question"}
         assert messages[2] == {"role": "user", "content": [{"type": "text", "text": "follow-up"}]}
 
