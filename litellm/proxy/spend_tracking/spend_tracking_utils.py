@@ -16,6 +16,7 @@ from litellm.constants import (
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     UNKNOWN_MODEL_SPEND_LOG_MODEL,
@@ -333,6 +334,10 @@ def _sl_attribution_fallback(
     return standard_logging_payload.get(field) or ""
 
 
+def _looks_like_model_name(model: str) -> bool:
+    return len(model) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in model)
+
+
 def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
@@ -435,11 +440,13 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         or None
     )
     raw_model: Final = cast(str, kwargs.get("model") or "")
+    resolved_model: Final = (
+        standard_logging_payload.get("model") if standard_logging_payload is not None else None
+    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
     model_name: Final = (
         UNKNOWN_MODEL_SPEND_LOG_MODEL
-        if rejected_as_unknown_model
-        else (standard_logging_payload.get("model") if standard_logging_payload is not None else None)
-        or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+        if rejected_as_unknown_model or not _looks_like_model_name(resolved_model)
+        else resolved_model
     )
     litellm_call_id: Final = cast(
         str | None,
