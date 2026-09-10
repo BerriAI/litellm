@@ -8,7 +8,6 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 from __future__ import annotations
 
-import asyncio
 import hmac
 import inspect
 import json
@@ -1131,7 +1130,7 @@ async def bedrock_proxy_route(
     )
 
     # Add or update query parameters
-    from litellm.llms.bedrock.base_aws_llm import sign_aws_json_post
+    from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
     from litellm.llms.bedrock.chat import BedrockConverseLLM
 
     bedrock_llm: Final = BedrockConverseLLM()
@@ -1140,7 +1139,7 @@ async def bedrock_proxy_route(
         data: Final = await _json_request_body(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
-    prepped: Final = await asyncio.to_thread(
+    prepped: Final = await run_aws_signing(
         sign_aws_json_post,
         get_credentials=bedrock_llm.get_credentials,
         service_name="bedrock",
@@ -1236,10 +1235,10 @@ async def comprehend_medical_proxy_route(
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
 
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, sign_aws_json_post
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
 
     target_url: Final = f"https://comprehendmedical.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
-    prepped: Final = await asyncio.to_thread(
+    prepped: Final = await run_aws_signing(
         sign_aws_json_post,
         get_credentials=partial(BaseAWSLLM().get_credentials, aws_region_name=aws_region_name),
         service_name="comprehendmedical",

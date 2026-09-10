@@ -1,5 +1,6 @@
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 import os
 import threading
 import time
@@ -23,6 +24,7 @@ from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
     BaseAWSLLM,
     Boto3CredentialsInfo,
+    run_aws_signing,
     sign_request_off_loop_if_aws,
 )
 from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
@@ -3247,3 +3249,27 @@ async def test_sign_request_off_loop_if_aws_keeps_the_loop_serving_while_credent
 
     assert "Authorization" in signed
     assert probe.served_during_refresh is True
+
+
+async def test_run_aws_signing_leaves_the_default_executor_free_for_other_providers():
+    """A signing parked on botocore's refresh lock must not hold a default-executor thread, since every
+    other provider's async entry point hops through that same executor."""
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    signing_parked = asyncio.Event()
+    refresh_done = threading.Event()
+
+    def sign() -> str:
+        loop.call_soon_threadsafe(signing_parked.set)
+        refresh_done.wait()
+        return threading.current_thread().name
+
+    signing = asyncio.create_task(run_aws_signing(sign))
+    try:
+        await asyncio.wait_for(signing_parked.wait(), timeout=5)
+        other_provider = await asyncio.wait_for(loop.run_in_executor(None, threading.current_thread), timeout=5)
+    finally:
+        refresh_done.set()
+
+    assert other_provider.name != await signing
+    assert (await signing).startswith("aws-signing")

@@ -44,7 +44,7 @@ from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicM
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
 )
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -917,7 +917,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 source,
             )
             return BedrockGuardrailResponse()
-        credentials, aws_region_name = await asyncio.to_thread(
+        credentials, aws_region_name = await run_aws_signing(
             self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
         )
         allow_chunking: Final = not self._content_uses_contextual_grounding(content)
@@ -1180,7 +1180,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             **base_request_data,
             "content": content,
         }  # mutable-ok: outbound JSON request body
-        prepared_request: Final = await asyncio.to_thread(
+        prepared_request: Final = await run_aws_signing(
             self._prepare_request,
             credentials=credentials,
             data=bedrock_request_data,
@@ -1878,12 +1878,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return BedrockGuardrailResponse()
 
         api_key: Final[str | None] = request_data.get("api_key") if request_data else None
-        credentials, aws_region_name = await asyncio.to_thread(
+        credentials, aws_region_name = await run_aws_signing(
             self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
         )
         body: Final[dict[str, object]] = {"messages": checks_messages, "checks": self.checks}
 
-        prepared_request: Final = await asyncio.to_thread(
+        prepared_request: Final = await run_aws_signing(
             self._prepare_request,
             credentials=credentials,
             data=body,

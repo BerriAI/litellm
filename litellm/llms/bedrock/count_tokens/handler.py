@@ -4,13 +4,13 @@ AWS Bedrock CountTokens API handler.
 Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 """
 
-import asyncio
 from typing import Any, Final
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
@@ -77,7 +77,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             # Extract api_key for bearer token auth if provided
             api_key: Final = litellm_params.get("api_key", None)
             headers: Final = {"Content-Type": "application/json"}
-            signed_headers, signed_body = await asyncio.to_thread(
+            signed_headers, signed_body = await run_aws_signing(
                 self._sign_request,
                 service_name="bedrock",
                 headers=headers,
