@@ -631,3 +631,49 @@ def test_shipped_wandb_rule_keeps_reasoning_effort_on_an_unmapped_model(shipped_
         drop_params=False,
     )
     assert optional_params["reasoning_effort"] == "medium"
+
+
+def test_router_registration_does_not_shadow_shipped_rules(shipped_cost_map):
+    """Regression: Router writes every configured deployment into ``litellm.model_cost``,
+    and an exact entry ends the lookup ladder before the rules are consulted. Registering
+    an unmapped model has to carry the rule defaults forward, or configuring a model on a
+    proxy silently strips the capabilities the same model resolves to off-proxy."""
+    from litellm import Router
+
+    unmapped_wandb = "wandb/zai-org/GLM-6-Turbo"
+    unmapped_claude = "anthropic/claude-opus-9"
+    assert unmapped_wandb not in litellm.model_cost
+    assert unmapped_claude not in litellm.model_cost
+
+    Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": name, "api_key": "fake"}}
+            for name in (unmapped_wandb, unmapped_claude)
+        ]
+    )
+
+    assert unmapped_wandb in litellm.model_cost
+    assert unmapped_claude in litellm.model_cost
+    assert litellm.supports_reasoning(model="zai-org/GLM-6-Turbo", custom_llm_provider="wandb") is True
+    assert litellm.supports_reasoning(model="claude-opus-9", custom_llm_provider="anthropic") is True
+
+
+def test_deployment_model_info_beats_the_seeded_rule_defaults(shipped_cost_map):
+    """Seeding a registration from the rules is a floor, not an override: an explicit
+    model_info on the deployment still wins, so a non-reasoning model can be configured
+    under a reasoning-first namespace."""
+    from litellm import Router
+
+    model = "wandb/some-org/NoThink-1"
+    Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": model, "api_key": "fake"},
+                "model_info": {"supports_reasoning": False},
+            }
+        ]
+    )
+
+    assert litellm.model_cost[model]["supports_reasoning"] is False
+    assert litellm.supports_reasoning(model="some-org/NoThink-1", custom_llm_provider="wandb") is False
