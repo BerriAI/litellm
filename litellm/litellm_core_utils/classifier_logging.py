@@ -38,7 +38,7 @@ def is_classifier_call(call_type: str, params: Mapping[str, object]) -> bool:
 
 
 def masked_originating_request(request_kwargs: Mapping[str, object] | None) -> Mapping[str, JsonValue] | None:
-    request: Final = (request_kwargs or {}).get("proxy_server_request")
+    request: Final = request_kwargs.get("proxy_server_request") if request_kwargs is not None else None
     body: Final = request.get("body") if isinstance(request, Mapping) else None
     if not isinstance(body, Mapping):
         return None
