@@ -795,12 +795,11 @@ async def create_a2a_client(
     if extra_headers:
         verbose_proxy_logger.debug("A2A client created with extra_headers=%s", list(extra_headers.keys()))
 
-    agent_card: "AgentCard | None" = None
+    agent_card: AgentCard | None = None
 
     if agent_card_params:
-        from pydantic import ValidationError as _ValidationError
-
         from a2a.compat.v0_3.types import AgentCard as _AgentCard
+        from pydantic import ValidationError as _ValidationError
 
         try:
             agent_card = normalize_agent_card_interfaces(_AgentCard.model_validate(agent_card_params))
