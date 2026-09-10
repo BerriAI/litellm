@@ -1795,6 +1795,30 @@ async def test_async_increment_tokens_fallback_behavior():
     ), "Fallback method should be called when Lua script is not available"
 
 
+@pytest.mark.asyncio
+async def test_async_increment_tokens_open_breaker_falls_back_without_warning(caplog):
+    """An open Redis breaker fast-fails the Lua script on every request, so it must fall
+    back to the regular pipeline quietly instead of emitting a WARNING per request."""
+    from unittest.mock import AsyncMock
+
+    from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    handler.token_increment_script = object()
+    handler._execute_token_increment_script = AsyncMock(
+        side_effect=RedisCircuitBreakerOpenError("Redis circuit breaker is open, skipping run_script")
+    )
+    fallback = AsyncMock()
+    handler.internal_usage_cache.dual_cache.async_increment_cache_pipeline = fallback
+    pipeline_operations = [RedisPipelineIncrementOperation(key="test_breaker_key", increment_value=10.0, ttl=60)]
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        await handler.async_increment_tokens_with_ttl_preservation(pipeline_operations=pipeline_operations)
+
+    assert fallback.await_count == 1
+    assert [r.levelno for r in caplog.records if "TTL preservation failed" in r.getMessage()] == [logging.DEBUG]
+
+
 # Redis Cluster Compatibility Tests
 def test_group_keys_by_hash_tag_regular_redis():
     """
