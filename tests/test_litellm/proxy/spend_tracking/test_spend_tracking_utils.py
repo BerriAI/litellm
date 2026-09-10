@@ -1,8 +1,8 @@
 import asyncio
 import datetime
 import json
-from datetime import timezone
 from collections.abc import Mapping
+from datetime import timezone
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,12 +15,15 @@ from litellm.constants import (
     LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    MAX_SPEND_LOG_MODEL_NAME_LENGTH,
     REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
+    UNKNOWN_MODEL_SPEND_LOG_MODEL,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
@@ -39,7 +42,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_logging_payload,
     get_spend_logs_id,
 )
-from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.utils import hash_token
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
@@ -944,6 +946,88 @@ def test_safe_dumps_complex_metadata_like_object():
     parsed = json.loads(result)
     assert parsed["user_api_key"] == "test-key"
     assert parsed["model"] == "gpt-4"
+
+
+_RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+
+
+_BEDROCK_INFERENCE_PROFILE_ARN: Final = (
+    "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-sonnet-4-5"
+)
+_OVERLONG_MODEL: Final = "m" * (MAX_SPEND_LOG_MODEL_NAME_LENGTH + 1)
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "failure", "expected_model"),
+    [
+        (
+            _RAW_MODEL_WITH_PROMPT,
+            ProxyModelNotFoundError(route="acompletion", model_name=_RAW_MODEL_WITH_PROMPT),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+        ),
+        (
+            _RAW_MODEL_WITH_PROMPT,
+            ValueError("Upstream passthrough request failed with status 404"),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+        ),
+        (_OVERLONG_MODEL, ValueError("provider timed out"), UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        (
+            "gpt-5.2",
+            ProxyModelNotFoundError(route="acompletion", model_name="gpt-5.2"),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL,
+        ),
+        ("gpt-5.2", ValueError("provider timed out"), "gpt-5.2"),
+        (_BEDROCK_INFERENCE_PROFILE_ARN, ValueError("provider timed out"), _BEDROCK_INFERENCE_PROFILE_ARN),
+    ],
+)
+def test_get_logging_payload_replaces_rejected_or_prompt_shaped_models_with_the_placeholder(
+    requested_model: str, failure: Exception, expected_model: str
+):
+    kwargs: Final = {
+        "model": requested_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "status": "failure"}},
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=failure,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == expected_model
+
+
+@pytest.mark.parametrize(
+    ("metadata", "response_obj"),
+    [
+        ({"user_api_key": "sk-test"}, litellm.ModelResponse(id="chatcmpl-test", choices=[])),
+        (
+            {"user_api_key": "sk-test", "model_group": "team alias", "status": "failure"},
+            ValueError("provider timed out"),
+        ),
+    ],
+)
+def test_get_logging_payload_keeps_a_whitespace_model_name_on_success_or_a_routed_failure(
+    metadata: dict[str, str], response_obj: litellm.ModelResponse | Exception
+):
+    kwargs: Final = {
+        "model": _RAW_MODEL_WITH_PROMPT,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": metadata},
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == _RAW_MODEL_WITH_PROMPT
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
