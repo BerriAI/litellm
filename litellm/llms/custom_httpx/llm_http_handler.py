@@ -579,7 +579,7 @@ class BaseLLMHTTPHandler:
             data: dict[str, object],  # mutable-ok: async_completion takes dict
             signed_headers: dict[str, object],  # mutable-ok: async_completion takes dict
             signed_json_body: bytes | None,
-        ):
+        ) -> Coroutine[object, object, ModelResponse | CustomStreamWrapper]:
             async_client: Final = client if isinstance(client, AsyncHTTPHandler) else None
             if stream is True:
                 return self.acompletion_stream_function(
@@ -626,7 +626,7 @@ class BaseLLMHTTPHandler:
 
         if acompletion is True and provider_config.uses_async_transform_request:
 
-            async def transform_then_dispatch():
+            async def transform_then_dispatch() -> ModelResponse | CustomStreamWrapper:
                 transformed: Final = cast(  # cast-ok: async_transform_request is declared as a bare dict
                     "dict[str, object]",
                     await provider_config.async_transform_request(
