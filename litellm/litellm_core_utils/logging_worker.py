@@ -55,8 +55,8 @@ class LoggingWorker:
         self.max_queue_size = max_queue_size
         self.concurrency = concurrency
         self.error_traceback_interval = error_traceback_interval
-        self._last_error_traceback_at: float | None = None
-        self._errors_since_traceback: int = 0
+        self._last_error_traceback_at: dict[type[BaseException], float] = {}
+        self._errors_since_traceback: dict[type[BaseException], int] = {}
         self._queue: asyncio.Queue[LoggingTask] | None = None
         self._worker_task: asyncio.Task | None = None
         self._running_tasks: set[asyncio.Task] = set()
@@ -178,19 +178,21 @@ class LoggingWorker:
             sem.release()
 
     def _log_task_error(self, error: Exception) -> None:
-        """One traceback per interval: a stalled backend fails every in-flight task at once."""
+        """One traceback per error type per interval: a stalled backend fails every in-flight task at once."""
         now: Final = time.monotonic()
-        last_traceback_at: Final = self._last_error_traceback_at
+        error_type: Final = type(error)
+        last_traceback_at: Final = self._last_error_traceback_at.get(error_type)
         if last_traceback_at is not None and now - last_traceback_at < self.error_traceback_interval:
-            self._errors_since_traceback += 1
+            self._errors_since_traceback[error_type] = self._errors_since_traceback.get(error_type, 0) + 1
             return
         verbose_logger.exception(
-            "LoggingWorker error (%d more suppressed since the last traceback): %r",
-            self._errors_since_traceback,
+            "LoggingWorker error (%d more %s suppressed since the last traceback): %r",
+            self._errors_since_traceback.get(error_type, 0),
+            error_type.__name__,
             error,
         )
-        self._last_error_traceback_at = now
-        self._errors_since_traceback = 0
+        self._last_error_traceback_at[error_type] = now
+        self._errors_since_traceback[error_type] = 0
 
     async def _worker_loop(self) -> None:
         """Main worker loop that gets tasks and schedules them to run concurrently."""

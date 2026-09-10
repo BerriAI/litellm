@@ -568,5 +568,33 @@ class TestLoggingWorker:
 
         messages = [r.getMessage() for r in caplog.records if "LoggingWorker error" in r.getMessage()]
         assert len(messages) == 2, messages
-        assert "(0 more suppressed" in messages[0]
-        assert "(4 more suppressed" in messages[1]
+        assert "(0 more TimeoutError suppressed" in messages[0]
+        assert "(4 more TimeoutError suppressed" in messages[1]
+
+    @pytest.mark.asyncio
+    async def test_traceback_throttle_is_per_error_type(self, caplog):
+        """A timeout burst from one stalled backend must not hide the first traceback of a different
+        failure, otherwise a misconfigured callback stays invisible for the whole interval.
+        """
+        caplog.set_level(logging.DEBUG, logger="LiteLLM")
+        worker = LoggingWorker(timeout=0.05, max_queue_size=200, concurrency=100, error_traceback_interval=60.0)
+        worker.start()
+
+        async def stalled_callback():
+            await asyncio.sleep(10)
+
+        async def misconfigured_callback():
+            raise KeyError("missing api key")
+
+        for _ in range(20):
+            worker.enqueue(stalled_callback())
+        await asyncio.sleep(0.2)
+        for _ in range(3):
+            worker.enqueue(misconfigured_callback())
+        await asyncio.sleep(0.2)
+        await worker.stop()
+
+        messages = [r.getMessage() for r in caplog.records if "LoggingWorker error" in r.getMessage()]
+        assert len(messages) == 2, messages
+        assert "TimeoutError" in messages[0]
+        assert "KeyError" in messages[1] and "missing api key" in messages[1]
