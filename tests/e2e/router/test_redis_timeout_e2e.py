@@ -3,12 +3,12 @@
 Runs only against a proxy booted from tests/e2e/gateway/redis_timeout_ci_config.yml, which
 points cache_params at a real Redis with socket_timeout 0.001. The test holds that Redis in
 CLIENT PAUSE WRITE for its duration, so every write the proxy sends, the spend counter increment
-included, hangs past the timeout, and it proves the degradation was real from the breaker metrics on /metrics: fresh timeouts, a breaker transition,
-or an already-open breaker rejecting every call, which is the state a customer's worker sits in. The test registers two deployments through /model/new: a primary whose api_base is a closed port
-and a backup that answers with a mock. Each request fails the primary, retries, falls back and succeeds, so it carries retry breadcrumbs; its cost
-tracking then fails on the spend counter increment and stringifies the request metadata into a
-failed-tracking alert. On v1.100.0 that string doubled per request until the worker hung
-(LIT-6780). Deselected unless E2E_REDIS_TIMEOUT is set, since it needs that dedicated proxy.
+included, hangs past the timeout. For each endpoint it registers two deployments through
+/model/new: a primary whose api_base is a closed port and a backup that answers with a mock. Each request fails the primary,
+retries, falls back and succeeds, so it carries retry breadcrumbs; its cost tracking then fails on
+the spend counter increment and stringifies the request metadata into a failed-tracking alert. On
+v1.100.0 that string doubled per request until the worker hung (LIT-6780). Deselected unless
+E2E_REDIS_TIMEOUT is set, since it needs that dedicated proxy.
 """
 
 from __future__ import annotations
@@ -26,25 +26,29 @@ from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
 from e2e_http import NoBody, Result, Success
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody, LiteLLMParamsBody
+from models import ChatBody, ChatMessage, ChatResponse, EmbedBody, KeyGenerateBody, LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 
 pytestmark = [pytest.mark.e2e, pytest.mark.redis_timeout]
 
-PRIMARY_MODEL: Final = "redis-timeout-primary"
-BACKUP_MODEL: Final = "redis-timeout-backup"
-BACKING_MODEL: Final = "openai/gpt-5-mini"
-CLOSED_PORT_API_BASE: Final = "http://127.0.0.1:1"
 REQUESTS: Final = 20
 MAX_SECONDS_PER_REQUEST: Final = 10.0
 MAX_LATENCY_GROWTH_RATIO: Final = 3.0
 MAX_LIVELINESS_SECONDS: Final = 2.0
+MAX_RSS_GROWTH_BYTES: Final = 200 * 1024 * 1024
 REDIS_PAUSE_MS: Final = 600_000
 BREAKER_FAILURE_THRESHOLD: Final = 5
+CLOSED_PORT_API_BASE: Final = "http://127.0.0.1:1"
 TIMEOUT_FAILURES_RE: Final = re.compile(
     r'^litellm_redis_circuit_breaker_failures_total\{failure_class="timeout"\} ([0-9.e+]+)$', re.M
 )
+BREAKER_OPEN_RE: Final = re.compile(r'^litellm_redis_circuit_breaker_state\{state="open"\} ([0-9.e+]+)$', re.M)
+BREAKER_TRANSITIONS_RE: Final = re.compile(
+    r'^litellm_redis_circuit_breaker_transitions_total\{state="[a-z_]+"\} ([0-9.e+]+)$', re.M
+)
+FALLBACKS_RE: Final = re.compile(r"^litellm_deployment_successful_fallbacks_total\{[^}]*\} ([0-9.e+]+)$", re.M)
+RSS_RE: Final = re.compile(r"^process_resident_memory_bytes ([0-9.e+]+)$", re.M)
 
 
 class ResponsesBody(BaseModel):
@@ -59,48 +63,95 @@ class ResponsesObject(BaseModel):
     output: list[object] = []
 
 
+class EmbeddingsObject(BaseModel):
+    model: str | None = None
+    data: list[object] = []
+
+
 @dataclass(frozen=True, slots=True)
 class Endpoint:
+    """One endpoint's deployments and request shape."""
+
     name: str
-    send: Callable[[ProxyClient, str, str], Result[BaseModel]]
+    primary: str
+    backup: str
+    primary_params: LiteLLMParamsBody
+    backup_params: LiteLLMParamsBody
+    send: Callable[[ProxyClient, str, str, str], Result[BaseModel]]
     served: Callable[[BaseModel], bool]
 
 
-def _send_chat(proxy: ProxyClient, key: str, marker: str) -> Result[BaseModel]:
+def _send_chat(proxy: ProxyClient, key: str, model: str, marker: str) -> Result[BaseModel]:
     return proxy.transport.post(
         "/chat/completions",
         headers=proxy.transport.bearer(key),
-        json=ChatBody(model=PRIMARY_MODEL, messages=[ChatMessage(role="user", content=marker)], max_tokens=5),
+        json=ChatBody(model=model, messages=[ChatMessage(role="user", content=marker)], max_tokens=5),
         response_type=ChatResponse,
         timeout=MAX_SECONDS_PER_REQUEST,
     )
 
 
-def _send_responses(proxy: ProxyClient, key: str, marker: str) -> Result[BaseModel]:
+def _send_responses(proxy: ProxyClient, key: str, model: str, marker: str) -> Result[BaseModel]:
     return proxy.transport.post(
         "/v1/responses",
         headers=proxy.transport.bearer(key),
-        json=ResponsesBody(model=PRIMARY_MODEL, input=marker),
+        json=ResponsesBody(model=model, input=marker),
         response_type=ResponsesObject,
         timeout=MAX_SECONDS_PER_REQUEST,
     )
 
 
+def _send_embeddings(proxy: ProxyClient, key: str, model: str, marker: str) -> Result[BaseModel]:
+    return proxy.transport.post(
+        "/embeddings",
+        headers=proxy.transport.bearer(key),
+        json=EmbedBody(model=model, input=marker),
+        response_type=EmbeddingsObject,
+        timeout=MAX_SECONDS_PER_REQUEST,
+    )
+
+
+_CHAT_PRIMARY: Final = LiteLLMParamsBody(
+    model="openai/gpt-5-mini", api_key="sk-redis-timeout-primary-not-used", api_base=CLOSED_PORT_API_BASE
+)
+_CHAT_BACKUP: Final = LiteLLMParamsBody(
+    model="openai/gpt-5-nano", api_key="sk-redis-timeout-backup-not-used", mock_response="ok"
+)
+_EMBED_PRIMARY: Final = LiteLLMParamsBody(
+    model="openai/text-embedding-3-small", api_key="sk-redis-timeout-primary-not-used", api_base=CLOSED_PORT_API_BASE
+)
+_EMBED_BACKUP: Final = LiteLLMParamsBody(
+    model="openai/text-embedding-3-large", api_key="sk-redis-timeout-backup-not-used", mock_response=[0.1, 0.2, 0.3]
+)
+
 ENDPOINTS: Final = (
     Endpoint(
         name="chat_completions",
+        primary="redis-timeout-primary",
+        backup="redis-timeout-backup",
+        primary_params=_CHAT_PRIMARY,
+        backup_params=_CHAT_BACKUP,
         send=_send_chat,
         served=lambda data: isinstance(data, ChatResponse) and bool(data.choices),
     ),
     Endpoint(
         name="responses",
+        primary="redis-timeout-primary",
+        backup="redis-timeout-backup",
+        primary_params=_CHAT_PRIMARY,
+        backup_params=_CHAT_BACKUP,
         send=_send_responses,
         served=lambda data: isinstance(data, ResponsesObject) and bool(data.output),
     ),
-)
-BREAKER_OPEN_RE: Final = re.compile(r'^litellm_redis_circuit_breaker_state\{state="open"\} ([0-9.e+]+)$', re.M)
-BREAKER_TRANSITIONS_RE: Final = re.compile(
-    r'^litellm_redis_circuit_breaker_transitions_total\{state="[a-z_]+"\} ([0-9.e+]+)$', re.M
+    Endpoint(
+        name="embeddings",
+        primary="redis-timeout-embed-primary",
+        backup="redis-timeout-embed-backup",
+        primary_params=_EMBED_PRIMARY,
+        backup_params=_EMBED_BACKUP,
+        send=_send_embeddings,
+        served=lambda data: isinstance(data, EmbeddingsObject) and bool(data.data),
+    ),
 )
 
 
@@ -126,48 +177,51 @@ def _metric(proxy: ProxyClient, pattern: re.Pattern[str]) -> float:
     return sum(float(match.group(1)) for match in pattern.finditer(body))
 
 
+def _rss_bytes(proxy: ProxyClient) -> float | None:
+    """The proxy's resident memory from the Prometheus process collector, which reads /proc and
+    so reports on Linux only; None where the metric is absent."""
+    body = proxy.probe("/metrics", params=NoBody()).body
+    match = RSS_RE.search(body)
+    return float(match.group(1)) if match else None
+
+
 class TestRedisTimeout:
     @pytest.mark.parametrize("endpoint", ENDPOINTS, ids=[endpoint.name for endpoint in ENDPOINTS])
     @pytest.mark.covers(
         "reliability.circuit_breaker.redis_timeout.stays_responsive",
-        exercised_on=["chat_completions", "responses"],
+        exercised_on=["chat_completions", "responses", "embeddings"],
     )
     def test_retries_under_redis_timeouts_keep_answering(
         self, client: ComplexityRouterClient, resources: ResourceManager, endpoint: Endpoint, paused_redis: None
     ) -> None:
         proxy = client.proxy
-        primary_id = proxy.create_model(
-            PRIMARY_MODEL,
-            LiteLLMParamsBody(
-                model=BACKING_MODEL, api_key="sk-redis-timeout-primary-not-used", api_base=CLOSED_PORT_API_BASE
-            ),
-        )
+        primary_id = proxy.create_model(endpoint.primary, endpoint.primary_params)
         resources.defer(lambda: proxy.delete_model(primary_id))
-        backup_id = proxy.create_model(
-            BACKUP_MODEL,
-            LiteLLMParamsBody(model=BACKING_MODEL, api_key="sk-redis-timeout-backup-not-used", mock_response="ok"),
-        )
+        backup_id = proxy.create_model(endpoint.backup, endpoint.backup_params)
         resources.defer(lambda: proxy.delete_model(backup_id))
-        timeouts_before = _metric(proxy, TIMEOUT_FAILURES_RE)
-        transitions_before = _metric(proxy, BREAKER_TRANSITIONS_RE)
         key = proxy.generate_key(
             KeyGenerateBody(
-                models=[PRIMARY_MODEL, BACKUP_MODEL], key_alias=f"e2e-redis-timeout-{endpoint.name}-{unique_marker()}"
+                models=[endpoint.primary, endpoint.backup],
+                key_alias=f"e2e-redis-timeout-{endpoint.name}-{unique_marker()}",
             )
         )
         resources.defer(lambda: proxy.delete_key(key))
+        timeouts_before = _metric(proxy, TIMEOUT_FAILURES_RE)
+        transitions_before = _metric(proxy, BREAKER_TRANSITIONS_RE)
+        fallbacks_before = _metric(proxy, FALLBACKS_RE)
+        rss_before = _rss_bytes(proxy)
 
         latencies: list[float] = []
         for request_number in range(1, REQUESTS + 1):
             started = time.monotonic()
-            result = endpoint.send(proxy, key, f"redis timeout {unique_marker()} {request_number}")
+            result = endpoint.send(proxy, key, endpoint.primary, f"redis timeout {unique_marker()} {request_number}")
             elapsed = time.monotonic() - started
             assert isinstance(result, Success), (
                 f"{endpoint.name} request {request_number} failed after {elapsed:.1f}s with Redis timing out: {result}; "
                 f"earlier requests took {[round(seconds, 2) for seconds in latencies]}"
             )
             assert endpoint.served(result.data), (
-                f"{endpoint.name} request {request_number}: fallback to {BACKUP_MODEL} returned no output"
+                f"{endpoint.name} request {request_number}: fallback to {endpoint.backup} returned no output"
             )
             assert elapsed < MAX_SECONDS_PER_REQUEST, (
                 f"{endpoint.name} request {request_number} took {elapsed:.1f}s with Redis timing out; "
@@ -191,6 +245,20 @@ class TestRedisTimeout:
             f"/health/liveliness took {liveliness_seconds:.1f}s after the loop; the worker is stalled"
         )
 
+        if rss_before is not None:
+            rss_after = _rss_bytes(proxy)
+            assert rss_after is not None
+            assert rss_after - rss_before <= MAX_RSS_GROWTH_BYTES, (
+                f"proxy RSS grew {(rss_after - rss_before) / 2**20:.0f} MB across {REQUESTS} {endpoint.name} requests "
+                "with Redis timing out; on v1.100.0 this path grew by gigabytes"
+            )
+
+        fallbacks = _metric(proxy, FALLBACKS_RE) - fallbacks_before
+        assert fallbacks >= REQUESTS, (
+            f"only {fallbacks:.0f} successful fallbacks were counted across {REQUESTS} {endpoint.name} requests; "
+            "the closed-port primary did not fail every request, so the retry path was not exercised"
+        )
+
         timeouts_total = _metric(proxy, TIMEOUT_FAILURES_RE)
         timeouts = timeouts_total - timeouts_before
         transitions = _metric(proxy, BREAKER_TRANSITIONS_RE) - transitions_before
@@ -210,3 +278,5 @@ class TestRedisTimeout:
             f"only {len(rows)} of {REQUESTS} {endpoint.name} requests reached the spend log; "
             "a Redis outage must not lose spend rows"
         )
+        failed_rows = [row.status for row in rows if row.status not in (None, "success")]
+        assert not failed_rows, f"{len(failed_rows)} {endpoint.name} spend rows are not successes: {failed_rows[:3]}"
