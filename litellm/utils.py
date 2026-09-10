@@ -2293,15 +2293,7 @@ def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: st
     dict: A dictionary with the tokenizer and its type.
     """
 
-    try:
-        tokenizer = Tokenizer.from_pretrained(
-            identifier,
-            revision=revision,
-            auth_token=auth_token,
-        )
-    except Exception as e:
-        verbose_logger.error("Error creating pretrained tokenizer: %s. Defaulting to version without 'auth_token'.", e)
-        tokenizer = Tokenizer.from_pretrained(identifier, revision=revision)
+    tokenizer: Final = Tokenizer.from_pretrained(identifier, revision=revision, token=auth_token)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 

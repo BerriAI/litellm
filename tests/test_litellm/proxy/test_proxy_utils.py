@@ -1824,6 +1824,44 @@ def test_a_dispatched_failure_lifts_the_four_fields_the_spend_log_needs():
 
 
 @pytest.mark.asyncio
+async def test_a_dispatched_failure_is_counted_off_the_event_loop():
+    from unittest.mock import AsyncMock, patch
+
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("claude-fable-5")
+    request_data = {
+        "litellm_logging_obj": _LoggingObj(
+            {
+                "first_api_call_start_time": 1700000000.0,
+                "call_type": "acompletion",
+                "model": "claude-fable-5",
+                "messages": [{"role": "user", "content": text * 100}],
+            }
+        ),
+        "metadata": {},
+    }
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alert_types = []
+    with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+        _, took, lags = await timed_with_loop_lags(
+            lambda: proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        )
+
+    assert request_data["combined_usage_object"].prompt_tokens > 0
+    assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.asyncio
 async def test_proxy_only_error_expected_4xx_skips_traceback_for_both_handlers(monkeypatch):
     """Regression for LIT-6043: an expected 4xx must not format a traceback for
     either the async or the threaded sync failure handler."""
