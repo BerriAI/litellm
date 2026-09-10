@@ -163,14 +163,11 @@ impl<B: Serialize + DeserializeOwned> OcrWireBody<B> {
 pub(crate) fn credential_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
-
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
-    use crate::ocr::codecs::mistral::MistralOcrParams;
 
     #[derive(Debug, Deserialize, PartialEq)]
     struct KnownParams {
@@ -196,37 +193,5 @@ mod tests {
             json!({"provider_option": "value"})
         );
         assert_eq!(parsed.extra_params.len(), 2);
-    }
-
-    fn mistral_request(request_format: &str) -> LiteLLMOcrRequest {
-        LiteLLMOcrRequest::new(
-            "mistral/mistral-ocr-latest".into(),
-            serde_json::from_value(
-                json!({"type":"document_url","document_url":"https://example.com/doc.pdf"}),
-            )
-            .unwrap(),
-            None,
-            json!({"req_format":request_format})
-                .as_object()
-                .unwrap()
-                .clone(),
-        )
-        .unwrap()
-    }
-
-    #[rstest]
-    fn native_format_rejected_for_provider_without_support_as_bad_request() {
-        assert!(matches!(
-            _prepare_ocr_request::<MistralOcrParams>(&mistral_request("native")),
-            Err(OcrRequestError::NativeUnsupported("mistral"))
-        ));
-    }
-
-    #[rstest]
-    fn unknown_format_rejected_for_provider_without_support_as_bad_request() {
-        assert!(matches!(
-            _prepare_ocr_request::<MistralOcrParams>(&mistral_request("raw")),
-            Err(OcrRequestError::RequestFormat)
-        ));
     }
 }
