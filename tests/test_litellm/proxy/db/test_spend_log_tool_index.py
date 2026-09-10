@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
+from litellm.proxy.db import spend_log_tool_index
 from litellm.proxy.db.spend_log_tool_index import (
     ToolUsageTransaction,
     build_tool_usage_transaction,
@@ -281,7 +281,8 @@ class TestFlushToolUsageTransactions:
         assert data["update"]["request_count"] == {"increment": 2}
 
     @pytest.mark.asyncio
-    async def test_index_rows_are_written_in_bounded_statements_outside_the_rollup_transaction(self):
+    async def test_index_rows_are_written_in_bounded_statements_outside_the_rollup_transaction(self, monkeypatch):
+        monkeypatch.setattr(spend_log_tool_index, "SPEND_LOG_WRITE_BATCH_MAX_ROWS", 100)
         prisma, batcher = _prisma_with_batcher()
         tool_names = tuple(f"tool_{i}" for i in range(50))
         transactions = [_transaction(f"r{i}", tool_names=tool_names) for i in range(5)]
@@ -289,7 +290,6 @@ class TestFlushToolUsageTransactions:
 
         statements = prisma.db.litellm_spendlogtoolindex.create_many.call_args_list
         assert [len(call.kwargs["data"]) for call in statements] == [100, 100, 50]
-        assert all(len(call.kwargs["data"]) <= SPEND_LOG_WRITE_BATCH_MAX_ROWS for call in statements)
         assert all(call.kwargs["skip_duplicates"] is True for call in statements)
         assert _index_rows_written(prisma) == [
             (txn.request_id, tool_name) for txn in transactions for tool_name in tool_names

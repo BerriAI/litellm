@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
+from litellm.proxy.guardrails import usage_tracking
 from litellm.proxy.guardrails.usage_tracking import (
     _MAX_PENDING_ROWS,
     PendingRollups,
@@ -535,11 +535,12 @@ def _index_rows_written(prisma: MagicMock) -> list[tuple[str, str]]:
 
 
 @pytest.mark.asyncio
-async def test_index_rows_are_written_in_row_bounded_statements():
+async def test_index_rows_are_written_in_row_bounded_statements(monkeypatch):
     """
     LIT-5931: the drain caps logs, not logs x guardrails, so a fan-out must be
     split into statements the query engine can afford instead of one create_many.
     """
+    monkeypatch.setattr(usage_tracking, "SPEND_LOG_WRITE_BATCH_MAX_ROWS", 100)
     prisma = _prisma()
     guardrail_ids = tuple(f"guard-{i}" for i in range(50))
     logs = [_fan_out_payload(f"r{i}", guardrail_ids) for i in range(5)]
@@ -548,13 +549,13 @@ async def test_index_rows_are_written_in_row_bounded_statements():
 
     statements = prisma.db.litellm_spendlogguardrailindex.create_many.call_args_list
     assert [len(call.kwargs["data"]) for call in statements] == [100, 100, 50]
-    assert all(len(call.kwargs["data"]) <= SPEND_LOG_WRITE_BATCH_MAX_ROWS for call in statements)
     assert all(call.kwargs["skip_duplicates"] is True for call in statements)
     assert _index_rows_written(prisma) == [(f"r{i}", gid) for i in range(5) for gid in guardrail_ids]
 
 
 @pytest.mark.asyncio
-async def test_one_failing_index_statement_does_not_drop_the_others_or_the_rollup():
+async def test_one_failing_index_statement_does_not_drop_the_others_or_the_rollup(monkeypatch):
+    monkeypatch.setattr(usage_tracking, "SPEND_LOG_WRITE_BATCH_MAX_ROWS", 100)
     prisma = _prisma()
     prisma.db.litellm_spendlogguardrailindex.create_many.side_effect = [None, httpx.ReadTimeout("ambiguous"), None]
     guardrail_ids = tuple(f"guard-{i}" for i in range(50))
