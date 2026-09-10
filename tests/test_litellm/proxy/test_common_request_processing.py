@@ -614,6 +614,64 @@ class TestProxyBaseLLMRequestProcessing:
         proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_suppress_version(self):
+        """Test suppressing x-litellm-version header via global and env config."""
+        import litellm
+
+        mock_request = MagicMock()
+        mock_request.headers = {}
+
+        class _FakeGenaiResponse:
+            _hidden_params = {
+                "model_id": "deployment-model-id",
+                "cache_key": "ck-test",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "response_cost": 0.001,
+            }
+
+        mock_user = MagicMock()
+        mock_user.spend = 0.0
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.allowed_model_region = None
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-id-test"
+        logging_obj.model_id = "deployment-model-id"
+        logging_obj.model_call_details = {"litellm_call_id": "call-id-test"}
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock()
+
+        try:
+            litellm.suppress_version_header = True
+            headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+                response=_FakeGenaiResponse(),
+                request_data={"model": "gemini/gemini-1.5-flash"},
+                request=mock_request,
+                user_api_key_dict=mock_user,
+                logging_obj=logging_obj,
+                version="9.9.9",
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            assert "x-litellm-version" not in headers
+        finally:
+            litellm.suppress_version_header = False
+
+        headers_kw = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeGenaiResponse(),
+            request_data={"model": "gemini/gemini-1.5-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="9.9.9",
+            proxy_logging_obj=proxy_logging_obj,
+            suppress_version_header=True,
+        )
+        assert "x-litellm-version" not in headers_kw
+
+    @pytest.mark.asyncio
     async def test_build_litellm_proxy_success_headers_streaming_style_iterator(self):
         """AsyncGoogleGenAIGenerateContentStreamingIterator sets _hidden_params at init; headers must propagate."""
 
