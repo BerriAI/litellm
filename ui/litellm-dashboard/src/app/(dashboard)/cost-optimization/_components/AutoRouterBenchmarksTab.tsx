@@ -30,7 +30,7 @@ import {
   type BenchmarkView,
   type BucketRow,
 } from "./autoRouterBenchmarks";
-import { formatRangeLabel, usd } from "./costOptimizationUtils";
+import { classificationRatePer1kTurns, formatRangeLabel, usd } from "./costOptimizationUtils";
 import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
@@ -52,10 +52,22 @@ const Metric: React.FC<{ label: string; value: string; hint?: string }> = ({ lab
   </Card>
 );
 
-const SpendRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
-  <dl className="flex items-baseline justify-between gap-6 py-3">
-    <dt className="text-sm text-muted-foreground">{label}</dt>
-    <dd className="text-base font-semibold tabular-nums text-foreground">{value}</dd>
+const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?: boolean }> = ({
+  label,
+  value,
+  hint,
+  subdued,
+}) => (
+  <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-2">
+    <dt className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-sm text-muted-foreground">
+      {label}
+      {hint && <span className="text-xs">{hint}</span>}
+    </dt>
+    <dd
+      className={`min-w-0 break-all tabular-nums ${subdued ? "text-sm font-normal text-muted-foreground" : "text-base font-semibold text-foreground"}`}
+    >
+      {value}
+    </dd>
   </dl>
 );
 
@@ -70,7 +82,9 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
             Total estimated savings
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
-            <p className="text-6xl font-semibold tracking-tight text-foreground">{usd(stats.saved_spend)}</p>
+            <p className="min-w-0 break-all text-center text-4xl font-semibold tracking-tight text-foreground xl:text-6xl">
+              {usd(stats.saved_spend)}
+            </p>
             <Badge
               variant="secondary"
               className={`h-6 px-2.5 text-sm ${cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
@@ -83,6 +97,28 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
 
         <div className="flex flex-col justify-center border-t p-6 md:border-t-0 md:border-l">
           <SpendRow label="Actual auto-router spend" value={usd(stats.spend)} />
+          <div className="mb-3 border-l-2 pl-4">
+            <SpendRow
+              subdued
+              label="LLM spend"
+              value={stats.classifier_cost == null ? "Unavailable" : usd(stats.spend - stats.classifier_cost)}
+            />
+            <SpendRow
+              subdued
+              label="Classification cost"
+              value={stats.classifier_cost == null ? "Unavailable" : usd(stats.classifier_cost)}
+              hint={
+                stats.classifier_cost == null
+                  ? undefined
+                  : classificationRatePer1kTurns(stats.classifier_cost, stats.turns)
+              }
+            />
+          </div>
+          {stats.classifier_cost == null && (
+            <p className="mb-3 text-xs text-muted-foreground">
+              Breakdown unavailable because some usage predates classification-cost tracking.
+            </p>
+          )}
           <Separator />
           <SpendRow label="Estimated spend at highest-tier model" value={usd(stats.baseline_spend)} />
         </div>
@@ -254,8 +290,10 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
       <p className="text-xs text-muted-foreground">
         Compares your actual routed spend with the estimated cost of using only the most expensive model configured in
         the auto-router. It accounts for both the cache savings from staying on one model and the added cache costs from
-        switching models. The range counts whole sessions that overlap it, so totals can differ slightly from the
-        Overall tab, which buckets savings by UTC day.
+        switching models. Savings are net of recorded LLM classification cost, which is included in actual spend.
+        Classification cost per 1K turns is averaged over all auto-router turns, including those that skip
+        classification. The range counts whole sessions that overlap it, so totals can differ slightly from the Overall
+        tab, which buckets savings by UTC day.
       </p>
 
       <div className="space-y-4">
@@ -273,12 +311,13 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
 interface AutoRouterBenchmarksTabProps {
   accessToken: string | null;
-  activity: DailyActivityRange;
+  activity: Pick<DailyActivityRange, "dateValue" | "onDateChange">;
+  apiKey?: string;
 }
 
-const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
+export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity, apiKey }) => {
   const { dateValue, onDateChange } = activity;
-  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue);
+  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue, apiKey);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
   const { data: autoRouters } = useAutoRouters();
 
@@ -347,7 +386,7 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
       </TabsList>
 
       <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
-        <UsageView accessToken={accessToken} activity={activity} />
+        <AutoRouterUsageView accessToken={accessToken} activity={activity} />
       </TabsContent>
       <TabsContent value="shadow-evals" keepMounted={visitedTabs.includes("shadow-evals")}>
         <ShadowEvalSection />
