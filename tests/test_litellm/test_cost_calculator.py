@@ -18,6 +18,7 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     ModelInfo,
@@ -126,6 +127,22 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     )
 
     assert cost > 0, "Cost should be calculated using response model"
+
+
+def test_jina_rerank_bills_total_tokens_at_input_rate_only(_local_model_cost_map):
+    response: Final = RerankResponse(
+        id="rerank-1",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": {"total_tokens": 1000}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="jina_ai/jina-reranker-v2-base-multilingual",
+        call_type="rerank",
+    )
+
+    assert cost == pytest.approx(1000 * 5e-08)
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
@@ -3734,6 +3751,112 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown(_local_model_cost_ma
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(3114 * 2.5e-06)
     assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
+
+
+def test_completion_cost_logs_the_rates_it_billed_at(monkeypatch):
+    """A caller reporting the cost lines beside their per-token rates reads both off this one call.
+    completion_cost infers the provider, and xai's inclusive tier thresholds put a request sitting
+    exactly on 200k at the tier rate, which a lookup made without that inferred provider would miss.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "xai/tiered-model",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "input_cost_per_token_above_200k_tokens": 6e-6,
+            "output_cost_per_token_above_200k_tokens": 3e-5,
+            "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+            "litellm_provider": "xai",
+            "mode": "chat",
+        },
+    )
+    logging_obj = Logging(
+        model="xai/tiered-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="billed-rates",
+        function_id="f",
+    )
+    usage = Usage(
+        prompt_tokens=200_000,
+        completion_tokens=1_000,
+        total_tokens=201_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+    )
+
+    litellm.completion_cost(
+        completion_response=ModelResponse(model="xai/tiered-model", usage=usage),
+        model="xai/tiered-model",
+        custom_llm_provider=None,
+        litellm_logging_obj=logging_obj,
+    )
+
+    rates = logging_obj.billed_token_rates
+    assert rates is not None
+    assert rates.input_cost_per_token == pytest.approx(6e-6)
+    assert rates.cache_read_input_token_cost == pytest.approx(6e-7)
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(
+        100_000 * rates.cache_read_input_token_cost
+    )
+    assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(1_000 * rates.output_cost_per_token)
+
+
+def test_completion_cost_logs_cache_and_reasoning_breakdown_for_custom_pricing():
+    """
+    A custom-priced deployment bills cache tokens at its custom cache rates, but the
+    breakdown stored for the spend logs carried no cache or reasoning lines for it.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CompletionTokensDetailsWrapper, CostPerToken
+
+    logging_obj = Logging(
+        model="openai/onprem-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="custom-pricing-breakdown",
+        function_id="f",
+    )
+    response = ModelResponse(
+        model="openai/onprem-model",
+        usage=Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            total_tokens=1500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800, cache_creation_tokens=100),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=200),
+        ),
+    )
+
+    total = completion_cost(
+        completion_response=response,
+        model="openai/onprem-model",
+        custom_llm_provider="openai",
+        custom_cost_per_token=CostPerToken(
+            input_cost_per_token=1e-6,
+            output_cost_per_token=2e-6,
+            cache_read_input_token_cost=1e-7,
+            cache_creation_input_token_cost=1.25e-6,
+        ),
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(800 * 1e-7)
+    assert logging_obj.cost_breakdown["cache_creation_cost"] == pytest.approx(100 * 1.25e-6)
+    assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(200 * 2e-6)
+    assert total == pytest.approx(100 * 1e-6 + 800 * 1e-7 + 100 * 1.25e-6 + 500 * 2e-6)
 
 
 def test_cost_per_token_per_second_pricing(monkeypatch):

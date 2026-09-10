@@ -5085,6 +5085,104 @@ async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
     assert len(deleted_keys) == 2
 
 
+class _JWTMappingRow:
+    def __init__(self, token, jwt_claim_name, jwt_claim_value):
+        self.token = token
+        self.jwt_claim_name = jwt_claim_name
+        self.jwt_claim_value = jwt_claim_value
+
+
+class _CascadingJWTMappingTable:
+    """Mapping rows that LiteLLM_JWTKeyMapping_token_fkey drops when their key is deleted."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def find_many(self, where, **kwargs):
+        return [row for row in self.rows if row.token == where["token"]]
+
+    def cascade(self, deleted_tokens):
+        self.rows = [row for row in self.rows if row.token not in deleted_tokens]
+
+
+class _RecordingEvict:
+    def __init__(self):
+        self.cache_keys = ()
+
+    async def __call__(self, cache_keys, user_api_key_cache):
+        self.cache_keys = tuple(cache_keys)
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_evicts_jwt_key_mapping_cache(monkeypatch):
+    """Deleting a key must evict its jwt_key_mapping cache entries (LIT-5380).
+
+    The FK cascade removes the mapping rows, so a surviving cache entry would keep
+    resolving the deleted token hash and 401 every JWT call from that identity until
+    virtual_key_mapping_cache_ttl expires, instead of auto-registering again.
+    """
+    jwt_table = _CascadingJWTMappingTable(
+        [_JWTMappingRow("hashed-token-1", "email", "user@example.com")]
+    )
+
+    key1 = LiteLLM_VerificationToken(
+        token="hashed-token-1",
+        user_id="user-123",
+        team_id=None,
+        key_alias="jwt-mapped-key",
+        spend=0.0,
+        max_budget=None,
+        models=[],
+        aliases={},
+        config={},
+        permissions={},
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+        soft_budget_cooldown=False,
+        allowed_routes=[],
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[key1]
+    )
+    mock_prisma_client.db.litellm_jwtkeymapping = jwt_table
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+
+    async def cascading_delete_data(tokens):
+        jwt_table.cascade(tokens)
+        return list(tokens)
+
+    mock_prisma_client.delete_data = AsyncMock(side_effect=cascading_delete_data)
+
+    recording_evict = _RecordingEvict()
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.evict_and_broadcast",
+        recording_evict,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
+        lambda token: token,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    )
+
+    await delete_verification_tokens(
+        tokens=["hashed-token-1"],
+        user_api_key_cache=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+    )
+
+    assert recording_evict.cache_keys == ("jwt_key_mapping:email:user@example.com",)
+
+
 @pytest.mark.asyncio
 async def test_delete_key_fn_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import KeyRequest
@@ -17973,6 +18071,32 @@ def test_key_request_blank_organization_id_is_unset():
     assert UpdateKeyRequest(key="sk-1", organization_id="").organization_id is None
     assert GenerateKeyRequest(organization_id="org-1").organization_id == "org-1"
     assert UpdateKeyRequest(key="sk-1", organization_id="org-1").organization_id == "org-1"
+
+
+def test_update_key_request_blank_team_id_is_not_a_team_change():
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        is_different_team,
+    )
+
+    blank = UpdateKeyRequest(key="sk-1", team_id="", key_alias="renamed")
+    assert blank.team_id is None
+    assert "team_id" not in blank.model_dump(exclude_unset=True)
+    assert blank.model_dump(exclude_unset=True) == {"key": "sk-1", "key_alias": "renamed"}
+    assert is_different_team(data=blank, existing_key_row=LiteLLM_VerificationToken(token="hashed")) is False
+    assert (
+        is_different_team(data=blank, existing_key_row=LiteLLM_VerificationToken(token="hashed", team_id="team-1"))
+        is False
+    )
+    assert "team_id" in UpdateKeyRequest(key="sk-1", team_id=None).model_dump(exclude_unset=True)
+    assert UpdateKeyRequest(key="sk-1", team_id="team-1").team_id == "team-1"
+    assert (
+        is_different_team(
+            data=UpdateKeyRequest(key="sk-1", team_id="team-1"),
+            existing_key_row=LiteLLM_VerificationToken(token="hashed"),
+        )
+        is True
+    )
 
 
 def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatch):

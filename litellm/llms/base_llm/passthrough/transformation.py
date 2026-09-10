@@ -1,5 +1,14 @@
+from __future__ import annotations
+
+import re
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Final, Optional, Union
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, TypeAlias
+
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.types.utils import CallTypes
 
 from ..base_utils import BaseLLMModelInfo
 
@@ -7,9 +16,68 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import CostResponseTypes
+    from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesTerminalEvent
+    from litellm.types.rerank import RerankResponse
+    from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
     from ..chat.transformation import BaseLLMException
+    from ..ocr.transformation import OCRResponse
+
+    LoggedRelayResponse: TypeAlias = CostResponseTypes | RerankResponse | ResponsesAPIResponse | ResponsesTerminalEvent
+
+
+RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+
+def strip_leading_model_segment(endpoint: str, model_names: tuple[str, ...]) -> str:
+    path: Final = endpoint.lstrip("/")
+    for model_name in model_names:
+        if not model_name:
+            continue
+        if path == model_name:
+            return ""
+        if path.startswith(f"{model_name}/"):
+            return path[len(model_name) + 1 :]
+    return path
+
+
+def replace_path_segment(endpoint: str, segment: str, replacement: str) -> str:
+    bounded_segment: Final = re.compile(rf"(?<![^/]){re.escape(segment)}(?![^/:])")
+    return bounded_segment.sub(lambda _: replacement, endpoint)
+
+
+def relayed_json_object(httpx_response: Response) -> Mapping[str, object] | None:
+    if httpx_response.status_code != 200:
+        return None
+    try:
+        return RELAYED_JSON_OBJECT.validate_python(httpx_response.json())
+    except (ValueError, ValidationError):
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class RelayShape:
+    path_suffix: str
+    call_type: CallTypes
+    parse: Callable[[Mapping[str, object]], LoggedRelayResponse]
+
+
+def logged_relay_shape(
+    shapes: Sequence[RelayShape], httpx_response: Response, logging_obj: LiteLLMLoggingObj, endpoint: str
+) -> LoggedRelayResponse | None:
+    relayed_path: Final = f"/{endpoint.strip('/')}"
+    shape: Final = next((candidate for candidate in shapes if relayed_path.endswith(candidate.path_suffix)), None)
+    body: Final = relayed_json_object(httpx_response) if shape else None
+    if shape is None or body is None:
+        return None
+    try:
+        parsed: Final = shape.parse(body)
+    except ValidationError:
+        return None
+    logging_obj.call_type = (
+        shape.call_type.value
+    )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
+    return parsed
 
 
 class BasePassthroughConfig(BaseLLMModelInfo):
@@ -23,8 +91,8 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         self,
         endpoint: str,
         base_target_url: str,
-        request_query_params: dict | None,
-    ) -> "URL":
+        request_query_params: Mapping[str, object] | None,
+    ) -> URL:
         """
         Helper function to add query params to the url
         Args:
@@ -58,7 +126,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         endpoint: str,
         request_query_params: dict | None,
         litellm_params: dict,
-    ) -> tuple["URL", str]:
+    ) -> tuple[URL, str]:
         """
         Get the complete url for the request
         Returns:
@@ -88,9 +156,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         """
         return headers, None
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, "Headers"]
-    ) -> "BaseLLMException":
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
         return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
@@ -99,21 +165,21 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         self,
         model: str,
         custom_llm_provider: str,
-        httpx_response: "Response",
+        httpx_response: Response,
         request_data: dict,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: LiteLLMLoggingObj,
         endpoint: str,
-    ) -> Optional["CostResponseTypes"]:
+    ) -> LoggedRelayResponse | OCRResponse | StandardPassThroughResponseObject | None:
         pass
 
     def handle_logging_collected_chunks(
         self,
         all_chunks: list[str],
-        litellm_logging_obj: "LiteLLMLoggingObj",
+        litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
         custom_llm_provider: str,
         endpoint: str,
-    ) -> Optional["CostResponseTypes"]:
+    ) -> LoggedRelayResponse | None:
         return None
 
     def _convert_raw_bytes_to_str_lines(self, raw_bytes: list[bytes]) -> list[str]:

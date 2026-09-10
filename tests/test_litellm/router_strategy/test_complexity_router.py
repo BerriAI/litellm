@@ -3846,11 +3846,11 @@ class TestRouterPreRoutingSharedAliasName:
     def test_forwardable_alias_marker_params_reads_the_marker_entry_only(self):
         router = Router(model_list=[self._plain_entry(), self._marker_entry(), self._tier_entry()])
 
-        forwarded = dict(router._forwardable_alias_marker_params(model="gpt4o", strategy_tags=()))
+        forwarded = dict(router._forwardable_alias_marker_params(model="gpt4o", strategy_tags=(), request_kwargs={}))
 
         assert forwarded["drop_params"] is True
         assert "api_key" not in forwarded and "api_base" not in forwarded
-        assert router._forwardable_alias_marker_params(model="gemini-flash", strategy_tags=()) == ()
+        assert router._forwardable_alias_marker_params(model="gemini-flash", strategy_tags=(), request_kwargs={}) == ()
 
     @staticmethod
     def _region_marker_entry() -> dict:

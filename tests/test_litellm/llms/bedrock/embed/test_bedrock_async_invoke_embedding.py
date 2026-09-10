@@ -1,11 +1,15 @@
 import json
+import asyncio
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.base import HiddenParams
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Mock async invoke responses
 async_invoke_response = {
@@ -422,3 +426,34 @@ class TestBedrockAsyncInvokeEmbedding:
                 async_endpoint
                 == "https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke"
             )
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_status_signs_off_the_event_loop(monkeypatch):
+    """Regression for issue #40165: the GetAsyncInvoke poll is a signed GET, and botocore refreshes
+    expiring credentials inside that signing with a blocking HTTP call, so it must run on a worker
+    thread to keep the loop serving other requests."""
+    from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    embedder = BedrockEmbedding()
+    probe = EventLoopProbe()
+
+    with (
+        patch.object(embedder, "_load_credentials", return_value=(probe.credentials(), "us-east-1")),
+        respx.mock,
+    ):
+        route = respx.get(url__regex=r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/async-invoke/.*").mock(
+            return_value=httpx.Response(200, json=async_invoke_status_response)
+        )
+        release = asyncio.create_task(probe.release_refresh_from_the_loop())
+        status = await embedder._get_async_invoke_status(
+            invocation_arn=async_invoke_status_response["invocationArn"], aws_region_name="us-east-1"
+        )
+        await release
+
+    assert status["status"] == "InProgress"
+    assert "Authorization" in route.calls.last.request.headers
+    assert probe.served_during_refresh is True
