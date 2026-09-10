@@ -2332,8 +2332,6 @@ def _combine_prompt_tokens_details(combined: Usage, usage: Usage) -> None:
     if not hasattr(combined, "prompt_tokens_details") or not combined.prompt_tokens_details:
         combined.prompt_tokens_details = PromptTokensDetailsWrapper()
 
-    # Check what keys exist in the model's prompt_tokens_details
-    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
     for attr in _summable_prompt_token_fields(usage.prompt_tokens_details):
         if (
             hasattr(usage.prompt_tokens_details, attr)

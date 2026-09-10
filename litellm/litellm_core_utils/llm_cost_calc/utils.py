@@ -806,9 +806,17 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         or None
     )
     cached_tokens_details: Final = getattr(usage.prompt_tokens_details, "cached_tokens_details", None)
-    cached_text_tokens: Final = _get_token_detail_value(cached_tokens_details, "text_tokens") or 0
-    cached_audio_tokens: Final = _get_token_detail_value(cached_tokens_details, "audio_tokens") or 0
-    cached_image_tokens: Final = _get_token_detail_value(cached_tokens_details, "image_tokens") or 0
+    cached_audio_tokens: Final = min(
+        _get_token_detail_value(cached_tokens_details, "audio_tokens") or 0, cache_hit_tokens
+    )
+    cached_text_tokens: Final = min(
+        _get_token_detail_value(cached_tokens_details, "text_tokens") or 0,
+        cache_hit_tokens - cached_audio_tokens,
+    )
+    cached_image_tokens: Final = min(
+        _get_token_detail_value(cached_tokens_details, "image_tokens") or 0,
+        cache_hit_tokens - cached_audio_tokens - cached_text_tokens,
+    )
     text_tokens: Final = max(
         (
             cast(int | None, getattr(usage.prompt_tokens_details, "text_tokens", None))
@@ -852,7 +860,7 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
 
     return PromptTokensDetailsResult(
         cache_hit_tokens=cache_hit_tokens,
-        cache_hit_audio_tokens=min(cached_audio_tokens, cache_hit_tokens),
+        cache_hit_audio_tokens=cached_audio_tokens,
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_token_details,
         text_tokens=text_tokens,
