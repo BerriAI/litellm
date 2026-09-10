@@ -29,6 +29,10 @@ fn deepseek_request_uses_single_provider_namespace(#[case] model: &str) {
 #[rstest]
 #[case(json!("# hello"),"# hello")]
 #[case(json!("{broken"),"{broken")]
+#[case(json!(" {\"pages\":[]} "), " {\"pages\":[]} ")]
+#[case(json!({"pages":[]}), "{\"pages\":[]}")]
+#[case(json!({}), "{}")]
+#[case(json!("[]"), "[]")]
 #[case(json!("{\"pages\":[{\"markdown\":\"json text\"}]}"),"json text")]
 #[case(json!({"pages":[{"markdown":"object"}]}),"object")]
 fn vertex_deepseek_response_wraps_markdown_content(
@@ -51,6 +55,7 @@ fn vertex_deepseek_response_wraps_markdown_content(
 fn deepseek_rejects_missing_content_and_invalid_structured_pages() {
     for response in [
         json!({"choices":[]}),
+        json!({"choices":[{"message":{"content":"{\"pages\":[{\"markdown\":42}]}"}}]}),
         json!({"choices":[{"message":{"content":""}}]}),
         json!({"choices":[{"message":{"content":{"pages":[{"markdown":42}]}}}]}),
     ] {

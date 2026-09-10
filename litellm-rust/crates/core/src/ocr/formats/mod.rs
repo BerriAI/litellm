@@ -6,6 +6,10 @@ use crate::Error;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
+mod macros;
+
+pub(crate) use macros::ocr_format;
+
 pub mod deepseek;
 pub mod document_intelligence;
 pub mod mistral;

@@ -101,13 +101,9 @@ fn reducto_page<'de, D: serde::Deserializer<'de>>(
     let value = Value::deserialize(deserializer)?;
     Ok(match value {
         Value::Number(number) => number.as_i64().or_else(|| {
-            number.as_f64().and_then(|value| {
-                let truncated = value.trunc();
-                (truncated.is_finite()
-                    && truncated >= i64::MIN as f64
-                    && truncated < -(i64::MIN as f64))
-                    .then_some(truncated as i64)
-            })
+            number
+                .as_f64()
+                .and_then(crate::ocr::wire::checked_truncated_i64)
         }),
         Value::String(value) => value.trim().parse().ok(),
         Value::Bool(value) => Some(i64::from(value)),

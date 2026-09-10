@@ -178,9 +178,17 @@ impl PythonNumber {
     }
 }
 fn exact_integer(n: f64) -> Option<i64> {
-    (n.is_finite() && n.fract() == 0.0 && n >= i64::MIN as f64 && n < -(i64::MIN as f64))
-        .then_some(n as i64)
+    if n.fract() != 0.0 {
+        return None;
+    }
+    checked_truncated_i64(n)
 }
+pub(crate) fn checked_truncated_i64(value: f64) -> Option<i64> {
+    let truncated = value.trunc();
+    (truncated.is_finite() && truncated >= i64::MIN as f64 && truncated < -(i64::MIN as f64))
+        .then_some(truncated as i64)
+}
+
 pub fn optional_i64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
     Option::<PythonNumber>::deserialize(deserializer)?
         .map(|n| {
