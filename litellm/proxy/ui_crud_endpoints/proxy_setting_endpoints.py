@@ -14,7 +14,7 @@ from typing import (
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, JsonValue, ValidationError, create_model
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
 from pydantic.fields import FieldInfo
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -1478,6 +1478,42 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
     return ui_settings
 
 
+_UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    """Copy the UI settings that gate runtime behavior into ``general_settings``. Returns what was applied."""
+    from litellm.proxy.proxy_server import general_settings
+
+    flags: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
+    if flags:
+        general_settings.update(flags)
+    return MappingProxyType(flags)
+
+
+async def sync_ui_settings_to_general_settings(prisma_client: object) -> Mapping[str, JsonValue]:
+    """Re-read the persisted UI settings and apply the runtime flags to ``general_settings``.
+
+    Runs on startup and on every periodic config reload: the PATCH handler only updates the pod
+    that served it, so every other pod needs its own read to pick up a change without a restart.
+    Never raises. A read that fails leaves this pod on the flags it already had.
+    """
+    try:
+        db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+            where={"id": "ui_settings"}
+        )
+        stored: Final = (db_record.ui_settings if db_record else None) or "{}"
+        parsed: Final = (
+            _UI_SETTINGS_OBJECT.validate_json(stored)
+            if isinstance(stored, str)
+            else _UI_SETTINGS_OBJECT.validate_python(stored)
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning("Could not refresh UI settings from the database: %s", e)
+        return MappingProxyType({})
+    return apply_runtime_general_settings_flags(parsed)
+
+
 @router.get(
     "/get/ui_settings",
     tags=["UI Settings"],
@@ -1506,13 +1542,7 @@ async def get_ui_settings():
     # Sanitize any unexpected keys from persisted config before returning
     ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
-    # Sync runtime flags into general_settings so the proxy picks them up
-    # at runtime (covers server restart scenarios).
-    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if _flags_to_sync:
-        from litellm.proxy.proxy_server import general_settings
-
-        general_settings.update(_flags_to_sync)
+    apply_runtime_general_settings_flags(ui_settings)
 
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -1651,13 +1681,7 @@ async def update_ui_settings(
         },
     )
 
-    # Sync runtime flags to general_settings so the proxy picks them up
-    # at runtime (general_settings is checked in pre-call utils).
-    _flags_to_sync: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if _flags_to_sync:
-        from litellm.proxy.proxy_server import general_settings
-
-        general_settings.update(_flags_to_sync)
+    apply_runtime_general_settings_flags(ui_settings)
 
     # Invalidate + set DualCache so subsequent reads see the new values immediately
     from litellm.proxy.proxy_server import user_api_key_cache

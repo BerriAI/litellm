@@ -3374,3 +3374,70 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert field_schema["type"] == "array"
         assert field_schema["items"]["type"] == "string"
         assert isinstance(field_schema["items"]["enum"], list)
+
+
+class TestSyncUiSettingsToGeneralSettings:
+    """The DB re-read each pod runs on startup and on every config reload."""
+
+    def _sync(self):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            sync_ui_settings_to_general_settings,
+        )
+
+        return sync_ui_settings_to_general_settings
+
+    @pytest.mark.asyncio
+    async def test_applies_runtime_flags_and_leaves_other_ui_settings_alone(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        general_settings: dict = {"allow_agents_for_team_admins": False}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        mock_prisma = MagicMock()
+        record = MagicMock()
+        record.ui_settings = json.dumps(
+            {
+                "allow_agents_for_team_admins": True,
+                "team_admin_editable_team_fields": ["tpm_limit"],
+                "enable_chat_ui": False,
+            }
+        )
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=record)
+
+        applied = await self._sync()(mock_prisma)
+
+        assert dict(applied) == {
+            "allow_agents_for_team_admins": True,
+            "team_admin_editable_team_fields": ["tpm_limit"],
+        }
+        assert general_settings["allow_agents_for_team_admins"] is True
+        assert general_settings["team_admin_editable_team_fields"] == ["tpm_limit"]
+        assert "enable_chat_ui" not in general_settings
+
+    @pytest.mark.asyncio
+    async def test_reads_a_row_the_prisma_client_already_deserialized(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        general_settings: dict = {}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        mock_prisma = MagicMock()
+        record = MagicMock()
+        record.ui_settings = {"team_admin_editable_team_fields": ["rpm_limit"]}
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=record)
+
+        await self._sync()(mock_prisma)
+
+        assert general_settings["team_admin_editable_team_fields"] == ["rpm_limit"]
+
+    @pytest.mark.asyncio
+    async def test_without_a_stored_row_general_settings_is_left_untouched(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        general_settings: dict = {"allow_agents_for_team_admins": True}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+
+        applied = await self._sync()(mock_prisma)
+
+        assert dict(applied) == {}
+        assert general_settings == {"allow_agents_for_team_admins": True}
