@@ -22,7 +22,7 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
-from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields
+from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     reconstruct_model_name,
@@ -1277,7 +1277,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
                 # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
-                    _request_body = _convert_mapping_to_json_serializable(_request_body)
+                    _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)

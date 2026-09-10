@@ -897,10 +897,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         This is useful for logging payloads that contain sensitive information.
         """
-        from copy import copy
-
         import litellm
         from litellm import Choices, Message, ModelResponse
+        from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS, without_classifier_audit
 
         turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
         excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
@@ -909,41 +908,25 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if turn_off_message_logging is False and not excluded_fields:
             return model_call_details
 
-        # Only make a shallow copy of the top-level dict to avoid deepcopy issues
-        # with complex objects like AuthenticationError that may be present
-        model_call_details_copy: Final = copy(model_call_details)
         standard_logging_object: Final = model_call_details.get("standard_logging_object")
         if standard_logging_object is None:
-            return model_call_details_copy
+            return model_call_details.copy()
 
         # Make a copy of just the standard_logging_object to avoid modifying the original
-        standard_logging_object_copy: Final = copy(standard_logging_object)
-
-        # Handle excluded fields - remove them entirely from the payload
-        if excluded_fields:
-            for field in excluded_fields:
-                if field in standard_logging_object_copy:
-                    del standard_logging_object_copy[field]
+        standard_logging_object_copy: Final = {
+            key: value
+            for key, value in standard_logging_object.items()
+            if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
+        }
 
         # Handle turn_off_message_logging - redact messages and responses (if not already excluded)
         if turn_off_message_logging:
-            from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS, without_classifier_audit
-
-            for field in CLASSIFIER_AUDIT_FIELDS:
-                standard_logging_object_copy.pop(field, None)
-            params: Final = model_call_details_copy.get("litellm_params")
-            request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
-            if isinstance(params, dict) and isinstance(request, dict):
-                model_call_details_copy["litellm_params"] = {
-                    **params,
-                    "proxy_server_request": without_classifier_audit(request),
-                }
             redacted_str: Final = "redacted-by-litellm"
 
-            if "messages" not in (excluded_fields or []) and standard_logging_object_copy.get("messages") is not None:
+            if "messages" not in (excluded_fields or ()) and standard_logging_object_copy.get("messages") is not None:
                 standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
 
-            if "response" not in (excluded_fields or []) and standard_logging_object_copy.get("response") is not None:
+            if "response" not in (excluded_fields or ()) and standard_logging_object_copy.get("response") is not None:
                 response: Final = standard_logging_object_copy["response"]
                 # Check if this is a ResponsesAPIResponse (has "output" field)
                 if isinstance(response, dict) and "output" in response:
@@ -967,8 +950,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     model_response_dict: Final = model_response.model_dump()
                     standard_logging_object_copy["response"] = model_response_dict
 
-        model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
-        return model_call_details_copy
+        redacted_details: Final = {**model_call_details, "standard_logging_object": standard_logging_object_copy}
+        params: Final = model_call_details.get("litellm_params")
+        request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
+        if turn_off_message_logging and isinstance(params, dict) and isinstance(request, dict):
+            return {
+                **redacted_details,
+                "litellm_params": {**params, "proxy_server_request": without_classifier_audit(request)},
+            }
+        return redacted_details
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
