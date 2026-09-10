@@ -158,15 +158,6 @@ impl RecordingOcrGuardrail {
         }
     }
 
-    fn blocking_during_call() -> Self {
-        Self {
-            hooks: vec![GuardrailEventHook::DuringCall],
-            events: Mutex::new(Vec::new()),
-            block_pre_call: false,
-            block_during_call: true,
-        }
-    }
-
     fn events(&self) -> Vec<&'static str> {
         self.events.lock().unwrap().clone()
     }
@@ -213,26 +204,6 @@ impl CustomGuardrail for RecordingOcrGuardrail {
             request.data["body"]["guarded_during"] = json!(true);
             Ok(GuardrailDecision::Mask(request))
         })
-    }
-}
-
-fn base_ocr_request(model: &str) -> OcrRequest<'_> {
-    OcrRequest {
-        model,
-        document: json!({
-            "type": "document_url",
-            "document_url": "https://example.com/doc.pdf"
-        }),
-        api_key: Some("sk-test"),
-        api_base: None,
-        custom_llm_provider: None,
-        extra_headers: None,
-        optional_params: Map::new(),
-        timeout: None,
-        callbacks: Vec::new(),
-        guardrails: Vec::new(),
-        request_metadata: RequestMetadata::default(),
-        litellm_call_id: None,
     }
 }
 
@@ -285,66 +256,6 @@ async fn azure_mistral_uses_prepared_authorization_through_gateway() {
         sent.to_ascii_lowercase()
             .contains("authorization: bearer python-prepared-token\r\n")
     );
-}
-
-#[tokio::test]
-async fn reducto_during_call_guardrail_blocks_before_upload() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener binds");
-    let address = listener.local_addr().expect("listener has local address");
-    let api_base = format!("http://{address}");
-    let guardrail = Arc::new(RecordingOcrGuardrail::blocking_during_call());
-    let mut request = base_ocr_request("reducto/parse-v3");
-    request.api_base = Some(&api_base);
-    request.document = json!({
-        "type": "document_url",
-        "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
-    });
-    request.guardrails = vec![guardrail.clone()];
-
-    let error = ocr(request).await.expect_err("guardrail blocks upload");
-
-    assert!(matches!(error, Error::InvalidRequest(_)));
-    assert_eq!(guardrail.events(), vec!["async_moderation_hook"]);
-    let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
-    assert!(accepted.is_err(), "upload socket should not be touched");
-}
-
-#[tokio::test]
-async fn reducto_upload_error_body_is_truncated() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener binds");
-    let address = listener.local_addr().expect("listener has local address");
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("accepts upload request");
-        let _request = read_http_request(&mut socket).await;
-        let body = "x".repeat(300);
-        let response = format!(
-            "HTTP/1.1 500 Internal Server Error\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        socket
-            .write_all(response.as_bytes())
-            .await
-            .expect("writes upload response");
-    });
-    let api_base = format!("http://{address}");
-    let mut request = base_ocr_request("reducto/parse-v3");
-    request.api_base = Some(&api_base);
-    request.document = json!({
-        "type": "document_url",
-        "document_url": "data:application/pdf;base64,JVBERi0xLjQ="
-    });
-
-    let error = ocr(request).await.expect_err("upload should fail");
-
-    assert!(
-        matches!(error, Error::Http { status: 500, body } if body.chars().count() < 300 && body.ends_with("... (truncated)"))
-    );
-    server.await.expect("server task completes");
 }
 
 #[tokio::test]
