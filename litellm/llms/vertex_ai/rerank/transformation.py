@@ -212,7 +212,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
                 RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
             )
 
-        input_record_count: Final = len(request_data.get("records", []))
+        input_record_count: Final = len(request_data.get("records", ()))
         search_units: Final = math.ceil(input_record_count / self.MAX_RECORDS_PER_SEARCH_UNIT)
         meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=search_units))
 
