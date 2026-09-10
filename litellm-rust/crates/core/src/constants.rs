@@ -43,3 +43,9 @@ pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
 
 pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
+
+#[allow(
+    dead_code,
+    reason = "used by the OCR architecture in the next stacked PR"
+)]
+pub(crate) const MEDIA_CONNECT_TIMEOUT_SECS: u64 = 10;
