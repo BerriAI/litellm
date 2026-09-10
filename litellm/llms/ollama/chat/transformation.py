@@ -24,6 +24,7 @@ from litellm.types.llms.ollama import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
+    ChatCompletionToolParam,
     ChatCompletionUsageBlock,
 )
 from litellm.types.utils import ModelResponse, ModelResponseStream
@@ -184,7 +185,9 @@ class OllamaChatConfig(BaseConfig):
                 optional_params["tools"] = value
 
             if param == "functions":
-                optional_params["tools"] = value
+                optional_params["tools"] = tuple(
+                    ChatCompletionToolParam(type="function", function=function) for function in value
+                )
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params

@@ -1,11 +1,12 @@
 import json
-from litellm._uuid import uuid
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 import litellm
+from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
@@ -476,7 +477,7 @@ class TestOllamaTextCompletionResponseIterator:
         # Updated to handle ModelResponseStream return type
         assert isinstance(result, ModelResponseStream)
         assert result.choices and result.choices[0].delta is not None
-        assert result.choices[0].delta.content == None
+        assert result.choices[0].delta.content is None
         assert getattr(result.choices[0].delta, "reasoning_content", None) == ""
 
     def test_chunk_parser_done_chunk(self):
@@ -558,7 +559,17 @@ GRAPH_STATS_TOOLS = [
 ]
 
 
-def test_ollama_tool_result_turn_is_sent_to_native_chat_api():
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://ollama.example:11434",
+        "http://ollama.example:11434/",
+        "http://ollama.example:11434/api/generate",
+        "http://ollama.example:11434/api/generate/",
+        "http://ollama.example:11434/api/chat",
+    ],
+)
+def test_ollama_tool_result_turn_is_sent_to_native_chat_api(api_base: str):
     """https://github.com/BerriAI/litellm/issues/40575"""
     requests = []
 
@@ -590,7 +601,7 @@ def test_ollama_tool_result_turn_is_sent_to_native_chat_api():
             {"role": "tool", "tool_call_id": "call_1", "name": "graph_stats", "content": '{"nodes": 190921}'},
         ],
         tools=GRAPH_STATS_TOOLS,
-        api_base="http://ollama.example:11434",
+        api_base=api_base,
         client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
     )
 
@@ -646,3 +657,73 @@ def test_ollama_streamed_tool_call_is_returned_as_tool_call():
     assert [tool_call.function.name for tool_call in tool_calls] == ["graph_stats"]
     assert "".join(chunk.choices[0].delta.content or "" for chunk in streamed) == ""
     assert streamed[-1].choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.parametrize("empty_parameter", ["none", "tools", "functions"])
+def test_ollama_empty_tools_preserve_generate_request(empty_parameter: str) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert request.url.path == "/api/generate"
+        assert "format" not in body
+        assert "tools" not in body
+        return httpx.Response(200, json={"response": "Hello", "done": True})
+
+    response: Final = litellm.completion(
+        model="ollama/qwen3.8:27b",
+        messages=[{"role": "user", "content": "Hello"}],
+        tools=[] if empty_parameter == "tools" else None,
+        functions=[] if empty_parameter == "functions" else None,
+        api_base="http://ollama.example:11434/api/generate",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+    )
+    assert response.choices[0].message.content == "Hello"
+
+
+def test_ollama_native_tool_support_error_is_preserved() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/chat"
+        return httpx.Response(400, json={"error": "model does not support tools"})
+
+    with pytest.raises(litellm.BadRequestError, match="does not support tools"):
+        litellm.completion(
+            model="ollama/qwen3.8:27b",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=GRAPH_STATS_TOOLS,
+            api_base="http://ollama.example:11434/api/generate",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+            num_retries=0,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_functions", [False, True])
+async def test_ollama_async_native_tools(legacy_functions: bool) -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert request.url.path == "/prefix/api/chat"
+        assert body["tools"] == GRAPH_STATS_TOOLS
+        return httpx.Response(
+            200,
+            json={
+                "model": "qwen3.8:27b",
+                "message": {"role": "assistant", "content": "Hello"},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        handler: Final = AsyncHTTPHandler()
+        await handler.client.aclose()
+        handler.client = client
+        response: Final = await litellm.acompletion(
+            model="ollama/qwen3.8:27b",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=None if legacy_functions else GRAPH_STATS_TOOLS,
+            functions=[GRAPH_STATS_TOOLS[0]["function"]] if legacy_functions else None,
+            api_base="http://ollama.example:11434/prefix/api/generate/",
+            client=handler,
+        )
+    assert response.choices[0].message.content == "Hello"
