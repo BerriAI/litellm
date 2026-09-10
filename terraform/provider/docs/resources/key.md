@@ -76,7 +76,7 @@ The following arguments are supported:
 
 * `key_alias` - (Optional) Alias for this key. This provides a human-readable identifier for the key.
 
-* `duration` - (Optional) Duration for which this key is valid. This sets an expiration time for the key.
+* `duration` - (Optional) How long the key stays valid, e.g. "30d" or "12h". The proxy stores this as an absolute `expires` timestamp. Changing the value resets the expiry to the time of the update plus the new duration; removing it from the configuration leaves the current expiry in place.
 
 * `aliases` - (Optional) Map of model aliases. This allows you to create custom names for models when using this key.
 

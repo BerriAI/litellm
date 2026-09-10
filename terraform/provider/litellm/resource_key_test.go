@@ -524,3 +524,38 @@ func TestKeyReadKeepsOnlyDeclaredMetadata(t *testing.T) {
 		t.Errorf("metadata in state = %v, want %v", got, want)
 	}
 }
+
+func TestKeyUpdateSendsChangedDuration(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "duration": "30d"},
+		map[string]interface{}{"key_alias": "alias-1", "duration": "90d"},
+	)
+
+	if got := proxy.updates[0]["duration"]; got != "90d" {
+		t.Errorf("update payload duration = %v, want 90d", got)
+	}
+}
+
+func TestKeyUpdateOmitsUnchangedDuration(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	applyKeyUpdate(t, client,
+		map[string]string{"key_alias": "alias-1", "duration": "30d"},
+		map[string]interface{}{"key_alias": "alias-2", "duration": "30d"},
+	)
+
+	if got := proxy.updates[0]["key_alias"]; got != "alias-2" {
+		t.Fatalf("update payload key_alias = %v, want alias-2", got)
+	}
+	if v, present := proxy.updates[0]["duration"]; present {
+		t.Errorf("update payload unexpectedly contains duration = %v", v)
+	}
+}
