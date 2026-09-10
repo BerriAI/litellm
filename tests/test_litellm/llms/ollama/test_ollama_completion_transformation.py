@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
@@ -544,3 +544,105 @@ async def test_ollama_async_completion_inlines_remote_images_off_the_event_loop(
     assert response.choices[0].message.content == "Green"
     assert async_only_image_fetch.fetched == [image_url]
     assert captured["body"]["images"] == [async_only_image_fetch.base64_png]
+
+
+GRAPH_STATS_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "graph_stats",
+            "description": "Return node and edge counts of the code graph",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+]
+
+
+def test_ollama_tool_result_turn_is_sent_to_native_chat_api():
+    """https://github.com/BerriAI/litellm/issues/40575"""
+    requests = []
+
+    def handle(request):
+        requests.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(
+            200,
+            json={
+                "model": "qwen3.8:27b",
+                "message": {"role": "assistant", "content": "The graph has 190921 nodes."},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 1,
+                "eval_count": 1,
+            },
+        )
+
+    response = litellm.completion(
+        model="ollama/qwen3.8:27b",
+        messages=[
+            {"role": "user", "content": "How many nodes does the graph have?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "graph_stats", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "name": "graph_stats", "content": '{"nodes": 190921}'},
+        ],
+        tools=GRAPH_STATS_TOOLS,
+        api_base="http://ollama.example:11434",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+    )
+
+    assert [path for path, _ in requests] == ["/api/chat"]
+    body = requests[0][1]
+    assert body["tools"] == GRAPH_STATS_TOOLS
+    assert "format" not in body
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant", "tool"]
+    assert body["messages"][2]["content"] == '{"nodes": 190921}'
+    assert response.choices[0].message.content == "The graph has 190921 nodes."
+    assert response.choices[0].message.tool_calls is None
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_ollama_streamed_tool_call_is_returned_as_tool_call():
+    """https://github.com/BerriAI/litellm/issues/35711"""
+    chunks = [
+        {
+            "model": "qwen3.8:27b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "graph_stats", "arguments": {}}}],
+            },
+            "done": False,
+        },
+        {
+            "model": "qwen3.8:27b",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 1,
+            "eval_count": 1,
+        },
+    ]
+
+    def handle(request):
+        assert request.url.path == "/api/chat"
+        return httpx.Response(200, content="\n".join(json.dumps(chunk) for chunk in chunks).encode())
+
+    streamed = list(
+        litellm.completion(
+            model="ollama/qwen3.8:27b",
+            messages=[{"role": "user", "content": "How many nodes does the graph have?"}],
+            tools=GRAPH_STATS_TOOLS,
+            stream=True,
+            api_base="http://ollama.example:11434",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle))),
+        )
+    )
+
+    tool_calls = [tool_call for chunk in streamed for tool_call in chunk.choices[0].delta.tool_calls or []]
+    assert [tool_call.function.name for tool_call in tool_calls] == ["graph_stats"]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in streamed) == ""
+    assert streamed[-1].choices[0].finish_reason == "tool_calls"

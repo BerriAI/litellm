@@ -5308,6 +5308,8 @@ def completion(
                 GenericLiteLLMParams(**_supplemental_provider_params) if _supplemental_provider_params else None
             ),
         )
+        if custom_llm_provider == "ollama" and (tools is not None or functions is not None):
+            custom_llm_provider = "ollama_chat"  # rebind-ok: /api/generate has no native tool calling
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
