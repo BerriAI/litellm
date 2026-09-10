@@ -4,6 +4,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -12,10 +13,12 @@ import requests
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
+from .claude_settings import claude_settings_path, lite_api_key_helper_configured
 from .cmd_quoting import quote_for_cmd
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
+    ListingFailure,
     PiSyncError,
     fetch_model_ids,
     fetch_model_limits,
@@ -83,6 +86,8 @@ def build_agent_env(
     base_url: str,
     api_key: str,
     profiles: frozenset[str],
+    *,
+    export_anthropic_token: bool = True,
 ) -> dict[str, str]:
     """Return a copy of base_env wired to route the agent through the proxy.
 
@@ -97,12 +102,19 @@ def build_agent_env(
     proxy's /v1/models; likewise left alone when already set.
     pi ignores both base URL variables and instead resolves $LITELLM_PROXY_API_KEY
     from its synced models.json provider entry.
+
+    With export_anthropic_token=False the bearer is left out (and any inherited
+    one dropped) so Claude Code asks its configured apiKeyHelper instead; Claude
+    Code prefers ANTHROPIC_AUTH_TOKEN over the helper and warns when both are set.
     """
     env: Final = dict(base_env)
     root: Final = base_url.rstrip("/")
     if PROFILE_ANTHROPIC in profiles:
         env[ANTHROPIC_BASE_URL_ENV] = root
-        env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
+        if export_anthropic_token:
+            env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
+        else:
+            env.pop(ANTHROPIC_AUTH_TOKEN_ENV, None)
         env.pop(ANTHROPIC_API_KEY_ENV, None)
         if ENABLE_TOOL_SEARCH_ENV not in env:
             env[ENABLE_TOOL_SEARCH_ENV] = ENABLE_TOOL_SEARCH_VALUE
@@ -165,7 +177,9 @@ def prepare_pi(
     """
     ids: Final = fetch_model_ids(base_url, api_key, get=get)
     if isinstance(ids, PiSyncError):
-        raise AgentRunError(ids.message)
+        raise AgentRunError(
+            f"{ids.message} pi would have nothing to run." if ids.kind is ListingFailure.EMPTY else ids.message
+        )
     limits: Final = fetch_model_limits(base_url, api_key, get=get)
     path: Final = models_json_path(base_env)
     error: Final = sync_models_json(path, base_url, ids, limits)
@@ -460,6 +474,7 @@ def run_agent(
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
     preparers: Mapping[str, _Preparer] = MappingProxyType(_PREPARERS),
+    export_anthropic_token: bool = True,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
@@ -491,7 +506,9 @@ def run_agent(
 
     env: Final = MappingProxyType(
         {
-            **build_agent_env(env_before_sync, base_url, api_key, profiles),
+            **build_agent_env(
+                env_before_sync, base_url, api_key, profiles, export_anthropic_token=export_anthropic_token
+            ),
             **(_NO_EXTRA_ENV if isinstance(synced, ModelSyncSkipped) else synced),
         }
     )
@@ -529,14 +546,26 @@ def resolve_api_key(ctx: click.Context) -> str:
 _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
+def _helper_supplies_token(
+    ctx_obj: CliContextObj, base_url: str, profiles: frozenset[str], settings_path: Path
+) -> bool:
+    if PROFILE_ANTHROPIC not in profiles or not ctx_obj.get("api_key_from_token_file"):
+        return False
+    return lite_api_key_helper_configured(base_url, settings_path)
+
+
 def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
     ctx_obj: Final[CliContextObj] = ctx.obj
     base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
     api_key: Final = resolve_api_key(ctx)
 
-    display_name, _ = agent_profile(binary)
+    display_name, profiles = agent_profile(binary)
+    settings_path: Final = claude_settings_path(os.environ)
+    helper_supplies_token: Final = _helper_supplies_token(ctx_obj, base_url, profiles, settings_path)
     click.echo(f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}")
+    if helper_supplies_token:
+        click.echo(f"litellm: {display_name} reads its key from the apiKeyHelper in {settings_path}")
 
     try:
         run_agent(
@@ -545,6 +574,7 @@ def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify
             [binary, *args],
             skip_verify=skip_verify,
             reattach_terminal=(_restore_controlling_terminal if started_interactive else None),
+            export_anthropic_token=not helper_supplies_token,
         )
     except AgentRunError as e:
         raise click.ClickException(str(e))

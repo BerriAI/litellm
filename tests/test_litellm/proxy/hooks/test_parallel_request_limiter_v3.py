@@ -6171,3 +6171,68 @@ async def test_success_hook_leaves_stash_untouched_for_non_batch_responses():
         data={}, user_api_key_dict=user, response=ModelResponse(usage=Usage(total_tokens=5))
     )
     assert get_request_stash().batch_enqueued_reservation == reservation
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_attaches_ratelimit_headers_to_dict_response():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitResponse, RateLimitStatus
+
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    get_or_create_request_stash().rate_limit_response = RateLimitResponse(
+        overall_code="OK",
+        statuses=[
+            RateLimitStatus(
+                code="OK",
+                current_limit=100,
+                limit_remaining=99,
+                rate_limit_type="requests",
+                descriptor_key="model_saturation_check",
+            )
+        ],
+    )
+    response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "_hidden_params": {"additional_headers": {"x-litellm-attempted-retries": 0}},
+    }
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-dict-response")),
+        response=response,
+    )
+
+    additional_headers = response["_hidden_params"]["additional_headers"]
+    assert additional_headers["x-litellm-attempted-retries"] == 0
+    assert additional_headers["x-ratelimit-model_saturation_check-limit-requests"] == 100
+    assert additional_headers["x-ratelimit-model_saturation_check-remaining-requests"] == 99
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitResponse, RateLimitStatus
+
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    get_or_create_request_stash().rate_limit_response = RateLimitResponse(
+        overall_code="OK",
+        statuses=[
+            RateLimitStatus(
+                code="OK",
+                current_limit=100,
+                limit_remaining=99,
+                rate_limit_type="requests",
+                descriptor_key="model_saturation_check",
+            )
+        ],
+    )
+    response = {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-raw-dict")),
+        response=response,
+    )
+
+    assert response == {"id": "msg_123", "type": "message", "role": "assistant", "content": []}

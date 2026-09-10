@@ -1547,3 +1547,68 @@ def test_sync_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
         handler.close()
 
     assert response.text == "ok-tls"
+
+
+@pytest.mark.asyncio
+async def test_put_can_refuse_to_follow_a_redirect():
+    """The client follows redirects by default; a caller uploading to a URL it did not choose must be able to opt out."""
+    hops: list[str] = []  # mutable-ok: the fake transport records the paths it was asked for
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        hops.append(request.url.path)
+        if request.url.path == "/first":
+            return httpx.Response(302, request=request, headers={"location": "/second"})
+        return httpx.Response(200, request=request)
+
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler), follow_redirects=True)
+    try:
+        followed = await handler.put("https://uploads.example/first", data=b"x")
+        assert followed.status_code == 200
+        assert hops == ["/first", "/second"]
+
+        hops.clear()
+        with pytest.raises(MaskedHTTPStatusError) as refused:
+            await handler.put("https://uploads.example/first", data=b"x", follow_redirects=False)
+        assert refused.value.status_code == 302
+        assert hops == ["/first"]
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_a_retried_put_stays_a_put_and_still_refuses_redirects():
+    """
+    The connection-error retry used to resend as POST through a client that follows redirects.
+
+    Storage answers a POST to a presigned PUT url with 403 or 405, so the batch looked
+    permanently rejected, and the redirect refusal the caller asked for was silently lost.
+    """
+    attempts: list[tuple[str, str]] = []  # mutable-ok: the fake transports record what they were asked for
+
+    async def refusing_transport(request: httpx.Request) -> httpx.Response:
+        attempts.append((request.method, request.url.path))
+        raise httpx.ConnectError("connection reset", request=request)
+
+    async def retry_transport(request: httpx.Request) -> httpx.Response:
+        attempts.append((request.method, request.url.path))
+        if request.url.path == "/first":
+            return httpx.Response(302, request=request, headers={"location": "/second"})
+        return httpx.Response(200, request=request)
+
+    class HandlerWithFakeRetryClient(AsyncHTTPHandler):
+        def create_client(self, *args, **kwargs) -> httpx.AsyncClient:
+            return httpx.AsyncClient(transport=httpx.MockTransport(retry_transport), follow_redirects=True)
+
+    handler = HandlerWithFakeRetryClient()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(refusing_transport))
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as refused:
+            await handler.put("https://uploads.example/first", data=b"x", follow_redirects=False)
+
+        assert refused.value.status_code == 302
+        assert attempts == [("PUT", "/first"), ("PUT", "/first")]
+    finally:
+        await handler.client.aclose()

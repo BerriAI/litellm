@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict, Final, Optional
+from typing import Any, Dict, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12567,3 +12567,112 @@ async def test_pre_call_tool_check_honors_guardrail_attached_to_key(monkeypatch,
     with pytest.raises(HTTPException) as exc_info:
         await call
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "extra_headers", "expected_source", "expected_authorization"),
+    [
+        ("stored", None, "stored-user-token", "Bearer stored-token"),
+        ("stored", {"aUtHoRiZaTiOn": "Bearer injected"}, "stored-user-token", "Bearer stored-token"),
+        ("static", None, "static-token", "Bearer static-token"),
+        ("static", {"authorization": "Bearer injected"}, "extra-headers", "Bearer injected"),
+        ("none", None, "no-auth", None),
+        ("none", {"Authorization": "Bearer injected"}, "extra-headers", "Bearer injected"),
+    ],
+)
+async def test_debug_resolution_matches_final_header_conflict_winner(
+    config: Literal["stored", "static", "none"],
+    extra_headers: dict[str, str] | None,
+    expected_source: str,
+    expected_authorization: str | None,
+) -> None:
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+    from starlette.requests import Request
+    from pydantic import SecretStr
+
+    from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import MCPAuthenticatedUser
+    from litellm.proxy._experimental.mcp_server.mcp_debug import MCP_AUTH_DIAGNOSTICS_SCOPE_KEY, MCPAuthDiagnostics
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import (
+        ApiKeyConfig, AuthorizationCodeConfig, NoneConfig, ServerSpec, SharedKey, UpstreamCredentialProvider,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    class Store:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+            self.calls += 1
+            return OAuthToken(access_token="stored-token") if user_id == "alice" else None
+
+    store = Store()
+    context = MCPAuthenticatedUser(UserAPIKeyAuth(user_id="alice"))
+    diagnostics = MCPAuthDiagnostics()
+    token = request_ctx.set(RequestContext(
+        request_id=1, meta=None, session=MagicMock(), lifespan_context=None,
+        request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
+    ))
+    selected = {
+        "stored": AuthorizationCodeConfig(),
+        "static": ApiKeyConfig(key_source=SharedKey(value=SecretStr("static-token"))),
+        "none": NoneConfig(),
+    }[config]
+    try:
+        auth, remaining = await MCPServerManager()._resolve_v2_auth(
+            server=MCPServer(
+                server_id="s", name="s", transport="http", url="https://up.example/mcp",
+                static_headers={"Authorization": "Bearer configured"},
+            ),
+            spec=ServerSpec(server_id="s", resource="https://up.example/mcp", config=selected),
+            provider=UpstreamCredentialProvider(oauth_token_store=store),
+            subject_token=None,
+            user_api_key_auth=context.user_api_key_auth,
+            extra_headers=extra_headers,
+        )
+        request = httpx.Request("GET", "https://up.example/mcp", headers=remaining)
+        if auth is not None:
+            next(auth.auth_flow(request))
+        assert diagnostics.resolution() == expected_source
+        assert request.headers.get("Authorization") == expected_authorization
+        assert store.calls == (1 if config == "stored" else 0)
+    finally:
+        request_ctx.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_debug_reports_legacy_signing_and_non_http_transport(transport: Literal["http", "stdio"]) -> None:
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+    from starlette.requests import Request
+
+    from litellm.proxy._experimental.mcp_server.mcp_debug import MCP_AUTH_DIAGNOSTICS_SCOPE_KEY, MCPAuthDiagnostics
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    diagnostics = MCPAuthDiagnostics()
+    token = request_ctx.set(RequestContext(
+        request_id=1, meta=None, session=MagicMock(), lifespan_context=None,
+        request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
+    ))
+    try:
+        server = MCPServer(
+            server_id="signed", name="signed", transport=transport,
+            url="https://up.example/mcp", auth_type="aws_sigv4",
+            aws_access_key_id="AKIDEXAMPLE", aws_secret_access_key="test-signing-secret",
+            aws_region_name="us-east-1", aws_service_name="execute-api",
+            command="python", args=["-c", "pass"],
+        )
+        client = await MCPServerManager()._create_mcp_client(server)
+        if transport == "stdio":
+            assert diagnostics.resolution() == "not-applicable"
+        else:
+            assert diagnostics.resolution() == "aws-sigv4"
+            request = httpx.Request("POST", "https://up.example/mcp", content=b"{}")
+            next(client._aws_auth.auth_flow(request))
+            assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256 ")
+            assert "Credential=AKIDEXAMPLE/" in request.headers["Authorization"]
+    finally:
+        request_ctx.reset(token)

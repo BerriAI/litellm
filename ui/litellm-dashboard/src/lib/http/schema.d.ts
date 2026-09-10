@@ -23713,6 +23713,15 @@ export interface components {
             /** @description The decision record this request would have written to its log row */
             routing_decision: components["schemas"]["StandardLoggingRoutingDecision"];
         };
+        /** AwsSessionTag */
+        AwsSessionTag: {
+            /** Key */
+            Key: string;
+            /** Value */
+            Value: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** BaseLitellmParams */
         BaseLitellmParams: {
             /**
@@ -25870,6 +25879,11 @@ export interface components {
              * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). An INFO notice is logged once per worker at config load while this flag is active as a reminder that hard enforcement is relaxed.
              */
             disable_budget_reservation?: boolean | null;
+            /**
+             * Disable Env Credential Login
+             * @description If True, disables signing in to the Admin UI with the environment credentials: UI_USERNAME/UI_PASSWORD, or the master key when UI_PASSWORD is unset (that fallback means env-credential login is always live by default). Database users with passwords are unaffected. LOCKOUT RISK: create at least one proxy admin user with a password before enabling, or nobody can sign in to the UI. A locked-out admin can still administer the proxy over the API with the master key, and can unset this setting and restart the proxy to restore env-credential login. Default is False.
+             */
+            disable_env_credential_login?: boolean | null;
             /**
              * Disable Password Login When Sso Enabled
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
@@ -29535,6 +29549,8 @@ export interface components {
             aws_secret_access_key?: string | null;
             /** Aws Session Name */
             aws_session_name?: string | null;
+            /** Aws Session Tags */
+            aws_session_tags?: components["schemas"]["AwsSessionTag"][] | null;
             /** Aws Session Token */
             aws_session_token?: string | null;
             /** Aws Sts Endpoint */
@@ -29740,6 +29756,8 @@ export interface components {
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
+            /** Output Cost Per Second 720P */
+            output_cost_per_second_720p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -39730,6 +39748,8 @@ export interface components {
             aws_secret_access_key?: string | null;
             /** Aws Session Name */
             aws_session_name?: string | null;
+            /** Aws Session Tags */
+            aws_session_tags?: components["schemas"]["AwsSessionTag"][] | null;
             /** Aws Session Token */
             aws_session_token?: string | null;
             /** Aws Sts Endpoint */
@@ -39935,6 +39955,8 @@ export interface components {
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
+            /** Output Cost Per Second 720P */
+            output_cost_per_second_720p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -49398,7 +49420,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Specify the service being hit. */
-                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "sqs") | string;
+                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "pointfive" | "sqs") | string;
             };
             header?: never;
             path?: never;

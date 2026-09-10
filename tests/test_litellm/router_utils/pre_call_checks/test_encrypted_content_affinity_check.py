@@ -1584,6 +1584,89 @@ async def test_model_group_encrypted_content_affinity_overrides_global_deploymen
         router.discard()
 
 
+@pytest.mark.asyncio
+async def test_encrypted_content_affinity_pins_anthropic_messages_replayed_through_the_bridge():
+    """
+    Claude Code behind /v1/messages replays the encrypted reasoning the bridge packed
+    into a thinking block's signature (or a redacted block's data). The pin has to be
+    read from those blocks because the bridge builds the Responses `input` only after
+    the router has picked a deployment.
+    """
+    check = EncryptedContentAffinityCheck()
+    deployments = [
+        {"model_info": {"id": "openai-org-a"}, "litellm_params": {"model": "openai/gpt-5.1"}},
+        {"model_info": {"id": "openai-org-b"}, "litellm_params": {"model": "openai/gpt-5.1"}},
+    ]
+    request_kwargs = {"model": "gpt-5.1"}
+
+    pinned = await check.async_filter_deployments(
+        model="gpt-5.1",
+        healthy_deployments=deployments,
+        messages=_bridge_replayed_anthropic_messages(minted_by="openai-org-b"),
+        request_kwargs=request_kwargs,
+    )
+
+    assert [d["model_info"]["id"] for d in pinned] == ["openai-org-b"]
+    assert request_kwargs["_encrypted_content_affinity_pinned"] is True
+
+
+def _bridge_replayed_anthropic_messages(minted_by: str) -> list:
+    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA_turn_one", minted_by)
+    return [
+        {"role": "user", "content": "Solve the zebra puzzle"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Anthropic minted this one", "signature": "ErcCCpIBCBEYAipA"},
+                {"type": "redacted_thinking", "data": f"litellm_encrypted_reasoning:{wrapped}"},
+                {
+                    "type": "thinking",
+                    "thinking": "The bridge packed this one",
+                    "signature": f"litellm_encrypted_reasoning:{wrapped}",
+                },
+                {"type": "text", "text": "The zebra owner lives in the green house."},
+            ],
+        },
+        {"role": "user", "content": "And who drinks water?"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_encrypted_content_affinity_strips_bridge_reasoning_from_messages_routed_to_another_group():
+    """
+    The /v1/messages twin of the tier-change case: the routed group holds no deployment
+    of the org that minted the reasoning, so the bridge-tagged blocks are dropped whole
+    and the request dispatches to the routed pool. No unsigned thinking block may be left
+    behind: Anthropic and Bedrock reject a thinking block with a missing signature the
+    same way they reject a foreign one.
+    """
+    originating = _make_originating_mock(None, "key-a", model_name="gpt-reasoning-tier")
+    mock_router = _make_router_mock_with_cooldown(
+        originating, cooldown_entries=[], routed_group_model_ids=["openai-org-b"]
+    )
+    check = EncryptedContentAffinityCheck(router=mock_router)
+    routed_pool = [{"model_info": {"id": "openai-org-b"}, "litellm_params": {"model": "openai/gpt-5-nano"}}]
+    messages = _bridge_replayed_anthropic_messages(minted_by="openai-org-a")
+    assistant_content = messages[1]["content"]
+    request_kwargs = {"model": "gpt-5.1"}
+
+    result = await check.async_filter_deployments(
+        model="gpt-simple-tier",
+        healthy_deployments=routed_pool,
+        messages=messages,
+        request_kwargs=request_kwargs,
+    )
+
+    assert result is routed_pool
+    assert "_encrypted_content_affinity_pinned" not in request_kwargs
+    assert messages[1]["content"] is assistant_content
+    assert assistant_content == [
+        {"type": "thinking", "thinking": "Anthropic minted this one", "signature": "ErcCCpIBCBEYAipA"},
+        {"type": "text", "text": "The zebra owner lives in the green house."},
+    ]
+    assert all(block["signature"] for block in assistant_content if block["type"] == "thinking")
+
+
 class TestStripEncryptedReasoningFromInput:
     def test_keeps_summary_and_drops_encrypted_content_and_id(self):
         wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")

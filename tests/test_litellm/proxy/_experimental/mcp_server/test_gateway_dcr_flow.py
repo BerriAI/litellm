@@ -833,7 +833,7 @@ async def test_manual_delivery_page_renders_the_url_as_data_never_as_a_shell_com
     assert 'value="' in body
 
 
-def _scoped_mcp_server(name="github", **kw):
+def _scoped_mcp_server(name="github", auth_type="oauth2", **kw):
     from litellm.types.mcp import MCPAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -844,7 +844,7 @@ def _scoped_mcp_server(name="github", **kw):
         alias=name,
         url="https://upstream.example/mcp",
         transport="http",
-        auth_type=MCPAuth.oauth2,
+        auth_type=MCPAuth(auth_type) if auth_type is not None else None,
         **kw,
     )
 
@@ -2044,3 +2044,45 @@ async def test_introspect_fails_closed_on_dead_user_and_503s_on_outage():
 
     status, body = await _introspect(minted.token.get_secret_value(), master_key=None)
     assert (status, body["error"]) == (500, "server_error")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_type", [None, "none", "api_key", "bearer_token", "basic", "authorization", "token", "aws_sigv4"]
+)
+@pytest.mark.parametrize("resource", ["https://llm.example.com/mcp/github", "https://llm.example.com/github/mcp"])
+async def test_gateway_owned_resource_stays_scoped_through_consent_and_refresh(auth_type, resource):
+    from unittest.mock import patch
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    server = _scoped_mcp_server(auth_type=auth_type)
+    vendor = _VendorCredential("absent")
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = server
+        response = _scoped_authorize(client_id, resource)
+    described = await _describe_page(response, scoped_server=server, vendor=vendor)
+    assert json.loads(described.body) == {
+        "state": "m2m",
+        "client_origin": "https://claude.ai",
+        "server_id": "github-id",
+        "server_name": "github",
+        "connected": True,
+    }
+    unreachable = await _complete_page(response, scoped_server=server, reachable=_ServerReachability(False))
+    assert unreachable.status_code == 400
+    cache = DualCache()
+    completed = await _complete_page(response, scoped_server=server, vendor=vendor, cache=cache)
+    assert completed.status_code == 303
+    assert vendor.calls == []
+    code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = server
+        redeemed = await _redeem(code, client_id, cache=cache, resource=resource)
+    assert redeemed.status_code == 200
+    payload = json.loads(redeemed.body)
+    assert _opened_principal(payload).resource_server_id == "github-id"
+    renewed = await _redeem(
+        None, client_id, cache=cache, grant_type="refresh_token", refresh_token=payload["refresh_token"]
+    )
+    assert renewed.status_code == 200
+    assert _opened_principal(json.loads(renewed.body)).resource_server_id == "github-id"
