@@ -948,7 +948,7 @@ def cleanup_router_config_variables():
     heuristic_v1_tuning_baselines = None
 
 
-async def _flush_spend_counters_on_shutdown() -> None:
+async def flush_spend_counters_on_shutdown() -> None:
     if prisma_client is None:
         return
     try:
@@ -1396,7 +1396,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await _drain_spend_event_producer_on_shutdown()
 
-    await _flush_spend_counters_on_shutdown()
+    await flush_spend_counters_on_shutdown()
 
     await _flush_spend_logs_queue_on_shutdown()
 

@@ -43,8 +43,8 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
-    _should_store_prompts_and_responses_in_spend_logs,
     get_request_model_access_groups,
+    should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
@@ -103,13 +103,22 @@ class _ProxyDBLogger(CustomLogger):
             response_obj,
             start_time,
             end_time,
-            store_bodies=_should_store_prompts_and_responses_in_spend_logs(),
+            store_bodies=should_store_prompts_and_responses_in_spend_logs(),
         )
         if isinstance(event, SpendEventBuildError):
             verbose_proxy_logger.warning("collector: tracking cost in-process, event not buildable: %s", event.reason)
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return
         await self.spend_event_producer.publish(event)
+
+    async def run_spend_event(self, line: bytes) -> None:
+        """Run the unchanged cost pipeline on a serialized spend event (sidecar consumer and in-process fallback)."""
+        event: Final = decode_spend_event(line)
+        if isinstance(event, SpendEventDecodeError):
+            verbose_proxy_logger.error("collector: discarding undecodable spend event: %s", event.reason)
+            return
+        args: Final = spend_event_callback_args(event)
+        await self._PROXY_track_cost_callback(args.kwargs, args.response_obj, args.start_time, args.end_time)
 
     async def async_post_call_failure_hook(
         self,
@@ -541,13 +550,7 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
 
 
 async def run_spend_event(line: bytes) -> None:
-    """Run the unchanged cost pipeline on a serialized spend event (sidecar consumer and in-process fallback)."""
-    event: Final = decode_spend_event(line)
-    if isinstance(event, SpendEventDecodeError):
-        verbose_proxy_logger.error("collector: discarding undecodable spend event: %s", event.reason)
-        return
-    args: Final = spend_event_callback_args(event)
-    await _ProxyDBLogger()._PROXY_track_cost_callback(args.kwargs, args.response_obj, args.start_time, args.end_time)
+    await _ProxyDBLogger().run_spend_event(line)
 
 
 def _is_unbilled_interaction_response(completion_response: object) -> bool:

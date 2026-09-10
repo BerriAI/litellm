@@ -314,7 +314,7 @@ gateway:
     labels: {}
     interval: 15s
     scrapeTimeout: 10s
-  # Opt-in `collector` sidecar (same image, `python -m gateway.collector`)
+  # Opt-in `collector` sidecar (same image, `python -m litellm.proxy.collector`)
   # that runs the post-response spend pipeline (cost calculation, spend logs,
   # spend counters, budget reservation reconciliation) so the uvicorn workers
   # only serialise a compact event over loopback and go back to serving

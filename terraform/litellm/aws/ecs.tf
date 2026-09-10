@@ -299,7 +299,7 @@ locals {
     local.collector_env,
   )
 
-  collector_launch_cmd = "exec python -m gateway.collector"
+  collector_launch_cmd = "exec python -m litellm.proxy.collector"
   collector_command = [
     local.proxy_config_enabled ? "${local.proxy_config_fetch_cmd} && ${local.collector_launch_cmd}" : local.collector_launch_cmd
   ]

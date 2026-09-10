@@ -7,7 +7,13 @@ from typing import Final
 import pytest
 
 from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
-from litellm.proxy.collector import SpendEventConsumer, _address_argument, apply_log_level
+from litellm.proxy.collector import (
+    SpendEventConsumer,
+    address_argument,
+    apply_log_level,
+    pod_pgbouncer_database_url,
+)
+from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
 from litellm.proxy.spend_tracking.spend_event_producer import (
     AddressError,
     SpendEventProducer,
@@ -126,11 +132,22 @@ async def test_graceful_stop_hands_the_producer_over_to_its_fallback_without_los
 
 
 def test_address_argument():
-    assert _address_argument((), default="unix:///tmp/x.sock") == "unix:///tmp/x.sock"
-    assert _address_argument(("--address", "tcp://127.0.0.1:4100"), default="unix:///tmp/x.sock") == (
+    assert address_argument((), default="unix:///tmp/x.sock") == "unix:///tmp/x.sock"
+    assert address_argument(("--address", "tcp://127.0.0.1:4100"), default="unix:///tmp/x.sock") == (
         "tcp://127.0.0.1:4100"
     )
-    assert isinstance(_address_argument(("--listen", "x"), default="unix:///tmp/x.sock"), AddressError)
+    assert isinstance(address_argument(("--listen", "x"), default="unix:///tmp/x.sock"), AddressError)
+
+
+def test_pod_pgbouncer_database_url_points_at_the_proxy_containers_pooler():
+    """With pgbouncer on, the sidecar must not open its own upstream connections but share the pod's pooler."""
+    upstream: Final = "postgresql://u:p@db.internal:5432/litellm?schema=public"
+    assert pod_pgbouncer_database_url(PgBouncerSettings(enabled=False), {"DATABASE_URL": upstream}) is None
+    assert (
+        pod_pgbouncer_database_url(PgBouncerSettings(enabled=True, port=6543), {"DATABASE_URL": upstream})
+        == "postgresql://u:p@127.0.0.1:6543/litellm?schema=public&pgbouncer=true"
+    )
+    assert isinstance(pod_pgbouncer_database_url(PgBouncerSettings(enabled=True), {}), PgBouncerError)
 
 
 @pytest.fixture

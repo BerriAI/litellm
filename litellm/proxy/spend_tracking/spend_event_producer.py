@@ -317,12 +317,20 @@ class SpendEventProducer:
     async def _unavailable(self, line: bytes, reason: str) -> PublishOutcome:
         if self._on_unavailable == "fallback":
             self._fallback_count += 1
+            fallback: Final = asyncio.ensure_future(self._run_fallback(line, reason))
             try:
-                await self._fallback(line)
-            except Exception:  # noqa: BLE001  # one failing event must not kill the writer task
-                verbose_proxy_logger.exception("collector: in-process fallback failed (%s)", reason)
+                await asyncio.shield(fallback)
+            except asyncio.CancelledError:
+                await fallback
+                raise
             return "fallback"
         self._dropped += 1
         if self._dropped % DROP_LOG_EVERY == 1:
             verbose_proxy_logger.warning("collector: dropping spend event (%s). stats=%s", reason, self.stats())
         return "dropped"
+
+    async def _run_fallback(self, line: bytes, reason: str) -> None:
+        try:
+            await self._fallback(line)
+        except Exception:  # noqa: BLE001  # one failing event must not kill the writer task
+            verbose_proxy_logger.exception("collector: in-process fallback failed (%s)", reason)

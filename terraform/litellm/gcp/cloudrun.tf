@@ -202,7 +202,7 @@ locals {
   collector_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    ["exec python -m gateway.collector"],
+    ["exec python -m litellm.proxy.collector"],
   ))
 
   # Env shipped to the migrations Job. The migrations image runs run.py

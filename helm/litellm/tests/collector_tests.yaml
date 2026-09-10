@@ -41,6 +41,14 @@ tests:
           value: "true"
       gateway.envSecrets:
         - litellm-license
+      gateway.volumes:
+        - name: redis-ca
+          secret:
+            secretName: redis-ca
+      gateway.volumeMounts:
+        - name: redis-ca
+          mountPath: /etc/litellm/redis-ca
+          readOnly: true
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -79,7 +87,7 @@ tests:
           value:
             - python
             - -m
-            - gateway.collector
+            - litellm.proxy.collector
         template: gateway/deployment.yaml
       - contains:
           path: spec.template.spec.containers[1].env
@@ -135,6 +143,13 @@ tests:
           content:
             name: collector-socket
             mountPath: /var/run/litellm
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: redis-ca
+            mountPath: /etc/litellm/redis-ca
+            readOnly: true
         template: gateway/deployment.yaml
       - equal:
           path: spec.template.spec.containers[1].resources.limits.cpu

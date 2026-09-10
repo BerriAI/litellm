@@ -66,12 +66,12 @@ run "enabled_adds_a_sidecar_that_shares_the_gateway_transport" {
     condition = (
       google_cloud_run_v2_service.gateway[0].template[0].containers[1].image == local.gateway_image &&
       google_cloud_run_v2_service.gateway[0].template[0].containers[1].command == tolist(["sh", "-c"]) &&
-      endswith(google_cloud_run_v2_service.gateway[0].template[0].containers[1].args[0], " && exec python -m gateway.collector") &&
+      endswith(google_cloud_run_v2_service.gateway[0].template[0].containers[1].args[0], " && exec python -m litellm.proxy.collector") &&
       strcontains(google_cloud_run_v2_service.gateway[0].template[0].containers[1].args[0], "export DATABASE_URL=") &&
       strcontains(google_cloud_run_v2_service.gateway[0].template[0].containers[1].args[0], "REDIS_SSL_CA_CERTS") &&
       { for e in google_cloud_run_v2_service.gateway[0].template[0].containers[1].env : e.name => e.value }["LITELLM_JOB_ROLE"] == "collector"
     )
-    error_message = "The sidecar must run gateway.collector from the gateway image with the same Redis CA + DATABASE_URL bootstrap as the gateway."
+    error_message = "The sidecar must run litellm.proxy.collector from the gateway image with the same Redis CA + DATABASE_URL bootstrap as the gateway."
   }
 
   assert {

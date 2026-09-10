@@ -163,7 +163,7 @@ spec:
           command:
             - python
             - -m
-            - gateway.collector
+            - litellm.proxy.collector
           env:
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
             {{- if .Values.gateway.config.create }}
@@ -174,7 +174,7 @@ spec:
             - name: LITELLM_JOB_ROLE
               value: collector
           {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
-          {{- if or .Values.gateway.config.create (include "litellm.gateway.collectorSocketDir" .) }}
+          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts (include "litellm.gateway.collectorSocketDir" .) }}
           volumeMounts:
             {{- if .Values.gateway.config.create }}
             - name: gateway-config
@@ -184,6 +184,9 @@ spec:
             {{- if include "litellm.gateway.collectorSocketDir" . }}
             - name: collector-socket
               mountPath: {{ include "litellm.gateway.collectorSocketDir" . }}
+            {{- end }}
+            {{- with .Values.gateway.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
           resources:

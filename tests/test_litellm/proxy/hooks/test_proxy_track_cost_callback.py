@@ -2310,9 +2310,7 @@ async def test_sidecar_writes_the_same_spend_row_and_counters_as_the_in_process_
     end_time = datetime(2026, 1, 1, 0, 0, 2)
 
     async def in_process() -> None:
-        await _ProxyDBLogger()._PROXY_track_cost_callback(
-            _offload_kwargs(), _offload_response(), start_time=start_time, end_time=end_time
-        )
+        await _ProxyDBLogger().async_log_success_event(_offload_kwargs(), _offload_response(), start_time, end_time)
 
     async def via_sidecar() -> None:
         line = build_spend_event(_offload_kwargs(), _offload_response(), start_time, end_time, store_bodies=False)

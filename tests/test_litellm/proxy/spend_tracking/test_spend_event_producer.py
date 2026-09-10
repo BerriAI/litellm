@@ -65,6 +65,20 @@ class _Fallback:
         self.lines.append(line)
 
 
+class _GatedFallback(_Fallback):
+    """A fallback that blocks, like a slow database write, until the test releases it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def __call__(self, line: bytes) -> None:
+        self.started.set()
+        await self.release.wait()
+        await super().__call__(line)
+
+
 class _StalledDrainWriter(asyncio.StreamWriter):
     """Hands bytes to the real transport but never wakes ``drain()``: the loop iteration between a flush
     completing and the writer task resuming, frozen in place."""
@@ -219,6 +233,23 @@ async def test_drain_timeout_hands_the_in_flight_event_to_fallback(tmp_path: Pat
     assert fallback.lines == [stuck]
     stats: Final = producer.stats()
     assert (stats.sent, stats.fallback, stats.connected) == (0, 1, False)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_lets_the_writer_finish_a_fallback_already_in_progress(tmp_path: Path):
+    """Cancelling the writer while it runs the pipeline in-process must neither lose nor repeat that event."""
+    fallback: Final = _GatedFallback()
+    producer: Final = _producer(tmp_path / "missing.sock", fallback)
+    assert await producer.publish(b"event-1\n") == "queued"
+    await asyncio.wait_for(fallback.started.wait(), 5.0)
+    closing: Final = asyncio.ensure_future(producer.close(drain_timeout=0.05))
+    await asyncio.sleep(0.2)
+    assert fallback.lines == []
+    fallback.release.set()
+    await asyncio.wait_for(closing, 5.0)
+
+    assert fallback.lines == [b"event-1\n"]
+    assert producer.stats().fallback == 1
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,12 @@ connections, half-closes every producer connection so the producers switch to th
 policy, finishes the events already sent, then runs the proxy shutdown (which flushes the buffered
 spend transactions).
 
-    LITELLM_JOB_ROLE=collector python -m litellm.proxy.collector [--address unix:///path.sock]
+``DATABASE_URL`` is assembled from the same ``DATABASE_*`` inputs as the proxy container, and when
+``LITELLM_PGBOUNCER_ENABLED`` is set it points at the PgBouncer that container already runs on the
+pod's loopback, so the sidecar must see the same env as the proxy. Works from any image that has
+``litellm`` installed:
+
+    python -m litellm.proxy.collector [--address unix:///path.sock]
 """
 
 import asyncio
@@ -19,11 +24,13 @@ import logging
 import os
 import signal
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
 from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
+from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, pooled_database_url
 from litellm.proxy.spend_tracking.spend_event_producer import (
     COLLECTOR_JOB_ROLE,
     AddressError,
@@ -140,7 +147,7 @@ async def run_collector(address: CollectorAddress, drain_timeout: float) -> None
         )
 
 
-def _address_argument(argv: Sequence[str], default: str) -> str | AddressError:
+def address_argument(argv: Sequence[str], default: str) -> str | AddressError:
     match tuple(argv):
         case ():
             return default
@@ -159,11 +166,27 @@ def apply_log_level(litellm_log: str | None) -> None:
         logger.setLevel(level)
 
 
+def pod_pgbouncer_database_url(pgbouncer: PgBouncerSettings, environ: Mapping[str, str]) -> str | PgBouncerError | None:
+    """The proxy container's PgBouncer URL for ``environ["DATABASE_URL"]``, or None when PgBouncer is off."""
+    if not pgbouncer.enabled:
+        return None
+    upstream_url: Final = environ.get("DATABASE_URL")
+    if upstream_url is None:
+        return PgBouncerError("LITELLM_PGBOUNCER_ENABLED is set but no DATABASE_URL could be assembled")
+    return pooled_database_url(upstream_url, pgbouncer)
+
+
 def main(argv: Sequence[str]) -> None:
     os.environ.setdefault("LITELLM_JOB_ROLE", COLLECTOR_JOB_ROLE)
     apply_log_level(os.environ.get("LITELLM_LOG"))
+    DatabaseURLSettings.from_env().apply_to_env()
+    pooled: Final = pod_pgbouncer_database_url(PgBouncerSettings(), os.environ)
+    if isinstance(pooled, PgBouncerError):
+        sys.exit(f"LiteLLM collector: cannot use the pod's pgbouncer: {pooled.reason}")
+    if pooled is not None:
+        os.environ["DATABASE_URL"] = pooled
     settings: Final = CollectorSettings()
-    raw_address: Final = _address_argument(argv, default=settings.address)
+    raw_address: Final = address_argument(argv, default=settings.address)
     address: Final = raw_address if isinstance(raw_address, AddressError) else parse_collector_address(raw_address)
     if isinstance(address, AddressError):
         sys.exit(f"LiteLLM collector: {address.reason}")

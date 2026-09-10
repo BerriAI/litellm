@@ -46,7 +46,7 @@ tests:
           value: ghcr.io/berriai/litellm:test
       - equal:
           path: spec.template.spec.containers[1].command
-          value: [python, -m, gateway.collector]
+          value: [python, -m, litellm.proxy.collector]
       - equal:
           path: spec.template.spec.containers[1].resources.requests.cpu
           value: 500m

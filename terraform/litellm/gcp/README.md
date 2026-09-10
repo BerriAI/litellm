@@ -324,7 +324,7 @@ honours `KEEPALIVE_TIMEOUT` from `gateway_extra_env` the way the image does
 ### Collector sidecar
 
 `collector_enabled = true` adds a `spend-collector` container to the gateway
-Cloud Run service that runs `python -m gateway.collector` from the gateway
+Cloud Run service that runs `python -m litellm.proxy.collector` from the gateway
 image, and sets `LITELLM_COLLECTOR_ENABLED=true` on the gateway so its
 uvicorn workers ship spend events (SpendLogs writes, key/team/user spend
 updates, budget alerts) to the sidecar instead of running that pipeline in

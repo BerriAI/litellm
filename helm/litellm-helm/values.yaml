@@ -217,7 +217,7 @@ collector:
   command:
     - python
     - -m
-    - gateway.collector
+    - litellm.proxy.collector
   # Sized independently of the proxy container; the pipeline is CPU bound
   resources: {}
   # requests:

@@ -260,7 +260,7 @@ async def test_flush_spend_counters_on_shutdown_commits_buffered_spend(monkeypat
     commit = AsyncMock()
     monkeypatch.setattr(ps.proxy_logging_obj.db_spend_update_writer, "db_update_spend_transaction_handler", commit)
 
-    await ps._flush_spend_counters_on_shutdown()
+    await ps.flush_spend_counters_on_shutdown()
 
     observed = {
         "commit_calls": commit.await_count,
@@ -280,7 +280,7 @@ async def test_flush_spend_counters_on_shutdown_logs_and_swallows_commit_errors(
     )
 
     with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
-        await ps._flush_spend_counters_on_shutdown()
+        await ps.flush_spend_counters_on_shutdown()
 
     assert "Error flushing spend counters on shutdown: db gone" in caplog.text
 
