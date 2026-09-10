@@ -76,11 +76,6 @@ def test_custom_llm_provider(config):
     assert config.custom_llm_provider == LlmProviders.MISTRAL
 
 
-# --------------------------------------------------------------------------- #
-# create
-# --------------------------------------------------------------------------- #
-
-
 def test_create_request_maps_openai_fields_onto_mistral_job(config):
     data = CreateBatchRequest(
         completion_window="24h",
@@ -173,11 +168,6 @@ def test_create_response_maps_job_onto_openai_batch(config):
     assert batch.in_progress_at is None
     assert batch.completed_at is None
     assert batch.metadata == {"job_type": "testing"}
-
-
-# --------------------------------------------------------------------------- #
-# retrieve
-# --------------------------------------------------------------------------- #
 
 
 def test_retrieve_request_is_presigned_get_with_auth(config, api_key):

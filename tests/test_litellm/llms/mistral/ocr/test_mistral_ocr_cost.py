@@ -63,7 +63,6 @@ def test_ocr4_cost_scales_with_pages(model: str, pages_processed: int) -> None:
     assert cost == pytest.approx(OCR4_COST_PER_PAGE * pages_processed)
 
 
-
 @pytest.mark.parametrize("cost_map_path", [MAIN_COST_MAP, BACKUP_COST_MAP])
 def test_ocr3_pricing_entry(cost_map_path: Path) -> None:
     with open(cost_map_path) as f:
