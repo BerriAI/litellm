@@ -68,6 +68,7 @@ except ImportError:
     raise ImportError("backoff is not installed. Please install it via 'pip install backoff'")
 
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -3902,6 +3903,11 @@ async def prefetch_config_params(prisma_client: "PrismaClient | None", param_nam
         )
 
 
+_WRITER_WRITABILITY_PROBE_SQL: Final = "SELECT current_setting('transaction_read_only') AS transaction_read_only"
+_WRITER_WRITABILITY_PROBE_ROWS: Final = TypeAdapter(list[dict[str, object]])
+_READ_ONLY_RECREATE_BACKOFF_CAP_SECONDS: Final = 600
+
+
 class _ForcedRecreateDeclined(Exception):
     """A forced recreate was declined by the engine-generation guard.
 
@@ -4079,6 +4085,8 @@ class PrismaClient:
         self._db_health_watchdog_task: asyncio.Task | None = None
         self._db_last_reconnect_attempt_ts: float = 0.0
         self._db_reconnect_cooldown_seconds: int = max(1, int(os.getenv("PRISMA_RECONNECT_COOLDOWN_SECONDS", "15")))
+        self._db_read_only_recreate_ts: float = 0.0
+        self._db_read_only_recreate_streak: int = 0
         self._db_health_watchdog_interval_seconds: int = max(
             5, int(os.getenv("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", "30"))
         )
@@ -5796,15 +5804,20 @@ class PrismaClient:
                 writer: Final = self.writer_db
                 if force_recreate is False:
                     try:
-                        await writer.query_raw("SELECT 1")
-                        verbose_proxy_logger.info(
-                            "Writer healthy on probe; skipping recreate (engine "
-                            "likely already replaced by a token refresh)."
-                        )
-                        if isinstance(self.db, RoutingPrismaWrapper):
-                            self.db.mark_writer_recovered()
-                        await self._start_engine_watcher()
-                        return
+                        if await self._writer_is_read_only(writer):
+                            verbose_proxy_logger.warning(
+                                "Writer answers the probe but its session is read-only "
+                                "(writes fail with SQLSTATE 25006); recreating Prisma client."
+                            )
+                        else:
+                            verbose_proxy_logger.info(
+                                "Writer healthy on probe; skipping recreate (engine "
+                                "likely already replaced by a token refresh)."
+                            )
+                            if isinstance(self.db, RoutingPrismaWrapper):
+                                self.db.mark_writer_recovered()
+                            await self._start_engine_watcher()
+                            return
                     except Exception as probe_err:
                         verbose_proxy_logger.warning(
                             "Writer probe failed (%s); recreating Prisma client.",
@@ -6124,6 +6137,18 @@ class PrismaClient:
                         reason="db_health_watchdog_writer_unavailable",
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
+                    continue
+                if await asyncio.wait_for(
+                    self._writer_is_read_only(self.writer_db),
+                    timeout=self._db_health_watchdog_probe_timeout_seconds,
+                ):
+                    await self.recreate_read_only_writer(
+                        reason="db_health_watchdog_writer_read_only",
+                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                    )
+                    continue
+                self._db_read_only_recreate_streak = 0
+                self._db_read_only_recreate_ts = 0.0
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -6134,6 +6159,39 @@ class PrismaClient:
                     )
                 else:
                     verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
+
+    async def recreate_read_only_writer(self, reason: str, timeout_seconds: float | None = None) -> bool:
+        """Force-recreate the client behind a writer session that rejects writes
+        (SQLSTATE 25006). Each recreate doubles the wait before the next one
+        until the watchdog sees a writable session again, so a database that is
+        read-only as a whole (replica, failover in progress) does not get its
+        engine killed on every watchdog cycle or failed write."""
+        backoff_seconds: Final = min(
+            self._db_reconnect_cooldown_seconds * 2 ** min(self._db_read_only_recreate_streak, 10),
+            _READ_ONLY_RECREATE_BACKOFF_CAP_SECONDS,
+        )
+        if time.time() - self._db_read_only_recreate_ts < backoff_seconds:
+            verbose_proxy_logger.debug(
+                "Writer session still read-only after %s recreate(s); backing off %ss. reason=%s",
+                self._db_read_only_recreate_streak,
+                backoff_seconds,
+                reason,
+            )
+            return False
+        verbose_proxy_logger.warning(
+            "Writer session is read-only (writes fail with SQLSTATE 25006); recreating Prisma client. reason=%s",
+            reason,
+        )
+        self._db_read_only_recreate_ts = time.time()
+        self._db_read_only_recreate_streak += 1
+        return await self.attempt_db_reconnect(reason=reason, timeout_seconds=timeout_seconds, force_recreate=True)
+
+    async def _writer_is_read_only(self, writer: PrismaWrapper) -> bool:
+        """True iff the pooled writer session answers reads but rejects writes (SQLSTATE 25006)."""
+        rows: Final = _WRITER_WRITABILITY_PROBE_ROWS.validate_python(
+            await writer.query_raw(_WRITER_WRITABILITY_PROBE_SQL)
+        )
+        return any(row.get("transaction_read_only") == "on" for row in rows)
 
     def _probe_target_wrapper(self) -> PrismaWrapper:
         """The Prisma wrapper a `SELECT 1` health probe actually reaches.
@@ -7547,6 +7605,12 @@ def _get_openapi_url() -> str | None:
     return "/openapi.json"
 
 
+def _recreate_writer_on_read_only_transaction(prisma_client: "PrismaClient | None") -> None:
+    if prisma_client is None:
+        return
+    asyncio.create_task(prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction"))
+
+
 def handle_exception_on_proxy(e: Exception) -> ProxyException:
     """
     Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
@@ -7554,6 +7618,10 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
     from fastapi import status
 
     verbose_proxy_logger.exception("Exception: %s", e)
+    if PrismaDBExceptionHandler.is_read_only_transaction_error(e):
+        from litellm.proxy.proxy_server import prisma_client
+
+        _recreate_writer_on_read_only_transaction(prisma_client)
 
     if isinstance(e, HTTPException):
         return ProxyException(

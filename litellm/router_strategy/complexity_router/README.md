@@ -361,6 +361,19 @@ model_list:
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
 
+When the current ask is a Responses API `agent_message` containing `encrypted_content`, LLM
+classification preserves the encrypted task and uses native Responses. This also bypasses the
+local scoring shortcut in `heuristic_first` and `hybrid` modes. The configured classifier must use
+a native OpenAI or Azure OpenAI Responses deployment with access to the encrypted content. The
+provider handles the encrypted task, and the classifier still chooses the tier dynamically
+
+Compatibility is checked after normal deployment selection. A paused incompatible member of the
+classifier group does not prevent an eligible compatible deployment from classifying the task
+
+Unsupported classifier deployments and provider decryption errors use the existing
+`classifier_fallback` policy. No fixed tier is introduced for encrypted tasks. Plaintext asks and
+requests carrying only historical encrypted reasoning retain the existing classifier path
+
 Classifier calls have a one-attempt hard deadline. After a timeout, the router opens a process-local
 circuit for that classifier and sends every session through `classifier_fallback` for
 `classifier_llm_config.circuit_breaker_cooldown_seconds` (30 seconds by default). When the cooldown

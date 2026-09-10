@@ -556,6 +556,44 @@ variable "otel_capture_message_content" {
   }
 }
 
+# ---------- Prometheus metrics sidecar ----------
+
+variable "gateway_metrics_port" {
+  description = <<-EOT
+    Serve Prometheus /metrics from a `metrics` sidecar container in the
+    gateway Cloud Run service on this port (a whole number 1-65535, not 4000
+    or 13133), so the collector's scrape never runs on an inference worker.
+    The sidecar runs the gateway image with
+    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
+    workers' PROMETHEUS_MULTIPROC_DIR samples over an in-memory volume shared
+    with the gateway container. Cloud Run only routes ingress to the gateway
+    container, so the sidecar port is reachable on localhost inside the
+    instance only; a Managed Service for Prometheus collector sidecar
+    (gateway_metrics_collector_image) scrapes it and writes the series to
+    Cloud Monitoring. The load balancer keeps serving the authenticated
+    /metrics on the gateway port as before. Null (the default) leaves /metrics
+    on the gateway port only. Needs gateway_image v1.101.0 or newer.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.gateway_metrics_port == null || (var.gateway_metrics_port >= 1 && var.gateway_metrics_port <= 65535 && floor(var.gateway_metrics_port) == var.gateway_metrics_port && !contains([4000, 13133], var.gateway_metrics_port))
+    error_message = "gateway_metrics_port must be a whole number between 1 and 65535 and must not be 4000 (the gateway port) or 13133 (the collector health port)."
+  }
+}
+
+variable "gateway_metrics_collector_image" {
+  description = <<-EOT
+    Managed Service for Prometheus sidecar image that scrapes
+    localhost:<gateway_metrics_port>/metrics and writes to Cloud Monitoring.
+    Override only to pin a different release or pull through your own
+    Artifact Registry. Ignored when gateway_metrics_port is null.
+  EOT
+  type        = string
+  default     = "us-docker.pkg.dev/cloud-ops-agents-artifacts/cloud-run-gmp-sidecar/cloud-run-gmp-sidecar:1.9.2"
+}
+
 # ---------- Enterprise billing metrics ----------
 #
 # License-gated request metering. Opt-in and gated entirely on
