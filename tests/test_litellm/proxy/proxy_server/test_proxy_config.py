@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock
@@ -2220,8 +2221,8 @@ def test_ProxyConfig_get_model_info_with_id_populates_audit_fields_regardless_of
     )
     out = pc.get_model_info_with_id(model=model, db_model=True)
     dumped = out.model_dump()
-    assert dumped.get("created_at") == "2026-01-01T00:00:00Z"
-    assert dumped.get("updated_at") == "2026-01-02T00:00:00Z"
+    assert dumped.get("created_at") == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert dumped.get("updated_at") == datetime(2026, 1, 2, tzinfo=timezone.utc)
     assert dumped.get("created_by") == "test-user@example.com"
     assert dumped.get("updated_by") == "test-user@example.com"
 

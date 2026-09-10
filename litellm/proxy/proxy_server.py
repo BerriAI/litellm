@@ -6242,10 +6242,11 @@ class ProxyConfig:
             model.model_info["blocked"] = bool(getattr(model, "blocked", False))
 
         # Always copy from the DB row, not gated behind premium_user. See #40548
-        model.model_info["created_at"] = getattr(model, "created_at", None)
-        model.model_info["updated_at"] = getattr(model, "updated_at", None)
-        model.model_info["created_by"] = getattr(model, "created_by", None)
-        model.model_info["updated_by"] = getattr(model, "updated_by", None)
+        if model.model_info is not None:
+            model.model_info["created_at"] = getattr(model, "created_at", None)
+            model.model_info["updated_at"] = getattr(model, "updated_at", None)
+            model.model_info["created_by"] = getattr(model, "created_by", None)
+            model.model_info["updated_by"] = getattr(model, "updated_by", None)
 
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
@@ -14263,7 +14264,7 @@ async def model_info_v2(
     ):
         all_models = [
             {**m, "model_info": {**m["model_info"], "created_by": None, "updated_by": None}}
-            if isinstance(m, dict) and isinstance(m.get("model_info"), dict)
+            if isinstance(m.get("model_info"), dict)
             else m
             for m in all_models
         ]
