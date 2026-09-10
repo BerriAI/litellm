@@ -1,7 +1,7 @@
 import posixpath
 import re
 from collections.abc import Mapping, Sequence
-from itertools import accumulate, pairwise, repeat
+from itertools import accumulate, repeat
 from types import MappingProxyType
 from typing import Any, Final, cast
 from urllib.parse import quote, unquote
@@ -21,21 +21,29 @@ MANAGED_CLOUD_STORAGE_SCHEMES: Final = ("s3://", "gs://")
 _MAPPING_PROXY_TYPE: Final[type] = type(MappingProxyType({}))
 
 
-def _fully_unquoted(value: str) -> str:
-    decodings: Final = accumulate(repeat(value), lambda current, _: unquote(current))
-    return next(current for current, following in pairwise(decodings) if current == following)
+MAX_FILE_ID_DECODE_PASSES: Final = 8
+
+
+def _decodings(value: str) -> tuple[str, ...]:
+    return tuple(accumulate(repeat(value, MAX_FILE_ID_DECODE_PASSES + 2), lambda current, _: unquote(current)))
 
 
 def is_managed_cloud_storage_uri(file_id: str) -> bool:
     """
     True if file_id is a raw cloud-storage object URI (e.g. ``s3://bucket/key``),
-    however many times it was percent-encoded on the way in.
+    up to ``MAX_FILE_ID_DECODE_PASSES`` layers of percent-encoding deep, or an id
+    encoded deeper than that, which no client produces and which is treated as raw
+    rather than decoded any further.
 
     These are internal provider artifacts. On the multi-tenant proxy they must be
     retrieved through their managed unified file id so owner/team access is enforced;
     a raw URI supplied by a caller bypasses that check.
     """
-    return isinstance(file_id, str) and _fully_unquoted(file_id).startswith(MANAGED_CLOUD_STORAGE_SCHEMES)
+    if not isinstance(file_id, str):
+        return False
+    decodings: Final = _decodings(file_id)
+    settled: Final = decodings[-1] == decodings[-2]
+    return decodings[-1].startswith(MANAGED_CLOUD_STORAGE_SCHEMES) or not settled
 
 
 _SAFE_OBJECT_COMPONENT_PATTERN: Final = re.compile(r"[^A-Za-z0-9._-]+")

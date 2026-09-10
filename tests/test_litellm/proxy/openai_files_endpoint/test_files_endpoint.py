@@ -12,7 +12,7 @@ from pytest_mock import MockerFixture
 import litellm
 from litellm import Router
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import LiteLLM_UserTableFiltered, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.hooks import get_proxy_hook
 from litellm.proxy.management_endpoints.internal_user_endpoints import ui_view_users
 from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
@@ -252,7 +252,9 @@ def _raw_cloud_file_ids_in_every_encoding() -> tuple[tuple[str, str, str], ...]:
     )
 
 
-def _override_auth(monkeypatch, mocker: MockerFixture, llm_router: Router, user_role) -> ProxyLogging:
+def _override_auth(
+    monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, llm_router: Router, user_role: LitellmUserRoles
+) -> ProxyLogging:
     import litellm.proxy.proxy_server as ps
 
     proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
@@ -269,10 +271,14 @@ def _override_auth(monkeypatch, mocker: MockerFixture, llm_router: Router, user_
 
 @pytest.mark.parametrize(("encoded_id", "raw_id", "provider"), _raw_cloud_file_ids_in_every_encoding())
 def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
-    mocker: MockerFixture, monkeypatch, llm_router: Router, encoded_id: str, raw_id: str, provider: str
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    encoded_id: str,
+    raw_id: str,
+    provider: str,
 ):
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles
 
     _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.INTERNAL_USER)
     afile_content = mocker.AsyncMock()
@@ -293,25 +299,26 @@ def test_get_file_content_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
 
 @pytest.mark.parametrize(("encoded_id", "raw_id", "provider"), _raw_cloud_file_ids_in_every_encoding())
 def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
-    mocker: MockerFixture, monkeypatch, llm_router: Router, encoded_id: str, raw_id: str, provider: str
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    llm_router: Router,
+    encoded_id: str,
+    raw_id: str,
+    provider: str,
 ):
     import litellm.proxy.proxy_server as ps
-    from litellm.proxy._types import LitellmUserRoles
 
     _override_auth(monkeypatch, mocker, llm_router, LitellmUserRoles.PROXY_ADMIN)
-    captured_kwargs: dict = {}
-
-    async def _mock_afile_content(**kwargs):
-        captured_kwargs.update(kwargs)
-        return HttpxBinaryResponseContent(
+    afile_content = mocker.AsyncMock(
+        return_value=HttpxBinaryResponseContent(
             response=httpx.Response(
                 status_code=200,
                 content=b'{"custom_id": "request-1"}\n',
                 headers={"content-type": "application/octet-stream"},
             )
         )
-
-    monkeypatch.setattr(litellm, "afile_content", _mock_afile_content)
+    )
+    monkeypatch.setattr(litellm, "afile_content", afile_content)
 
     try:
         response = client.get(
@@ -323,8 +330,9 @@ def test_get_file_content_forwards_a_raw_cloud_id_from_a_proxy_admin_key(
 
     assert response.status_code == 200, response.text
     assert response.content == b'{"custom_id": "request-1"}\n'
-    assert captured_kwargs["custom_llm_provider"] == provider
-    assert captured_kwargs["file_id"] == raw_id
+    afile_content.assert_called_once()
+    assert afile_content.call_args.kwargs["custom_llm_provider"] == provider
+    assert afile_content.call_args.kwargs["file_id"] == raw_id
 
 
 def test_mock_create_audio_file(mocker: MockerFixture, monkeypatch, llm_router: Router):
