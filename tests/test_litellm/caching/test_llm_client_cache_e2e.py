@@ -139,12 +139,12 @@ async def test_evicted_openai_client_finalizes_aiohttp_session():
     from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    transport = AsyncHTTPHandler._create_async_transport()
+    transport: Final = AsyncHTTPHandler._create_async_transport()
     assert isinstance(transport, LiteLLMAiohttpTransport)
-    session_ref = weakref.ref(transport._get_valid_client_session())
-    http_client = httpx.AsyncClient(transport=transport)
-    client = AsyncOpenAI(api_key="sk-test", http_client=http_client)
-    transport_ref = weakref.ref(transport)
+    session_ref: Final = weakref.ref(transport._get_valid_client_session())
+    http_client: Final = httpx.AsyncClient(transport=transport)
+    client: Final = AsyncOpenAI(api_key="sk-test", http_client=http_client)
+    transport_ref: Final = weakref.ref(transport)
     warning: Final[asyncio.Future[str]] = asyncio.get_running_loop().create_future()
 
     def exception_handler(_loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
@@ -153,7 +153,7 @@ async def test_evicted_openai_client_finalizes_aiohttp_session():
 
     asyncio.get_running_loop().set_exception_handler(exception_handler)
 
-    cache = litellm.in_memory_llm_clients_cache
+    cache: Final = litellm.in_memory_llm_clients_cache
     cache.set_cache("openai-aiohttp-client", client, ttl=600)
     cache.set_cache("filler", "x", ttl=600)
 
