@@ -1,0 +1,16 @@
+{
+  "commit": "6b721de3e530bc97758d59621e57e3a75a9ebadf",
+  "case": "headers",
+  "requestsAfterEdit": [
+    {
+      "method": "GET",
+      "url": "http://localhost:47135/mcp-rest/tools/list?server_id=e9d70a72-41b3-4875-8a1e-baf4cc6fff48",
+      "status": 403,
+      "tools": [],
+      "error": null,
+      "message": null
+    }
+  ],
+  "visibleTools": 0,
+  "errorVisible": true
+}

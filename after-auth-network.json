@@ -1,0 +1,33 @@
+{
+  "commit": "245369764e80d113e80ec8269846e5257692b8bc",
+  "case": "auth",
+  "requestsAfterEdit": [
+    {
+      "method": "POST",
+      "url": "http://localhost:47135/mcp-rest/test/tools/list",
+      "status": 200,
+      "config": {
+        "url": "http://upstream:8080/mcp",
+        "auth_type": "basic",
+        "server_id": "9b6bd048-e6c8-4501-972c-1fc1c73944bd"
+      },
+      "credentialsProvided": true,
+      "staticHeaderNames": [],
+      "tools": [
+        "echo"
+      ],
+      "error": null,
+      "message": "Successfully retrieved tools"
+    },
+    {
+      "method": "GET",
+      "url": "http://localhost:47135/mcp-rest/tools/list?server_id=9b6bd048-e6c8-4501-972c-1fc1c73944bd",
+      "status": 403,
+      "tools": [],
+      "error": null,
+      "message": null
+    }
+  ],
+  "visibleTools": 1,
+  "errorVisible": false
+}

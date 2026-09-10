@@ -1,0 +1,466 @@
+Testing types with tsc and vue-tsc is an experimental feature.
+Breaking changes might not follow SemVer, please pin Vitest's version when using it.
+
+ RUN  v4.1.11 /Users/jvalluru/LiteLLM-work/litellm-lit-7135-before/ui/litellm-dashboard
+
+Importing from "vitest/environments" is deprecated since Vitest 4.1. Please use "vitest/runtime" instead.
+The Vitest environment jsdom-fetch defines the "transformMode". This options was deprecated in Vitest 4 and will be removed in the next major version. Please, use "viteEnvironment" instead.
+ ❯ |integration| src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx (23 tests | 4 failed | 19 skipped) 4272ms
+     × replaces the saved connection failure with tools after correcting Basic Auth without saving 817ms
+     × refreshes tools when a static header is corrected 1155ms
+     × coalesces URL edits and ignores an older failed preview after the latest preview succeeds 1213ms
+     × ignores a saved-record response after editing and restores saved discovery when changes are reverted 1086ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |integration| src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx > MCPServerEdit live tool preview > replaces the saved connection failure with tools after correcting Basic Auth without saving
+Error: expect(element).not.toBeInTheDocument()
+
+expected document not to contain element, found <p
+  class="text-sm text-destructive"
+>
+  Saved credentials rejected
+</p> instead
+ ❯ src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx:404:66
+    402|     await selectOption("Authentication", "Basic Auth");
+    403|     fireEvent.change(screen.getByLabelText("Authentication Value"), { …
+    404|     expect(screen.queryByText("Saved credentials rejected")).not.toBeI…
+       |                                                                  ^
+    405|     expect(screen.getByText("Loading tools...")).toBeInTheDocument();
+    406|     expect(networking.testMCPToolsListRequest).not.toHaveBeenCalled();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  |integration| src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx > MCPServerEdit live tool preview > refreshes tools when a static header is corrected
+TestingLibraryElementError: Unable to find role="button" and name "Flat List"
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m"overflow: hidden;"[39m
+[36m>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"group/tabs flex gap-2 data-horizontal:flex-col"[39m
+      [33mdata-activation-direction[39m=[32m"none"[39m
+      [33mdata-orientation[39m=[32m"horizontal"[39m
+      [33mdata-slot[39m=[32m"tabs"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"group/tabs-list items-center justify-center text-muted-foreground group-data-horizontal/tabs:h-9 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none gap-1 bg-transparent grid h-auto w-full grid-cols-2 rounded-none border-b p-0"[39m
+        [33mdata-activation-direction[39m=[32m"none"[39m
+        [33mdata-orientation[39m=[32m"horizontal"[39m
+        [33mdata-slot[39m=[32m"tabs-list"[39m
+        [33mdata-variant[39m=[32m"line"[39m
+        [33mrole[39m=[32m"tablist"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-controls[39m=[32m"base-ui-_r_2l_"[39m
+          [33maria-disabled[39m=[32m"false"[39m
+          [33maria-selected[39m=[32m"true"[39m
+          [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-active[39m=[32m""[39m
+          [33mdata-composite-item-active[39m=[32m""[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-trigger"[39m
+          [33mid[39m=[32m"base-ui-_r_2j_"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtabindex[39m=[32m"0"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mServer Configuration[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-controls[39m=[32m"base-ui-_r_51_"[39m
+          [33maria-disabled[39m=[32m"false"[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-trigger"[39m
+          [33mid[39m=[32m"base-ui-_r_2k_"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtabindex[39m=[32m"-1"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mCost Configuration[0m
+        [36m</button>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"mt-6"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33maria-labelledby[39m=[32m"base-ui-_r_2j_"[39m
+          [33mclass[39m=[32m"flex-1 text-sm outline-none"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-index[39m=[32m"0"[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-content"[39m
+          [33mid[39m=[32m"base-ui-_r_2l_"[39m
+          [33mrole[39m=[32m"tabpanel"[39m
+          [33mtabindex[39m=[32m"0"[39m
+        [36m>[39m
+          [36m<form>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"group/field flex w-full gap-3 data-[invalid=true]:text-destructive flex-col *:w-full [&>.sr-only]:w-auto"[39m
+              [33mdata-orientation[39m=[32m"vertical"[39m
+              [33mdata-slot[39m=[32m"field"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<label[39m
+                [33mclass[39m=[32m"items-center text-sm font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-...
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m"overflow: hidden;"[39m
+[36m>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"group/tabs flex gap-2 data-horizontal:flex-col"[39m
+      [33mdata-activation-direction[39m=[32m"none"[39m
+      [33mdata-orientation[39m=[32m"horizontal"[39m
+      [33mdata-slot[39m=[32m"tabs"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"group/tabs-list items-center justify-center text-muted-foreground group-data-horizontal/tabs:h-9 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none gap-1 bg-transparent grid h-auto w-full grid-cols-2 rounded-none border-b p-0"[39m
+        [33mdata-activation-direction[39m=[32m"none"[39m
+        [33mdata-orientation[39m=[32m"horizontal"[39m
+        [33mdata-slot[39m=[32m"tabs-list"[39m
+        [33mdata-variant[39m=[32m"line"[39m
+        [33mrole[39m=[32m"tablist"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-controls[39m=[32m"base-ui-_r_2l_"[39m
+          [33maria-disabled[39m=[32m"false"[39m
+          [33maria-selected[39m=[32m"true"[39m
+          [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-active[39m=[32m""[39m
+          [33mdata-composite-item-active[39m=[32m""[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-trigger"[39m
+          [33mid[39m=[32m"base-ui-_r_2j_"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtabindex[39m=[32m"0"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mServer Configuration[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-controls[39m=[32m"base-ui-_r_51_"[39m
+          [33maria-disabled[39m=[32m"false"[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-trigger"[39m
+          [33mid[39m=[32m"base-ui-_r_2k_"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtabindex[39m=[32m"-1"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mCost Configuration[0m
+        [36m</button>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"mt-6"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33maria-labelledby[39m=[32m"base-ui-_r_2j_"[39m
+          [33mclass[39m=[32m"flex-1 text-sm outline-none"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-index[39m=[32m"0"[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-content"[39m
+          [33mid[39m=[32m"base-ui-_r_2l_"[39m
+          [33mrole[39m=[32m"tabpanel"[39m
+          [33mtabindex[39m=[32m"0"[39m
+        [36m>[39m
+          [36m<form>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"group/field flex w-full gap-3 data-[invalid=true]:text-destructive flex-col *:w-full [&>.sr-only]:w-auto"[39m
+              [33mdata-orientation[39m=[32m"vertical"[39m
+              [33mdata-slot[39m=[32m"field"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<label[39m
+                [33mclass[39m=[32m"items-center text-sm font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-...
+ ❯ waitForWrapper ../../../litellm-lit-5777/ui/litellm-dashboard/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../../litellm-lit-5777/ui/litellm-dashboard/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx:426:34
+    424|     expect(await screen.findByText("Saved credentials rejected")).toBe…
+    425|     fireEvent.change(screen.getByPlaceholderText("Header value"), { ta…
+    426|     fireEvent.click(await screen.findByRole("button", { name: "Flat Li…
+       |                                  ^
+    427|     expect(screen.getByText("echo")).toBeInTheDocument();
+    428|     expect(networking.testMCPToolsListRequest).toHaveBeenCalledExactly…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  |integration| src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx > MCPServerEdit live tool preview > coalesces URL edits and ignores an older failed preview after the latest preview succeeds
+AssertionError: expected "vi.fn()" to be called 1 times, but got 0 times
+
+Ignored nodes: comments, script, style
+[36m<html[39m
+  [33mstyle[39m=[32m""[39m
+[36m>[39m
+  [36m<head />[39m
+  [36m<body[39m
+    [33mstyle[39m=[32m"overflow: hidden;"[39m
+  [36m>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"group/tabs flex gap-2 data-horizontal:flex-col"[39m
+        [33mdata-activation-direction[39m=[32m"none"[39m
+        [33mdata-orientation[39m=[32m"horizontal"[39m
+        [33mdata-slot[39m=[32m"tabs"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"group/tabs-list items-center justify-center text-muted-foreground group-data-horizontal/tabs:h-9 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none gap-1 bg-transparent grid h-auto w-full grid-cols-2 rounded-none border-b p-0"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-list"[39m
+          [33mdata-variant[39m=[32m"line"[39m
+          [33mrole[39m=[32m"tablist"[39m
+        [36m>[39m
+          [36m<button[39m
+            [33maria-controls[39m=[32m"base-ui-_r_54_"[39m
+            [33maria-disabled[39m=[32m"false"[39m
+            [33maria-selected[39m=[32m"true"[39m
+            [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+            [33mdata-activation-direction[39m=[32m"none"[39m
+            [33mdata-active[39m=[32m""[39m
+            [33mdata-composite-item-active[39m=[32m""[39m
+            [33mdata-orientation[39m=[32m"horizontal"[39m
+            [33mdata-slot[39m=[32m"tabs-trigger"[39m
+            [33mid[39m=[32m"base-ui-_r_52_"[39m
+            [33mrole[39m=[32m"tab"[39m
+            [33mtabindex[39m=[32m"0"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0mServer Configuration[0m
+          [36m</button>[39m
+          [36m<button[39m
+            [33maria-controls[39m=[32m"base-ui-_r_7g_"[39m
+            [33maria-disabled[39m=[32m"false"[39m
+            [33maria-selected[39m=[32m"false"[39m
+            [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+            [33mdata-activation-direction[39m=[32m"none"[39m
+            [33mdata-orientation[39m=[32m"horizontal"[39m
+            [33mdata-slot[39m=[32m"tabs-trigger"[39m
+            [33mid[39m=[32m"base-ui-_r_53_"[39m
+            [33mrole[39m=[32m"tab"[39m
+            [33mtabindex[39m=[32m"-1"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0mCost Configuration[0m
+          [36m</button>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"mt-6"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33maria-labelledby[39m=[32m"base-ui-_r_52_"[39m
+            [33mclass[39m=[32m"flex-1 text-sm outline-none"[39m
+            [33mdata-activation-direction[39m=[32m"none"[39m
+            [33mdata-index[39m=[32m"0"[39m
+            [33mdata-orientation[39m=[32m"horizontal"[39m
+            [33mdata-slot[39m=[32m"tabs-content"[39m
+            [33mid[39m=[32m"base-ui-_r_54_"[39m
+            [33mrole[39m=[32m"tabpanel"[39m
+            [33mtabindex[39m=[32m"0"[39m
+          [36m>[39m
+            [36m<form>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"group/field flex w-full gap-3 data-[invalid=true]:text-destructive flex-col *:w-full [&>.sr-only]:w-auto"[39m
+                [33mdata-orientation[39m=[32m"vertical"[39m
+                [33mdata-slot[39m=[32m"field"[39m
+                [33mrole[39m=[32m"group"[39m
+              [36m>[39m
+                [36m<label[3...
+ ❯ src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx:441:68
+    439|     expect(await screen.findByText("Saved credentials rejected")).toBe…
+    440|     fireEvent.change(screen.getByLabelText("MCP Server URL"), { target…
+    441|     await waitFor(() => expect(networking.testMCPToolsListRequest).toH…
+       |                                                                    ^
+    442|     await user.clear(screen.getByLabelText("MCP Server URL"));
+    443|     await user.type(screen.getByLabelText("MCP Server URL"), "https://…
+ ❯ runWithExpensiveErrorDiagnosticsDisabled ../../../litellm-lit-5777/ui/litellm-dashboard/node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback ../../../litellm-lit-5777/ui/litellm-dashboard/node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback ../../../litellm-lit-5777/ui/litellm-dashboard/node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  |integration| src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx > MCPServerEdit live tool preview > ignores a saved-record response after editing and restores saved discovery when changes are reverted
+TestingLibraryElementError: Unable to find role="button" and name "Flat List"
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m"overflow: hidden;"[39m
+[36m>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"group/tabs flex gap-2 data-horizontal:flex-col"[39m
+      [33mdata-activation-direction[39m=[32m"none"[39m
+      [33mdata-orientation[39m=[32m"horizontal"[39m
+      [33mdata-slot[39m=[32m"tabs"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"group/tabs-list items-center justify-center text-muted-foreground group-data-horizontal/tabs:h-9 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none gap-1 bg-transparent grid h-auto w-full grid-cols-2 rounded-none border-b p-0"[39m
+        [33mdata-activation-direction[39m=[32m"none"[39m
+        [33mdata-orientation[39m=[32m"horizontal"[39m
+        [33mdata-slot[39m=[32m"tabs-list"[39m
+        [33mdata-variant[39m=[32m"line"[39m
+        [33mrole[39m=[32m"tablist"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-controls[39m=[32m"base-ui-_r_7j_"[39m
+          [33maria-disabled[39m=[32m"false"[39m
+          [33maria-selected[39m=[32m"true"[39m
+          [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-active[39m=[32m""[39m
+          [33mdata-composite-item-active[39m=[32m""[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-trigger"[39m
+          [33mid[39m=[32m"base-ui-_r_7h_"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtabindex[39m=[32m"0"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mServer Configuration[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-controls[39m=[32m"base-ui-_r_9v_"[39m
+          [33maria-disabled[39m=[32m"false"[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-trigger"[39m
+          [33mid[39m=[32m"base-ui-_r_7i_"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtabindex[39m=[32m"-1"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mCost Configuration[0m
+        [36m</button>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"mt-6"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33maria-labelledby[39m=[32m"base-ui-_r_7h_"[39m
+          [33mclass[39m=[32m"flex-1 text-sm outline-none"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-index[39m=[32m"0"[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-content"[39m
+          [33mid[39m=[32m"base-ui-_r_7j_"[39m
+          [33mrole[39m=[32m"tabpanel"[39m
+          [33mtabindex[39m=[32m"0"[39m
+        [36m>[39m
+          [36m<form>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"group/field flex w-full gap-3 data-[invalid=true]:text-destructive flex-col *:w-full [&>.sr-only]:w-auto"[39m
+              [33mdata-orientation[39m=[32m"vertical"[39m
+              [33mdata-slot[39m=[32m"field"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<label[39m
+                [33mclass[39m=[32m"items-center text-sm font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-...
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mstyle[39m=[32m"overflow: hidden;"[39m
+[36m>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"group/tabs flex gap-2 data-horizontal:flex-col"[39m
+      [33mdata-activation-direction[39m=[32m"none"[39m
+      [33mdata-orientation[39m=[32m"horizontal"[39m
+      [33mdata-slot[39m=[32m"tabs"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"group/tabs-list items-center justify-center text-muted-foreground group-data-horizontal/tabs:h-9 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col data-[variant=line]:rounded-none gap-1 bg-transparent grid h-auto w-full grid-cols-2 rounded-none border-b p-0"[39m
+        [33mdata-activation-direction[39m=[32m"none"[39m
+        [33mdata-orientation[39m=[32m"horizontal"[39m
+        [33mdata-slot[39m=[32m"tabs-list"[39m
+        [33mdata-variant[39m=[32m"line"[39m
+        [33mrole[39m=[32m"tablist"[39m
+      [36m>[39m
+        [36m<button[39m
+          [33maria-controls[39m=[32m"base-ui-_r_7j_"[39m
+          [33maria-disabled[39m=[32m"false"[39m
+          [33maria-selected[39m=[32m"true"[39m
+          [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-active[39m=[32m""[39m
+          [33mdata-composite-item-active[39m=[32m""[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-trigger"[39m
+          [33mid[39m=[32m"base-ui-_r_7h_"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtabindex[39m=[32m"0"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mServer Configuration[0m
+        [36m</button>[39m
+        [36m<button[39m
+          [33maria-controls[39m=[32m"base-ui-_r_9v_"[39m
+          [33maria-disabled[39m=[32m"false"[39m
+          [33maria-selected[39m=[32m"false"[39m
+          [33mclass[39m=[32m"relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 border border-transparent px-2 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 dark:text-muted-foreground dark:hover:text-foreground group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent dark:group-data-[variant=line]/tabs-list:data-active:border-transparent dark:group-data-[variant=line]/tabs-list:data-active:bg-transparent data-active:bg-background data-active:text-foreground dark:data-active:border-input dark:data-active:bg-input/30 dark:data-active:text-foreground after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-horizontal/tabs:after:inset-x-0 group-data-horizontal/tabs:after:bottom-[-5px] group-data-horizontal/tabs:after:h-0.5 group-data-vertical/tabs:after:inset-y-0 group-data-vertical/tabs:after:-right-1 group-data-vertical/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-active:after:opacity-100 rounded-none py-2"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-trigger"[39m
+          [33mid[39m=[32m"base-ui-_r_7i_"[39m
+          [33mrole[39m=[32m"tab"[39m
+          [33mtabindex[39m=[32m"-1"[39m
+          [33mtype[39m=[32m"button"[39m
+        [36m>[39m
+          [0mCost Configuration[0m
+        [36m</button>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"mt-6"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33maria-labelledby[39m=[32m"base-ui-_r_7h_"[39m
+          [33mclass[39m=[32m"flex-1 text-sm outline-none"[39m
+          [33mdata-activation-direction[39m=[32m"none"[39m
+          [33mdata-index[39m=[32m"0"[39m
+          [33mdata-orientation[39m=[32m"horizontal"[39m
+          [33mdata-slot[39m=[32m"tabs-content"[39m
+          [33mid[39m=[32m"base-ui-_r_7j_"[39m
+          [33mrole[39m=[32m"tabpanel"[39m
+          [33mtabindex[39m=[32m"0"[39m
+        [36m>[39m
+          [36m<form>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"group/field flex w-full gap-3 data-[invalid=true]:text-destructive flex-col *:w-full [&>.sr-only]:w-auto"[39m
+              [33mdata-orientation[39m=[32m"vertical"[39m
+              [33mdata-slot[39m=[32m"field"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<label[39m
+                [33mclass[39m=[32m"items-center text-sm font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-...
+ ❯ waitForWrapper ../../../litellm-lit-5777/ui/litellm-dashboard/node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ ../../../litellm-lit-5777/ui/litellm-dashboard/node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx:463:34
+    461|     await waitFor(() => expect(networking.listMCPTools).toHaveBeenCall…
+    462|     fireEvent.change(screen.getByLabelText("MCP Server URL"), { target…
+    463|     fireEvent.click(await screen.findByRole("button", { name: "Flat Li…
+       |                                  ^
+    464|     expect(screen.getByText("echo")).toBeInTheDocument();
+    465|     await act(async () => saved.resolve({ tools: [], error: "connectio…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 19 skipped (23)
+Type Errors  no errors
+   Start at  17:37:14
+   Duration  8.72s (transform 1.85s, setup 147ms, import 3.28s, tests 4.27s, environment 846ms)
+

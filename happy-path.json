@@ -1,0 +1,31 @@
+{
+  "commit": "245369764e80d113e80ec8269846e5257692b8bc",
+  "saveStatus": 202,
+  "listStatus": 200,
+  "tools": [
+    "echo"
+  ],
+  "callRequest": {
+    "server_id": "9b6bd048-e6c8-4501-972c-1fc1c73944bd",
+    "name": "echo",
+    "arguments": {
+      "message": "LIT-7135 tool call verified"
+    }
+  },
+  "callStatus": 200,
+  "callResult": {
+    "_meta": null,
+    "content": [
+      {
+        "type": "text",
+        "text": "LIT-7135 tool call verified",
+        "annotations": null,
+        "_meta": null
+      }
+    ],
+    "structuredContent": {
+      "result": "LIT-7135 tool call verified"
+    },
+    "isError": false
+  }
+}

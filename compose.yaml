@@ -1,0 +1,32 @@
+name: litellm-7135
+services:
+  gateway:
+    image: litellm-7135:${REVISION:-before}
+    ports: ["127.0.0.1:47135:4000"]
+    command: ["--config", "/verification/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+    volumes: ["./config.yaml:/verification/config.yaml:ro"]
+    depends_on:
+      db: {condition: service_healthy}
+      upstream: {condition: service_started}
+  upstream:
+    image: litellm-7135:before
+    entrypoint: ["python", "/verification/server.py"]
+    volumes: ["./server.py:/verification/server.py:ro"]
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      retries: 12
+    volumes: ["data:/var/lib/postgresql/data"]
+volumes:
+  data:

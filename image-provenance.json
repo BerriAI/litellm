@@ -1,0 +1,36 @@
+[
+  {
+    "tags": [
+      "litellm-7135:before"
+    ],
+    "id": "sha256:9596e5232992e923b9f0fbb50d3b4663f5d4f54c610d306e475aaed00348b235",
+    "labels": {
+      "dev.chainguard.image.title": "wolfi-base",
+      "dev.chainguard.package.main": "",
+      "org.opencontainers.image.authors": "Chainguard Team https://www.chainguard.dev/",
+      "org.opencontainers.image.created": "2026-08-30T12:58:50Z",
+      "org.opencontainers.image.revision": "6b721de3e5",
+      "org.opencontainers.image.source": "https://github.com/chainguard-images/images/tree/main/images/wolfi-base",
+      "org.opencontainers.image.title": "wolfi-base",
+      "org.opencontainers.image.url": "https://images.chainguard.dev/directory/image/wolfi-base/overview",
+      "org.opencontainers.image.vendor": "Chainguard"
+    }
+  },
+  {
+    "tags": [
+      "litellm-7135:after"
+    ],
+    "id": "sha256:f061712316ab2897b57ea858626a9d6a433118319ce217f28f4ab4d6cc81fcc1",
+    "labels": {
+      "dev.chainguard.image.title": "wolfi-base",
+      "dev.chainguard.package.main": "",
+      "org.opencontainers.image.authors": "Chainguard Team https://www.chainguard.dev/",
+      "org.opencontainers.image.created": "2026-08-30T12:58:50Z",
+      "org.opencontainers.image.revision": "245369764e80d113e80ec8269846e5257692b8bc",
+      "org.opencontainers.image.source": "https://github.com/chainguard-images/images/tree/main/images/wolfi-base",
+      "org.opencontainers.image.title": "wolfi-base",
+      "org.opencontainers.image.url": "https://images.chainguard.dev/directory/image/wolfi-base/overview",
+      "org.opencontainers.image.vendor": "Chainguard"
+    }
+  }
+]

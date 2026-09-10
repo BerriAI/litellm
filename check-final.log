@@ -1,0 +1,117 @@
+uv sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
+Checked 232 packages in 37ms
+uv run --no-sync python scripts/prisma_generate_if_needed.py
+Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
+cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
+
+up to date in 541ms
+bootstrap: .env left untouched
+bootstrap: done
+./scripts/pre_commit_lint.sh
+check: logging full output to /Users/jvalluru/LiteLLM-work/litellm/.git/worktrees/litellm-lit-7135/pre_commit_lint.log
+check: nothing staged; scoping to the working tree's diff against the merge base with 6b721de3e5:
+    litellm/proxy/_experimental/mcp_server/rest_endpoints.py
+    tests/test_litellm/proxy/_experimental/mcp_server/test_rest_endpoints.py
+    ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/editToolPreview.test.ts
+    ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/editToolPreview.ts
+    ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.integration.test.tsx
+    ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx
+    ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx
+check: linting Python (make lint)
+uv sync --inexact --frozen --group proxy-dev --group e2e-dev
+Checked 205 packages in 6ms
+uv run --no-sync python scripts/prisma_generate_if_needed.py
+Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
+cd litellm && uv run --no-sync ruff check . && cd ..
+uv run --no-sync python scripts/ruff_strict_gate.py --base "6b721de3e5"
+uv run --no-sync python scripts/type_discipline_gate.py --base "6b721de3e5"
+uv run --no-sync python scripts/test_quality_gate.py --base "6b721de3e5"
+uv run --no-sync python scripts/type_check_gate.py --base "6b721de3e5"
+uv run --no-sync basedpyright tests/e2e
+cd litellm && uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py && cd ..
+No LiteLLM type hints found.
+All checks passed!
+uv run --no-sync ruff check --config ruff-tests.toml tests
+1 file already formatted
+All checks passed!
+[from litellm import *] OK! no issues!
+OK: every strict rule is within its codebase ceiling (base 6b721de3e5)
+0 errors, 0 warnings, 0 notes
+OK: every TQ rule is within its test-suite ceiling (base 6b721de3e5)
+OK: every LIT rule is within its codebase ceiling (base 6b721de3e5)
+OK: every rule is within its basedpyright limit or no higher than base (137959 errors total)
+check: ruff format --check (scoped litellm files)
+1 file already formatted
+check: linting dashboard (prettier + eslint + lint budgets)
+Checking formatting...
+All matched files use Prettier code style!
+
+/Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx
+  103:4   warning  Arrow function has a complexity of 43. Maximum allowed is 20                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  complexity
+  159:5   warning  React Hook React.useMemo has an unnecessary dependency: 'initialEnvJson'. Either exclude it or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    react-hooks/exhaustive-deps
+  166:38  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      @typescript-eslint/no-explicit-any
+  178:85  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      @typescript-eslint/no-explicit-any
+  224:24  warning  Object literal with 6 properties passed inline as an argument; assign it to a named variable first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            local/no-large-inline-object-arg
+  254:23  warning  Object literal with 6 properties passed inline as an argument; assign it to a named variable first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            local/no-large-inline-object-arg
+  448:62  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      @typescript-eslint/no-explicit-any
+  451:6   warning  React Hook useEffect has a missing dependency: 'form'. Either include it or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       react-hooks/exhaustive-deps
+  585:55  warning  Async arrow function has a complexity of 25. Maximum allowed is 20                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            complexity
+  680:28  warning  Object literal with 5 properties passed inline as an argument; assign it to a named variable first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            local/no-large-inline-object-arg
+  705:26  warning  Compilation Skipped: Use of incompatible library
+
+This API returns functions which cannot be memoized without leading to stale UI. To prevent this, by default React Compiler will skip memoizing this component/hook. However, you may see issues if values from this API are passed to other components/hooks that are memoized.
+
+/Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_server_edit.tsx:705:26
+  703 |
+  704 |   React.useEffect(() => {
+> 705 |     const subscription = form.watch((values, { name, type }) => {
+      |                          ^^^^ React Hook Form's `useForm()` API returns a `watch()` function which cannot be memoized safely.
+  706 |       if (type !== "change" || name === undefined) {
+  707 |         return;
+  708 |       }  react-hooks/incompatible-library
+  725:52  warning  Object literal with 9 properties passed inline as an argument; assign it to a named variable first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            local/no-large-inline-object-arg
+  782:21  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      @typescript-eslint/no-explicit-any
+
+/Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx
+   22:30  warning  Unexpected any. Specify a different type                                                                                                                                                      @typescript-eslint/no-explicit-any
+   35:19  warning  Unexpected any. Specify a different type                                                                                                                                                      @typescript-eslint/no-explicit-any
+  171:4   warning  Arrow function has a complexity of 45. Maximum allowed is 20                                                                                                                                  complexity
+  183:9   warning  The 'tools' logical expression could make the dependencies of useMemo Hook (at line 218) change on every render. To fix this, wrap the initialization of 'tools' in its own useMemo() Hook    react-hooks/exhaustive-deps
+  183:9   warning  The 'tools' logical expression could make the dependencies of useMemo Hook (at line 232) change on every render. To fix this, wrap the initialization of 'tools' in its own useMemo() Hook    react-hooks/exhaustive-deps
+  183:9   warning  The 'tools' logical expression could make the dependencies of useEffect Hook (at line 300) change on every render. To fix this, wrap the initialization of 'tools' in its own useMemo() Hook  react-hooks/exhaustive-deps
+  183:9   warning  The 'tools' logical expression could make the dependencies of useMemo Hook (at line 314) change on every render. To fix this, wrap the initialization of 'tools' in its own useMemo() Hook    react-hooks/exhaustive-deps
+  311:5   warning  Boolean expression combines 4 conditions; extract it into a named variable                                                                                                                    local/no-long-condition-chain
+  441:10  warning  Boolean expression combines 4 conditions; extract it into a named variable                                                                                                                    local/no-long-condition-chain
+  447:10  warning  Boolean expression combines 4 conditions; extract it into a named variable                                                                                                                    local/no-long-condition-chain
+  456:10  warning  Boolean expression combines 5 conditions; extract it into a named variable                                                                                                                    local/no-long-condition-chain
+  475:10  warning  Boolean expression combines 4 conditions; extract it into a named variable                                                                                                                    local/no-long-condition-chain
+  484:10  warning  Boolean expression combines 4 conditions; extract it into a named variable                                                                                                                    local/no-long-condition-chain
+
+✖ 26 problems (0 errors, 26 warnings)
+
+@typescript-eslint/no-explicit-any: 1472 | max: 2040 | target: 1500 | at target
+no-console: 12 | max: 12 | target: 0 | 0 of headroom
+complexity: 126 | max: 140 | target: 80 | 14 of headroom
+max-depth: 53 | max: 70 | target: 30 | 17 of headroom
+local/no-large-inline-object-arg: 551 | max: 551 | target: 300 | 0 of headroom
+local/no-long-condition-chain: 196 | max: 196 | target: 120 | 0 of headroom
+testing-library/no-container: 132 | max: 133 | target: 50 | 1 of headroom
+testing-library/no-node-access: 704 | max: 707 | target: 500 | 3 of headroom
+testing-library/prefer-screen-queries: 18 | max: 18 | target: 18 | at target
+check: checking the lazy OpenAPI snapshot and dashboard API types are in sync (npm run gen:api)
+Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
+wrote 33 feature fragments to /Users/jvalluru/LiteLLM-work/litellm-lit-7135/litellm/proxy/_lazy_openapi_snapshot.json
+
+> litellm-dashboard@0.1.0 gen:api
+> node scripts/gen-api-types.mjs
+
+✨ openapi-typescript 7.13.0
+🚀 /var/folders/n4/7jf8qfys5256pzfjlkkcmzj80000gn/T/litellm-openapi-qqevN5/openapi.json → /Users/jvalluru/LiteLLM-work/litellm-lit-7135/ui/litellm-dashboard/src/lib/http/schema.d.ts [690.2ms]
+check: summary
+    ran:     Python lint (make lint)
+    skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)
+    ran:     test-tree lint (ruff-tests.toml + test-quality budget)
+    ran:     dashboard lint (prettier + eslint + lint budgets)
+    ran:     dashboard API-type sync (npm run gen:api)
+check: PASS
+check: full log: /Users/jvalluru/LiteLLM-work/litellm/.git/worktrees/litellm-lit-7135/pre_commit_lint.log

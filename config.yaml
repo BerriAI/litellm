@@ -1,0 +1,6 @@
+model_list: []
+litellm_settings:
+  telemetry: false
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
