@@ -49,6 +49,7 @@ from litellm.exceptions import (
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    anthropic_content_lists,
     encrypted_content_of_block,
     strip_encrypted_reasoning_from_messages,
 )
@@ -154,10 +155,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             return iter(())
         return (
             cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
-            for message in cast(list[object], messages)  # cast-ok: narrowed by isinstance
-            if isinstance(message, Mapping)
-            for content in (cast(Mapping[str, object], message).get("content"),)  # cast-ok: narrowed by isinstance
-            if isinstance(content, list)
+            for content in anthropic_content_lists(cast(list[object], messages))  # cast-ok: narrowed by isinstance
             for block in cast(list[object], content)  # cast-ok: narrowed by isinstance
             if isinstance(block, Mapping)
         )

@@ -171,7 +171,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         cls,
         summary: Iterable[object],
         encrypted_content: object,
-    ) -> dict[str, Any] | None:  # mutable-ok: API message payload
+    ) -> dict[str, object] | None:  # mutable-ok: API message payload
         """The one Anthropic block for a Responses reasoning item.
 
         The item's encrypted reasoning rides the block's opaque field (`signature`, or
@@ -200,7 +200,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @classmethod
     def _assistant_group_to_input_items(
         cls, group: tuple[Mapping[str, object], ...]
-    ) -> tuple[dict[str, Any], ...]:  # mutable-ok: API message payload
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: API message payload
         first: Final = group[0]
         btype: Final = first.get("type")
         if btype in ("thinking", "redacted_thinking"):
