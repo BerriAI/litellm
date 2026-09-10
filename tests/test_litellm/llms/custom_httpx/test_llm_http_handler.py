@@ -3708,8 +3708,8 @@ def test_request_body_spill_cleanup_removes_the_file(tmp_path):
 
 
 def test_request_body_spill_cleanup_without_spill_is_a_no_op():
-    _remove_spilled_request_body(None)  # must not raise
+    assert _remove_spilled_request_body(None) is None  # must not raise
 
 
 def test_request_body_spill_cleanup_ignores_a_missing_file(tmp_path):
-    _remove_spilled_request_body((str(tmp_path / "gone.json"), 2))  # must not raise
+    assert _remove_spilled_request_body((str(tmp_path / "gone.json"), 2)) is None  # must not raise

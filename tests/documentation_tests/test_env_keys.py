@@ -31,6 +31,7 @@ EXCLUDED_GUARD_ONLY_VARS = {
 EXCLUDED_ROLLOUT_FLAGS = {
     "LITELLM_USE_RUST_OCR",
     "LITELLM_RUST",
+    "LITELLM_REQUEST_SPILL_MB",  # opt-in request-body spill, under review in BerriAI/litellm#40565; document when accepted
 }
 
 # Internal infrastructure tuning parameters for streaming/queue management
