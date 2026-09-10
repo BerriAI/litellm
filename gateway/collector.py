@@ -1,12 +1,12 @@
-"""Spend sidecar entrypoint for the gateway image.
+"""Collector sidecar entrypoint for the gateway image.
 
 Assembles ``DATABASE_URL`` the way ``gateway.launch`` does, but instead of starting a PgBouncer it
 points the URL at the one the gateway container already runs on the pod's loopback (the sidecar
 must see the same ``DATABASE_URL`` inputs and ``LITELLM_PGBOUNCER_*`` values as the gateway
-container), then hands off to ``litellm.proxy.spend_worker``.
+container), then hands off to ``litellm.proxy.collector``.
 
 Run with:
-    python -m gateway.spend_worker [--address unix:///var/run/litellm/spend-worker.sock]
+    python -m gateway.collector [--address unix:///var/run/litellm/collector.sock]
 """
 
 import os
@@ -14,9 +14,9 @@ import sys
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from litellm.proxy.collector import main as collector_main
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, pooled_database_url
-from litellm.proxy.spend_worker import main as spend_worker_main
 
 
 def pod_pgbouncer_database_url(pgbouncer: PgBouncerSettings, environ: Mapping[str, str]) -> str | PgBouncerError | None:
@@ -33,10 +33,10 @@ def main(argv: Sequence[str]) -> None:
     DatabaseURLSettings.from_env().apply_to_env()
     pooled: Final = pod_pgbouncer_database_url(PgBouncerSettings(), os.environ)
     if isinstance(pooled, PgBouncerError):
-        sys.exit(f"LiteLLM spend worker: cannot use the pod's pgbouncer: {pooled.reason}")
+        sys.exit(f"LiteLLM collector: cannot use the pod's pgbouncer: {pooled.reason}")
     if pooled is not None:
         os.environ["DATABASE_URL"] = pooled
-    spend_worker_main(argv)
+    collector_main(argv)
 
 
 if __name__ == "__main__":

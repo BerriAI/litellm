@@ -8,19 +8,19 @@ import uvloop
 
 from litellm.proxy.spend_tracking.spend_event_producer import (
     AddressError,
+    CollectorAddress,
+    CollectorSettings,
     SpendEventProducer,
-    SpendWorkerAddress,
-    SpendWorkerSettings,
     TcpAddress,
     UnixAddress,
     build_spend_event_producer,
-    open_spend_worker_connection,
-    parse_spend_worker_address,
+    open_collector_connection,
+    parse_collector_address,
 )
 
 
 class _Sidecar:
-    """A unix-socket server that records every line it receives, standing in for the spend worker."""
+    """A unix-socket server that records every line it receives, standing in for the collector."""
 
     def __init__(self, path: Path, reads: bool = True) -> None:
         self.path = path
@@ -78,9 +78,9 @@ class _StalledDrainWriter(asyncio.StreamWriter):
 
 
 async def _open_with_stalled_drain(
-    address: SpendWorkerAddress, timeout: float
+    address: CollectorAddress, timeout: float
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    reader, writer = await open_spend_worker_connection(address, timeout)
+    reader, writer = await open_collector_connection(address, timeout)
     return reader, _StalledDrainWriter(writer, reader)
 
 
@@ -90,8 +90,8 @@ def _producer(
     on_unavailable="fallback",
     buffer_size: int = 100,
     open_connection: Callable[
-        [SpendWorkerAddress, float], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
-    ] = open_spend_worker_connection,
+        [CollectorAddress, float], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
+    ] = open_collector_connection,
 ) -> SpendEventProducer:
     return SpendEventProducer(
         address=UnixAddress(path=str(path)),
@@ -103,41 +103,41 @@ def _producer(
     )
 
 
-def test_parse_spend_worker_address():
-    assert parse_spend_worker_address("unix:///var/run/litellm/spend-worker.sock") == UnixAddress(
-        path="/var/run/litellm/spend-worker.sock"
+def test_parse_collector_address():
+    assert parse_collector_address("unix:///var/run/litellm/collector.sock") == UnixAddress(
+        path="/var/run/litellm/collector.sock"
     )
-    assert parse_spend_worker_address("tcp://127.0.0.1:4100") == TcpAddress(host="127.0.0.1", port=4100)
-    assert parse_spend_worker_address("tcp://localhost:4100") == TcpAddress(host="localhost", port=4100)
-    assert parse_spend_worker_address("tcp://[::1]:4100") == TcpAddress(host="::1", port=4100)
-    assert isinstance(parse_spend_worker_address("redis://localhost:6379"), AddressError)
-    assert isinstance(parse_spend_worker_address("tcp://127.0.0.1"), AddressError)
+    assert parse_collector_address("tcp://127.0.0.1:4100") == TcpAddress(host="127.0.0.1", port=4100)
+    assert parse_collector_address("tcp://localhost:4100") == TcpAddress(host="localhost", port=4100)
+    assert parse_collector_address("tcp://[::1]:4100") == TcpAddress(host="::1", port=4100)
+    assert isinstance(parse_collector_address("redis://localhost:6379"), AddressError)
+    assert isinstance(parse_collector_address("tcp://127.0.0.1"), AddressError)
 
 
-@pytest.mark.parametrize("address", ["tcp://0.0.0.0:4100", "tcp://10.0.0.5:4100", "tcp://spend-worker.svc:4100"])
+@pytest.mark.parametrize("address", ["tcp://0.0.0.0:4100", "tcp://10.0.0.5:4100", "tcp://collector.svc:4100"])
 def test_tcp_address_outside_loopback_is_refused(address: str):
     """The socket has no authentication, so anything reachable from outside the pod would accept forged spend."""
-    error: Final = parse_spend_worker_address(address)
+    error: Final = parse_collector_address(address)
     assert isinstance(error, AddressError)
     assert "loopback" in error.reason
-    assert build_spend_event_producer(SpendWorkerSettings(enabled=True, address=address), _Fallback()) is None
+    assert build_spend_event_producer(CollectorSettings(enabled=True, address=address), _Fallback()) is None
 
 
 def test_gateway_produces_only_when_enabled_and_not_the_sidecar_itself():
     fallback: Final = _Fallback()
-    assert build_spend_event_producer(SpendWorkerSettings(enabled=False), fallback) is None
-    assert build_spend_event_producer(SpendWorkerSettings(enabled=True, job_role="spend_worker"), fallback) is None
-    assert build_spend_event_producer(SpendWorkerSettings(enabled=True, address="redis://x"), fallback) is None
-    assert isinstance(build_spend_event_producer(SpendWorkerSettings(enabled=True), fallback), SpendEventProducer)
+    assert build_spend_event_producer(CollectorSettings(enabled=False), fallback) is None
+    assert build_spend_event_producer(CollectorSettings(enabled=True, job_role="collector"), fallback) is None
+    assert build_spend_event_producer(CollectorSettings(enabled=True, address="redis://x"), fallback) is None
+    assert isinstance(build_spend_event_producer(CollectorSettings(enabled=True), fallback), SpendEventProducer)
 
 
 def test_settings_read_the_documented_env(monkeypatch):
-    monkeypatch.setenv("LITELLM_SPEND_WORKER_ENABLED", "true")
-    monkeypatch.setenv("LITELLM_SPEND_WORKER_ADDRESS", "tcp://127.0.0.1:4100")
-    monkeypatch.setenv("LITELLM_SPEND_WORKER_BUFFER_SIZE", "50")
-    monkeypatch.setenv("LITELLM_SPEND_WORKER_ON_UNAVAILABLE", "drop")
-    monkeypatch.setenv("LITELLM_JOB_ROLE", "spend_worker")
-    settings: Final = SpendWorkerSettings()
+    monkeypatch.setenv("LITELLM_COLLECTOR_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_COLLECTOR_ADDRESS", "tcp://127.0.0.1:4100")
+    monkeypatch.setenv("LITELLM_COLLECTOR_BUFFER_SIZE", "50")
+    monkeypatch.setenv("LITELLM_COLLECTOR_ON_UNAVAILABLE", "drop")
+    monkeypatch.setenv("LITELLM_JOB_ROLE", "collector")
+    settings: Final = CollectorSettings()
     assert (settings.enabled, settings.address, settings.buffer_size, settings.on_unavailable) == (
         True,
         "tcp://127.0.0.1:4100",

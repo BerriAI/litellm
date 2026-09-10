@@ -18,7 +18,7 @@ spec:
   {{- end }}
   metrics:
     {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
-    {{- if and .Values.spendWorker.enabled .Values.spendWorker.scaleOnProxyContainerCpu }}
+    {{- if and .Values.collector.enabled .Values.collector.scaleOnProxyContainerCpu }}
     - type: ContainerResource
       containerResource:
         name: cpu

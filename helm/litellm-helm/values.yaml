@@ -201,10 +201,10 @@ metricsServer:
 # are lost if it crashes before writing them; events the workers could not hand
 # over follow onUnavailable. Both containers drain on SIGTERM within
 # terminationGracePeriodSeconds
-spendWorker:
+collector:
   enabled: false
   # unix:///<dir>/<file>.sock (the <dir> becomes a shared emptyDir) or tcp://127.0.0.1:<port>
-  address: unix:///var/run/litellm/spend-worker.sock
+  address: unix:///var/run/litellm/collector.sock
   # Events each uvicorn worker holds in memory while the sidecar is slow or restarting
   bufferSize: 1000
   # fallback: run the pipeline in the worker when the sidecar is unreachable or the
@@ -217,7 +217,7 @@ spendWorker:
   command:
     - python
     - -m
-    - gateway.spend_worker
+    - gateway.collector
   # Sized independently of the proxy container; the pipeline is CPU bound
   resources: {}
   # requests:

@@ -7,14 +7,14 @@ from typing import Final
 import pytest
 
 from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
+from litellm.proxy.collector import SpendEventConsumer, _address_argument, apply_log_level
 from litellm.proxy.spend_tracking.spend_event_producer import (
     AddressError,
     SpendEventProducer,
     TcpAddress,
     UnixAddress,
-    open_spend_worker_connection,
+    open_collector_connection,
 )
-from litellm.proxy.spend_worker import SpendEventConsumer, _address_argument, apply_log_level
 
 
 class _Handler:
@@ -72,7 +72,7 @@ async def test_consumer_discards_a_truncated_trailing_event(tmp_path: Path):
     consumer: Final = SpendEventConsumer(handler)
     address: Final = UnixAddress(path=str(tmp_path / "spend.sock"))
     server: Final = await consumer.serve(address)
-    _, writer = await open_spend_worker_connection(address, timeout=1.0)
+    _, writer = await open_collector_connection(address, timeout=1.0)
     writer.write(b"whole\npartial-without-newline")
     await writer.drain()
     writer.close()
@@ -90,7 +90,7 @@ async def test_drain_reports_producers_still_connected_after_the_timeout(tmp_pat
     consumer: Final = SpendEventConsumer(_Handler())
     address: Final = UnixAddress(path=str(tmp_path / "spend.sock"))
     server: Final = await consumer.serve(address)
-    _, writer = await open_spend_worker_connection(address, timeout=1.0)
+    _, writer = await open_collector_connection(address, timeout=1.0)
     await asyncio.sleep(0.05)
 
     server.close()

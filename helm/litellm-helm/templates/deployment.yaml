@@ -57,8 +57,8 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             {{- include "litellm.proxyEnv" . | nindent 12 }}
-            {{- if .Values.spendWorker.enabled }}
-            {{- include "litellm.spendWorkerEnv" . | nindent 12 }}
+            {{- if .Values.collector.enabled }}
+            {{- include "litellm.collectorEnv" . | nindent 12 }}
             {{- end }}
           envFrom:
           {{- range .Values.environmentSecrets }}
@@ -136,9 +136,9 @@ spec:
           {{- if .Values.billingMetrics.enabled }}
             {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
           {{- end }}
-          {{- if include "litellm.spendWorker.socketDir" . }}
-            - name: spend-worker-socket
-              mountPath: {{ include "litellm.spendWorker.socketDir" . }}
+          {{- if include "litellm.collector.socketDir" . }}
+            - name: collector-socket
+              mountPath: {{ include "litellm.collector.socketDir" . }}
           {{- end }}
           {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
@@ -147,18 +147,18 @@ spec:
           lifecycle:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- if .Values.spendWorker.enabled }}
-        - name: {{ include "litellm.name" . }}-spend-worker
+      {{- if .Values.collector.enabled }}
+        - name: {{ include "litellm.name" . }}-collector
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: {{ toYaml .Values.spendWorker.command | nindent 12 }}
+          command: {{ toYaml .Values.collector.command | nindent 12 }}
           env:
             {{- include "litellm.proxyEnv" . | nindent 12 }}
-            {{- include "litellm.spendWorkerEnv" . | nindent 12 }}
+            {{- include "litellm.collectorEnv" . | nindent 12 }}
             - name: LITELLM_JOB_ROLE
-              value: spend_worker
+              value: collector
             {{- if not (hasKey (default dict .Values.envVars) "CONFIG_FILE_PATH") }}
             - name: CONFIG_FILE_PATH
               value: /etc/litellm/config.yaml
@@ -173,14 +173,14 @@ spec:
                 name: {{ . }}
           {{- end }}
           resources:
-            {{- toYaml .Values.spendWorker.resources | nindent 12 }}
+            {{- toYaml .Values.collector.resources | nindent 12 }}
           volumeMounts:
             - name: litellm-config
               mountPath: /etc/litellm/config.yaml
               subPath: config.yaml
-          {{- if include "litellm.spendWorker.socketDir" . }}
-            - name: spend-worker-socket
-              mountPath: {{ include "litellm.spendWorker.socketDir" . }}
+          {{- if include "litellm.collector.socketDir" . }}
+            - name: collector-socket
+              mountPath: {{ include "litellm.collector.socketDir" . }}
           {{- end }}
           {{ if .Values.securityContext.readOnlyRootFilesystem }}
             - name: tmp
@@ -220,8 +220,8 @@ spec:
         {{- if .Values.billingMetrics.enabled }}
         {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}
         {{- end }}
-        {{- if include "litellm.spendWorker.socketDir" . }}
-        - name: spend-worker-socket
+        {{- if include "litellm.collector.socketDir" . }}
+        - name: collector-socket
           emptyDir:
             sizeLimit: 1Mi
         {{- end }}

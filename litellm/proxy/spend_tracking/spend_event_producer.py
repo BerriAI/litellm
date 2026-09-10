@@ -1,10 +1,10 @@
 """Fire-and-forget push of serialized spend events from an inference worker to the pod-local sidecar.
 
-``LITELLM_SPEND_WORKER_ENABLED=true`` turns the push on in the gateway; the sidecar process sets
-``LITELLM_JOB_ROLE=spend_worker`` and always runs the pipeline in-process. Events queue in a bounded
+``LITELLM_COLLECTOR_ENABLED=true`` turns the push on in the gateway; the sidecar process sets
+``LITELLM_JOB_ROLE=collector`` and always runs the pipeline in-process. Events queue in a bounded
 in-memory buffer that a single writer task flushes over a unix socket or loopback TCP connection.
 When the sidecar is unreachable, the buffer is full, or the connection breaks mid-write, each affected
-event follows ``LITELLM_SPEND_WORKER_ON_UNAVAILABLE``: ``fallback`` runs the existing cost pipeline in
+event follows ``LITELLM_COLLECTOR_ON_UNAVAILABLE``: ``fallback`` runs the existing cost pipeline in
 the worker, ``drop`` counts it and moves on. Transitions are logged with the counters, so a sidecar
 outage is visible without scraping anything.
 
@@ -31,9 +31,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_proxy_logger
 
-SPEND_WORKER_ENV_PREFIX: Final = "LITELLM_SPEND_WORKER_"
-SPEND_WORKER_JOB_ROLE: Final = "spend_worker"
-DEFAULT_SPEND_WORKER_ADDRESS: Final = "unix:///var/run/litellm/spend-worker.sock"
+COLLECTOR_ENV_PREFIX: Final = "LITELLM_COLLECTOR_"
+COLLECTOR_JOB_ROLE: Final = "collector"
+DEFAULT_COLLECTOR_ADDRESS: Final = "unix:///var/run/litellm/collector.sock"
 RECONNECT_BACKOFF_SECONDS: Final = 1.0
 DROP_LOG_EVERY: Final = 1000
 
@@ -41,15 +41,15 @@ UnavailablePolicy: TypeAlias = Literal["fallback", "drop"]
 PublishOutcome: TypeAlias = Literal["queued", "fallback", "dropped"]
 
 
-class SpendWorkerSettings(BaseSettings):
-    """``LITELLM_SPEND_WORKER_*`` env vars, shared by the gateway producer and the sidecar consumer."""
+class CollectorSettings(BaseSettings):
+    """``LITELLM_COLLECTOR_*`` env vars, shared by the gateway producer and the sidecar consumer."""
 
     model_config = SettingsConfigDict(
-        env_prefix=SPEND_WORKER_ENV_PREFIX, case_sensitive=False, extra="ignore", frozen=True, populate_by_name=True
+        env_prefix=COLLECTOR_ENV_PREFIX, case_sensitive=False, extra="ignore", frozen=True, populate_by_name=True
     )
 
     enabled: bool = False
-    address: str = DEFAULT_SPEND_WORKER_ADDRESS
+    address: str = DEFAULT_COLLECTOR_ADDRESS
     buffer_size: int = Field(default=1000, ge=1)
     on_unavailable: UnavailablePolicy = "fallback"
     drain_timeout_seconds: float = Field(default=10.0, gt=0)
@@ -58,7 +58,7 @@ class SpendWorkerSettings(BaseSettings):
 
     @property
     def produces(self) -> bool:
-        return self.enabled and self.job_role != SPEND_WORKER_JOB_ROLE
+        return self.enabled and self.job_role != COLLECTOR_JOB_ROLE
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +77,7 @@ class AddressError:
     reason: str
 
 
-SpendWorkerAddress: TypeAlias = UnixAddress | TcpAddress
+CollectorAddress: TypeAlias = UnixAddress | TcpAddress
 
 
 def _is_loopback(host: str) -> bool:
@@ -87,20 +87,20 @@ def _is_loopback(host: str) -> bool:
         return host == "localhost"
 
 
-def parse_spend_worker_address(address: str) -> SpendWorkerAddress | AddressError:
+def parse_collector_address(address: str) -> CollectorAddress | AddressError:
     """``unix:///path/to.sock`` or ``tcp://127.0.0.1:port``; the socket carries unauthenticated spend events."""
     parsed: Final = urlsplit(address)
     if parsed.scheme == "unix" and parsed.path:
         return UnixAddress(path=parsed.path)
     if parsed.scheme == "tcp" and parsed.hostname and parsed.port is not None:
         if not _is_loopback(parsed.hostname):
-            return AddressError(reason=f"tcp spend worker address must be a loopback host, got {address!r}")
+            return AddressError(reason=f"tcp collector address must be a loopback host, got {address!r}")
         return TcpAddress(host=parsed.hostname, port=parsed.port)
     return AddressError(reason=f"expected unix:///path or tcp://127.0.0.1:port, got {address!r}")
 
 
-async def open_spend_worker_connection(
-    address: SpendWorkerAddress, timeout: float
+async def open_collector_connection(
+    address: CollectorAddress, timeout: float
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     match address:
         case UnixAddress(path=path):
@@ -110,17 +110,17 @@ async def open_spend_worker_connection(
 
 
 def build_spend_event_producer(
-    settings: SpendWorkerSettings, fallback: Callable[[bytes], Awaitable[None]]
+    settings: CollectorSettings, fallback: Callable[[bytes], Awaitable[None]]
 ) -> "SpendEventProducer | None":
     """The gateway producer for these settings, or ``None`` when the pipeline stays in-process."""
     if not settings.produces:
         return None
-    address: Final = parse_spend_worker_address(settings.address)
+    address: Final = parse_collector_address(settings.address)
     if isinstance(address, AddressError):
-        verbose_proxy_logger.error("spend worker: %s; running the spend pipeline in-process", address.reason)
+        verbose_proxy_logger.error("collector: %s; running the spend pipeline in-process", address.reason)
         return None
     verbose_proxy_logger.info(
-        "spend worker: offloading spend tracking to %s (buffer=%d, on_unavailable=%s)",
+        "collector: offloading spend tracking to %s (buffer=%d, on_unavailable=%s)",
         settings.address,
         settings.buffer_size,
         settings.on_unavailable,
@@ -158,15 +158,15 @@ class SpendEventProducer:
 
     def __init__(
         self,
-        address: SpendWorkerAddress,
+        address: CollectorAddress,
         on_unavailable: UnavailablePolicy,
         buffer_size: int,
         connect_timeout: float,
         fallback: Callable[[bytes], Awaitable[None]],
         clock: Callable[[], float] = time.monotonic,
         open_connection: Callable[
-            [SpendWorkerAddress, float], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
-        ] = open_spend_worker_connection,
+            [CollectorAddress, float], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]
+        ] = open_collector_connection,
     ) -> None:
         self._address = address
         self._on_unavailable = on_unavailable
@@ -218,7 +218,7 @@ class SpendEventProducer:
             await asyncio.wait_for(queue.join(), drain_timeout)
         except asyncio.TimeoutError:
             verbose_proxy_logger.warning(
-                "spend worker: %s events still buffered after %.1fs drain timeout", queue.qsize(), drain_timeout
+                "collector: %s events still buffered after %.1fs drain timeout", queue.qsize(), drain_timeout
             )
         task.cancel()
         try:
@@ -291,7 +291,7 @@ class SpendEventProducer:
         except (ConnectionError, OSError, asyncio.TimeoutError) as error:
             self._next_connect_at = self._clock() + RECONNECT_BACKOFF_SECONDS
             verbose_proxy_logger.warning(
-                "spend worker: cannot reach %s (%s); applying %s policy for %.0fs. stats=%s",
+                "collector: cannot reach %s (%s); applying %s policy for %.0fs. stats=%s",
                 self._address,
                 error,
                 self._on_unavailable,
@@ -300,7 +300,7 @@ class SpendEventProducer:
             )
             return None
         self._connection = _Connection(reader=reader, writer=writer)
-        verbose_proxy_logger.info("spend worker: connected to %s. stats=%s", self._address, self.stats())
+        verbose_proxy_logger.info("collector: connected to %s. stats=%s", self._address, self.stats())
         return self._connection
 
     async def _disconnect(self) -> None:
@@ -320,9 +320,9 @@ class SpendEventProducer:
             try:
                 await self._fallback(line)
             except Exception:  # noqa: BLE001  # one failing event must not kill the writer task
-                verbose_proxy_logger.exception("spend worker: in-process fallback failed (%s)", reason)
+                verbose_proxy_logger.exception("collector: in-process fallback failed (%s)", reason)
             return "fallback"
         self._dropped += 1
         if self._dropped % DROP_LOG_EVERY == 1:
-            verbose_proxy_logger.warning("spend worker: dropping spend event (%s). stats=%s", reason, self.stats())
+            verbose_proxy_logger.warning("collector: dropping spend event (%s). stats=%s", reason, self.stats())
         return "dropped"

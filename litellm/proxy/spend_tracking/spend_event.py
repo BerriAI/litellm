@@ -1,4 +1,4 @@
-"""Compact, typed success event handed from an inference worker to the spend sidecar.
+"""Compact, typed success event handed from an inference worker to the collector.
 
 ``build_spend_event`` runs on the inference worker right after ``Logging.async_success_handler``
 has built the ``standard_logging_object`` (so the cost is already known). It validates the success

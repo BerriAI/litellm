@@ -1,4 +1,4 @@
-# Plan-only coverage for the opt-in spend-worker sidecar on the gateway Cloud
+# Plan-only coverage for the opt-in collector sidecar on the gateway Cloud
 # Run service. `mock_provider` keeps this offline: no GCP credentials, no API
 # calls. Run from terraform/litellm/gcp with `terraform test`.
 
@@ -19,14 +19,14 @@ run "disabled_by_default_leaves_the_service_untouched" {
 
   assert {
     condition     = [for c in google_cloud_run_v2_service.gateway[0].template[0].containers : c.name] == ["gateway"]
-    error_message = "The gateway service must stay single-container unless spend_worker_enabled is set."
+    error_message = "The gateway service must stay single-container unless collector_enabled is set."
   }
 
   assert {
     condition = !anytrue([
-      for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : startswith(e.name, "LITELLM_SPEND_WORKER_")
+      for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : startswith(e.name, "LITELLM_COLLECTOR_")
     ])
-    error_message = "No LITELLM_SPEND_WORKER_* env may reach the gateway while the sidecar is disabled."
+    error_message = "No LITELLM_COLLECTOR_* env may reach the gateway while the sidecar is disabled."
   }
 }
 
@@ -34,44 +34,44 @@ run "enabled_adds_a_sidecar_that_shares_the_gateway_transport" {
   command = plan
 
   variables {
-    spend_worker_enabled        = true
-    spend_worker_port           = 4321
-    spend_worker_buffer_size    = 250
-    spend_worker_on_unavailable = "drop"
-    spend_worker_cpu            = "500m"
-    spend_worker_memory         = "1Gi"
-    gateway_extra_env           = { OPENAI_API_BASE = "https://example.invalid" }
-    gateway_extra_secrets       = { OPENAI_API_KEY = "projects/acme-test/secrets/openai-api-key" }
+    collector_enabled        = true
+    collector_port           = 4321
+    collector_buffer_size    = 250
+    collector_on_unavailable = "drop"
+    collector_cpu            = "500m"
+    collector_memory         = "1Gi"
+    gateway_extra_env        = { OPENAI_API_BASE = "https://example.invalid" }
+    gateway_extra_secrets    = { OPENAI_API_KEY = "projects/acme-test/secrets/openai-api-key" }
   }
 
   assert {
-    condition     = [for c in google_cloud_run_v2_service.gateway[0].template[0].containers : c.name] == ["gateway", "spend-worker"]
-    error_message = "Enabling the sidecar must append a spend-worker container after the gateway container."
+    condition     = [for c in google_cloud_run_v2_service.gateway[0].template[0].containers : c.name] == ["gateway", "spend-collector"]
+    error_message = "Enabling the sidecar must append a spend-collector container after the gateway container."
   }
 
   assert {
     condition = alltrue([
       for c in google_cloud_run_v2_service.gateway[0].template[0].containers : (
-        { for e in c.env : e.name => e.value }["LITELLM_SPEND_WORKER_ENABLED"] == "true" &&
-        { for e in c.env : e.name => e.value }["LITELLM_SPEND_WORKER_ADDRESS"] == "tcp://127.0.0.1:4321" &&
-        { for e in c.env : e.name => e.value }["LITELLM_SPEND_WORKER_BUFFER_SIZE"] == "250" &&
-        { for e in c.env : e.name => e.value }["LITELLM_SPEND_WORKER_ON_UNAVAILABLE"] == "drop" &&
-        { for e in c.env : e.name => e.value }["LITELLM_SPEND_WORKER_DRAIN_TIMEOUT_SECONDS"] == "10"
+        { for e in c.env : e.name => e.value }["LITELLM_COLLECTOR_ENABLED"] == "true" &&
+        { for e in c.env : e.name => e.value }["LITELLM_COLLECTOR_ADDRESS"] == "tcp://127.0.0.1:4321" &&
+        { for e in c.env : e.name => e.value }["LITELLM_COLLECTOR_BUFFER_SIZE"] == "250" &&
+        { for e in c.env : e.name => e.value }["LITELLM_COLLECTOR_ON_UNAVAILABLE"] == "drop" &&
+        { for e in c.env : e.name => e.value }["LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS"] == "10"
       )
     ])
-    error_message = "Gateway and sidecar must agree on the loopback address and the spend-worker knobs."
+    error_message = "Gateway and sidecar must agree on the loopback address and the collector knobs."
   }
 
   assert {
     condition = (
       google_cloud_run_v2_service.gateway[0].template[0].containers[1].image == local.gateway_image &&
       google_cloud_run_v2_service.gateway[0].template[0].containers[1].command == tolist(["sh", "-c"]) &&
-      endswith(google_cloud_run_v2_service.gateway[0].template[0].containers[1].args[0], " && exec python -m gateway.spend_worker") &&
+      endswith(google_cloud_run_v2_service.gateway[0].template[0].containers[1].args[0], " && exec python -m gateway.collector") &&
       strcontains(google_cloud_run_v2_service.gateway[0].template[0].containers[1].args[0], "export DATABASE_URL=") &&
       strcontains(google_cloud_run_v2_service.gateway[0].template[0].containers[1].args[0], "REDIS_SSL_CA_CERTS") &&
-      { for e in google_cloud_run_v2_service.gateway[0].template[0].containers[1].env : e.name => e.value }["LITELLM_JOB_ROLE"] == "spend_worker"
+      { for e in google_cloud_run_v2_service.gateway[0].template[0].containers[1].env : e.name => e.value }["LITELLM_JOB_ROLE"] == "collector"
     )
-    error_message = "The sidecar must run gateway.spend_worker from the gateway image with the same Redis CA + DATABASE_URL bootstrap as the gateway."
+    error_message = "The sidecar must run gateway.collector from the gateway image with the same Redis CA + DATABASE_URL bootstrap as the gateway."
   }
 
   assert {
@@ -96,12 +96,34 @@ run "enabled_adds_a_sidecar_that_shares_the_gateway_transport" {
   }
 }
 
+run "coexists_with_the_metrics_sidecars" {
+  command = plan
+
+  variables {
+    collector_enabled    = true
+    gateway_metrics_port = 4001
+  }
+
+  assert {
+    condition     = [for c in google_cloud_run_v2_service.gateway[0].template[0].containers : c.name] == ["gateway", "metrics", "collector", "spend-collector"]
+    error_message = "The spend collector must keep its own container name next to the GMP metrics collector."
+  }
+
+  assert {
+    condition = (
+      { for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : e.name => e.value }["PROMETHEUS_MULTIPROC_DIR"] == local.metrics_multiproc_dir &&
+      { for e in google_cloud_run_v2_service.gateway[0].template[0].containers[0].env : e.name => e.value }["LITELLM_COLLECTOR_ENABLED"] == "true"
+    )
+    error_message = "The gateway container must keep both the metrics and the collector env when both sidecars are on."
+  }
+}
+
 run "proxy_config_is_mounted_into_the_sidecar_too" {
   command = plan
 
   variables {
-    spend_worker_enabled = true
-    proxy_config         = { model_list = [] }
+    collector_enabled = true
+    proxy_config      = { model_list = [] }
   }
 
   assert {

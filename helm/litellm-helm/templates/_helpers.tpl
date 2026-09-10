@@ -163,7 +163,7 @@ taken before the change, which by that point no longer exists.
 {{- end -}}
 
 {{/*
-Environment shared by the proxy container and the opt-in spend worker sidecar:
+Environment shared by the proxy container and the opt-in collector sidecar:
 database, pgbouncer, master key, redis, user envVars. Both containers must see
 the same DATABASE_URL and REDIS_* so the sidecar reaches the pod's pgbouncer
 and the same spend transaction buffer.
@@ -293,24 +293,24 @@ and the same spend transaction buffer.
 {{- end -}}
 
 {{/*
-Directory of the spend worker's unix socket, shared between the two containers
+Directory of the collector's unix socket, shared between the two containers
 through an emptyDir. Empty when the sidecar is off or uses 127.0.0.1 TCP.
 */}}
-{{- define "litellm.spendWorker.socketDir" -}}
-{{- if and .Values.spendWorker.enabled (hasPrefix "unix://" .Values.spendWorker.address) -}}
-{{- dir (trimPrefix "unix://" .Values.spendWorker.address) -}}
+{{- define "litellm.collector.socketDir" -}}
+{{- if and .Values.collector.enabled (hasPrefix "unix://" .Values.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.collector.address) -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "litellm.spendWorkerEnv" -}}
-- name: LITELLM_SPEND_WORKER_ENABLED
+{{- define "litellm.collectorEnv" -}}
+- name: LITELLM_COLLECTOR_ENABLED
   value: "true"
-- name: LITELLM_SPEND_WORKER_ADDRESS
-  value: {{ .Values.spendWorker.address | quote }}
-- name: LITELLM_SPEND_WORKER_BUFFER_SIZE
-  value: {{ .Values.spendWorker.bufferSize | quote }}
-- name: LITELLM_SPEND_WORKER_ON_UNAVAILABLE
-  value: {{ .Values.spendWorker.onUnavailable | quote }}
-- name: LITELLM_SPEND_WORKER_DRAIN_TIMEOUT_SECONDS
-  value: {{ .Values.spendWorker.drainTimeoutSeconds | quote }}
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .Values.collector.address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .Values.collector.bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .Values.collector.onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .Values.collector.drainTimeoutSeconds | quote }}
 {{- end -}}

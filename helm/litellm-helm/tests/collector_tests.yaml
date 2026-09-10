@@ -1,10 +1,10 @@
-suite: test spend worker sidecar
+suite: test collector sidecar
 templates:
   - deployment.yaml
   - hpa.yaml
   - configmap-litellm.yaml
 tests:
-  - it: should run the proxy alone with no spend worker env by default
+  - it: should run the proxy alone with no collector env by default
     template: deployment.yaml
     asserts:
       - lengthEqual:
@@ -13,12 +13,12 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_ENABLED
+            name: LITELLM_COLLECTOR_ENABLED
             value: "true"
       - notContains:
           path: spec.template.spec.volumes
           content:
-            name: spend-worker-socket
+            name: collector-socket
           any: true
 
   - it: should add the sidecar on the same image and point both containers at the unix socket
@@ -26,8 +26,8 @@ tests:
     set:
       image.tag: test
       db.connectionPool.enabled: true
-      spendWorker.enabled: true
-      spendWorker.resources:
+      collector.enabled: true
+      collector.resources:
         requests:
           cpu: 500m
           memory: 1Gi
@@ -40,13 +40,13 @@ tests:
           count: 2
       - equal:
           path: spec.template.spec.containers[1].name
-          value: litellm-spend-worker
+          value: litellm-collector
       - equal:
           path: spec.template.spec.containers[1].image
           value: ghcr.io/berriai/litellm:test
       - equal:
           path: spec.template.spec.containers[1].command
-          value: [python, -m, gateway.spend_worker]
+          value: [python, -m, gateway.collector]
       - equal:
           path: spec.template.spec.containers[1].resources.requests.cpu
           value: 500m
@@ -56,38 +56,38 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_ENABLED
+            name: LITELLM_COLLECTOR_ENABLED
             value: "true"
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_ADDRESS
-            value: unix:///var/run/litellm/spend-worker.sock
+            name: LITELLM_COLLECTOR_ADDRESS
+            value: unix:///var/run/litellm/collector.sock
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_BUFFER_SIZE
+            name: LITELLM_COLLECTOR_BUFFER_SIZE
             value: "1000"
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_ON_UNAVAILABLE
+            name: LITELLM_COLLECTOR_ON_UNAVAILABLE
             value: fallback
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: LITELLM_JOB_ROLE
-            value: spend_worker
+            value: collector
       - contains:
           path: spec.template.spec.containers[1].env
           content:
             name: LITELLM_JOB_ROLE
-            value: spend_worker
+            value: collector
       - contains:
           path: spec.template.spec.containers[1].env
           content:
-            name: LITELLM_SPEND_WORKER_ADDRESS
-            value: unix:///var/run/litellm/spend-worker.sock
+            name: LITELLM_COLLECTOR_ADDRESS
+            value: unix:///var/run/litellm/collector.sock
       - contains:
           path: spec.template.spec.containers[1].env
           content:
@@ -119,12 +119,12 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content:
-            name: spend-worker-socket
+            name: collector-socket
             mountPath: /var/run/litellm
       - contains:
           path: spec.template.spec.containers[1].volumeMounts
           content:
-            name: spend-worker-socket
+            name: collector-socket
             mountPath: /var/run/litellm
       - contains:
           path: spec.template.spec.containers[1].volumeMounts
@@ -135,17 +135,17 @@ tests:
       - contains:
           path: spec.template.spec.volumes
           content:
-            name: spend-worker-socket
+            name: collector-socket
             emptyDir:
               sizeLimit: 1Mi
 
   - it: should skip the socket volume and pass the policy through on tcp transport
     template: deployment.yaml
     set:
-      spendWorker.enabled: true
-      spendWorker.address: tcp://127.0.0.1:4100
-      spendWorker.onUnavailable: drop
-      spendWorker.bufferSize: 50
+      collector.enabled: true
+      collector.address: tcp://127.0.0.1:4100
+      collector.onUnavailable: drop
+      collector.bufferSize: 50
       envVars:
         CONFIG_FILE_PATH: /custom/config.yaml
     asserts:
@@ -165,29 +165,29 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_ADDRESS
+            name: LITELLM_COLLECTOR_ADDRESS
             value: tcp://127.0.0.1:4100
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_ON_UNAVAILABLE
+            name: LITELLM_COLLECTOR_ON_UNAVAILABLE
             value: drop
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_BUFFER_SIZE
+            name: LITELLM_COLLECTOR_BUFFER_SIZE
             value: "50"
       - notContains:
           path: spec.template.spec.volumes
           content:
-            name: spend-worker-socket
+            name: collector-socket
           any: true
 
   - it: should keep the pod-wide cpu metric unless asked to scale on the proxy container
     template: hpa.yaml
     set:
       autoscaling.enabled: true
-      spendWorker.enabled: true
+      collector.enabled: true
     asserts:
       - equal: { path: "spec.metrics[0].type", value: Resource }
       - equal: { path: "spec.metrics[0].resource.name", value: cpu }
@@ -196,8 +196,8 @@ tests:
     template: hpa.yaml
     set:
       autoscaling.enabled: true
-      spendWorker.enabled: true
-      spendWorker.scaleOnProxyContainerCpu: true
+      collector.enabled: true
+      collector.scaleOnProxyContainerCpu: true
     asserts:
       - equal: { path: "spec.metrics[0].type", value: ContainerResource }
       - equal: { path: "spec.metrics[0].containerResource.name", value: cpu }
@@ -209,6 +209,6 @@ tests:
     template: hpa.yaml
     set:
       autoscaling.enabled: true
-      spendWorker.scaleOnProxyContainerCpu: true
+      collector.scaleOnProxyContainerCpu: true
     asserts:
       - equal: { path: "spec.metrics[0].type", value: Resource }

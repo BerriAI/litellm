@@ -6,6 +6,7 @@ import pytest
 
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy.collector import SpendEventConsumer
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     _get_budget_reservation_from_metadata,
@@ -17,7 +18,6 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.spend_worker import SpendEventConsumer
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, Usage
 
 

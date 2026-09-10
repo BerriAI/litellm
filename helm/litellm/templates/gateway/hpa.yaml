@@ -15,7 +15,7 @@ spec:
   maxReplicas: {{ .Values.gateway.hpa.maxReplicas }}
   metrics:
     {{- if .Values.gateway.hpa.targetCPUUtilizationPercentage }}
-    {{- if and .Values.gateway.spendWorker.enabled .Values.gateway.spendWorker.scaleOnGatewayContainerCpu }}
+    {{- if and .Values.gateway.collector.enabled .Values.gateway.collector.scaleOnGatewayContainerCpu }}
     - type: ContainerResource
       containerResource:
         name: cpu

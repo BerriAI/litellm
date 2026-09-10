@@ -106,9 +106,7 @@ class _ProxyDBLogger(CustomLogger):
             store_bodies=_should_store_prompts_and_responses_in_spend_logs(),
         )
         if isinstance(event, SpendEventBuildError):
-            verbose_proxy_logger.warning(
-                "spend worker: tracking cost in-process, event not buildable: %s", event.reason
-            )
+            verbose_proxy_logger.warning("collector: tracking cost in-process, event not buildable: %s", event.reason)
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return
         await self.spend_event_producer.publish(event)
@@ -546,7 +544,7 @@ async def run_spend_event(line: bytes) -> None:
     """Run the unchanged cost pipeline on a serialized spend event (sidecar consumer and in-process fallback)."""
     event: Final = decode_spend_event(line)
     if isinstance(event, SpendEventDecodeError):
-        verbose_proxy_logger.error("spend worker: discarding undecodable spend event: %s", event.reason)
+        verbose_proxy_logger.error("collector: discarding undecodable spend event: %s", event.reason)
         return
     args: Final = spend_event_callback_args(event)
     await _ProxyDBLogger()._PROXY_track_cost_callback(args.kwargs, args.response_obj, args.start_time, args.end_time)

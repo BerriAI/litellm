@@ -314,7 +314,7 @@ gateway:
     labels: {}
     interval: 15s
     scrapeTimeout: 10s
-  # Opt-in `spend-worker` sidecar (same image, `python -m gateway.spend_worker`)
+  # Opt-in `collector` sidecar (same image, `python -m gateway.collector`)
   # that runs the post-response spend pipeline (cost calculation, spend logs,
   # spend counters, budget reservation reconciliation) so the uvicorn workers
   # only serialise a compact event over loopback and go back to serving
@@ -323,11 +323,11 @@ gateway:
   # Delivery is at-most-once inside the pod: events already handed over are
   # lost if the sidecar dies before writing them; events the workers cannot
   # hand over follow `onUnavailable`.
-  spendWorker:
+  collector:
     enabled: false
     # unix:///<dir>/<file>.sock (the <dir> becomes a shared emptyDir) or
     # tcp://127.0.0.1:<port>
-    address: unix:///var/run/litellm/spend-worker.sock
+    address: unix:///var/run/litellm/collector.sock
     # Events each uvicorn worker holds in memory while the sidecar is slow or
     # restarting.
     bufferSize: 1000

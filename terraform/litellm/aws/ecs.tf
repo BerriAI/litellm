@@ -279,13 +279,13 @@ locals {
     ]
   } : {}
 
-  spend_worker_address = "tcp://127.0.0.1:${var.spend_worker_port}"
-  spend_worker_env = var.spend_worker_enabled ? [
-    { name = "LITELLM_SPEND_WORKER_ENABLED", value = "true" },
-    { name = "LITELLM_SPEND_WORKER_ADDRESS", value = local.spend_worker_address },
-    { name = "LITELLM_SPEND_WORKER_BUFFER_SIZE", value = tostring(var.spend_worker_buffer_size) },
-    { name = "LITELLM_SPEND_WORKER_ON_UNAVAILABLE", value = var.spend_worker_on_unavailable },
-    { name = "LITELLM_SPEND_WORKER_DRAIN_TIMEOUT_SECONDS", value = tostring(var.spend_worker_drain_timeout_seconds) },
+  collector_address = "tcp://127.0.0.1:${var.collector_port}"
+  collector_env = var.collector_enabled ? [
+    { name = "LITELLM_COLLECTOR_ENABLED", value = "true" },
+    { name = "LITELLM_COLLECTOR_ADDRESS", value = local.collector_address },
+    { name = "LITELLM_COLLECTOR_BUFFER_SIZE", value = tostring(var.collector_buffer_size) },
+    { name = "LITELLM_COLLECTOR_ON_UNAVAILABLE", value = var.collector_on_unavailable },
+    { name = "LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS", value = tostring(var.collector_drain_timeout_seconds) },
   ] : []
 
   gateway_environment = concat(
@@ -296,32 +296,32 @@ locals {
     local.proxy_config_env,
     local.metrics_env,
     local.gateway_pool_env,
-    local.spend_worker_env,
+    local.collector_env,
   )
 
-  spend_worker_launch_cmd = "exec python -m gateway.spend_worker"
-  spend_worker_command = [
-    local.proxy_config_enabled ? "${local.proxy_config_fetch_cmd} && ${local.spend_worker_launch_cmd}" : local.spend_worker_launch_cmd
+  collector_launch_cmd = "exec python -m gateway.collector"
+  collector_command = [
+    local.proxy_config_enabled ? "${local.proxy_config_fetch_cmd} && ${local.collector_launch_cmd}" : local.collector_launch_cmd
   ]
 
-  spend_worker_container = var.spend_worker_enabled ? [{
-    name      = "spend-worker"
+  collector_container = var.collector_enabled ? [{
+    name      = "collector"
     image     = var.gateway_image
     essential = false
-    cpu       = var.spend_worker_cpu
-    memory    = var.spend_worker_memory
+    cpu       = var.collector_cpu
+    memory    = var.collector_memory
 
     restartPolicy = { enabled = true }
 
     entryPoint = ["sh", "-c"]
-    command    = local.spend_worker_command
+    command    = local.collector_command
     environment = concat(
       local.shared_env,
       local.gateway_extra_env_list,
       local.proxy_config_env,
       local.gateway_pool_env,
-      local.spend_worker_env,
-      [{ name = "LITELLM_JOB_ROLE", value = "spend_worker" }],
+      local.collector_env,
+      [{ name = "LITELLM_JOB_ROLE", value = "collector" }],
     )
     secrets = concat(local.shared_secrets, local.gateway_extra_secrets_list)
 
@@ -330,7 +330,7 @@ locals {
       options = {
         awslogs-group         = aws_cloudwatch_log_group.gateway.name
         awslogs-region        = var.region
-        awslogs-stream-prefix = "spend-worker"
+        awslogs-stream-prefix = "collector"
       }
     }
   }] : []
@@ -367,8 +367,8 @@ resource "aws_ecs_task_definition" "gateway" {
     }
 
     precondition {
-      condition     = !var.spend_worker_enabled || (var.spend_worker_cpu < var.gateway_cpu && var.spend_worker_memory < var.gateway_memory)
-      error_message = "spend_worker_cpu and spend_worker_memory are carved out of gateway_cpu / gateway_memory and must leave room for the gateway container."
+      condition     = !var.collector_enabled || (var.collector_cpu < var.gateway_cpu && var.collector_memory < var.gateway_memory)
+      error_message = "collector_cpu and collector_memory are carved out of gateway_cpu / gateway_memory and must leave room for the gateway container."
     }
   }
 
@@ -407,7 +407,7 @@ resource "aws_ecs_task_definition" "gateway" {
       },
       local.gateway_proxy_overrides,
     )
-  ], local.gateway_metrics_container, local.spend_worker_container))
+  ], local.gateway_metrics_container, local.collector_container))
 
   dynamic "volume" {
     for_each = local.metrics_enabled ? [1] : []

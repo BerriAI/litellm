@@ -1,4 +1,4 @@
-suite: test gateway spend worker sidecar
+suite: test gateway collector sidecar
 templates:
   - gateway/configmap.yaml
   - gateway/deployment.yaml
@@ -6,7 +6,7 @@ templates:
 values:
   - ./values/required.yaml
 tests:
-  - it: adds no sidecar, env, volume or container metric when the spend worker is off
+  - it: adds no sidecar, env, volume or container metric when the collector is off
     asserts:
       - lengthEqual:
           path: spec.template.spec.containers
@@ -15,13 +15,13 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_ENABLED
+            name: LITELLM_COLLECTOR_ENABLED
             value: "true"
         template: gateway/deployment.yaml
       - notContains:
           path: spec.template.spec.volumes
           content:
-            name: spend-worker-socket
+            name: collector-socket
           any: true
         template: gateway/deployment.yaml
       - equal:
@@ -29,11 +29,11 @@ tests:
           value: Resource
         template: gateway/hpa.yaml
 
-  - it: runs the spend worker as a sidecar sharing env, config and a unix socket emptyDir, and scales on the gateway container only
+  - it: runs the collector as a sidecar sharing env, config and a unix socket emptyDir, and scales on the gateway container only
     set:
-      gateway.spendWorker.enabled: true
-      gateway.spendWorker.bufferSize: 250
-      gateway.spendWorker.onUnavailable: drop
+      gateway.collector.enabled: true
+      gateway.collector.bufferSize: 250
+      gateway.collector.onUnavailable: drop
       gateway.image.tag: v1.102.0
       gateway.numWorkers: 4
       gateway.extraEnv:
@@ -45,30 +45,30 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_ADDRESS
-            value: unix:///var/run/litellm/spend-worker.sock
+            name: LITELLM_COLLECTOR_ADDRESS
+            value: unix:///var/run/litellm/collector.sock
         template: gateway/deployment.yaml
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_BUFFER_SIZE
+            name: LITELLM_COLLECTOR_BUFFER_SIZE
             value: "250"
         template: gateway/deployment.yaml
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_SPEND_WORKER_ON_UNAVAILABLE
+            name: LITELLM_COLLECTOR_ON_UNAVAILABLE
             value: drop
         template: gateway/deployment.yaml
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
           content:
-            name: spend-worker-socket
+            name: collector-socket
             mountPath: /var/run/litellm
         template: gateway/deployment.yaml
       - equal:
           path: spec.template.spec.containers[1].name
-          value: spend-worker
+          value: collector
         template: gateway/deployment.yaml
       - equal:
           path: spec.template.spec.containers[1].image
@@ -79,13 +79,13 @@ tests:
           value:
             - python
             - -m
-            - gateway.spend_worker
+            - gateway.collector
         template: gateway/deployment.yaml
       - contains:
           path: spec.template.spec.containers[1].env
           content:
             name: LITELLM_JOB_ROLE
-            value: spend_worker
+            value: collector
         template: gateway/deployment.yaml
       - contains:
           path: spec.template.spec.containers[1].env
@@ -108,8 +108,8 @@ tests:
       - contains:
           path: spec.template.spec.containers[1].env
           content:
-            name: LITELLM_SPEND_WORKER_ADDRESS
-            value: unix:///var/run/litellm/spend-worker.sock
+            name: LITELLM_COLLECTOR_ADDRESS
+            value: unix:///var/run/litellm/collector.sock
         template: gateway/deployment.yaml
       - notContains:
           path: spec.template.spec.containers[1].env
@@ -133,7 +133,7 @@ tests:
       - contains:
           path: spec.template.spec.containers[1].volumeMounts
           content:
-            name: spend-worker-socket
+            name: collector-socket
             mountPath: /var/run/litellm
         template: gateway/deployment.yaml
       - equal:
@@ -143,7 +143,7 @@ tests:
       - contains:
           path: spec.template.spec.volumes
           content:
-            name: spend-worker-socket
+            name: collector-socket
             emptyDir:
               sizeLimit: 1Mi
         template: gateway/deployment.yaml
@@ -161,26 +161,26 @@ tests:
 
   - it: uses loopback tcp without a socket volume and keeps the pod-wide cpu metric when asked
     set:
-      gateway.spendWorker.enabled: true
-      gateway.spendWorker.address: tcp://127.0.0.1:4010
-      gateway.spendWorker.scaleOnGatewayContainerCpu: false
+      gateway.collector.enabled: true
+      gateway.collector.address: tcp://127.0.0.1:4010
+      gateway.collector.scaleOnGatewayContainerCpu: false
     asserts:
       - contains:
           path: spec.template.spec.containers[1].env
           content:
-            name: LITELLM_SPEND_WORKER_ADDRESS
+            name: LITELLM_COLLECTOR_ADDRESS
             value: tcp://127.0.0.1:4010
         template: gateway/deployment.yaml
       - notContains:
           path: spec.template.spec.volumes
           content:
-            name: spend-worker-socket
+            name: collector-socket
           any: true
         template: gateway/deployment.yaml
       - notContains:
           path: spec.template.spec.containers[1].volumeMounts
           content:
-            name: spend-worker-socket
+            name: collector-socket
           any: true
         template: gateway/deployment.yaml
       - equal:

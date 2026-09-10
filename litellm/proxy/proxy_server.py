@@ -593,8 +593,8 @@ from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
 from litellm.proxy.spend_tracking.spend_event_producer import (
+    CollectorSettings,
     SpendEventProducer,
-    SpendWorkerSettings,
     build_spend_event_producer,
 )
 from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
@@ -2485,7 +2485,7 @@ def cost_tracking():
     if prisma_client is not None:
         from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
-        spend_event_producer = build_spend_event_producer(SpendWorkerSettings(), fallback=run_spend_event)
+        spend_event_producer = build_spend_event_producer(CollectorSettings(), fallback=run_spend_event)
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger(spend_event_producer))
         litellm.logging_callback_manager.add_litellm_async_success_callback(_ProxyDBLogger(spend_event_producer))
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
@@ -2494,8 +2494,8 @@ def cost_tracking():
 async def _drain_spend_event_producer_on_shutdown() -> None:
     if spend_event_producer is None:
         return
-    await spend_event_producer.close(drain_timeout=SpendWorkerSettings().drain_timeout_seconds)
-    verbose_proxy_logger.info("spend worker: producer drained on shutdown. stats=%s", spend_event_producer.stats())
+    await spend_event_producer.close(drain_timeout=CollectorSettings().drain_timeout_seconds)
+    verbose_proxy_logger.info("collector: producer drained on shutdown. stats=%s", spend_event_producer.stats())
 
 
 # Bounds authoritative DB re-reads when enforcing a budget against a

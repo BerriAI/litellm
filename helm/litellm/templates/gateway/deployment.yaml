@@ -74,11 +74,11 @@ spec:
             - name: PROMETHEUS_MULTIPROC_DIR
               value: {{ include "litellm.gateway.prometheusMultiprocDir" . }}
             {{- end }}
-            {{- if .Values.gateway.spendWorker.enabled }}
-            {{- include "litellm.gateway.spendWorkerEnv" . | nindent 12 }}
+            {{- if .Values.gateway.collector.enabled }}
+            {{- include "litellm.gateway.collectorEnv" . | nindent 12 }}
             {{- end }}
           {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
-          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled (include "litellm.gateway.spendWorkerSocketDir" .) }}
+          {{- if or .Values.gateway.config.create .Values.gateway.volumeMounts .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled (include "litellm.gateway.collectorSocketDir" .) }}
           volumeMounts:
             {{- if .Values.gateway.config.create }}
             - name: gateway-config
@@ -89,9 +89,9 @@ spec:
             - name: prometheus-multiproc
               mountPath: {{ include "litellm.gateway.prometheusMultiprocDir" . }}
             {{- end }}
-            {{- if include "litellm.gateway.spendWorkerSocketDir" . }}
-            - name: spend-worker-socket
-              mountPath: {{ include "litellm.gateway.spendWorkerSocketDir" . }}
+            {{- if include "litellm.gateway.collectorSocketDir" . }}
+            - name: collector-socket
+              mountPath: {{ include "litellm.gateway.collectorSocketDir" . }}
             {{- end }}
             {{- if .Values.billingMetrics.enabled }}
             {{- include "litellm.billingMetricsVolumeMounts" . | nindent 12 }}
@@ -152,8 +152,8 @@ spec:
           resources:
             {{- toYaml .Values.gateway.metricsServer.resources | nindent 12 }}
         {{- end }}
-        {{- if .Values.gateway.spendWorker.enabled }}
-        - name: spend-worker
+        {{- if .Values.gateway.collector.enabled }}
+        - name: collector
           image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
           {{- with .Values.gateway.securityContext }}
@@ -163,36 +163,36 @@ spec:
           command:
             - python
             - -m
-            - gateway.spend_worker
+            - gateway.collector
           env:
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
             {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH
               value: /app/config/config.yaml
             {{- end }}
-            {{- include "litellm.gateway.spendWorkerEnv" . | nindent 12 }}
+            {{- include "litellm.gateway.collectorEnv" . | nindent 12 }}
             - name: LITELLM_JOB_ROLE
-              value: spend_worker
+              value: collector
           {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
-          {{- if or .Values.gateway.config.create (include "litellm.gateway.spendWorkerSocketDir" .) }}
+          {{- if or .Values.gateway.config.create (include "litellm.gateway.collectorSocketDir" .) }}
           volumeMounts:
             {{- if .Values.gateway.config.create }}
             - name: gateway-config
               mountPath: /app/config/config.yaml
               subPath: config.yaml
             {{- end }}
-            {{- if include "litellm.gateway.spendWorkerSocketDir" . }}
-            - name: spend-worker-socket
-              mountPath: {{ include "litellm.gateway.spendWorkerSocketDir" . }}
+            {{- if include "litellm.gateway.collectorSocketDir" . }}
+            - name: collector-socket
+              mountPath: {{ include "litellm.gateway.collectorSocketDir" . }}
             {{- end }}
           {{- end }}
           resources:
-            {{- toYaml .Values.gateway.spendWorker.resources | nindent 12 }}
+            {{- toYaml .Values.gateway.collector.resources | nindent 12 }}
         {{- end }}
       {{- with .Values.gateway.extraContainers }}
         {{- tpl (toYaml .) $ | nindent 8 }}
       {{- end }}
-      {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled (include "litellm.gateway.spendWorkerSocketDir" .) }}
+      {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.billingMetrics.enabled .Values.gateway.metricsServer.enabled (include "litellm.gateway.collectorSocketDir" .) }}
       volumes:
         {{- if .Values.gateway.config.create }}
         - name: gateway-config
@@ -203,8 +203,8 @@ spec:
         - name: prometheus-multiproc
           emptyDir: {}
         {{- end }}
-        {{- if include "litellm.gateway.spendWorkerSocketDir" . }}
-        - name: spend-worker-socket
+        {{- if include "litellm.gateway.collectorSocketDir" . }}
+        - name: collector-socket
           emptyDir:
             sizeLimit: 1Mi
         {{- end }}
