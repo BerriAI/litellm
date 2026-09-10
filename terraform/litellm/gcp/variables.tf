@@ -206,6 +206,45 @@ variable "gateway_num_workers" {
   }
 }
 
+variable "gateway_connection_pool_enabled" {
+  description = <<-EOT
+    Run an in-container PgBouncer (transaction mode, loopback) in each gateway
+    instance, shared by every uvicorn worker. Without it each of the
+    `gateway_num_workers` workers opens its own Prisma pool straight to
+    Cloud SQL, so an instance's footprint against the database connection
+    ceiling is workers x connection_limit and grows with every instance. Sets
+    LITELLM_PGBOUNCER_ENABLED / LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS /
+    LITELLM_PGBOUNCER_MAX_CLIENT_CONN on the gateway container only. The
+    module's Cloud SQL authenticates with the static password in Secret
+    Manager, which is what the pooler needs. Mirrors the AWS stack's
+    gateway_connection_pool_enabled.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gateway_pool_max_db_connections" {
+  description = "Upstream Cloud SQL connections one gateway instance may hold when gateway_connection_pool_enabled is set, regardless of gateway_num_workers. 20 suits 4 workers."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.gateway_pool_max_db_connections >= 1
+    error_message = "gateway_pool_max_db_connections must be >= 1."
+  }
+}
+
+variable "gateway_pool_max_client_conn" {
+  description = "Client connections the in-container PgBouncer accepts from the gateway workers when gateway_connection_pool_enabled is set."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.gateway_pool_max_client_conn >= 1
+    error_message = "gateway_pool_max_client_conn must be >= 1."
+  }
+}
+
 # Cloud Run autoscales out of the box (request-rate driven). The min/max
 # bounds mirror the HPA replica bounds in helm/litellm/values.yaml so each
 # stack scales over the same range. Cloud Run has no direct CPU-utilization
@@ -515,6 +554,44 @@ variable "otel_capture_message_content" {
     condition     = contains(["no_content", "prompt_and_completion"], var.otel_capture_message_content)
     error_message = "otel_capture_message_content must be one of: no_content, prompt_and_completion."
   }
+}
+
+# ---------- Prometheus metrics sidecar ----------
+
+variable "gateway_metrics_port" {
+  description = <<-EOT
+    Serve Prometheus /metrics from a `metrics` sidecar container in the
+    gateway Cloud Run service on this port (a whole number 1-65535, not 4000
+    or 13133), so the collector's scrape never runs on an inference worker.
+    The sidecar runs the gateway image with
+    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
+    workers' PROMETHEUS_MULTIPROC_DIR samples over an in-memory volume shared
+    with the gateway container. Cloud Run only routes ingress to the gateway
+    container, so the sidecar port is reachable on localhost inside the
+    instance only; a Managed Service for Prometheus collector sidecar
+    (gateway_metrics_collector_image) scrapes it and writes the series to
+    Cloud Monitoring. The load balancer keeps serving the authenticated
+    /metrics on the gateway port as before. Null (the default) leaves /metrics
+    on the gateway port only. Needs gateway_image v1.101.0 or newer.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.gateway_metrics_port == null || (var.gateway_metrics_port >= 1 && var.gateway_metrics_port <= 65535 && floor(var.gateway_metrics_port) == var.gateway_metrics_port && !contains([4000, 13133], var.gateway_metrics_port))
+    error_message = "gateway_metrics_port must be a whole number between 1 and 65535 and must not be 4000 (the gateway port) or 13133 (the collector health port)."
+  }
+}
+
+variable "gateway_metrics_collector_image" {
+  description = <<-EOT
+    Managed Service for Prometheus sidecar image that scrapes
+    localhost:<gateway_metrics_port>/metrics and writes to Cloud Monitoring.
+    Override only to pin a different release or pull through your own
+    Artifact Registry. Ignored when gateway_metrics_port is null.
+  EOT
+  type        = string
+  default     = "us-docker.pkg.dev/cloud-ops-agents-artifacts/cloud-run-gmp-sidecar/cloud-run-gmp-sidecar:1.9.2"
 }
 
 # ---------- Enterprise billing metrics ----------

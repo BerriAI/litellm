@@ -34,6 +34,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
+from litellm.rust_bridge.token_counter import count_anthropic_input_tokens, uses_anthropic_tokenizer
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
 
@@ -210,6 +211,7 @@ async def reserve_budget_for_request(
     end_user_object: object = None,
     apply_user_budget_to_team_keys: bool = False,
     fail_closed_budget_enforcement: bool = False,
+    raw_body: bytes | None = None,
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
@@ -237,6 +239,7 @@ async def reserve_budget_for_request(
         request_body=request_body,
         route=route,
         llm_router=llm_router,
+        raw_body=raw_body,
     )
 
     current_spend_by_counter_key: Final[dict[str, float]] = {}
@@ -1356,24 +1359,46 @@ async def count_request_input_tokens(
     request_body: dict,
     route: str,
     llm_router: Router | None,
+    raw_body: bytes | None = None,
 ) -> Mapping[str, int]:
     """Input-token count per candidate model, counted once per request.
 
     Tokenizing is the reservation path's dominant CPU cost and is O(prompt), so
     counting a large prompt inline stalls every other request on the worker.
-    Large prompts are counted in a worker thread, and the counts are reused by
-    both the max-cost and the input-cost estimate.
+    Models on the Anthropic tokenizer are counted from the raw body by the Rust
+    bridge when it is enabled, which parses and tokenizes with the GIL released.
+    Everything it declines is counted in Python, large prompts in a worker
+    thread. The counts are reused by both the max-cost and the input-cost
+    estimate.
     """
     models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     if not models:
         return MappingProxyType({})
-    if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS:
-        return _count_input_tokens_for_models(request_body=request_body, models=models)
-    return await asyncio.to_thread(
-        _count_input_tokens_for_models,
-        request_body=request_body,
-        models=models,
+    rust_count: Final = (
+        await count_anthropic_input_tokens(raw_body)
+        if raw_body is not None and any(uses_anthropic_tokenizer(model) for model in models)
+        else None
     )
+    rust_counts: Final = MappingProxyType(
+        {
+            model: rust_count.input_tokens
+            for model in models
+            if rust_count is not None and uses_anthropic_tokenizer(model)
+        }
+    )
+    python_models: Final = tuple(model for model in models if model not in rust_counts)
+    if not python_models:
+        return rust_counts
+    python_counts: Final = (
+        _count_input_tokens_for_models(request_body=request_body, models=python_models)
+        if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS
+        else await asyncio.to_thread(
+            _count_input_tokens_for_models,
+            request_body=request_body,
+            models=python_models,
+        )
+    )
+    return MappingProxyType({**rust_counts, **python_counts})
 
 
 def _count_input_tokens_for_models(

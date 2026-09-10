@@ -61,6 +61,9 @@ spec:
             - name: NUM_WORKERS
               value: {{ .Values.gateway.numWorkers | quote }}
             {{- end }}
+            {{- if .Values.database.connectionPool.enabled }}
+            {{- include "litellm.connectionPoolEnv" $ | nindent 12 }}
+            {{- end }}
             {{- if .Values.billingMetrics.enabled }}
             {{- include "litellm.billingMetricsEnv" . | nindent 12 }}
             {{- end }}

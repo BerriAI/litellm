@@ -59,6 +59,7 @@ vi.mock("../networking", async () => {
       agents: [],
     }),
     getAgentAccessGroups: vi.fn().mockResolvedValue([]),
+    getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [], count: 0 }),
   };
 });
 
@@ -131,6 +132,14 @@ vi.mock("../agent_management/AgentSelector", () => ({
       onClick={() => onChange?.({ agents: ["agent-1"], accessGroups: [] })}
     >
       pick agent
+    </button>
+  ),
+}));
+
+vi.mock("../skills/SkillSelector", () => ({
+  default: ({ onChange }: { onChange: (selected: string[]) => void }) => (
+    <button type="button" data-testid="skill-selector" onClick={() => onChange(["private-skill"])}>
+      pick skill
     </button>
   ),
 }));
@@ -1907,6 +1916,7 @@ describe("KeyEditView", () => {
     mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
     mcp_tool_permissions: {},
     agents_and_groups: { agents: [], accessGroups: [] },
+    skills: [],
     organization_id: null,
     team_id: null,
     logging_settings: [],
@@ -2239,6 +2249,36 @@ describe("KeyEditView", () => {
         expect(onSubmitMock).toHaveBeenCalled();
       });
       expect(onSubmitMock.mock.calls[0][0].agents_and_groups.agents).toEqual(["agent-1"]);
+    });
+
+    it("carries a picked skill into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: "pick skill" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].skills).toEqual(["private-skill"]);
+    });
+
+    it("preloads the stored skills into the payload when the selector is left untouched", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        object_permission: { ...MOCK_KEY_DATA.object_permission, skills: ["stored-skill"] },
+      } as KeyResponse);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].skills).toEqual(["stored-skill"]);
     });
 
     it("carries an added logging integration into the payload", async () => {

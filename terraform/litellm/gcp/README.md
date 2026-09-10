@@ -238,6 +238,89 @@ this with `litellm_license`. To tune the export cadence, set
 
 Behavior matches the AWS stack 1:1; the variable names are identical
 
+### Prometheus metrics sidecar
+
+`gateway_metrics_port` adds a `metrics` sidecar
+(`python -m litellm.proxy.prometheus_metrics_server`) to the gateway Cloud Run
+service that aggregates the workers' samples over an in-memory volume shared
+with the gateway container, so the collector's scrape never runs on an
+inference worker. Cloud Run only routes traffic to the gateway container, so
+the load balancer keeps hitting port 4000 (including the gateway's own
+authenticated `/metrics`, which stays as it was) and the sidecar port is
+reachable on localhost inside the instance only. To get the series out, the
+stack also adds Google's
+[Managed Service for Prometheus sidecar](https://cloud.google.com/stackdriver/docs/managed-prometheus/cloudrun-sidecar)
+(`gateway_metrics_collector_image`) with a `RunMonitoring` config stored in
+Secret Manager that scrapes `localhost:<port>/metrics` every 30s and writes to
+Cloud Monitoring as `prometheus.googleapis.com/...` metrics. Enabling it grants
+the runtime service account `roles/monitoring.metricWriter` and
+`roles/logging.logWriter` on the project. Needs `gateway_image` v1.101.0 or
+newer. See [Prometheus metrics](https://docs.litellm.ai/docs/proxy/prometheus)
+for the metrics themselves
+
+```hcl
+gateway_metrics_port = 4001
+```
+
+The collector scrapes from inside the instance, so scrapes on an instance with
+no in-flight requests can fail when CPU is throttled between requests. Keep
+`gateway_min_instances` at 1 or more and, if you see gaps, enable
+instance-based billing on the gateway service. Unlike the AWS stack there is
+no `gateway_metrics_scrape_cidrs`: nothing outside the instance can reach the
+sidecar port, so there is no network rule to open
+
+### Autoscaling
+
+Cloud Run scales the gateway on request concurrency (plus its built-in CPU
+target), not on a metric you attach. Each instance takes up to
+`gateway_max_instance_request_concurrency` requests at once (default 80)
+and Cloud Run adds instances between `gateway_min_instances` and
+`gateway_max_instances` when the in-flight count fills up. That is the
+request-rate signal for this stack: lower the concurrency for LLM streams
+that hold a worker for tens of seconds, since a stream counts as one request
+for as long as it is open
+
+There is no tokens-per-second path here. Cloud Run's autoscaler has no
+custom-metric input, so the `litellm_total_tokens_metric_total` counter the
+proxy exposes cannot drive it. If you need token-based scaling on GCP, run
+the gateway on GKE with the Helm chart's `targetTokensPerSecond` (see
+"Dependencies only" below) rather than wiring the counter into Cloud
+Monitoring, which the autoscaler would ignore
+
+### In-container connection pool
+
+Each of the `gateway_num_workers` uvicorn workers opens its own Prisma pool
+straight to Cloud SQL, so one instance holds `workers x connection_limit`
+connections and the fleet's footprint against the database ceiling grows with
+every instance Cloud Run adds. `gateway_connection_pool_enabled` runs a
+PgBouncer (transaction mode, loopback) inside the gateway container that all
+workers share, capping the instance at `gateway_pool_max_db_connections`
+upstream connections however many workers it runs.
+`gateway_pool_max_client_conn` bounds the worker-side connections the pooler
+accepts. The module sets `LITELLM_PGBOUNCER_ENABLED`,
+`LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS` and `LITELLM_PGBOUNCER_MAX_CLIENT_CONN`
+on the gateway service only; the backend service and the migrations job keep
+the direct connection
+
+```hcl
+gateway_num_workers             = 4
+gateway_connection_pool_enabled = true
+gateway_pool_max_db_connections = 20
+gateway_pool_max_client_conn    = 1000
+```
+
+The pooler holds one static database password for the life of the instance.
+This stack authenticates to Cloud SQL with the Secret Manager password (see
+[Database authentication](#database-authentication)), so nothing else is
+needed; a Cloud SQL Auth Proxy sidecar with IAM auth would not work with the
+pool
+
+The gateway container starts through `python -m gateway.launch` (the
+componentized image's own entrypoint) rather than `uvicorn` directly. The
+launcher reads these variables, starts the pooler once per instance before
+uvicorn forks the workers and hands them its loopback `DATABASE_URL`. It also
+honours `KEEPALIVE_TIMEOUT` from `gateway_extra_env` the way the image does
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or
