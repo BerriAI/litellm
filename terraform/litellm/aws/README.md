@@ -286,10 +286,10 @@ existing database via `database_url`. The module-created Aurora authenticates
 with rotating IAM tokens (see [Aurora + IAM auth](#aurora--iam-auth)), which
 the pooler cannot follow, and `terraform plan` rejects that combination.
 
-The gateway image on ECS is the componentized `gateway_image`. Its entrypoint
-starts uvicorn directly today, so these variables are inert until the
-PgBouncer-aware launcher lands in that image (BerriAI/litellm#40592); the
-classic `litellm` image honours them already.
+The componentized `gateway_image` starts through `python -m gateway.launch`,
+which reads these variables, starts the pooler once per task and hands the
+workers its loopback URL; the classic `litellm` image honours them the same
+way.
 
 ### Scaling the gateway on requests and tokens
 
