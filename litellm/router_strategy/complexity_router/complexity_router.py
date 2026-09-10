@@ -2064,7 +2064,9 @@ class ComplexityRouter(CustomLogger):
         payload: Final = (
             self._native_classifier_payload(messages_for_call, response_format, encrypted_task)
             if encrypted_task is not None
-            else {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
+            else MappingProxyType(
+                {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
+            )
         )
         proxy_server_request: Final = {
             "originating_request_masked": masked_originating_request(request_kwargs),

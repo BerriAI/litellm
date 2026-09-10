@@ -3,12 +3,13 @@
 import re
 import traceback
 from collections.abc import AsyncGenerator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER, EMPTY_MAPPING
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -950,15 +951,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     model_response_dict: Final = model_response.model_dump()
                     standard_logging_object_copy["response"] = model_response_dict
 
-        redacted_details: Final = {**model_call_details, "standard_logging_object": standard_logging_object_copy}
         params: Final = model_call_details.get("litellm_params")
         request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
-        if turn_off_message_logging and isinstance(params, dict) and isinstance(request, dict):
-            return {
-                **redacted_details,
-                "litellm_params": {**params, "proxy_server_request": without_classifier_audit(request)},
-            }
-        return redacted_details
+        redacted_params: Final = (
+            MappingProxyType({"litellm_params": {**params, "proxy_server_request": without_classifier_audit(request)}})
+            if turn_off_message_logging and isinstance(params, dict) and isinstance(request, dict)
+            else EMPTY_MAPPING
+        )
+        return {
+            **model_call_details,
+            **redacted_params,
+            "standard_logging_object": standard_logging_object_copy,
+        }
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
