@@ -866,6 +866,191 @@ def test_get_supported_openai_params():
     assert "reasoning_effort" in supported_params
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/us.deepseek.r1-v1:0",
+        "bedrock/converse/us.deepseek.r1-v1:0",
+        "bedrock/deepseek.v3-v1:0",
+        "bedrock/deepseek.v3.2",
+    ],
+)
+def test_bedrock_deepseek_does_not_advertise_thinking(model):
+    """DeepSeek reasons natively on Bedrock and does not take the Anthropic-shaped `thinking`
+    field (R1 400s on it, V3 ignores it), so it must not be advertised as supported."""
+    config = AmazonConverseConfig()
+    supported_params = config.get_supported_openai_params(model=model)
+    assert "thinking" not in supported_params
+    assert "output_config" not in supported_params
+
+
+@pytest.mark.parametrize("model", ["bedrock/us.deepseek.r1-v1:0", "bedrock/converse/us.deepseek.r1-v1:0"])
+def test_bedrock_deepseek_r1_does_not_advertise_reasoning_effort(model):
+    """DeepSeek R1 always reasons and returns a 400 for any reasoning_effort shape."""
+    config = AmazonConverseConfig()
+    assert "reasoning_effort" not in config.get_supported_openai_params(model=model)
+
+
+@pytest.mark.parametrize("model", ["bedrock/deepseek.v3-v1:0", "bedrock/deepseek.v3.2", "bedrock/us.deepseek.v3.2"])
+def test_bedrock_deepseek_v3_advertises_reasoning_effort(model):
+    """DeepSeek V3 on Bedrock accepts a raw reasoning_effort in additionalModelRequestFields."""
+    config = AmazonConverseConfig()
+    assert "reasoning_effort" in config.get_supported_openai_params(model=model)
+
+
+@pytest.mark.parametrize("model", ["us.deepseek.r1-v1:0", "deepseek.v3.2"])
+def test_bedrock_deepseek_thinking_raises_without_drop_params(model):
+    """Passing `thinking` to Bedrock DeepSeek must fail client-side with a clear
+    UnsupportedParamsError instead of leaking through to Bedrock."""
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.utils.get_optional_params(
+            model=model,
+            custom_llm_provider="bedrock",
+            thinking={"type": "enabled", "budget_tokens": 1024},
+        )
+
+
+def test_bedrock_deepseek_r1_reasoning_effort_raises_without_drop_params():
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.utils.get_optional_params(
+            model="us.deepseek.r1-v1:0",
+            custom_llm_provider="bedrock",
+            reasoning_effort="high",
+        )
+
+
+@pytest.mark.parametrize("model", ["us.deepseek.r1-v1:0", "deepseek.v3.2"])
+def test_bedrock_deepseek_thinking_dropped_does_not_leak_into_request(model):
+    """With drop_params, `thinking` is dropped rather than forwarded into
+    additionalModelRequestFields for Bedrock DeepSeek."""
+    optional_params = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="bedrock",
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        drop_params=True,
+    )
+    assert "thinking" not in optional_params
+
+    config = AmazonConverseConfig()
+    request = config._transform_request(
+        model=f"bedrock/converse/{model}",
+        messages=[{"role": "user", "content": "Say hi in one word."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert "thinking" not in (request.get("additionalModelRequestFields") or {})
+
+
+@pytest.mark.parametrize("param", ["thinking", "reasoning_effort"])
+def test_bedrock_deepseek_r1_reasoning_params_not_forwarded_by_map(param):
+    """Even when map_openai_params is called directly (bypassing the supported-params
+    gate), DeepSeek R1 must not forward thinking/reasoning_effort into
+    additionalModelRequestFields, since Bedrock rejects both with a 400."""
+    config = AmazonConverseConfig()
+    model = "bedrock/converse/us.deepseek.r1-v1:0"
+    value = {"type": "enabled", "budget_tokens": 1024} if param == "thinking" else "high"
+
+    optional_params = config.map_openai_params(
+        non_default_params={param: value, "max_tokens": 100},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert "reasoning_effort" not in optional_params
+
+    request = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Say hi in one word."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert request.get("additionalModelRequestFields") is None
+
+
+def test_bedrock_deepseek_v3_reasoning_effort_forwarded_raw():
+    """DeepSeek V3 takes reasoning_effort verbatim in additionalModelRequestFields, never
+    converted into the Anthropic `thinking` block that Claude models get."""
+    config = AmazonConverseConfig()
+    model = "bedrock/deepseek.v3.2"
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high", "max_tokens": 100},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+
+    request = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Say hi in one word."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert request["additionalModelRequestFields"] == {"reasoning_effort": "high"}
+
+
+def test_bedrock_deepseek_v3_thinking_dropped_by_map():
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}, "max_tokens": 100},
+        optional_params={},
+        model="bedrock/deepseek.v3.2",
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params
+    assert "reasoning_effort" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "model, param, value, kept_key",
+    [
+        (
+            "bedrock/us.anthropic.claude-opus-4-20250514-v1:0",
+            "thinking",
+            {"type": "enabled", "budget_tokens": 1024},
+            "thinking",
+        ),
+        (
+            "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            "thinking",
+            {"type": "enabled", "budget_tokens": 1024},
+            "thinking",
+        ),
+        (
+            "bedrock/openai.gpt-oss-safeguard-20b-1:0",
+            "reasoning_effort",
+            "high",
+            "reasoning_effort",
+        ),
+        (
+            "bedrock/us.amazon.nova-2-lite-v1:0",
+            "reasoning_effort",
+            "high",
+            "reasoningConfig",
+        ),
+    ],
+)
+def test_bedrock_non_deepseek_reasoning_params_preserved(model, param, value, kept_key):
+    """The DeepSeek leak fix must only drop reasoning request params for DeepSeek.
+
+    Claude behind an application-inference-profile ARN, gpt-oss-safeguard (absent from the
+    cost map so `supports_reasoning` is False), and Nova 2 all reason via a request param and
+    must keep it. Regression guard against gating the drop on a positive allowlist, which
+    silently degraded reasoning for anything the allowlist/ARN introspection missed."""
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={param: value, "max_tokens": 100},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert kept_key in optional_params
+
+
 def test_get_supported_openai_params_bedrock_converse():
     """
     Test that all documented bedrock converse models have the same set of supported openai params when using
