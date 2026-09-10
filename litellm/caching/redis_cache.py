@@ -288,6 +288,7 @@ _RedisCallResult = TypeVar("_RedisCallResult")
 _swallowed_redis_failures: Final[ContextVar[tuple[bool, ...]]] = ContextVar(
     "litellm_swallowed_redis_failures", default=()
 )
+_breaker_depth: Final[ContextVar[int]] = ContextVar("litellm_redis_breaker_depth", default=0)
 
 
 def _opaque_kwarg_key(value: object) -> str:
@@ -425,13 +426,20 @@ def _record_swallowed_redis_failure(exc: BaseException) -> None:
 class _BreakerAdmission:
     swallowed_before: int
     generation: int
+    nested: bool
 
 
 def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> _BreakerAdmission:
     """Reject the call if the breaker is open, else snapshot what its outcome will be judged against."""
     if breaker.is_open():
         raise RedisCircuitBreakerOpenError(f"Redis circuit breaker is open, skipping {name}")
-    return _BreakerAdmission(swallowed_before=len(_swallowed_redis_failures.get()), generation=breaker.generation)
+    depth: Final = _breaker_depth.get()
+    _breaker_depth.set(depth + 1)
+    return _BreakerAdmission(
+        swallowed_before=len(_swallowed_redis_failures.get()),
+        generation=breaker.generation,
+        nested=depth > 0,
+    )
 
 
 def _take_swallowed_failures(admission: _BreakerAdmission) -> tuple[bool, ...]:
@@ -448,7 +456,14 @@ def _exit_circuit_breaker(breaker: RedisCircuitBreaker, admission: _BreakerAdmis
     method that returned is not on its own proof of a healthy Redis. A call admitted
     before the breaker opened reports nothing: its failures would refresh the open
     timer or knock out the recovery probe, and its success would close it early.
+
+    A guarded method calling another guarded method is one Redis interaction, so only
+    the outermost admission reports. The inner one leaves its swallowed failures in the
+    context for the outer to judge, otherwise the outer would read a clean context and
+    reset the streak the inner just fed.
     """
+    if admission.nested:
+        return
     swallowed: Final = _take_swallowed_failures(admission)
     if admission.generation != breaker.generation:
         return
@@ -459,7 +474,13 @@ def _exit_circuit_breaker(breaker: RedisCircuitBreaker, admission: _BreakerAdmis
         breaker.record_failure(is_timeout=is_timeout)
 
 
+def _leave_circuit_breaker() -> None:
+    _breaker_depth.set(_breaker_depth.get() - 1)
+
+
 def _fail_circuit_breaker(breaker: RedisCircuitBreaker, admission: _BreakerAdmission, exc: BaseException) -> None:
+    if admission.nested:
+        return
     swallowed: Final = _take_swallowed_failures(admission)
     if admission.generation != breaker.generation:
         return
@@ -485,6 +506,8 @@ async def _run_under_circuit_breaker(
     except Exception as e:
         _fail_circuit_breaker(breaker, admission, e)
         raise
+    finally:
+        _leave_circuit_breaker()
     _exit_circuit_breaker(breaker, admission)
     return result
 
@@ -501,6 +524,8 @@ def _run_under_circuit_breaker_sync(
     except Exception as e:
         _fail_circuit_breaker(breaker, admission, e)
         raise
+    finally:
+        _leave_circuit_breaker()
     _exit_circuit_breaker(breaker, admission)
     return result
 
@@ -1441,12 +1466,12 @@ class RedisCache(BaseCache):
         key_value_dict = {}
         _key_list: Final = [key for key in key_list if key is not None]
         start_time: Final = time.time()
-        admission: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
 
         try:
             _keys: Final = [self.check_and_fix_namespace(key=cache_key or "") for cache_key in _key_list]
-            results: Final = self._run_redis_mget_operation(keys=_keys)
-            _exit_circuit_breaker(self._circuit_breaker, admission)
+            results: Final = _run_under_circuit_breaker_sync(
+                self._circuit_breaker, "batch_get_cache", lambda: self._run_redis_mget_operation(keys=_keys)
+            )
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             self.service_logger_obj.service_success_hook(
@@ -1470,6 +1495,8 @@ class RedisCache(BaseCache):
                 decoded_results[k] = v
 
             return decoded_results
+        except RedisCircuitBreakerOpenError:
+            raise
         except Exception as e:
             failed_at: Final = time.time()
             self.service_logger_obj.service_failure_hook(
@@ -1482,7 +1509,6 @@ class RedisCache(BaseCache):
                 parent_otel_span=parent_otel_span,
             )
             verbose_logger.error("Error occurred in batch get cache - %s", e)
-            _fail_circuit_breaker(self._circuit_breaker, admission, e)
             return key_value_dict
 
     @_redis_circuit_breaker_guard

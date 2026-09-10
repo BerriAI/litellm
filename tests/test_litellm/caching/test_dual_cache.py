@@ -621,6 +621,11 @@ def dual_cache_with_open_breaker():
         pytest.param(lambda c: c.async_set_cache("lit7468", "v"), lambda n: None, id="async_set_cache"),
         pytest.param(lambda c: c.async_set_cache_pipeline([("lit7468", "v")]), lambda n: None, id="async_set_cache_pipeline"),
         pytest.param(lambda c: c.async_increment_cache("lit7468", 1.0, ttl=60), float, id="async_increment_cache"),
+        pytest.param(
+            lambda c: c.async_increment_cache_pipeline([{"key": "lit7468", "increment_value": 1.0, "ttl": 60}]),
+            lambda n: [float(n)],
+            id="async_increment_cache_pipeline",
+        ),
     ],
 )
 async def test_open_breaker_is_a_quiet_cache_miss(dual_cache_with_open_breaker, call, expected, caplog):
