@@ -27,6 +27,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -372,16 +373,16 @@ class Agent365Guardrail(CustomGuardrail):
             )
             if isinstance(session_id, str) and session_id:
                 return session_id
-        logging_obj: Final = data.get("litellm_logging_obj")
-        call_details: Final = getattr(logging_obj, "model_call_details", None)
-        if isinstance(call_details, Mapping):
-            tool_call_metadata: Final = call_details.get("mcp_tool_call_metadata")
+        raw_logging_obj: Final = data.get("litellm_logging_obj")
+        logging_obj: Final = raw_logging_obj if isinstance(raw_logging_obj, LiteLLMLoggingObj) else None
+        if logging_obj is not None:
+            tool_call_metadata: Final = logging_obj.model_call_details.get("mcp_tool_call_metadata")
             session_from_logging: Final = (
                 tool_call_metadata.get("mcp_session_id") if isinstance(tool_call_metadata, Mapping) else None
             )
             if isinstance(session_from_logging, str) and session_from_logging:
                 return session_from_logging
-        call_id: Final = data.get("litellm_call_id") or getattr(logging_obj, "litellm_call_id", None)
+        call_id: Final = data.get("litellm_call_id") or (logging_obj.litellm_call_id if logging_obj else None)
         if isinstance(call_id, str) and call_id:
             return call_id
         return str(uuid.uuid4())

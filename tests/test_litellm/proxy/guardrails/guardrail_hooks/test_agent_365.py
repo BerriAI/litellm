@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.exceptions import Timeout as LitellmTimeout
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.agent_365 import (
@@ -295,10 +296,16 @@ class TestConversationId:
     async def test_falls_back_to_logging_obj_session_id(self):
         handler: Final = FakeHandler([_token_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler)
-        logging_obj: Final = SimpleNamespace(
-            model_call_details={"mcp_tool_call_metadata": {"mcp_session_id": "sess-from-logging"}},
+        logging_obj: Final = LiteLLMLoggingObj(
+            model="mcp",
+            messages=[],
+            stream=False,
+            call_type="call_mcp_tool",
+            start_time=None,
             litellm_call_id="call-id-1",
+            function_id="fn-1",
         )
+        logging_obj.model_call_details["mcp_tool_call_metadata"] = {"mcp_session_id": "sess-from-logging"}
         data: Final = _mcp_data(metadata={"headers": {}}, litellm_logging_obj=logging_obj)
         await _run(guardrail, data)
         assert handler.calls[1].json["conversationId"] == "sess-from-logging"
