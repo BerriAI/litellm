@@ -4,7 +4,9 @@ use crate::auth::vertex::{self, VertexAuthInputs};
 use crate::ocr::OcrClient;
 use crate::ocr::codecs::deepseek::{self, DeepSeekOcrParams, DeepSeekOcrResponse};
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
-use crate::ocr::prepare::{_prepare_ocr_request, credential_env, transform_request_body};
+use crate::ocr::prepare::{
+    _prepare_ocr_request, ParsedProviderParams, credential_env, transform_request_body,
+};
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use crate::url_utils::ApiUrl;
@@ -25,7 +27,10 @@ impl OcrAdapter for VertexDeepSeekAdapter {
         request: &LiteLLMOcrRequest,
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
-        let params: DeepSeekOcrParams = _prepare_ocr_request(request)?;
+        let ParsedProviderParams {
+            known: params,
+            extra_params: _extra_params,
+        } = _prepare_ocr_request::<DeepSeekOcrParams>(request)?;
         let config = VertexAuthInputs::from_optional_params(&request.optional_params)
             .map_err(Error::from)?;
         let authentication = vertex::authenticate(

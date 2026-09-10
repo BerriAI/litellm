@@ -19,7 +19,9 @@ async fn facade_executes_vertex_deepseek_at_the_openai_endpoint() {
         json!({
             "vertex_project":"project-1",
             "vertex_location":"europe-west4",
-            "temperature":0.1
+            "temperature":0.1,
+            "future_ocr_option":true,
+            "extra_body":{"provider_option":"value"}
         }),
     );
     request.document = request
@@ -42,6 +44,8 @@ async fn facade_executes_vertex_deepseek_at_the_openai_endpoint() {
     let body = request_body(&requests[0]);
     assert_eq!(body["model"], "deepseek-ai/deepseek-ocr-maas");
     assert_eq!(body["temperature"], 0.1);
+    assert!(body.get("future_ocr_option").is_none());
+    assert!(body.get("extra_body").is_none());
     assert_eq!(
         body["messages"][0]["content"][0],
         json!({"type":"document_url","document_url":"gs://bucket/document.pdf"})
