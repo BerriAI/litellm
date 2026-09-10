@@ -1,0 +1,71 @@
+diff --git a/litellm/proxy/proxy_server.py b/litellm/proxy/proxy_server.py
+index 9269fd4..365f5c8 100644
+--- a/litellm/proxy/proxy_server.py
++++ b/litellm/proxy/proxy_server.py
+@@ -6244,12 +6244,17 @@ class ProxyConfig:
+             model.model_info["db_model"] = True
+             model.model_info["blocked"] = bool(getattr(model, "blocked", False))
+ 
+-        if premium_user is True:
+-            # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
+-            model.model_info["created_at"] = getattr(model, "created_at", None)
+-            model.model_info["updated_at"] = getattr(model, "updated_at", None)
+-            model.model_info["created_by"] = getattr(model, "created_by", None)
+-            model.model_info["updated_by"] = getattr(model, "updated_by", None)
++        # NOTE: previously gated behind `premium_user`, which meant that on
++        # any proxy instance without an Enterprise license these fields were
++        # never populated -- the Model Management > All Models UI always
++        # rendered "Unknown" / "Unknown date" for every DB-backed model,
++        # regardless of who created it. This metadata already lives on the
++        # DB row itself (it isn't derived/enterprise-only), so always copy
++        # it over. See https://github.com/BerriAI/litellm/issues/40548
++        model.model_info["created_at"] = getattr(model, "created_at", None)
++        model.model_info["updated_at"] = getattr(model, "updated_at", None)
++        model.model_info["created_by"] = getattr(model, "created_by", None)
++        model.model_info["updated_by"] = getattr(model, "updated_by", None)
+ 
+         if model.model_info is not None and isinstance(model.model_info, dict):
+             if "id" not in model.model_info:
+diff --git a/tests/test_litellm/proxy/proxy_server/test_proxy_config.py b/tests/test_litellm/proxy/proxy_server/test_proxy_config.py
+index e79448d..4fa4b10 100644
+--- a/tests/test_litellm/proxy/proxy_server/test_proxy_config.py
++++ b/tests/test_litellm/proxy/proxy_server/test_proxy_config.py
+@@ -2202,6 +2202,38 @@ def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch)
+         pc.get_model_info_with_id(model=bad)
+ 
+ 
++@pytest.mark.parametrize("premium_user", [True, False])
++def test_ProxyConfig_get_model_info_with_id_populates_audit_fields_regardless_of_license(
++    monkeypatch, premium_user
++):
++    """Regression test for https://github.com/BerriAI/litellm/issues/40548
++
++    `created_at` / `updated_at` / `created_by` / `updated_by` come straight
++    off the DB row and must be surfaced on `model_info` whether or not the
++    instance has an Enterprise license. Previously they were only copied
++    over `if premium_user is True`, so on non-premium proxies the Model
++    Management > All Models table always showed "Unknown" / "Unknown date"
++    for every model.
++    """
++    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
++    pc = ProxyConfig()
++    model = SimpleNamespace(
++        model_id="m-1",
++        model_info={"id": "m-1"},
++        blocked=False,
++        created_at="2026-01-01T00:00:00Z",
++        updated_at="2026-01-02T00:00:00Z",
++        created_by="malay@example.com",
++        updated_by="malay@example.com",
++    )
++    out = pc.get_model_info_with_id(model=model, db_model=True)
++    dumped = out.model_dump()
++    assert dumped.get("created_at") == "2026-01-01T00:00:00Z"
++    assert dumped.get("updated_at") == "2026-01-02T00:00:00Z"
++    assert dumped.get("created_by") == "malay@example.com"
++    assert dumped.get("updated_by") == "malay@example.com"
++
++
+ # ---------------------------------------------------------------------------
+ # ProxyConfig._delete_deployment
+ # ---------------------------------------------------------------------------

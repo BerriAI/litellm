@@ -6241,12 +6241,17 @@ class ProxyConfig:
             model.model_info["db_model"] = True
             model.model_info["blocked"] = bool(getattr(model, "blocked", False))
 
-        if premium_user is True:
-            # seeing "created_at", "updated_at", "created_by", "updated_by" is a LiteLLM Enterprise Feature
-            model.model_info["created_at"] = getattr(model, "created_at", None)
-            model.model_info["updated_at"] = getattr(model, "updated_at", None)
-            model.model_info["created_by"] = getattr(model, "created_by", None)
-            model.model_info["updated_by"] = getattr(model, "updated_by", None)
+        # NOTE: previously gated behind `premium_user`, which meant that on
+        # any proxy instance without an Enterprise license these fields were
+        # never populated -- the Model Management > All Models UI always
+        # rendered "Unknown" / "Unknown date" for every DB-backed model,
+        # regardless of who created it. This metadata already lives on the
+        # DB row itself (it isn't derived/enterprise-only), so always copy
+        # it over. See https://github.com/BerriAI/litellm/issues/40548
+        model.model_info["created_at"] = getattr(model, "created_at", None)
+        model.model_info["updated_at"] = getattr(model, "updated_at", None)
+        model.model_info["created_by"] = getattr(model, "created_by", None)
+        model.model_info["updated_by"] = getattr(model, "updated_by", None)
 
         if model.model_info is not None and isinstance(model.model_info, dict):
             if "id" not in model.model_info:
