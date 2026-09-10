@@ -179,6 +179,30 @@ describe("UsageTab", () => {
     expect(series[2]["Prompt caching"]).toBeCloseTo(0.016, 5);
   });
 
+  it("switches cards and charts from LiteLLM-injected to all caching savings", async () => {
+    const cachingMetrics: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.1,
+      prompt_caching_savings_spend: 0.5,
+      gateway_injected_caching_savings_spend: 0.2,
+      autorouter_savings_spend: 0.05,
+    };
+    renderWith([day("2026-07-12", cachingMetrics)]);
+
+    expect(readSeries(screen.getByTestId("area-chart")).at(-1)["Prompt caching"]).toBe(0.2);
+    expect(screen.getByTestId("summary-card-total-saved")).toHaveTextContent("$0.3500");
+
+    await userEvent.click(screen.getByRole("tab", { name: "All caching" }));
+
+    expect(readSeries(screen.getByTestId("area-chart")).at(-1)["Prompt caching"]).toBe(0.5);
+    expect(screen.getByTestId("summary-card-total-saved")).toHaveTextContent("$0.6500");
+    expect(screen.getByTestId("summary-card-prompt-caching-savings")).toHaveTextContent("All caching");
+    expect(JSON.parse(screen.getByTestId("donut-chart").getAttribute("data-slices") ?? "[]")).toContainEqual({
+      driver: "Prompt caching",
+      color: "blue",
+      usd: 0.5,
+    });
+  });
+
   it("rises from $0 to the day's cumulative total for a single-day range", () => {
     // The original complaint: a one-day range plotted a single floating dot. The
     // synthetic start anchor gives the line a zero origin to climb from.
@@ -295,7 +319,7 @@ describe("UsageTab", () => {
     expect(before.action).toBeTruthy();
     expect(before.description).toBeTruthy();
     // the toggle rides in the same action slot as the legend, so neither moves alone
-    expect(before.action.contains(screen.getByRole("tablist"))).toBe(true);
+    expect(before.action.contains(screen.getByRole("tablist", { name: "Savings accumulation" }))).toBe(true);
     // the subtitle lives outside that slot, so its length cannot reposition the controls
     expect(before.action.contains(before.description)).toBe(false);
     expect(before.description).toHaveTextContent(/Running total saved/);

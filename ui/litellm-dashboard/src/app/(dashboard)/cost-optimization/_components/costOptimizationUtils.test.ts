@@ -88,6 +88,20 @@ describe("savingsSeriesOf", () => {
     expect(series[0]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.3, "Auto-router": 0.05 });
     expect(series[1]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.2, "Auto-router": 0.05 });
   });
+
+  it("plots all provider and client caching savings when requested", () => {
+    const result = {
+      ...day("2026-07-01", {}),
+      metrics: metrics({
+        prompt_caching_savings_spend: 0.5,
+        gateway_injected_caching_savings_spend: 0.2,
+      }),
+    };
+
+    const series = savingsSeriesOf([result], "all");
+
+    expect(series[0]["Prompt caching"]).toBe(0.5);
+  });
 });
 
 describe("computeCacheLeakage", () => {

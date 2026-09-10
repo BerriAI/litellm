@@ -189,6 +189,8 @@ export type SavingsPoint = {
   "Auto-router": number;
 };
 
+export type CachingSavingsScope = "litellm-injected" | "all";
+
 /**
  * The savings drivers, each owning its own colour.
  *
@@ -199,11 +201,18 @@ export type SavingsPoint = {
  * colours of the drivers above them, while the legend still reports the original
  * mapping. Colour travels with the driver so filtering cannot separate them.
  */
-export const SAVINGS_DRIVERS = [
-  { name: "Compression", color: "emerald", of: compressionOf },
-  { name: "Prompt caching", color: "blue", of: gatewayAttributedCachingOf },
-  { name: "Auto-router", color: "amber", of: autorouterOf },
-] as const;
+export const savingsDriversFor = (cachingScope: CachingSavingsScope) =>
+  [
+    { name: "Compression", color: "emerald", of: compressionOf },
+    {
+      name: "Prompt caching",
+      color: "blue",
+      of: cachingScope === "all" ? cachingOf : gatewayAttributedCachingOf,
+    },
+    { name: "Auto-router", color: "amber", of: autorouterOf },
+  ] as const;
+
+export const SAVINGS_DRIVERS = savingsDriversFor("litellm-injected");
 
 export const SAVINGS_SERIES = SAVINGS_DRIVERS.map((d) => d.name);
 export const SAVINGS_COLORS = SAVINGS_DRIVERS.map((d) => d.color);
@@ -221,16 +230,21 @@ export const sumOverDays = (results: readonly DailyData[], of: (m: SpendMetrics)
  * total from the same driver list is what keeps a tile, a timeline and the
  * donut from quietly plotting different metrics for the same driver name.
  */
-export const savingsSeriesOf = (results: readonly DailyData[]): SavingsPoint[] =>
-  [...results]
+export const savingsSeriesOf = (
+  results: readonly DailyData[],
+  cachingScope: CachingSavingsScope = "litellm-injected",
+): SavingsPoint[] => {
+  const savingsDrivers = savingsDriversFor(cachingScope);
+  return [...results]
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((d) => ({
       date: shortDate(d.date),
-      ...(Object.fromEntries(SAVINGS_DRIVERS.map(({ name, of }) => [name, of(d.metrics)])) as Record<
+      ...(Object.fromEntries(savingsDrivers.map(({ name, of }) => [name, of(d.metrics)])) as Record<
         SavingsDriverName,
         number
       >), // fromEntries widens keys to string; the entries are exactly the driver names
     }));
+};
 
 /**
  * Running total of each series across the selected window. The total restarts
