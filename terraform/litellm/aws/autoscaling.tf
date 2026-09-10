@@ -53,7 +53,7 @@ resource "aws_appautoscaling_policy" "gateway_memory" {
 }
 
 resource "aws_appautoscaling_policy" "gateway_requests" {
-  count              = var.gateway_autoscaling_enabled && var.gateway_requests_per_target > 0 ? 1 : 0
+  count              = var.gateway_autoscaling_enabled && var.gateway_target_requests_per_second > 0 ? 1 : 0
   name               = "${local.name}-gateway-requests"
   policy_type        = "TargetTrackingScaling"
   service_namespace  = aws_appautoscaling_target.gateway[0].service_namespace
@@ -65,12 +65,13 @@ resource "aws_appautoscaling_policy" "gateway_requests" {
       predefined_metric_type = "ALBRequestCountPerTarget"
       resource_label         = "${aws_lb.this.arn_suffix}/${aws_lb_target_group.gateway.arn_suffix}"
     }
-    target_value = var.gateway_requests_per_target
+    # ALBRequestCountPerTarget is a per-minute count
+    target_value = var.gateway_target_requests_per_second * 60
   }
 }
 
 resource "aws_appautoscaling_policy" "gateway_tokens" {
-  count              = var.gateway_autoscaling_enabled && var.gateway_tokens_per_target > 0 ? 1 : 0
+  count              = var.gateway_autoscaling_enabled && var.gateway_target_tokens_per_second > 0 ? 1 : 0
   name               = "${local.name}-gateway-tokens"
   policy_type        = "TargetTrackingScaling"
   service_namespace  = aws_appautoscaling_target.gateway[0].service_namespace
@@ -80,16 +81,17 @@ resource "aws_appautoscaling_policy" "gateway_tokens" {
   lifecycle {
     precondition {
       condition     = var.gateway_tokens_metric != null
-      error_message = "gateway_tokens_metric is required when gateway_tokens_per_target > 0."
+      error_message = "gateway_tokens_metric is required when gateway_target_tokens_per_second > 0."
     }
   }
 
   target_tracking_scaling_policy_configuration {
-    target_value = var.gateway_tokens_per_target
+    target_value = var.gateway_target_tokens_per_second
 
+    # target tracking has no period setting and always aggregates over 60s
     customized_metric_specification {
       metrics {
-        id          = "tokens_per_minute"
+        id          = "tokens"
         return_data = false
 
         metric_stat {
@@ -134,9 +136,15 @@ resource "aws_appautoscaling_policy" "gateway_tokens" {
       }
 
       metrics {
-        id          = "tokens_per_minute_per_task"
-        expression  = "tokens_per_minute / running_tasks"
-        label       = "Tokens per minute per gateway task"
+        id          = "tokens_per_second"
+        expression  = "tokens / 60"
+        return_data = false
+      }
+
+      metrics {
+        id          = "tokens_per_second_per_task"
+        expression  = "tokens_per_second / running_tasks"
+        label       = "Tokens per second per gateway task"
         return_data = true
       }
     }

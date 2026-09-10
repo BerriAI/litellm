@@ -249,10 +249,10 @@ request-rate signal for this stack: lower the concurrency for LLM streams
 that hold a worker for tens of seconds, since a stream counts as one request
 for as long as it is open
 
-There is no tokens-per-minute path here. Cloud Run's autoscaler has no
+There is no tokens-per-second path here. Cloud Run's autoscaler has no
 custom-metric input, so the `litellm_total_tokens_metric_total` counter the
 proxy exposes cannot drive it. If you need token-based scaling on GCP, run
-the gateway on GKE with the Helm chart's `targetTokensPerMinute` (see
+the gateway on GKE with the Helm chart's `targetTokensPerSecond` (see
 "Dependencies only" below) rather than wiring the counter into Cloud
 Monitoring, which the autoscaler would ignore
 

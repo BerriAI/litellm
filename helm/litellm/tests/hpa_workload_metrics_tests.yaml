@@ -1,4 +1,4 @@
-suite: test gateway HPA per-pod requests and tokens targets
+suite: test gateway HPA per-pod requests-per-second and tokens-per-second targets
 templates:
   - gateway/hpa.yaml
   - gateway/servicemonitor.yaml
@@ -24,10 +24,10 @@ tests:
                   type: Utilization
                   averageUtilization: 80
 
-  - it: adds a requests-per-minute Pods metric next to the resource metrics
+  - it: adds a requests-per-second Pods metric next to the resource metrics
     template: gateway/hpa.yaml
     set:
-      gateway.hpa.targetRequestsPerMinute: 600
+      gateway.hpa.targetRequestsPerSecond: 90
     asserts:
       - lengthEqual:
           path: spec.metrics
@@ -47,23 +47,23 @@ tests:
             type: Pods
             pods:
               metric:
-                name: litellm_requests_per_minute
+                name: litellm_requests_per_second
               target:
                 type: AverageValue
-                averageValue: "600"
+                averageValue: "90"
       - notContains:
           path: spec.metrics
           content:
             type: Pods
             pods:
               metric:
-                name: litellm_tokens_per_minute
+                name: litellm_tokens_per_second
           any: true
 
-  - it: adds a tokens-per-minute Pods metric on its own
+  - it: adds a tokens-per-second Pods metric on its own
     template: gateway/hpa.yaml
     set:
-      gateway.hpa.targetTokensPerMinute: 400k
+      gateway.hpa.targetTokensPerSecond: 6M
     asserts:
       - lengthEqual:
           path: spec.metrics
@@ -74,24 +74,24 @@ tests:
             type: Pods
             pods:
               metric:
-                name: litellm_tokens_per_minute
+                name: litellm_tokens_per_second
               target:
                 type: AverageValue
-                averageValue: "400k"
+                averageValue: "6M"
       - notContains:
           path: spec.metrics
           content:
             type: Pods
             pods:
               metric:
-                name: litellm_requests_per_minute
+                name: litellm_requests_per_second
           any: true
 
   - it: renders requests and tokens targets together and keeps CPU and memory
     template: gateway/hpa.yaml
     set:
-      gateway.hpa.targetRequestsPerMinute: 600
-      gateway.hpa.targetTokensPerMinute: 400000
+      gateway.hpa.targetRequestsPerSecond: 90
+      gateway.hpa.targetTokensPerSecond: 6000000
     asserts:
       - lengthEqual:
           path: spec.metrics
@@ -104,21 +104,21 @@ tests:
           value: memory
       - equal:
           path: spec.metrics[2].pods.metric.name
-          value: litellm_requests_per_minute
+          value: litellm_requests_per_second
       - equal:
           path: spec.metrics[3].pods.metric.name
-          value: litellm_tokens_per_minute
+          value: litellm_tokens_per_second
       - equal:
           path: spec.metrics[3].pods.target.averageValue
-          value: "400000"
+          value: "6000000"
 
   - it: scales on workload metrics alone when the resource targets are cleared
     template: gateway/hpa.yaml
     set:
       gateway.hpa.targetCPUUtilizationPercentage: null
       gateway.hpa.targetMemoryUtilizationPercentage: null
-      gateway.hpa.targetRequestsPerMinute: 600
-      gateway.hpa.targetTokensPerMinute: 400000
+      gateway.hpa.targetRequestsPerSecond: 90
+      gateway.hpa.targetTokensPerSecond: 6000000
     asserts:
       - lengthEqual:
           path: spec.metrics
@@ -130,10 +130,27 @@ tests:
           any: true
       - equal:
           path: spec.metrics[0].pods.metric.name
-          value: litellm_requests_per_minute
+          value: litellm_requests_per_second
       - equal:
           path: spec.metrics[1].pods.metric.name
-          value: litellm_tokens_per_minute
+          value: litellm_tokens_per_second
+      - notMatchRegexRaw:
+          pattern: per_minute
+
+  - it: ignores the per-minute keys, which the chart never shipped
+    template: gateway/hpa.yaml
+    set:
+      gateway.hpa.targetRequestsPerMinute: 5400
+      gateway.hpa.targetTokensPerMinute: 360000000
+    asserts:
+      - lengthEqual:
+          path: spec.metrics
+          count: 2
+      - notContains:
+          path: spec.metrics
+          content:
+            type: Pods
+          any: true
 
   - it: renders no ServiceMonitor by default
     template: gateway/servicemonitor.yaml
