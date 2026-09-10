@@ -33,13 +33,13 @@ type PlaygroundGuide = {
 
 type PlaygroundExample = {
   files: PlaygroundFile[];
-  guide: PlaygroundGuide;
   id: string;
   title: string;
 };
 
 type PlaygroundInfo = {
   examples: PlaygroundExample[];
+  guide: PlaygroundGuide;
   rootUri: string;
   revision: string;
 };
@@ -263,8 +263,6 @@ const main = async () => {
   const fileByUri = new Map(allFiles.map(entry => [entry.file.uri, entry]));
   const views = new Map<string, EditorView>();
   const containers = new Map<string, HTMLDivElement>();
-  const markdownViews = new Map<string, EditorView>();
-  const markdownContainers = new Map<string, HTMLDivElement>();
   const exampleButtons = new Map<string, HTMLButtonElement>();
   const fileButtons = new Map<string, HTMLButtonElement>();
   let activeExampleId = initialExample.id;
@@ -314,10 +312,6 @@ const main = async () => {
     exampleButtons.forEach((button, candidate) => {
       button.dataset.active = String(candidate === example.id);
     });
-    markdownContainers.forEach((container, candidate) => {
-      container.hidden = candidate !== example.id;
-    });
-    guidePath.textContent = `${example.id}://${example.guide.path}`;
     renderFileTree(example);
     if (selectDefaultFile) {
       const current = fileByUri.get(activeUri);
@@ -426,33 +420,25 @@ const main = async () => {
     views.set(file.uri, view);
   });
 
-  info.examples.forEach(example => {
-    const container = document.createElement('div');
-    container.className = 'markdown-container';
-    container.hidden = example.id !== activeExampleId;
-    markdownEditorParent.append(container);
-    markdownContainers.set(example.id, container);
-
-    const view = new EditorView({
-      doc: storedFiles[example.guide.target] ?? example.guide.source,
-      extensions: [
-        basicSetup,
-        markdown(),
-        oneDark,
-        playgroundLinkDecorations,
-        markdownFileNavigation(openFileTarget),
-        EditorView.lineWrapping,
-        EditorView.updateListener.of(update => {
-          if (update.docChanged) {
-            saveStoredFile(example.guide.target, update.state.doc.toString());
-          }
-        }),
-      ],
-      parent: container,
-    });
-    markdownViews.set(example.id, view);
+  const markdownView = new EditorView({
+    doc: storedFiles[info.guide.target] ?? info.guide.source,
+    extensions: [
+      basicSetup,
+      markdown(),
+      oneDark,
+      playgroundLinkDecorations,
+      markdownFileNavigation(openFileTarget),
+      EditorView.lineWrapping,
+      EditorView.updateListener.of(update => {
+        if (update.docChanged) {
+          saveStoredFile(info.guide.target, update.state.doc.toString());
+        }
+      }),
+    ],
+    parent: markdownEditorParent,
   });
 
+  guidePath.textContent = info.guide.path;
   selectExample(activeExampleId);
   lspStatus.textContent = 'rust-analyzer connected';
   lspStatus.dataset.state = 'ready';
@@ -490,9 +476,8 @@ const main = async () => {
       const view = views.get(file.uri);
       view?.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: file.source } });
     });
-    const markdownView = markdownViews.get(example.id);
-    markdownView?.dispatch({
-      changes: { from: 0, to: markdownView.state.doc.length, insert: example.guide.source },
+    markdownView.dispatch({
+      changes: { from: 0, to: markdownView.state.doc.length, insert: info.guide.source },
     });
   });
 };

@@ -80,24 +80,16 @@ const readExamples = async () => {
     const id = entry.name;
     const directory = path.join(examplesDirectory, id);
     const sourcePaths = ['Cargo.toml', ...await listRustFiles(directory)];
-    const [guideSource, files] = await Promise.all([
-      readFile(path.join(directory, 'GUIDE.md'), 'utf8'),
-      Promise.all(sourcePaths.map(async filePath => ({
-        languageId: filePath.endsWith('.rs') ? 'rust' : 'toml',
-        path: filePath,
-        source: await readFile(path.join(directory, filePath), 'utf8'),
-        target: path.posix.join('examples', id, filePath),
-        uri: pathToFileURL(path.join(directory, filePath)).href,
-      }))),
-    ]);
+    const files = await Promise.all(sourcePaths.map(async filePath => ({
+      languageId: filePath.endsWith('.rs') ? 'rust' : 'toml',
+      path: filePath,
+      source: await readFile(path.join(directory, filePath), 'utf8'),
+      target: path.posix.join('examples', id, filePath),
+      uri: pathToFileURL(path.join(directory, filePath)).href,
+    })));
     return {
       directory,
       files,
-      guide: {
-        path: 'GUIDE.md',
-        source: guideSource,
-        target: path.posix.join('examples', id, 'GUIDE.md'),
-      },
       id,
       title: titleFromId(id),
     };
@@ -112,10 +104,15 @@ const vite = await createViteServer({
 
 const server = http.createServer(async (request, response) => {
   if (request.method === 'GET' && request.url === '/api/info') {
-    const [examples, revision] = await Promise.all([readExamples(), gitRevision()]);
+    const [examples, guideSource, revision] = await Promise.all([
+      readExamples(),
+      readFile(path.join(workspaceDirectory, 'GUIDE.md'), 'utf8'),
+      gitRevision(),
+    ]);
     sendJson(response, 200, {
       revision,
       examples: examples.map(({ directory: _directory, ...example }) => example),
+      guide: { path: 'GUIDE.md', source: guideSource, target: 'GUIDE.md' },
       rootUri: pathToFileURL(workspaceDirectory).href,
     });
     return;
