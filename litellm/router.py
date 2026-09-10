@@ -943,6 +943,9 @@ class Router:
         # ``id()``-reuse risk after GC). See
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
+        self.cached_deployment_model_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
+            self.get_deployment_model_info
+        )
         self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
         self._init_routing_groups(None)
         self._provider_unresolved_deployments: tuple[Callable[[], Deployment | None], ...] = ()
@@ -10042,6 +10045,7 @@ class Router:
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
+        self._invalidate_model_group_info_cache()
 
     def delete_deployment(self, id: str) -> Deployment | None:
         """
@@ -11003,6 +11007,9 @@ class Router:
         """
         return self.get_model_group_info(model_group)
 
+    def cached_model_group_info(self, model_group: str) -> ModelGroupInfo | None:
+        return self._cached_get_model_group_info(model_group)
+
     async def get_remaining_model_group_usage(self, model_group: str) -> dict[str, int]:
         model_group_info: Final = self._cached_get_model_group_info(model_group)
 
@@ -11780,6 +11787,7 @@ class Router:
         result and bypass budget enforcement.
         """
         self._cached_get_model_group_info.cache_clear()
+        self.cached_deployment_model_info.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
 
