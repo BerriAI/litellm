@@ -12,6 +12,12 @@ from litellm.llms.soniox.audio_transcription.transformation import (
     decode_soniox_form_params,
 )
 from litellm.llms.soniox.common_utils import SonioxException
+from litellm.llms.soniox.types import (
+    SonioxContext,
+    SonioxContextGeneralEntry,
+    SonioxTranslation,
+    SonioxTranslationTerm,
+)
 from litellm.types.utils import TranscriptionResponse
 
 
@@ -698,12 +704,24 @@ class TestDecodeSonioxFormParams:
         result = decode_soniox_form_params({"context": "medical conversation"})
         assert result["context"] == "medical conversation"
 
-    def test_should_leave_already_typed_values_untouched(self):
-        context = {"terms": ["Celebrex"]}
+    def test_should_leave_sdk_typed_values_untouched(self):
+        context = SonioxContext(
+            general=[SonioxContextGeneralEntry(key="domain", value="Healthcare")],
+            text="Follow-up visit notes.",
+            terms=["Celebrex"],
+            translation_terms=[SonioxTranslationTerm(source="Mr. Smith", target="Sr. Smith")],
+        )
+        translation = SonioxTranslation(type="one_way", target_language="es")
         result = decode_soniox_form_params(
-            {"context": context, "enable_speaker_diarization": True, "language_hints": ["en", "es"]}
+            {
+                "context": context,
+                "translation": translation,
+                "enable_speaker_diarization": True,
+                "language_hints": ["en", "es"],
+            }
         )
         assert result["context"] is context
+        assert result["translation"] is translation
         assert result["enable_speaker_diarization"] is True
         assert result["language_hints"] == ["en", "es"]
 
