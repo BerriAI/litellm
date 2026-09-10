@@ -2320,15 +2320,9 @@ def _combine_cached_tokens_details(
         return (current_value or 0) + (new_value or 0)
 
     return CachedTokensDetails(
-        text_tokens=_sum_optional(
-            current.text_tokens if current is not None else None, new.text_tokens
-        ),
-        audio_tokens=_sum_optional(
-            current.audio_tokens if current is not None else None, new.audio_tokens
-        ),
-        image_tokens=_sum_optional(
-            current.image_tokens if current is not None else None, new.image_tokens
-        ),
+        text_tokens=_sum_optional(current.text_tokens if current is not None else None, new.text_tokens),
+        audio_tokens=_sum_optional(current.audio_tokens if current is not None else None, new.audio_tokens),
+        image_tokens=_sum_optional(current.image_tokens if current is not None else None, new.image_tokens),
     )
 
 
@@ -2355,9 +2349,7 @@ def _combine_prompt_tokens_details(combined: Usage, usage: Usage) -> None:
                     current_val + new_val,
                 )
 
-    new_cached_tokens_details: Final = getattr(
-        usage.prompt_tokens_details, "cached_tokens_details", None
-    )
+    new_cached_tokens_details: Final = getattr(usage.prompt_tokens_details, "cached_tokens_details", None)
     if isinstance(new_cached_tokens_details, CachedTokensDetails):
         combined.prompt_tokens_details.cached_tokens_details = _combine_cached_tokens_details(
             getattr(combined.prompt_tokens_details, "cached_tokens_details", None),
