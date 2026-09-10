@@ -119,15 +119,16 @@ class ChatGPTRealtime(OpenAIRealtime):
 class ChatGPTRealtimeHTTPConfig(OpenAIRealtimeHTTPConfig):
     realtime_calls_json: Final = True
 
-    def __init__(self, params: GenericLiteLLMParams) -> None:
+    def __init__(self, params: GenericLiteLLMParams, use_codex_backend: bool = True) -> None:
         self._params = params
+        self._use_codex_backend = use_codex_backend
 
     def get_api_base(
         self,
         api_base: str | None,
         **kwargs: object,  # kwargs-ok: provider interface accepts optional credentials
     ) -> str:
-        return api_base or Authenticator.get_api_base()
+        return api_base or (Authenticator.get_api_base() if self._use_codex_backend else ChatGPTRealtime.get_api_base())
 
     def get_api_key(
         self,
@@ -159,7 +160,7 @@ class ChatGPTRealtimeHTTPConfig(OpenAIRealtimeHTTPConfig):
         }
 
     def get_complete_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
-        return "https://api.openai.com/v1/realtime/client_secrets"
+        return f"{self.get_api_base(api_base).rstrip('/')}/realtime/client_secrets"
 
     def get_transcription_session_url(
         self,
@@ -167,4 +168,4 @@ class ChatGPTRealtimeHTTPConfig(OpenAIRealtimeHTTPConfig):
         model: str,
         api_version: str | None = None,
     ) -> str:
-        return "https://api.openai.com/v1/realtime/transcription_sessions"
+        return f"{self.get_api_base(api_base).rstrip('/')}/realtime/transcription_sessions"

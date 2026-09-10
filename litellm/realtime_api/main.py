@@ -76,6 +76,7 @@ def _get_realtime_http_provider_config(
     dynamic_api_base: str | None,
     dynamic_api_key: str | None,
     litellm_params: GenericLiteLLMParams,
+    use_codex_backend: bool = False,
 ) -> tuple["BaseRealtimeHTTPConfig | None", str, str]:
     """
     Return (provider_config, resolved_api_base, resolved_api_key) for the
@@ -92,7 +93,7 @@ def _get_realtime_http_provider_config(
     if custom_llm_provider == "chatgpt":
         from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
 
-        provider_config = ChatGPTRealtimeHTTPConfig(litellm_params)
+        provider_config = ChatGPTRealtimeHTTPConfig(litellm_params, use_codex_backend=use_codex_backend)
     elif custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_http_config(
             model="",
@@ -100,9 +101,7 @@ def _get_realtime_http_provider_config(
         )
 
     raw_api_base: Final = (
-        litellm_params.api_base or dynamic_api_base
-        if custom_llm_provider == "chatgpt"
-        else dynamic_api_base or litellm_params.api_base
+        litellm_params.api_base if custom_llm_provider == "chatgpt" else dynamic_api_base or litellm_params.api_base
     )
     raw_api_key: Final = dynamic_api_key or litellm_params.api_key
 
@@ -282,6 +281,7 @@ async def arealtime_calls(
         dynamic_api_base=dynamic_api_base,
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
+        use_codex_backend=True,
     )
     if session is not None:
         session = _with_resolved_session_model(session, model_name)

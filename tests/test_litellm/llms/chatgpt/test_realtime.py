@@ -12,6 +12,40 @@ from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["client_secrets", "transcription_sessions"])
+@pytest.mark.parametrize("source", ["default", "explicit", "CHATGPT_API_BASE", "OPENAI_CHATGPT_API_BASE"])
+async def test_realtime_session_urls_honor_gateway(endpoint, source, chatgpt_tokens, monkeypatch):
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", chatgpt_tokens)
+    monkeypatch.delenv("CHATGPT_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_CHATGPT_API_BASE", raising=False)
+    gateway = "https://voice.example/custom/v1/"
+    if source in ("CHATGPT_API_BASE", "OPENAI_CHATGPT_API_BASE"):
+        monkeypatch.setenv(source, gateway)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={"client_secret": {"value": "test-secret"}})
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    kwargs = {"model": "chatgpt/gpt-realtime-1.5", "client": client}
+    if source == "explicit":
+        kwargs["api_base"] = gateway
+    try:
+        if endpoint == "client_secrets":
+            await litellm.acreate_realtime_client_secret(**kwargs)
+        else:
+            await litellm.acreate_realtime_transcription_session(**kwargs)
+    finally:
+        await client.client.aclose()
+    base = "https://api.openai.com/v1" if source == "default" else gateway.rstrip("/")
+    assert len(requests) == 1
+    assert str(requests[0].url) == f"{base}/realtime/{endpoint}"
+    assert requests[0].headers["authorization"] == "Bearer test-token-default"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("inbound_headers", [{}, {"openai-alpha": "quicksilver=v2"}])
 async def test_routed_call_preserves_deployment_gateway_headers(inbound_headers, chatgpt_tokens, monkeypatch):
     from litellm.llms.chatgpt.codex import CodexRealtimeOffer, build_call_request

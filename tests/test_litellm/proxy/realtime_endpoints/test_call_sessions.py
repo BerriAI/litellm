@@ -12,6 +12,34 @@ from litellm.proxy.realtime_endpoints.call_sessions import decode_call, encode_c
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route_type", ["arealtime_calls", "_arealtime"])
+async def test_codex_processing_merges_model_guardrails(monkeypatch, route_type):
+    from fastapi import Request
+    from litellm import Router
+    from litellm.proxy import proxy_server as server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.realtime_endpoints.call_sessions import process_codex_request
+
+    class PolicyHook:
+        async def pre_call_hook(self, user_api_key_dict, data, call_type):
+            if "model-policy" in data.get("metadata", {}).get("guardrails", []):
+                raise HTTPException(403, "Model policy rejected request")
+            return data
+
+    router = Router(model_list=[{
+        "model_name": "voice-policy",
+        "litellm_params": {"model": "openai/gpt-realtime-1.5", "api_key": "test", "guardrails": ["model-policy"]},
+    }])
+    monkeypatch.setattr(server, "llm_router", router)
+    monkeypatch.setattr(server, "proxy_logging_obj", PolicyHook())
+    request = Request({"type": "http", "method": "POST", "path": "/v1/realtime/calls", "headers": [], "query_string": b"", "scheme": "http", "server": ("localhost", 80)})
+    with pytest.raises(HTTPException) as error:
+        await process_codex_request(request, {"model": "voice-policy"}, UserAPIKeyAuth(), "voice-policy", route_type)
+    assert error.value.status_code == 403
+    assert error.value.detail == "Model policy rejected request"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("logged_success", [False, True])
 @pytest.mark.parametrize("disconnect_error", [False, True])
 async def test_sideband_preserves_pending_cost_reconciliation(monkeypatch, logged_success, disconnect_error):

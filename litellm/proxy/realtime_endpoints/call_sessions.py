@@ -74,6 +74,7 @@ async def process_codex_request(
         version=server.version,
         proxy_logging_obj=server.proxy_logging_obj,
         proxy_config=server.proxy_config,
+        llm_router=server.llm_router,
         user_model=server.user_model,
         user_temperature=server.user_temperature,
         user_request_timeout=server.user_request_timeout,
