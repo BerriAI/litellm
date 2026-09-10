@@ -3,36 +3,28 @@ use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH}
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
 
 pub trait ResponsesWebSocketProviderConfig: Sync {
-    fn supports_native_websocket(&self) -> bool {
-        false
-    }
-
     fn model_in_websocket_url(&self) -> bool {
         true
     }
 
-    fn complete_websocket_url(&self, api_base: Option<&str>, model: &str) -> String {
-        complete_websocket_url(api_base, model, self.model_in_websocket_url())
+    fn complete_url(&self, api_base: Option<&str>, model: &str) -> String {
+        complete_url(api_base, model, self.model_in_websocket_url())
     }
 
-    fn transform_ws_request(
+    fn transform_request(
         &self,
         event: &ResponsesWsEvent,
         model: &str,
     ) -> Result<ResponsesWsTransformResult, Error>;
 
-    fn transform_ws_response(
+    fn transform_response(
         &self,
         event: &ResponsesWsEvent,
         model: &str,
     ) -> Result<ResponsesWsTransformResult, Error>;
 }
 
-pub fn complete_websocket_url(
-    api_base: Option<&str>,
-    model: &str,
-    model_in_websocket_url: bool,
-) -> String {
+pub fn complete_url(api_base: Option<&str>, model: &str, model_in_websocket_url: bool) -> String {
     let base = api_base
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -67,21 +59,8 @@ pub fn complete_websocket_url(
     format!(
         "{url}{}model={}",
         if query.is_some() { "&" } else { "?" },
-        percent_encode(model)
+        crate::http_utils::encode_query_value(model)
     )
-}
-
-fn percent_encode(value: &str) -> String {
-    value
-        .bytes()
-        .map(|byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                format!("{}", byte as char)
-            } else {
-                format!("%{byte:02X}")
-            }
-        })
-        .collect()
 }
 
 pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent {
@@ -136,19 +115,19 @@ mod tests {
     #[test]
     fn url_construction_matches_python_defaults_and_query_behavior() {
         assert_eq!(
-            complete_websocket_url(None, "gpt-5", true),
+            complete_url(None, "gpt-5", true),
             "wss://api.openai.com/v1/responses?model=gpt-5"
         );
         assert_eq!(
-            complete_websocket_url(Some("http://localhost:8080/"), "gpt 5", true),
+            complete_url(Some("http://localhost:8080/"), "gpt 5", true),
             "ws://localhost:8080/responses?model=gpt%205"
         );
         assert_eq!(
-            complete_websocket_url(Some("https://example.test/v1?foo=bar"), "gpt-5", true),
+            complete_url(Some("https://example.test/v1?foo=bar"), "gpt-5", true),
             "wss://example.test/v1/responses?foo=bar&model=gpt-5"
         );
         assert_eq!(
-            complete_websocket_url(Some("https://example.test?model=existing"), "gpt-5", true),
+            complete_url(Some("https://example.test?model=existing"), "gpt-5", true),
             "wss://example.test/responses?model=existing"
         );
     }

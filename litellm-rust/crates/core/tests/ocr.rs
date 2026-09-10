@@ -25,13 +25,12 @@ pub(crate) async fn perform_ocr(
     ocr_client().perform(request).await
 }
 
-pub(crate) fn params<I>(integration: &I, value: Value) -> MappedParams<I>
+pub(crate) fn params<I>(_integration: &I, value: Value) -> MappedParams<I>
 where
     I: OcrIntegration,
 {
-    integration
-        .format()
-        .map_ocr_params(serde_json::from_value(value).unwrap())
+    I::FORMAT
+        .map_params(serde_json::from_value(value).unwrap())
         .unwrap()
 }
 pub(crate) fn transform<I>(
@@ -43,16 +42,12 @@ pub(crate) fn transform<I>(
 where
     I: OcrIntegration,
 {
-    let params = integration
-        .format()
-        .map_ocr_params(serde_json::from_value(options).unwrap())?;
+    let params = I::FORMAT.map_params(serde_json::from_value(options).unwrap())?;
     let decoded = decode_response(
         &serde_json::to_vec(&value).unwrap(),
         integration.preserve_native_response(&params),
     )?;
-    let mut response = integration
-        .format()
-        .transform_ocr_response(model, decoded.data, &params)?;
+    let mut response = I::FORMAT.transform_response(model, decoded.data, &params)?;
     response.provider_native_response = decoded.native;
     Ok(response.into_json())
 }
@@ -65,9 +60,7 @@ pub(crate) async fn body<I>(
 where
     I: OcrIntegration,
 {
-    let params = integration
-        .format()
-        .map_ocr_params(serde_json::from_value(options).unwrap())?;
+    let params = I::FORMAT.map_params(serde_json::from_value(options).unwrap())?;
     let client = ocr_client();
     let document = integration
         .prepare_document(
@@ -78,12 +71,8 @@ where
         )
         .await?;
     Ok(
-        serde_json::to_value(integration.format().transform_ocr_request(
-            model,
-            document.into(),
-            &params,
-        )?)
-        .unwrap(),
+        serde_json::to_value(I::FORMAT.transform_request(model, document.into(), &params)?)
+            .unwrap(),
     )
 }
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> OcrRequest {

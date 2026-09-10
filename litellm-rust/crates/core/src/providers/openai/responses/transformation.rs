@@ -2,16 +2,12 @@ use crate::Error;
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsTransformResult};
 use crate::responses::websocket::{ResponsesWebSocketProviderConfig, enforce_model};
 
-pub struct OpenAIResponsesWsConfig;
+pub struct OpenAiResponsesWsConfig;
 
-pub const OPENAI_RESPONSES_WS_CONFIG: OpenAIResponsesWsConfig = OpenAIResponsesWsConfig;
+pub const OPENAI_RESPONSES_WS_CONFIG: OpenAiResponsesWsConfig = OpenAiResponsesWsConfig;
 
-impl ResponsesWebSocketProviderConfig for OpenAIResponsesWsConfig {
-    fn supports_native_websocket(&self) -> bool {
-        true
-    }
-
-    fn transform_ws_request(
+impl ResponsesWebSocketProviderConfig for OpenAiResponsesWsConfig {
+    fn transform_request(
         &self,
         event: &ResponsesWsEvent,
         model: &str,
@@ -21,7 +17,7 @@ impl ResponsesWebSocketProviderConfig for OpenAIResponsesWsConfig {
         )))
     }
 
-    fn transform_ws_response(
+    fn transform_response(
         &self,
         event: &ResponsesWsEvent,
         _model: &str,
@@ -40,9 +36,8 @@ mod tests {
             serde_json::from_value(serde_json::json!({"type":"response.create"}))
                 .expect("valid event");
         let result = OPENAI_RESPONSES_WS_CONFIG
-            .transform_ws_request(&event, "gpt-5")
+            .transform_request(&event, "gpt-5")
             .expect("valid transform");
         assert_eq!(result.events[0].model(), Some("gpt-5"));
-        assert!(OPENAI_RESPONSES_WS_CONFIG.supports_native_websocket());
     }
 }

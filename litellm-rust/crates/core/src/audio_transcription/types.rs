@@ -1,9 +1,10 @@
+use crate::auth::RequestAuth;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
+use super::transformation::AudioTranscriptionProviderConfig;
 
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,
@@ -24,7 +25,7 @@ pub struct ProviderAudioTranscriptionRequest {
     pub(super) url: String,
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
-    pub(super) auth: AudioTranscriptionAuth,
+    pub(super) auth: RequestAuth,
     #[cfg(feature = "bedrock-auth")]
     pub(super) optional_params: Map<String, Value>,
     pub(super) timeout: Option<Duration>,
@@ -52,9 +53,43 @@ impl ProviderAudioTranscriptionRequest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AudioTranscriptionRequestData {
-    pub body: Value,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioFormat {
+    Wav,
+    Mp3,
+    Flac,
+    Ogg,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TranscriptionAudio {
+    pub data: String,
+    pub format: AudioFormat,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TranscriptionParams {
+    pub language: Option<String>,
+    pub prompt: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::http_utils::deserialize_optional_param"
+    )]
+    pub temperature: Option<Option<serde_json::Number>>,
+    pub response_format: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum AudioTranscriptionRequestData {
+    Bedrock(crate::providers::bedrock::converse::ConverseRequest),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ProviderTranscriptionResponse {
+    Bedrock(crate::providers::bedrock::converse::ConverseResponse),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

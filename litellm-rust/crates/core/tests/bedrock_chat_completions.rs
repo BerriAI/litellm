@@ -13,25 +13,29 @@ fn params(value: Value) -> Map<String, Value> {
 }
 
 fn transform(msgs: Value, opts: Value) -> Value {
-    BEDROCK_CHAT_COMPLETIONS_CONFIG
-        .transform_request(
-            "anthropic.claude-sonnet-4-5-v1:0",
-            messages(msgs),
-            params(opts),
-        )
-        .expect("request transforms")
-        .body
+    serde_json::to_value(
+        BEDROCK_CHAT_COMPLETIONS_CONFIG
+            .transform_request(
+                "anthropic.claude-sonnet-4-5-v1:0",
+                build_conversation(&messages(msgs)),
+                serde_json::from_value(opts).unwrap(),
+            )
+            .expect("request transforms"),
+    )
+    .unwrap()
 }
 
 fn transform_response(body: Value) -> Result<ChatCompletionsResponse, ChatResponseError> {
-    BEDROCK_CHAT_COMPLETIONS_CONFIG.transform_response(
+    crate::chat_completions::handler::decode_response(
+        &BEDROCK_CHAT_COMPLETIONS_CONFIG,
         "anthropic.claude-sonnet-4-5-v1:0",
-        ProviderChatResponseData { body },
+        body,
+        "converse",
     )
 }
 
 fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
-    BEDROCK_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+    BEDROCK_CHAT_COMPLETIONS_CONFIG.decline_reason(&messages(msgs), &params(opts))
 }
 
 #[test]
@@ -279,7 +283,7 @@ fn signs_with_sigv4_in_the_resolved_region() {
                 &|_| None
             )
             .expect("auth resolves"),
-        ChatCompletionsAuth::AwsSigV4 {
+        RequestAuth::AwsSigV4 {
             region: "eu-central-1".to_string()
         }
     );
@@ -304,10 +308,10 @@ fn a_bearer_token_outranks_sigv4_the_way_python_resolves_it() {
             )
             .expect("auth resolves")
     };
-    let bearer = |token: &str| ChatCompletionsAuth::Bearer {
+    let bearer = |token: &str| RequestAuth::Bearer {
         token: token.to_string(),
     };
-    let sigv4 = ChatCompletionsAuth::AwsSigV4 {
+    let sigv4 = RequestAuth::AwsSigV4 {
         region: "eu-central-1".to_string(),
     };
 
@@ -574,4 +578,41 @@ fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
         .is_none()
     );
     assert!(host_supplied_credentials(&Map::new()).is_none());
+}
+
+#[test]
+fn preserves_explicit_null_mapped_params() {
+    let body = transform(
+        json!([{"role":"user","content":"hi"}]),
+        json!({"maxTokens":null,"temperature":null}),
+    );
+    assert!(
+        body["inferenceConfig"]
+            .get("maxTokens")
+            .is_some_and(Value::is_null)
+    );
+    assert!(
+        body["inferenceConfig"]
+            .get("temperature")
+            .is_some_and(Value::is_null)
+    );
+    assert!(body["inferenceConfig"].get("topP").is_none());
+}
+
+#[test]
+fn rejects_empty_or_mixed_converse_blocks() {
+    for block in [json!({}), json!({"text":"visible","toolUse":{}})] {
+        assert_eq!(
+            transform_response(json!({
+                "output":{"message":{"content":[block]}},"usage":{}
+            }))
+            .unwrap_err(),
+            ChatResponseError::NonTextContent
+        );
+    }
+    let response = transform_response(json!({
+        "output":{"message":{"content":[{"text":null}]}},"usage":{}
+    }))
+    .unwrap();
+    assert_eq!(response.choices[0].message.content.as_deref(), Some(""));
 }

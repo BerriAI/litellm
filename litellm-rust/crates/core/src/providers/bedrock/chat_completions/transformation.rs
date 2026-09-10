@@ -1,16 +1,19 @@
+use crate::auth::RequestAuth;
 use crate::chat_completions::error::{ChatRequestError, ChatResponseError};
-use serde_json::{Map, Value, json};
+use crate::providers::bedrock::converse::{
+    ConverseContent, ConverseMappedParams, ConverseMessage, ConverseRequest, ConverseResponse,
+    ConverseResponseContent, ConverseText,
+};
+use serde_json::{Map, Value};
 
 use crate::chat_completions::conversation::{Conversation, TurnRole, build_conversation};
 use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage_from_parts};
 use crate::chat_completions::transformation::{
-    ChatCompletionsAuth, ChatCompletionsProviderConfig, Unsupported, unsupported_message,
-    unsupported_param,
+    ChatCompletionsProviderConfig, Unsupported, unsupported_message, unsupported_param,
 };
 use crate::chat_completions::types::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-    ChatCompletionsUsage, ChatMessage, ChatMessageContent, ProviderChatRequestData,
-    ProviderChatResponseData,
+    ChatCompletionsUsage, ChatMessage, ChatMessageContent,
 };
 use crate::error::Error;
 
@@ -24,12 +27,7 @@ use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT
 /// `additionalModelRequestFields` for Anthropic base models and to
 /// `inferenceConfig` otherwise, and that branch reads the model catalog the
 /// core cannot see.
-const SUPPORTED_PARAMS: &[(&str, &str)] = &[
-    ("max_tokens", "maxTokens"),
-    ("temperature", "temperature"),
-    ("top_p", "topP"),
-    ("stop", "stopSequences"),
-];
+const SUPPORTED_PARAMS: &[&str] = &["maxTokens", "temperature", "topP", "stopSequences"];
 
 const AWS_BEDROCK_RUNTIME_ENDPOINT: &str = "aws_bedrock_runtime_endpoint";
 
@@ -56,43 +54,6 @@ pub struct BedrockChatCompletionsConfig;
 pub const BEDROCK_CHAT_COMPLETIONS_CONFIG: BedrockChatCompletionsConfig =
     BedrockChatCompletionsConfig;
 
-fn converse_body(conversation: &Conversation, params: &Map<String, Value>) -> Value {
-    let messages: Vec<Value> = conversation
-        .turns
-        .iter()
-        .map(|turn| {
-            json!({
-                "role": turn.role.as_str(),
-                "content": turn.texts.iter().map(|text| json!({"text": text})).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
-
-    let inference_config = Map::from_iter(SUPPORTED_PARAMS.iter().filter_map(|(_, name)| {
-        params
-            .get(*name)
-            .map(|value| ((*name).to_string(), value.clone()))
-    }));
-
-    let system: Vec<Value> = conversation
-        .system
-        .iter()
-        .map(|text| json!({"text": text}))
-        .collect();
-
-    Value::Object(Map::from_iter(
-        [
-            (
-                "inferenceConfig".to_string(),
-                Value::Object(inference_config),
-            ),
-            ("messages".to_string(), json!(messages)),
-        ]
-        .into_iter()
-        .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system)))),
-    ))
-}
-
 fn has_blank_text(message: &ChatMessage) -> bool {
     match &message.content {
         None => false,
@@ -106,6 +67,10 @@ fn has_blank_text(message: &ChatMessage) -> bool {
 }
 
 impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
+    type MappedParams = ConverseMappedParams;
+    type RequestBody = ConverseRequest;
+    type ResponseBody = ConverseResponse;
+
     fn complete_url(
         &self,
         api_base: Option<&str>,
@@ -139,7 +104,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error> {
+    ) -> Result<RequestAuth, Error> {
         // Python reads `api_key` as the Bedrock bearer token and consults the
         // env only when the caller passed none, so a caller-supplied empty key
         // falls through to SigV4 without reaching for the environment. An
@@ -152,10 +117,10 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         }
         .filter(|token| !token.is_empty());
         if let Some(token) = bearer {
-            return Ok(ChatCompletionsAuth::Bearer { token });
+            return Ok(RequestAuth::Bearer { token });
         }
         let (_, model_region) = bedrock_model_id_and_region(model);
-        Ok(ChatCompletionsAuth::AwsSigV4 {
+        Ok(RequestAuth::AwsSigV4 {
             region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
         })
     }
@@ -165,7 +130,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)] {
+    fn supported_provider_params(&self) -> &'static [&'static str] {
         SUPPORTED_PARAMS
     }
 
@@ -173,13 +138,13 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         CONFIG_PARAMS
     }
 
-    fn unsupported_reason(
+    fn decline_reason(
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
     ) -> Option<Unsupported> {
         unsupported_param(
-            self.supported_openai_params(),
+            self.supported_provider_params(),
             CONFIG_PARAMS,
             optional_params,
         )
@@ -213,52 +178,56 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
     fn transform_request(
         &self,
         _model: &str,
-        messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
-    ) -> Result<ProviderChatRequestData, ChatRequestError> {
-        Ok(ProviderChatRequestData {
-            body: converse_body(&build_conversation(&messages), &optional_params),
+        conversation: Conversation,
+        params: Self::MappedParams,
+    ) -> Result<Self::RequestBody, ChatRequestError> {
+        Ok(ConverseRequest {
+            messages: conversation
+                .turns
+                .into_iter()
+                .map(|turn| ConverseMessage {
+                    role: turn.role,
+                    content: turn.texts.into_iter().map(ConverseContent::Text).collect(),
+                })
+                .collect(),
+            system: conversation
+                .system
+                .into_iter()
+                .map(|text| ConverseText { text })
+                .collect(),
+            inference_config: params,
         })
     }
 
     fn transform_response(
         &self,
         model: &str,
-        response: ProviderChatResponseData,
+        response: Self::ResponseBody,
     ) -> Result<ChatCompletionsResponse, ChatResponseError> {
-        let body = response
-            .body
-            .as_object()
-            .ok_or(ChatResponseError::NotObject { api: "converse" })?;
-
-        let content = body
-            .get("output")
-            .and_then(|output| output.get("message"))
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_array)
+        let content = response
+            .output
+            .and_then(|output| output.message)
+            .and_then(|message| message.content)
             .ok_or(ChatResponseError::MissingField("output.message.content"))?;
-        if content.iter().any(|block| {
-            block
-                .as_object()
-                .is_none_or(|block| block.len() != 1 || !block.contains_key("text"))
-        }) {
-            return Err(ChatResponseError::NonTextContent);
-        }
-        let text: String = content
-            .iter()
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
-            .collect();
-
-        let usage = body
-            .get("usage")
-            .and_then(Value::as_object)
+        let text = content
+            .into_iter()
+            .map(|block| match block {
+                ConverseResponseContent::Object(block)
+                    if block.text.is_some() && block.other_fields.is_empty() =>
+                {
+                    Ok(block.text.flatten().unwrap_or_default())
+                }
+                _ => Err(ChatResponseError::NonTextContent),
+            })
+            .collect::<Result<String, _>>()?;
+        let usage = response
+            .usage
             .ok_or(ChatResponseError::MissingField("usage"))?;
-        let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
         let computed = usage_from_parts(
-            field("inputTokens"),
-            field("outputTokens"),
-            field("cacheReadInputTokens"),
-            field("cacheWriteInputTokens"),
+            usage.input_tokens.unwrap_or(0),
+            usage.output_tokens.unwrap_or(0),
+            usage.cache_read_input_tokens.unwrap_or(0),
+            usage.cache_write_input_tokens.unwrap_or(0),
         );
         // Converse reports `totalTokens` and Python passes it straight through,
         // where Anthropic has no such field and Python adds the two counts
@@ -267,10 +236,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         // raises there rather than reporting a zero; fall back to the computed
         // total, which is the closest thing to that without failing the call.
         let usage = ChatCompletionsUsage {
-            total_tokens: usage
-                .get("totalTokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(computed.total_tokens),
+            total_tokens: usage.total_tokens.unwrap_or(computed.total_tokens),
             ..computed
         };
 
@@ -288,10 +254,8 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
                     // on this path alone.
                     content: Some(text),
                 },
-                finish_reason: finish_reason_for(
-                    body.get("stopReason").and_then(Value::as_str).unwrap_or(""),
-                )
-                .to_string(),
+                finish_reason: finish_reason_for(response.stop_reason.as_deref().unwrap_or(""))
+                    .to_string(),
             }],
             usage,
         })

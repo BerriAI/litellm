@@ -1,8 +1,9 @@
+use crate::auth::CredentialPlacement;
 use crate::error::Error;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
-use super::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
+use super::transformation::AnthropicMessagesProviderConfig;
 use super::types::{MessagesRequest, ProviderMessagesRequest};
 use serde_json::{Map, Value};
 
@@ -65,16 +66,16 @@ fn validate_environment(
 ) -> Result<Vec<(String, String)>, Error> {
     let mut headers = string_headers(extra_headers)?;
 
-    let auth_strategy = config.auth_strategy();
-    let already_authorized = has_header(&headers, auth_strategy.header_name())
+    let credential_placement = config.credential_placement();
+    let already_authorized = has_header(&headers, credential_placement.header_name())
         || (config.accepts_bearer_auth() && has_bearer_auth(&headers));
     if !already_authorized {
         let api_key = config.resolve_api_key(api_key, env_lookup)?;
-        let auth_header = match auth_strategy {
-            MessagesAuthStrategy::Bearer => {
+        let auth_header = match credential_placement {
+            CredentialPlacement::Bearer => {
                 ("authorization".to_string(), format!("Bearer {api_key}"))
             }
-            MessagesAuthStrategy::Header(name) => (name.to_string(), api_key),
+            CredentialPlacement::Header(name) => (name.to_string(), api_key),
         };
         headers.push(auth_header);
     }

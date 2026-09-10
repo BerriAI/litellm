@@ -1,44 +1,20 @@
 use crate::Error;
+use crate::auth::RequestAuth;
 use serde_json::{Map, Value};
 
-use super::types::{AudioTranscriptionRequestData, AudioTranscriptionResponseData};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AudioTranscriptionAuth {
-    Bearer,
-    AwsSigV4 {
-        region: String,
-        service: &'static str,
-    },
-}
+use super::types::{
+    AudioTranscriptionRequestData, AudioTranscriptionResponseData, ProviderTranscriptionResponse,
+    TranscriptionAudio, TranscriptionParams,
+};
 
 pub trait AudioTranscriptionProviderConfig: Sync {
-    fn supported_transcription_params(&self) -> &'static [&'static str];
-
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn map_transcription_params(&self, params: &Map<String, Value>) -> Map<String, Value> {
-        params
-            .iter()
-            .filter(|(key, _)| {
-                self.supported_transcription_params()
-                    .contains(&key.as_str())
-            })
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect()
-    }
-
-    fn transform_transcription_request(
+    fn auth(
         &self,
+        api_key: Option<&str>,
         model: &str,
-        audio: Value,
-        optional_params: Map<String, Value>,
-    ) -> Result<AudioTranscriptionRequestData, Error>;
-
-    fn transform_transcription_response(
-        &self,
-        model: &str,
-        response_json: Value,
-    ) -> Result<AudioTranscriptionResponseData, Error>;
+        optional_params: &Map<String, Value>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<RequestAuth, Error>;
 
     fn complete_url(
         &self,
@@ -48,10 +24,16 @@ pub trait AudioTranscriptionProviderConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
-    fn auth_strategy(
+    fn transform_request(
         &self,
         model: &str,
-        optional_params: &Map<String, Value>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<AudioTranscriptionAuth, Error>;
+        audio: TranscriptionAudio,
+        params: TranscriptionParams,
+    ) -> Result<AudioTranscriptionRequestData, Error>;
+
+    fn transform_response(
+        &self,
+        model: &str,
+        response: ProviderTranscriptionResponse,
+    ) -> Result<AudioTranscriptionResponseData, Error>;
 }

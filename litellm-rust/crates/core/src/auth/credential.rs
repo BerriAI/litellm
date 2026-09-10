@@ -7,7 +7,7 @@ use veil::Redact;
 
 use crate::error::AuthError;
 
-use super::{ResolvedCredential, SecretValue, TokenCallerHandle};
+use super::{ResolvedCredential, SecretValue, TokenProviderHandle};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialFileRef {
@@ -55,7 +55,7 @@ impl CredentialResolverHandle {
 #[derive(Clone, Debug)]
 pub enum CredentialPlan {
     Static(CredentialRef),
-    Caller(TokenCallerHandle),
+    Caller(TokenProviderHandle),
     None,
 }
 

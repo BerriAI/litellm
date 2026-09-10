@@ -2,7 +2,7 @@ use crate::AuthError;
 use crate::auth::error::AuthConfigurationError;
 use crate::auth::{
     CredentialFileRef, CredentialLookup, CredentialRef, ResolvedCredential, SecretValue,
-    TokenCallerHandle,
+    TokenProviderHandle,
 };
 
 use super::native::{NativeAzureRequest, NativeAzureTokenAcquirer};
@@ -20,7 +20,7 @@ const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
 #[derive(Clone, Debug)]
 pub(crate) enum AzureCredentialPlan {
     Supplied(ResolvedCredential),
-    Caller(TokenCallerHandle),
+    Caller(TokenProviderHandle),
     Oidc {
         reference: CredentialRef,
         tenant_id: String,

@@ -118,7 +118,7 @@ where
                         })?,
                     "guardrail.optional_params",
                 )
-                .and_then(|params| request.integration.format().map_ocr_params(params))?;
+                .and_then(|params| I::FORMAT.map_params(params))?;
             Ok(Ok(MappedOcrRequest {
                 document: changed.document,
                 params,

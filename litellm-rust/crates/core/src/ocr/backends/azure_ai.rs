@@ -1,6 +1,6 @@
 use crate::auth::azure::AzureAuthInputs;
 use crate::constants::{AZURE_AI_OCR_PATH, AZURE_DI_API_VERSION};
-use crate::ocr::backends::{HostConfig, OcrHost, OcrIntegration, PreparedOcrBackend};
+use crate::ocr::backends::{BackendConfig, OcrBackend, OcrIntegration, PreparedOcrBackend};
 use crate::ocr::error::{OcrError, OcrRequestError};
 use crate::ocr::formats::document_intelligence::{
     AzureDocumentIntelligenceOcrFormat,
@@ -29,7 +29,7 @@ fn encode_model_id(model: &str) -> Result<String, OcrRequestError> {
 pub struct AzureMistral;
 
 impl OcrIntegration for AzureMistral {
-    type Host = AzureHost;
+    type Backend = AzureBackend;
     type Format = MistralOcrFormat;
     type PreparedDocument = crate::ocr::document::InlineOcrDocument;
     const FORMAT: Self::Format = MistralOcrFormat;
@@ -38,7 +38,7 @@ impl OcrIntegration for AzureMistral {
     async fn prepare(
         &self,
         connection: &OcrConnection,
-        config: &HostConfig<Self>,
+        config: &BackendConfig<Self>,
         _model: &str,
         _params: &MistralOcrParams,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -85,7 +85,7 @@ impl OcrIntegration for AzureMistral {
 pub struct AzureDocumentIntelligence;
 
 impl OcrIntegration for AzureDocumentIntelligence {
-    type Host = AzureHost;
+    type Backend = AzureBackend;
     type Format = AzureDocumentIntelligenceOcrFormat;
     type PreparedDocument = OcrDocument;
     const FORMAT: Self::Format = AzureDocumentIntelligenceOcrFormat;
@@ -93,7 +93,7 @@ impl OcrIntegration for AzureDocumentIntelligence {
     async fn prepare(
         &self,
         connection: &OcrConnection,
-        config: &HostConfig<Self>,
+        config: &BackendConfig<Self>,
         model: &str,
         params: &DocumentIntelligenceParams,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -166,9 +166,9 @@ impl OcrIntegration for AzureDocumentIntelligence {
 }
 
 #[derive(Clone, Debug)]
-pub struct AzureHost;
+pub struct AzureBackend;
 
-impl OcrHost for AzureHost {
+impl OcrBackend for AzureBackend {
     type Config = AzureAuthInputs;
     const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::AzureAi;
 }

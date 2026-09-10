@@ -1,14 +1,14 @@
+use crate::auth::RequestAuth;
 use crate::chat_completions::error::{ChatRequestError, ChatResponseError};
-use serde_json::{Map, Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::chat_completions::conversation::{Conversation, build_conversation};
 use crate::chat_completions::transformation::{
-    ChatCompletionsAuth, ChatCompletionsProviderConfig, Unsupported, unsupported_message,
-    unsupported_param,
+    ChatCompletionsProviderConfig, Unsupported, unsupported_message, unsupported_param,
 };
 use crate::chat_completions::types::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
-    ProviderChatRequestData, ProviderChatResponseData,
 };
 use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
 use crate::error::Error;
@@ -28,52 +28,100 @@ use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage
 /// per-model gate inside `transform_request`, the function this route replaces.
 /// Forwarding it would send `top_k` to a model that removed sampling params and
 /// take a 400 after the call, where Python drops it and succeeds.
-const SUPPORTED_PARAMS: &[(&str, &str)] = &[
-    ("max_tokens", "max_tokens"),
-    ("temperature", "temperature"),
-    ("top_p", "top_p"),
-    ("stop", "stop_sequences"),
-];
+const SUPPORTED_PARAMS: &[&str] = &["max_tokens", "temperature", "top_p", "stop_sequences"];
 
 pub struct AnthropicChatCompletionsConfig;
 
 pub const ANTHROPIC_CHAT_COMPLETIONS_CONFIG: AnthropicChatCompletionsConfig =
     AnthropicChatCompletionsConfig;
 
-fn text_block(text: &str) -> Value {
-    json!({"type": "text", "text": text})
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct AnthropicMappedParams {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::http_utils::deserialize_optional_param"
+    )]
+    pub max_tokens: Option<Option<u64>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::http_utils::deserialize_optional_param"
+    )]
+    pub temperature: Option<Option<serde_json::Number>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::http_utils::deserialize_optional_param"
+    )]
+    pub top_p: Option<Option<serde_json::Number>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::http_utils::deserialize_optional_param"
+    )]
+    pub stop_sequences: Option<Option<Vec<String>>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::http_utils::deserialize_optional_param"
+    )]
+    pub stream: Option<Option<bool>>,
 }
 
-fn anthropic_body(model: &str, conversation: &Conversation, params: Map<String, Value>) -> Value {
-    let messages: Vec<Value> = conversation
-        .turns
-        .iter()
-        .map(|turn| {
-            json!({
-                "role": turn.role.as_str(),
-                "content": turn.texts.iter().map(|text| text_block(text)).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
+#[derive(Clone, Debug, Serialize)]
+pub struct AnthropicChatRequest {
+    pub model: String,
+    pub messages: Vec<AnthropicTextMessage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub system: Vec<AnthropicTextBlock>,
+    #[serde(flatten)]
+    pub params: AnthropicMappedParams,
+}
 
-    let system: Vec<Value> = conversation.system.iter().map(|s| text_block(s)).collect();
+#[derive(Clone, Debug, Serialize)]
+pub struct AnthropicTextMessage {
+    pub role: crate::chat_completions::conversation::TurnRole,
+    pub content: Vec<AnthropicTextBlock>,
+}
 
-    let body = Map::from_iter(
-        [
-            ("model".to_string(), json!(model)),
-            ("messages".to_string(), json!(messages)),
-        ]
-        .into_iter()
-        // Python builds `{"model", "messages", **optional_params}` with
-        // `system` already folded into optional_params, so a caller-supplied
-        // key of the same name wins here too.
-        .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system))))
-        .chain(params),
-    );
-    Value::Object(body)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AnthropicTextBlock {
+    Text { text: String },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AnthropicChatResponse {
+    pub model: Option<String>,
+    pub content: Option<Vec<AnthropicResponseBlock>>,
+    pub stop_reason: Option<String>,
+    pub usage: Option<AnthropicChatUsage>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AnthropicResponseBlock {
+    Text {
+        text: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct AnthropicChatUsage {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
 }
 
 impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
+    type MappedParams = AnthropicMappedParams;
+    type RequestBody = AnthropicChatRequest;
+    type ResponseBody = AnthropicChatResponse;
+
     fn complete_url(
         &self,
         api_base: Option<&str>,
@@ -90,8 +138,8 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         _model: &str,
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error> {
-        Ok(ChatCompletionsAuth::Header {
+    ) -> Result<RequestAuth, Error> {
+        Ok(RequestAuth::Header {
             name: "x-api-key",
             value: resolve_anthropic_api_key(api_key, env_lookup)?,
         })
@@ -119,16 +167,16 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)] {
+    fn supported_provider_params(&self) -> &'static [&'static str] {
         SUPPORTED_PARAMS
     }
 
-    fn unsupported_reason(
+    fn decline_reason(
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
     ) -> Option<Unsupported> {
-        unsupported_param(self.supported_openai_params(), &[], optional_params)
+        unsupported_param(self.supported_provider_params(), &[], optional_params)
             .or_else(|| messages.iter().find_map(unsupported_message))
             // Anthropic rejects a request whose first turn is not a user turn.
             // Python only repairs that under `litellm.modify_params`, which the
@@ -143,11 +191,29 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
     fn transform_request(
         &self,
         model: &str,
-        messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
-    ) -> Result<ProviderChatRequestData, ChatRequestError> {
-        Ok(ProviderChatRequestData {
-            body: anthropic_body(model, &build_conversation(&messages), optional_params),
+        conversation: Conversation,
+        params: Self::MappedParams,
+    ) -> Result<Self::RequestBody, ChatRequestError> {
+        Ok(AnthropicChatRequest {
+            model: model.to_string(),
+            messages: conversation
+                .turns
+                .into_iter()
+                .map(|turn| AnthropicTextMessage {
+                    role: turn.role,
+                    content: turn
+                        .texts
+                        .into_iter()
+                        .map(|text| AnthropicTextBlock::Text { text })
+                        .collect(),
+                })
+                .collect(),
+            system: conversation
+                .system
+                .into_iter()
+                .map(|text| AnthropicTextBlock::Text { text })
+                .collect(),
+            params,
         })
     }
 
@@ -155,59 +221,41 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
     fn transform_response(
         &self,
         _model: &str,
-        response: ProviderChatResponseData,
+        response: Self::ResponseBody,
     ) -> Result<ChatCompletionsResponse, ChatResponseError> {
-        let body = response
-            .body
-            .as_object()
-            .ok_or(ChatResponseError::NotObject { api: "messages" })?;
-
-        let content = body
-            .get("content")
-            .and_then(Value::as_array)
+        let content = response
+            .content
             .ok_or(ChatResponseError::MissingField("content"))?;
-        if content
-            .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) != Some("text"))
-        {
-            return Err(ChatResponseError::NonTextContent);
-        }
-        let text: String = content
-            .iter()
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
-            .collect();
-
-        let usage = body
-            .get("usage")
-            .and_then(Value::as_object)
+        let text = content
+            .into_iter()
+            .map(|block| match block {
+                AnthropicResponseBlock::Text { text } => Ok(text.unwrap_or_default()),
+                AnthropicResponseBlock::Other => Err(ChatResponseError::NonTextContent),
+            })
+            .collect::<Result<String, _>>()?;
+        let usage = response
+            .usage
             .ok_or(ChatResponseError::MissingField("usage"))?;
-        let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
 
         Ok(ChatCompletionsResponse {
             created: unix_now(),
-            model: body
-                .get("model")
-                .and_then(Value::as_str)
-                .ok_or(ChatResponseError::MissingField("model"))?
-                .to_string(),
+            model: response
+                .model
+                .ok_or(ChatResponseError::MissingField("model"))?,
             choices: vec![ChatCompletionsChoice {
                 index: 0,
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
                 },
-                finish_reason: finish_reason_for(
-                    body.get("stop_reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or(""),
-                )
-                .to_string(),
+                finish_reason: finish_reason_for(response.stop_reason.as_deref().unwrap_or(""))
+                    .to_string(),
             }],
             usage: usage_from_parts(
-                field("input_tokens"),
-                field("output_tokens"),
-                field("cache_read_input_tokens"),
-                field("cache_creation_input_tokens"),
+                usage.input_tokens.unwrap_or(0),
+                usage.output_tokens.unwrap_or(0),
+                usage.cache_read_input_tokens.unwrap_or(0),
+                usage.cache_creation_input_tokens.unwrap_or(0),
             ),
         })
     }

@@ -130,7 +130,7 @@ async fn dial_upstream(
     api_key: &str,
     api_base: Option<&str>,
 ) -> Result<ResponsesUpstreamWs, Error> {
-    let url = OPENAI_RESPONSES_WS_CONFIG.complete_websocket_url(api_base, model);
+    let url = OPENAI_RESPONSES_WS_CONFIG.complete_url(api_base, model);
     let mut request = url
         .as_str()
         .into_client_request()
@@ -208,7 +208,7 @@ where
             event = client_in.next() => {
                 let Some(event) = event else { break };
                 for outbound in OPENAI_RESPONSES_WS_CONFIG
-                    .transform_ws_request(&event, model)?
+                    .transform_request(&event, model)?
                     .events
                 {
                     let payload = serde_json::to_string(&outbound)
@@ -226,7 +226,7 @@ where
                             .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                         observe(&event);
                         for outbound in OPENAI_RESPONSES_WS_CONFIG
-                            .transform_ws_response(&event, model)?
+                            .transform_response(&event, model)?
                             .events
                         {
                             client_out.send(outbound)
@@ -265,7 +265,7 @@ where
     let (mut upstream_tx, upstream_rx) = upstream.split();
     if let Some(first_frame) = first_frame {
         for outbound in OPENAI_RESPONSES_WS_CONFIG
-            .transform_ws_request(&first_frame, model)?
+            .transform_request(&first_frame, model)?
             .events
         {
             let payload = serde_json::to_string(&outbound)

@@ -1,4 +1,5 @@
 use super::error::{ChatRequestError, ChatResponseError};
+use crate::auth::RequestAuth;
 use crate::error::TransportError;
 use serde_json::Value;
 
@@ -7,10 +8,9 @@ use crate::http_utils::{http_request, truncate_error_body};
 
 use super::client::http_client;
 use super::prepare::prepare_provider_request;
-use super::transformation::ChatCompletionsAuth;
+
 use super::types::{
-    ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
-    ResolvedChatCompletionsRequest,
+    ChatCompletionsResponse, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -49,10 +49,36 @@ pub(super) async fn execute_chat_completions_provider_call(
 
     let body: Value = serde_json::from_str(&text)
         .map_err(|err| ChatResponseError::InvalidJson(err.to_string()))?;
-    request
-        .config
-        .transform_response(&request.model, ProviderChatResponseData { body })
-        .map_err(Error::from)
+    use super::common_utils::ChatProviderConfig;
+    match request.config {
+        ChatProviderConfig::Anthropic => decode_response(
+            &crate::providers::anthropic::chat_completions::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
+            &request.model,
+            body,
+            "messages",
+        ),
+        #[cfg(feature = "bedrock-auth")]
+        ChatProviderConfig::Bedrock => decode_response(
+            &crate::providers::bedrock::chat_completions::transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
+            &request.model,
+            body,
+            "converse",
+        ),
+    }.map_err(Error::from)
+}
+
+pub(crate) fn decode_response<C: super::transformation::ChatCompletionsProviderConfig>(
+    config: &C,
+    model: &str,
+    body: Value,
+    api: &'static str,
+) -> Result<ChatCompletionsResponse, ChatResponseError> {
+    if !body.is_object() {
+        return Err(ChatResponseError::NotObject { api });
+    }
+    let response = serde_json::from_value(body)
+        .map_err(|_| ChatResponseError::InvalidJson("invalid provider response fields".into()))?;
+    config.transform_response(model, response)
 }
 
 #[cfg(feature = "bedrock-auth")]
@@ -68,7 +94,7 @@ pub(super) async fn signed_headers(
         is_sigv4_computed_header, resolve_credentials, sign_bedrock_post,
     };
 
-    let ChatCompletionsAuth::AwsSigV4 { region } = &request.auth else {
+    let RequestAuth::AwsSigV4 { region } = &request.auth else {
         return Ok(request.upstream_headers.clone());
     };
     // Reattaching a header the signer also emits would put both copies on the
@@ -118,7 +144,7 @@ pub(super) async fn signed_headers(
     _body: &[u8],
 ) -> Result<Vec<(String, String)>, Error> {
     match &request.auth {
-        ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
+        RequestAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
             "AWS SigV4 requires the bedrock-auth feature",
         )),
         _ => Ok(request.upstream_headers.clone()),

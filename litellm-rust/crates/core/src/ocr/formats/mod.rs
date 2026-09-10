@@ -13,7 +13,7 @@ pub mod reducto;
 
 pub trait OcrFormat: Send + Sync + Sized + 'static {
     type InputParams: std::fmt::Debug + Clone + Serialize + DeserializeOwned + Send + Sync;
-    type MappedParams: Clone + Serialize + Send + Sync + Into<Self::InputParams>;
+    type MappedParams: Clone + Serialize + Send + Sync;
     type PreparedDocument: Send;
     type RequestBody: Serialize + DeserializeOwned + Send + Sync;
     type ResponseBody: DeserializeOwned + Send;
@@ -22,17 +22,14 @@ pub trait OcrFormat: Send + Sync + Sized + 'static {
         Ok(())
     }
 
-    fn map_ocr_params(
-        &self,
-        params: Self::InputParams,
-    ) -> Result<Self::MappedParams, OcrRequestError>;
-    fn transform_ocr_request(
+    fn map_params(&self, params: Self::InputParams) -> Result<Self::MappedParams, OcrRequestError>;
+    fn transform_request(
         &self,
         model: &str,
         document: Self::PreparedDocument,
         params: &Self::MappedParams,
     ) -> Result<Self::RequestBody, OcrRequestError>;
-    fn transform_ocr_response(
+    fn transform_response(
         &self,
         model: &str,
         response: Self::ResponseBody,

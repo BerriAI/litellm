@@ -1,9 +1,8 @@
+use crate::auth::RequestAuth;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-
-use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
 
 /// A `/chat/completions` call as it crosses into the core.
 ///
@@ -24,7 +23,7 @@ pub struct ChatCompletionsRequest<'a> {
 
 pub(super) struct ResolvedChatCompletionsRequest<'a> {
     pub(super) model: String,
-    pub(super) config: &'static dyn ChatCompletionsProviderConfig,
+    pub(super) config: super::common_utils::ChatProviderConfig,
     pub(super) messages: Vec<ChatMessage>,
     pub(super) optional_params: Map<String, Value>,
     pub(super) api_key: Option<&'a str>,
@@ -35,26 +34,14 @@ pub(super) struct ResolvedChatCompletionsRequest<'a> {
 
 pub(super) struct ProviderChatCompletionsRequest {
     pub(super) model: String,
-    pub(super) config: &'static dyn ChatCompletionsProviderConfig,
+    pub(super) config: super::common_utils::ChatProviderConfig,
     pub(super) url: String,
     pub(super) body: Value,
     pub(super) upstream_headers: Vec<(String, String)>,
-    pub(super) auth: ChatCompletionsAuth,
+    pub(super) auth: RequestAuth,
     #[cfg_attr(not(feature = "bedrock-auth"), allow(dead_code))]
     pub(super) optional_params: Map<String, Value>,
     pub(super) timeout: Option<Duration>,
-}
-
-/// The provider-shaped request body a config produces. Named rather than a bare
-/// `Value` so the transform contract stays a typed one, mirroring
-/// [`crate::audio_transcription::types::AudioTranscriptionRequestData`].
-pub struct ProviderChatRequestData {
-    pub body: Value,
-}
-
-/// The raw provider response body handed back to a config for normalization.
-pub struct ProviderChatResponseData {
-    pub body: Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

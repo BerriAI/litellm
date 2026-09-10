@@ -1,20 +1,11 @@
+use super::conversation::Conversation;
 use crate::Error;
+use crate::auth::RequestAuth;
 use crate::chat_completions::error::{ChatRequestError, ChatResponseError};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
-use super::types::{
-    ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
-    ProviderChatResponseData,
-};
-
-/// How the upstream call is authenticated. API-key strategies are resolved in
-/// `prepare`; SigV4 needs the serialized body, so the handler signs it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ChatCompletionsAuth {
-    Header { name: &'static str, value: String },
-    Bearer { token: String },
-    AwsSigV4 { region: String },
-}
+use super::types::{ChatCompletionsResponse, ChatMessage, ChatMessageContent};
 
 /// Why a request cannot be served by the Rust path.
 ///
@@ -33,13 +24,31 @@ pub const STREAM_PARAM: &str = "stream";
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
 pub trait ChatCompletionsProviderConfig: Sync {
-    fn complete_url(
+    type MappedParams: DeserializeOwned;
+    type RequestBody: Serialize;
+    type ResponseBody: DeserializeOwned;
+
+    /// Accepted parameter names after Python provider mapping.
+    fn supported_provider_params(&self) -> &'static [&'static str];
+
+    /// Parameters consumed as call configuration (credentials, endpoints)
+    /// rather than placed in the body. Accepted, never serialized.
+    fn config_params(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn decline_reason(
         &self,
-        api_base: Option<&str>,
-        model: &str,
+        messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
+    ) -> Option<Unsupported> {
+        unsupported_param(
+            self.supported_provider_params(),
+            self.config_params(),
+            optional_params,
+        )
+        .or_else(|| messages.iter().find_map(unsupported_message))
+    }
 
     fn auth(
         &self,
@@ -47,7 +56,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error>;
+    ) -> Result<RequestAuth, Error>;
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[("content-type", "application/json")]
@@ -63,44 +72,30 @@ pub trait ChatCompletionsProviderConfig: Sync {
         false
     }
 
-    /// Supported OpenAI parameter names paired with their provider names.
-    fn supported_openai_params(&self) -> &'static [(&'static str, &'static str)];
-
-    /// Parameters consumed as call configuration (credentials, endpoints)
-    /// rather than placed in the body. Accepted, never serialized.
-    fn config_params(&self) -> &'static [&'static str] {
-        &[]
-    }
-
-    fn unsupported_reason(
+    fn complete_url(
         &self,
-        messages: &[ChatMessage],
+        api_base: Option<&str>,
+        model: &str,
         optional_params: &Map<String, Value>,
-    ) -> Option<Unsupported> {
-        unsupported_param(
-            self.supported_openai_params(),
-            self.config_params(),
-            optional_params,
-        )
-        .or_else(|| messages.iter().find_map(unsupported_message))
-    }
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error>;
 
     fn transform_request(
         &self,
         model: &str,
-        messages: Vec<ChatMessage>,
-        optional_params: Map<String, Value>,
-    ) -> Result<ProviderChatRequestData, ChatRequestError>;
+        conversation: Conversation,
+        params: Self::MappedParams,
+    ) -> Result<Self::RequestBody, ChatRequestError>;
 
     fn transform_response(
         &self,
         model: &str,
-        response: ProviderChatResponseData,
+        response: Self::ResponseBody,
     ) -> Result<ChatCompletionsResponse, ChatResponseError>;
 }
 
 pub fn unsupported_param(
-    supported: &'static [(&'static str, &'static str)],
+    supported: &'static [&'static str],
     config: &'static [&'static str],
     optional_params: &Map<String, Value>,
 ) -> Option<Unsupported> {
@@ -115,9 +110,7 @@ pub fn unsupported_param(
         .keys()
         .any(|key| {
             key != STREAM_PARAM
-                && !supported
-                    .iter()
-                    .any(|(_, provider_name)| *provider_name == key)
+                && !supported.iter().any(|provider_name| *provider_name == key)
                 && !config.contains(&key.as_str())
         })
         .then_some(Unsupported("unrecognized request parameter"))

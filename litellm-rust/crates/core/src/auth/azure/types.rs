@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use strum::EnumString;
 
 use crate::AuthError;
-use crate::auth::{CredentialResolverHandle, SecretValue, TokenCallerHandle};
+use crate::auth::{CredentialResolverHandle, SecretValue, TokenProviderHandle};
 
 pub const DEFAULT_AZURE_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
 
@@ -36,7 +36,7 @@ pub enum AzureCredentialType {
 #[derive(Clone, Debug, Default)]
 pub struct AzureAuthInputs {
     pub azure_ad_token: ConfigValue<SecretValue>,
-    pub azure_ad_token_provider: Option<TokenCallerHandle>,
+    pub azure_ad_token_provider: Option<TokenProviderHandle>,
     pub credential_resolver: Option<CredentialResolverHandle>,
     pub tenant_id: ConfigValue<String>,
     pub client_id: ConfigValue<String>,

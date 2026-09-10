@@ -13,19 +13,29 @@ fn params(value: Value) -> Map<String, Value> {
 }
 
 fn transform(model: &str, msgs: Value, opts: Value) -> Value {
-    ANTHROPIC_CHAT_COMPLETIONS_CONFIG
-        .transform_request(model, messages(msgs), params(opts))
-        .expect("request transforms")
-        .body
+    serde_json::to_value(
+        ANTHROPIC_CHAT_COMPLETIONS_CONFIG
+            .transform_request(
+                model,
+                build_conversation(&messages(msgs)),
+                serde_json::from_value(opts).unwrap(),
+            )
+            .expect("request transforms"),
+    )
+    .unwrap()
 }
 
 fn transform_response(body: Value) -> Result<ChatCompletionsResponse, ChatResponseError> {
-    ANTHROPIC_CHAT_COMPLETIONS_CONFIG
-        .transform_response("claude-sonnet-4-5", ProviderChatResponseData { body })
+    crate::chat_completions::handler::decode_response(
+        &ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
+        "claude-sonnet-4-5",
+        body,
+        "messages",
+    )
 }
 
 fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
-    ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+    ANTHROPIC_CHAT_COMPLETIONS_CONFIG.decline_reason(&messages(msgs), &params(opts))
 }
 
 #[test]
@@ -426,7 +436,7 @@ fn resolves_the_messages_url_and_x_api_key_auth() {
         config
             .auth(Some("sk-x"), "claude-sonnet-4-5", &Map::new(), &|_| None)
             .expect("auth resolves"),
-        ChatCompletionsAuth::Header {
+        RequestAuth::Header {
             name: "x-api-key",
             value: "sk-x".to_string()
         }
@@ -437,5 +447,31 @@ fn resolves_the_messages_url_and_x_api_key_auth() {
             ("anthropic-version", "2023-06-01"),
             ("content-type", "application/json"),
         ]
+    );
+}
+
+#[test]
+fn preserves_explicit_null_mapped_params() {
+    let body = transform(
+        "model",
+        json!([{"role":"user","content":"hi"}]),
+        json!({"max_tokens":null,"temperature":null}),
+    );
+    assert!(body.get("max_tokens").is_some_and(Value::is_null));
+    assert!(body.get("temperature").is_some_and(Value::is_null));
+    assert!(body.get("top_p").is_none());
+}
+
+#[test]
+fn malformed_response_fields_do_not_expose_provider_content() {
+    let error = transform_response(json!({
+        "model": "model",
+        "content": [{"type":"text","text":"private document"}],
+        "usage": {"input_tokens":"private token value"}
+    }))
+    .unwrap_err();
+    assert_eq!(
+        error,
+        ChatResponseError::InvalidJson("invalid provider response fields".into())
     );
 }

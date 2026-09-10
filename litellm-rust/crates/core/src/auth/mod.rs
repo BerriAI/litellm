@@ -11,7 +11,7 @@ pub use credential::{
     CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialPlan,
     CredentialPlanResolution, CredentialRef, CredentialResolver, CredentialResolverHandle,
 };
-pub use http::CredentialPlacement;
+pub use http::{CredentialPlacement, RequestAuth};
 pub use policy::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
 pub use secret::SecretValue;
-pub use token::{ResolvedCredential, TokenCaller, TokenCallerHandle, TokenFuture};
+pub use token::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};

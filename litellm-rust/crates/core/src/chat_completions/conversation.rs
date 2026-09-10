@@ -14,7 +14,8 @@ use crate::constants::EMPTY_TEXT_PLACEHOLDER;
 
 use super::types::{ChatMessage, ChatMessageContent};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TurnRole {
     User,
     Assistant,

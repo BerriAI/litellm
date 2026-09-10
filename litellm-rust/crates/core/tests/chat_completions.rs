@@ -1,9 +1,10 @@
+use crate::auth::RequestAuth;
 use serde_json::{Map, Value, json};
 
 use crate::error::Error;
 
 use super::prepare::{prepare_provider_request, resolve_request};
-use super::transformation::ChatCompletionsAuth;
+
 use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
 
 fn prepare_chat_completions_call(
@@ -89,7 +90,7 @@ fn adds_the_auth_and_default_headers() {
     );
     assert!(matches!(
         prepared.auth,
-        ChatCompletionsAuth::Header {
+        RequestAuth::Header {
             name: "x-api-key",
             ..
         }
@@ -287,7 +288,7 @@ fn prepares_a_bedrock_call_without_resolving_credentials() {
     );
     assert_eq!(
         prepared.auth,
-        ChatCompletionsAuth::AwsSigV4 {
+        RequestAuth::AwsSigV4 {
             region: "us-east-1".to_string()
         }
     );
@@ -468,7 +469,7 @@ fn a_bedrock_api_key_is_sent_as_a_bearer_token_instead_of_being_signed() {
     .expect("prepares");
     assert_eq!(
         prepared.auth,
-        ChatCompletionsAuth::Bearer {
+        RequestAuth::Bearer {
             token: "sk-test".to_string()
         }
     );
@@ -811,6 +812,39 @@ mod round_trip {
                 .source()
                 .and_then(|source| source.downcast_ref::<ChatResponseError>()),
             Some(&ChatResponseError::MissingField("usage"))
+        );
+    }
+}
+
+#[test]
+fn malformed_provider_params_decline_before_credentials_are_resolved() {
+    for optional_params in [json!({"max_tokens":"many"}), json!({"stop_sequences":[42]})] {
+        let request = ChatCompletionsRequest {
+            model: "anthropic/model",
+            custom_llm_provider: None,
+            messages: json!([{"role":"user","content":"hi"}]),
+            optional_params: optional_params.as_object().unwrap().clone(),
+            api_key: None,
+            api_base: None,
+            extra_headers: None,
+            timeout: None,
+        };
+        assert_eq!(
+            super::chat_completions_decline_reason(
+                request.model,
+                None,
+                request.messages.clone(),
+                &request.optional_params
+            ),
+            Some("invalid provider-mapped parameters"),
+        );
+        let error = match resolve_request(request) {
+            Ok(_) => panic!("malformed params must decline"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            Error::Unsupported("invalid provider-mapped parameters")
         );
     }
 }

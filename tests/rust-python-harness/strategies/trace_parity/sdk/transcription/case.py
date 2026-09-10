@@ -13,19 +13,18 @@ from ...models import RouteFixture, RouteSpec, TraceScenario, TraceSuite
 MAPPINGS: Final = (
     mapping(rust_span="prepare_audio_transcription_provider_call"),
     mapping(span="get_non_default_params", python_frame=r"get_non_default_transcription_params$"),
-    mapping(rust_span="map_transcription_params", python_frame=r"get_optional_params_transcription$"),
+    mapping(rust_span="map_params", python_frame=r"get_optional_params_transcription$"),
     mapping(
         span="python_provider_config",
         python_frame=r"ProviderConfigManager\.get_provider_audio_transcription_config$",
     ),
     mapping(rust_span="provider_config"),
-    mapping(rust_span="supported_transcription_params"),
-    mapping(rust_span="transform_transcription_request"),
+    mapping(rust_span="transform_request"),
     mapping(
         rust_span="execute_audio_transcription_provider_call",
         python_frame=r"BedrockAudioTranscriptionRustDispatch\.(?:async_)?audio_transcriptions$",
     ),
-    mapping(rust_span="transform_transcription_response"),
+    mapping(rust_span="transform_response"),
     mapping(rust_span="http_request"),
 )
 
@@ -38,7 +37,7 @@ ASYNC_MAPPINGS: Final = (
     mapping(span="python_transcription_wrapper", python_frame=r"main\.py:\d+ transcription$"),
     *MAPPINGS[:2],
     mapping(span="python_map_transcription_params", python_frame=r"get_optional_params_transcription$"),
-    mapping(rust_span="map_transcription_params"),
+    mapping(rust_span="map_params"),
     *MAPPINGS[3:],
 )
 

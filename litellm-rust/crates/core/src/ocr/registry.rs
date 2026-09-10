@@ -10,8 +10,8 @@ pub use super::backends::azure_ai::{AzureDocumentIntelligence, AzureMistral};
 pub use super::backends::mistral::MistralDirect;
 pub use super::backends::reducto::{ReductoLegacy, ReductoV3};
 pub use super::backends::vertex_ai::{VertexDeepSeek, VertexMistral};
-use super::backends::{HostConfig, InputParams};
-pub use super::backends::{OcrHost, OcrIntegration};
+use super::backends::{BackendConfig, InputParams};
+pub use super::backends::{OcrBackend, OcrIntegration};
 use super::types::OcrRequestFormat;
 
 pub(crate) fn validate_request_format(
@@ -67,7 +67,7 @@ pub(crate) const REDUCTO_LEGACY: ReductoLegacy = ReductoLegacy;
 #[derive(Clone, Debug)]
 pub struct OcrIntegrationInput<I: OcrIntegration> {
     pub params: InputParams<I>,
-    pub backend_config: HostConfig<I>,
+    pub backend_config: BackendConfig<I>,
 }
 
 #[derive(Clone, Debug)]

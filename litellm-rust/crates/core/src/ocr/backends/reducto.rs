@@ -1,5 +1,5 @@
 use crate::constants::{REDUCTO_ID_PREFIX, REDUCTO_OCR_API_BASE};
-use crate::ocr::backends::{HostConfig, OcrHost, OcrIntegration, PreparedOcrBackend};
+use crate::ocr::backends::{BackendConfig, OcrBackend, OcrIntegration, PreparedOcrBackend};
 use crate::ocr::document::InlineDocument;
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::formats::reducto::{
@@ -10,9 +10,9 @@ use crate::ocr::types::{OcrConnection, OcrDocument};
 use crate::providers::reducto::auth;
 
 #[derive(Clone, Debug)]
-pub struct ReductoHost;
+pub struct ReductoBackend;
 
-impl OcrHost for ReductoHost {
+impl OcrBackend for ReductoBackend {
     type Config = ();
     const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::Reducto;
 }
@@ -78,7 +78,7 @@ macro_rules! impl_reducto_backend {
         pub struct $integration;
 
         impl OcrIntegration for $integration {
-            type Host = ReductoHost;
+            type Backend = ReductoBackend;
             type Format = $format;
             type PreparedDocument = ReductoFileId;
             const FORMAT: Self::Format = $format;
@@ -86,7 +86,7 @@ macro_rules! impl_reducto_backend {
             async fn prepare(
                 &self,
                 connection: &OcrConnection,
-                _config: &HostConfig<Self>,
+                _config: &BackendConfig<Self>,
                 _model: &str,
                 _params: &$params,
                 env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),

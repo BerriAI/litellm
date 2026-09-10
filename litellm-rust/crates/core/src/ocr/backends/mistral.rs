@@ -1,5 +1,5 @@
 use crate::constants::MISTRAL_OCR_API_BASE;
-use crate::ocr::backends::{HostConfig, OcrHost, OcrIntegration, PreparedOcrBackend};
+use crate::ocr::backends::{BackendConfig, OcrBackend, OcrIntegration, PreparedOcrBackend};
 use crate::ocr::error::OcrError;
 use crate::ocr::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
 use crate::ocr::types::{OcrConnection, OcrDocument};
@@ -22,7 +22,7 @@ pub fn complete_url(api_base: Option<&str>) -> String {
 pub struct MistralDirect;
 
 impl OcrIntegration for MistralDirect {
-    type Host = MistralHost;
+    type Backend = MistralBackend;
     type Format = MistralOcrFormat;
     type PreparedDocument = OcrDocument;
     const FORMAT: Self::Format = MistralOcrFormat;
@@ -30,7 +30,7 @@ impl OcrIntegration for MistralDirect {
     async fn prepare(
         &self,
         connection: &OcrConnection,
-        _config: &HostConfig<Self>,
+        _config: &BackendConfig<Self>,
         _model: &str,
         _params: &MistralOcrParams,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -58,9 +58,9 @@ impl OcrIntegration for MistralDirect {
 }
 
 #[derive(Clone, Debug)]
-pub struct MistralHost;
+pub struct MistralBackend;
 
-impl OcrHost for MistralHost {
+impl OcrBackend for MistralBackend {
     type Config = ();
     const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::Mistral;
 }

@@ -153,7 +153,7 @@ where
     // Relay a buffered backend event (warm handoff's session.created) first, so a
     // warm session looks identical to a fresh one from the client's view.
     if let Some(event) = prelude {
-        for outbound in config.transform_realtime_response(&event, model)?.events {
+        for outbound in config.transform_response(&event, model)?.events {
             client_out
                 .send(outbound)
                 .await
@@ -176,7 +176,7 @@ where
                 // (carrying usage) are server→client events; observing the client arm
                 // would let an authenticated client POST a fabricated response.done and
                 // inflate its own spend log. Logging observes upstream events only.
-                for outbound in config.transform_realtime_request(&event, model)?.events {
+                for outbound in config.transform_request(&event, model)?.events {
                     let payload = serde_json::to_string(&outbound)
                         .map_err(|err| Error::InvalidResponse(err.to_string()))?;
                     upstream_tx
@@ -193,7 +193,7 @@ where
                         let event: RealtimeEvent = serde_json::from_str(&text)
                             .map_err(|err| Error::InvalidResponse(err.to_string()))?;
                         observe(&event);
-                        for outbound in config.transform_realtime_response(&event, model)?.events {
+                        for outbound in config.transform_response(&event, model)?.events {
                             client_out
                                 .send(outbound)
                                 .await
@@ -212,8 +212,8 @@ where
 }
 
 /// Splice a client realtime stream to OpenAI: forward client events upstream
-/// (via `transform_realtime_request`) and backend events downstream (via
-/// `transform_realtime_response`). Returns when either side closes.
+/// (via `transform_request`) and backend events downstream (via
+/// `transform_response`). Returns when either side closes.
 ///
 /// Generic over the client transport (typed events) so this crate stays
 /// framework-agnostic; the gateway adapts its axum socket to these. This is the

@@ -42,18 +42,6 @@ pub struct DocumentIntelligenceParams {
     pub(crate) request_format: OcrRequestFormat,
 }
 
-impl From<DocumentIntelligenceParams> for DocumentIntelligenceInputParams {
-    fn from(params: DocumentIntelligenceParams) -> Self {
-        Self {
-            pages: params.pages.map(|pages| PagesInput::NativeRange(pages.0)),
-            features: params
-                .features
-                .map(|features| FeaturesInput::CommaSeparated(features.0)),
-            req_format: Some(params.request_format),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DocumentIntelligenceRequest {
     #[serde(rename = "urlSource")]

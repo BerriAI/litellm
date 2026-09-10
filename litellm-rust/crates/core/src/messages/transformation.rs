@@ -1,37 +1,17 @@
 use super::types::{AnthropicMessagesRequest, AnthropicMessagesResponse};
 use crate::Error;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MessagesAuthStrategy {
-    Bearer,
-    Header(&'static str),
-}
-
-impl MessagesAuthStrategy {
-    pub fn header_name(self) -> &'static str {
-        match self {
-            Self::Bearer => "authorization",
-            Self::Header(header_name) => header_name,
-        }
-    }
-}
+use crate::auth::CredentialPlacement;
 
 pub trait AnthropicMessagesProviderConfig: Sync {
-    fn complete_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
-
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        MessagesAuthStrategy::Header("x-api-key")
+    fn credential_placement(&self) -> CredentialPlacement {
+        CredentialPlacement::Header("x-api-key")
     }
 
     fn accepts_bearer_auth(&self) -> bool {
@@ -44,6 +24,13 @@ pub trait AnthropicMessagesProviderConfig: Sync {
             ("content-type", "application/json"),
         ]
     }
+
+    fn complete_url(
+        &self,
+        api_base: Option<&str>,
+        model: &str,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error>;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_request(

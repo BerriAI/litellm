@@ -1,3 +1,4 @@
+use crate::auth::RequestAuth;
 use serde_json::Value;
 
 use crate::error::Error;
@@ -38,7 +39,7 @@ pub async fn execute_audio_transcription_provider_call(
         .map_err(|error| Error::InvalidResponse(format!("invalid audio response JSON: {error}")))?;
     Ok(request
         .config
-        .transform_transcription_response(&request.model, response_json)?
+        .transform_response(&request.model, response_json)?
         .into_json())
 }
 
@@ -50,11 +51,10 @@ async fn signed_headers(
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 
-    use crate::audio_transcription::transformation::AudioTranscriptionAuth;
     use crate::providers::bedrock::audio_transcription::aws_auth_config;
     use crate::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_post};
 
-    let AudioTranscriptionAuth::AwsSigV4 { region, .. } = &request.auth else {
+    let RequestAuth::AwsSigV4 { region, .. } = &request.auth else {
         return Ok(request.upstream_headers.clone());
     };
     let env_lookup = |key: &str| std::env::var(key).ok();
@@ -80,12 +80,12 @@ async fn signed_headers(
     request: &ProviderAudioTranscriptionRequest,
     _body: &[u8],
 ) -> Result<Vec<(String, String)>, Error> {
-    use crate::audio_transcription::transformation::AudioTranscriptionAuth;
-
     match request.auth {
-        AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
+        RequestAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
             "AWS SigV4 requires the bedrock-auth feature",
         )),
-        AudioTranscriptionAuth::Bearer => Ok(request.upstream_headers.clone()),
+        RequestAuth::Bearer { .. } | RequestAuth::Header { .. } => {
+            Ok(request.upstream_headers.clone())
+        }
     }
 }

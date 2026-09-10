@@ -1,4 +1,5 @@
 use super::error::ChatRequestError;
+use crate::auth::RequestAuth;
 use serde_json::Value;
 
 use crate::error::Error;
@@ -6,7 +7,7 @@ use crate::http_utils::has_header;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{chat_completions_provider_config, string_headers};
-use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
+use super::transformation::ChatCompletionsProviderConfig;
 use super::types::{
     ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
     ResolvedChatCompletionsRequest,
@@ -15,7 +16,7 @@ use super::types::{
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
-) -> Result<(String, &'static dyn ChatCompletionsProviderConfig), Error> {
+) -> Result<(String, super::common_utils::ChatProviderConfig), Error> {
     let provider_info = get_custom_llm_provider(model, custom_llm_provider)
         .or_else(|| {
             custom_llm_provider.map(|provider| CustomLlmProvider {
@@ -46,7 +47,7 @@ pub(super) fn resolve_request(
     if messages.is_empty() {
         return Err(ChatRequestError::EmptyMessages.into());
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
+    if let Some(reason) = config.decline_reason(&messages, &request.optional_params) {
         return Err(Error::Unsupported(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {
@@ -62,11 +63,11 @@ pub(super) fn resolve_request(
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-fn validate_environment(
+fn validate_environment<C: ChatCompletionsProviderConfig>(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
-    config: &dyn ChatCompletionsProviderConfig,
-) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), Error> {
+    config: &C,
+) -> Result<(Vec<(String, String)>, RequestAuth), Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers(request.extra_headers.clone())?;
     let auth = config.auth(
@@ -76,7 +77,7 @@ fn validate_environment(
         &env_lookup,
     )?;
     match &auth {
-        ChatCompletionsAuth::Header { name, value } => {
+        RequestAuth::Header { name, value } => {
             // The deployment's credential replaces whatever the caller forwarded
             // under the same name, mirroring Python's
             // `{**headers, **anthropic_headers}`: letting a request header win
@@ -91,7 +92,7 @@ fn validate_environment(
                 headers.push(((*name).to_string(), value.clone()));
             }
         }
-        ChatCompletionsAuth::Bearer { token } => {
+        RequestAuth::Bearer { token } => {
             // Bedrock's `get_request_headers` assigns `headers["Authorization"]`
             // unconditionally once a bearer token resolves, so the deployment's
             // identity outranks whatever the caller forwarded. Keeping the
@@ -104,7 +105,7 @@ fn validate_environment(
             headers.push(("authorization".to_string(), format!("Bearer {token}")));
         }
         // SigV4 signs the serialized body, so the handler adds its headers.
-        ChatCompletionsAuth::AwsSigV4 { .. } => {}
+        RequestAuth::AwsSigV4 { .. } => {}
     }
 
     for (name, value) in config.default_headers() {
@@ -118,24 +119,46 @@ fn validate_environment(
 pub(super) fn prepare_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
-    let (headers, auth) = validate_environment(&request, &request.model, request.config)?;
-    let model = request.model;
-    let config = request.config;
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    use super::common_utils::ChatProviderConfig;
+    match request.config {
+        ChatProviderConfig::Anthropic => prepare_for(
+            request,
+            &crate::providers::anthropic::chat_completions::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
+        ),
+        #[cfg(feature = "bedrock-auth")]
+        ChatProviderConfig::Bedrock => prepare_for(
+            request,
+            &crate::providers::bedrock::chat_completions::transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
+        ),
+    }
+}
+
+fn prepare_for<C: ChatCompletionsProviderConfig>(
+    request: ResolvedChatCompletionsRequest<'_>,
+    config: &C,
+) -> Result<ProviderChatCompletionsRequest, Error> {
+    let params =
+        serde_json::from_value::<C::MappedParams>(Value::Object(request.optional_params.clone()))
+            .map_err(|_| Error::Unsupported("invalid provider-mapped parameters"))?;
+    let (headers, auth) = validate_environment(&request, &request.model, config)?;
     let url = config.complete_url(
         request.api_base,
-        &model,
+        &request.model,
         &request.optional_params,
-        &env_lookup,
+        &|key| std::env::var(key).ok(),
     )?;
-    let transformed =
-        config.transform_request(&model, request.messages, request.optional_params.clone())?;
-
+    let transformed = config.transform_request(
+        &request.model,
+        super::conversation::build_conversation(&request.messages),
+        params,
+    )?;
+    let body = serde_json::to_value(transformed)
+        .map_err(|error| ChatRequestError::Serialization(error.to_string()))?;
     Ok(ProviderChatCompletionsRequest {
-        model,
-        config,
+        model: request.model,
+        config: request.config,
         url,
-        body: transformed.body,
+        body,
         upstream_headers: headers,
         auth,
         optional_params: request.optional_params,

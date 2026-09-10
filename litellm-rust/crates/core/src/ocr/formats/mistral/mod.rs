@@ -16,15 +16,12 @@ impl OcrFormat for MistralOcrFormat {
     type ResponseBody = MistralOcrResponse;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn map_ocr_params(
-        &self,
-        params: MistralOcrParams,
-    ) -> Result<MistralOcrParams, OcrRequestError> {
+    fn map_params(&self, params: MistralOcrParams) -> Result<MistralOcrParams, OcrRequestError> {
         Ok(params)
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn transform_ocr_request(
+    fn transform_request(
         &self,
         model: &str,
         document: OcrDocument,
@@ -38,7 +35,7 @@ impl OcrFormat for MistralOcrFormat {
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn transform_ocr_response(
+    fn transform_response(
         &self,
         model: &str,
         response: MistralOcrResponse,

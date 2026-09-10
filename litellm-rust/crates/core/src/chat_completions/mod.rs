@@ -53,7 +53,7 @@ pub fn chat_completions_decline_reason(
         return Some("empty message list");
     }
     config
-        .unsupported_reason(&messages, optional_params)
+        .decline_reason(&messages, optional_params)
         .map(|reason| reason.0)
 }
 

@@ -18,7 +18,7 @@ COMMON_MAPPINGS: Final = (
         span="python_provider_supported_openai_params",
         python_frame=r"AnthropicConfig\.get_supported_openai_params$",
     ),
-    mapping(rust_span="supported_openai_params"),
+    mapping(rust_span="supported_provider_params"),
     mapping(rust_span="validate_environment", python_frame=r"(?<!_)validate_environment$"),
     mapping(rust_span="transform_request", python_frame=r"(?<!async_)transform_request$"),
     mapping(rust_span="execute_chat_completions_provider_call"),
@@ -110,7 +110,7 @@ SPEC: Final = RouteSpec(
 )
 BEDROCK_COMMON_MAPPINGS: Final = (
     mapping(rust_span="chat_completions_provider_config"),
-    mapping(rust_span="supported_openai_params"),
+    mapping(rust_span="supported_provider_params"),
     mapping(rust_span="execute_chat_completions_provider_call"),
     mapping(rust_span="validate_environment"),
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),

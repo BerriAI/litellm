@@ -1,4 +1,4 @@
-use super::backends::{HostConfig, InputParams, MappedParams, OcrIntegration};
+use super::backends::{BackendConfig, InputParams, MappedParams, OcrIntegration};
 use super::formats::OcrFormat;
 
 use super::types::{OcrConnection, OcrDocument};
@@ -16,7 +16,7 @@ where
     pub model: String,
     pub document: OcrDocument,
     pub params: MappedParams<I>,
-    pub backend_config: HostConfig<I>,
+    pub backend_config: BackendConfig<I>,
     pub connection: OcrConnection,
 }
 
@@ -26,13 +26,13 @@ pub(crate) fn prepare_ocr_call<I>(
     model: String,
     document: OcrDocument,
     params: InputParams<I>,
-    backend_config: HostConfig<I>,
+    backend_config: BackendConfig<I>,
     connection: OcrConnection,
 ) -> Result<MappedOcrRequest<I>, Error>
 where
     I: OcrIntegration,
 {
-    let params = integration.format().map_ocr_params(params)?;
+    let params = I::FORMAT.map_params(params)?;
     Ok(MappedOcrRequest {
         integration,
         model,

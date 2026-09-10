@@ -7,4 +7,5 @@ pub mod audio_transcription;
 pub mod aws_base;
 pub mod chat_completions;
 mod constants;
+pub mod converse;
 mod resolved_credentials_cache;

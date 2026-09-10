@@ -1,6 +1,7 @@
+use crate::auth::CredentialPlacement;
 use crate::auth::error::MissingCredential;
 use crate::error::{AuthError, Error};
-use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
+use crate::messages::transformation::AnthropicMessagesProviderConfig;
 use crate::messages::types::{
     AnthropicMessage, AnthropicMessagesRequest, AnthropicMessagesResponse, ContentBlock,
     MessageContent, SystemPrompt,
@@ -154,8 +155,8 @@ impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
         resolve_azure_api_key(api_key, env_lookup)
     }
 
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        self.anthropic.auth_strategy()
+    fn credential_placement(&self) -> CredentialPlacement {
+        self.anthropic.credential_placement()
     }
 
     fn accepts_bearer_auth(&self) -> bool {
@@ -287,7 +288,7 @@ mod tests {
     fn auth_strategy_is_x_api_key() {
         assert_eq!(
             AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .auth_strategy()
+                .credential_placement()
                 .header_name(),
             "x-api-key"
         );

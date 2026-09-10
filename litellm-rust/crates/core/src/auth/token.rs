@@ -29,15 +29,15 @@ impl ResolvedCredential {
 pub type TokenFuture<'a> =
     Pin<Box<dyn Future<Output = Result<ResolvedCredential, AuthError>> + Send + 'a>>;
 
-pub trait TokenCaller: std::fmt::Debug + Send + Sync {
+pub trait TokenProvider: std::fmt::Debug + Send + Sync {
     fn acquire(&self) -> TokenFuture<'_>;
 }
 
 #[derive(Clone, Redact)]
-pub struct TokenCallerHandle(#[redact(with = "[REDACTED]")] Arc<dyn TokenCaller>);
+pub struct TokenProviderHandle(#[redact(with = "[REDACTED]")] Arc<dyn TokenProvider>);
 
-impl TokenCallerHandle {
-    pub fn new(caller: Arc<dyn TokenCaller>) -> Self {
+impl TokenProviderHandle {
+    pub fn new(caller: Arc<dyn TokenProvider>) -> Self {
         Self(caller)
     }
 

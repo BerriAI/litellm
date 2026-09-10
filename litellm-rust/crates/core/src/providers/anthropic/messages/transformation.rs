@@ -1,6 +1,7 @@
+use crate::auth::CredentialPlacement;
 use crate::auth::error::MissingCredential;
 use crate::error::{AuthError, Error};
-use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
+use crate::messages::transformation::AnthropicMessagesProviderConfig;
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
@@ -62,8 +63,8 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         resolve_anthropic_api_key(api_key, env_lookup)
     }
 
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        MessagesAuthStrategy::Header("x-api-key")
+    fn credential_placement(&self) -> CredentialPlacement {
+        CredentialPlacement::Header("x-api-key")
     }
 }
 
@@ -126,7 +127,9 @@ mod tests {
     #[test]
     fn auth_strategy_and_default_headers_match_anthropic() {
         assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.auth_strategy().header_name(),
+            ANTHROPIC_MESSAGES_CONFIG
+                .credential_placement()
+                .header_name(),
             "x-api-key"
         );
         assert_eq!(

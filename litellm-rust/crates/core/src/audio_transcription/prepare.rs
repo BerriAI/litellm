@@ -1,10 +1,11 @@
+use crate::auth::RequestAuth;
 use crate::error::Error;
 use crate::http_utils::{has_header, string_headers};
 #[cfg(feature = "bedrock-auth")]
 use crate::providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
-use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
+use super::transformation::AudioTranscriptionProviderConfig;
 use super::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -40,12 +41,20 @@ pub fn prepare_audio_transcription_provider_call(
         .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers("audio transcription", request.extra_headers)?;
-    let auth = config.auth_strategy(&model, &request.optional_params, &env_lookup)?;
-    if matches!(auth, AudioTranscriptionAuth::Bearer)
-        && !has_header(&headers, "authorization")
-        && let Some(api_key) = request.api_key
-    {
-        headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
+    let auth = config.auth(
+        request.api_key,
+        &model,
+        &request.optional_params,
+        &env_lookup,
+    )?;
+    match &auth {
+        RequestAuth::Bearer { token } if !has_header(&headers, "authorization") => {
+            headers.push(("Authorization".into(), format!("Bearer {token}")));
+        }
+        RequestAuth::Header { name, value } if !has_header(&headers, name) => {
+            headers.push(((*name).into(), value.clone()));
+        }
+        _ => {}
     }
     if !has_header(&headers, "content-type") {
         headers.push(("Content-Type".to_string(), "application/json".to_string()));
@@ -56,19 +65,30 @@ pub fn prepare_audio_transcription_provider_call(
         &request.optional_params,
         &env_lookup,
     )?;
-    let filtered_params = config.map_transcription_params(&request.optional_params);
-    let transformed =
-        config.transform_transcription_request(&model, request.audio, filtered_params)?;
+    let audio = serde_json::from_value(request.audio)
+        .map_err(|_| Error::InvalidRequest("invalid audio data or format".into()))?;
+    let params = map_params(request.optional_params.clone())?;
+    let transformed = config.transform_request(&model, audio, params)?;
+    let body = serde_json::to_value(transformed)
+        .map_err(|_| Error::InvalidRequest("invalid audio request body".into()))?;
     Ok(ProviderAudioTranscriptionRequest {
         model,
         custom_llm_provider: provider_info.custom_llm_provider.to_string(),
         config,
         url,
-        body: transformed.body,
+        body,
         upstream_headers: headers,
         auth,
         #[cfg(feature = "bedrock-auth")]
         optional_params: request.optional_params,
         timeout: request.timeout,
     })
+}
+
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+fn map_params(
+    params: serde_json::Map<String, serde_json::Value>,
+) -> Result<super::types::TranscriptionParams, Error> {
+    serde_json::from_value(serde_json::Value::Object(params))
+        .map_err(|_| Error::InvalidRequest("invalid transcription parameters".into()))
 }

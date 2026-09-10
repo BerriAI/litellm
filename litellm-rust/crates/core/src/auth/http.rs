@@ -45,6 +45,15 @@ pub(crate) fn apply_credential(
     )
 }
 
+/// How the upstream call is authenticated. API-key strategies are resolved in
+/// `prepare`; SigV4 needs the serialized body, so the handler signs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequestAuth {
+    Header { name: &'static str, value: String },
+    Bearer { token: String },
+    AwsSigV4 { region: String },
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CredentialPlacement, apply_credential};

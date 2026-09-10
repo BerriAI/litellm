@@ -8,23 +8,6 @@ pub const OPENAI_REALTIME_DEFAULT_API_BASE: &str = "https://api.openai.com";
 /// Path appended to the resolved host base to reach the realtime endpoint.
 pub const OPENAI_REALTIME_PATH: &str = "/v1/realtime";
 
-/// Percent-encode a query value, escaping any char outside the RFC 3986
-/// unreserved set (`A-Za-z0-9-._~`). Keeps us dependency-free; common realtime
-/// model slugs have no special chars, but this stays correct for the rest.
-fn percent_encode(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        let unreserved = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~');
-        if unreserved {
-            encoded.push(byte as char);
-        } else {
-            encoded.push('%');
-            encoded.push_str(&format!("{byte:02X}"));
-        }
-    }
-    encoded
-}
-
 /// Build the realtime WebSocket URL, porting Python's `OpenAIRealtime._construct_url`.
 ///
 /// Blank/whitespace `api_base` is treated as absent (guard at resolution time),
@@ -55,7 +38,7 @@ pub fn complete_url(api_base: Option<&str>, model: &str) -> String {
 
     format!(
         "{base}{OPENAI_REALTIME_PATH}?model={}",
-        percent_encode(model)
+        crate::http_utils::encode_query_value(model)
     )
 }
 
@@ -68,7 +51,7 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
         complete_url(api_base, model)
     }
 
-    fn transform_realtime_request(
+    fn transform_request(
         &self,
         event: &RealtimeEvent,
         _model: &str,
@@ -76,7 +59,7 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
         Ok(RealtimeTransformResult::passthrough(event.clone()))
     }
 
-    fn transform_realtime_response(
+    fn transform_response(
         &self,
         event: &RealtimeEvent,
         _model: &str,
@@ -85,18 +68,18 @@ impl RealtimeProviderConfig for OpenAiRealtimeConfig {
     }
 }
 
-pub fn transform_realtime_request(
+pub fn transform_request(
     event: &RealtimeEvent,
     model: &str,
 ) -> Result<RealtimeTransformResult, Error> {
-    OPENAI_REALTIME_CONFIG.transform_realtime_request(event, model)
+    OPENAI_REALTIME_CONFIG.transform_request(event, model)
 }
 
-pub fn transform_realtime_response(
+pub fn transform_response(
     event: &RealtimeEvent,
     model: &str,
 ) -> Result<RealtimeTransformResult, Error> {
-    OPENAI_REALTIME_CONFIG.transform_realtime_response(event, model)
+    OPENAI_REALTIME_CONFIG.transform_response(event, model)
 }
 
 #[cfg(test)]
@@ -172,8 +155,7 @@ mod tests {
         let event: RealtimeEvent =
             serde_json::from_str(r#"{"type":"session.update","session":{"voice":"alloy"}}"#)
                 .expect("valid event");
-        let result =
-            transform_realtime_request(&event, "gpt-realtime").expect("passthrough is infallible");
+        let result = transform_request(&event, "gpt-realtime").expect("passthrough is infallible");
         assert_eq!(result.events, vec![event]);
     }
 
@@ -182,8 +164,7 @@ mod tests {
         let event: RealtimeEvent =
             serde_json::from_str(r#"{"type":"response.output_audio.delta","delta":"abc=="}"#)
                 .expect("valid event");
-        let result =
-            transform_realtime_response(&event, "gpt-realtime").expect("passthrough is infallible");
+        let result = transform_response(&event, "gpt-realtime").expect("passthrough is infallible");
         assert_eq!(result.events, vec![event]);
     }
 }

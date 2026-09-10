@@ -84,15 +84,12 @@ impl OcrFormat for ReductoParseV3Format {
     type ResponseBody = ReductoResponse;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn map_ocr_params(
-        &self,
-        params: Self::InputParams,
-    ) -> Result<Self::MappedParams, OcrRequestError> {
+    fn map_params(&self, params: Self::InputParams) -> Result<Self::MappedParams, OcrRequestError> {
         Ok(params)
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn transform_ocr_request(
+    fn transform_request(
         &self,
         _model: &str,
         document: ReductoFileId,
@@ -105,7 +102,7 @@ impl OcrFormat for ReductoParseV3Format {
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn transform_ocr_response(
+    fn transform_response(
         &self,
         model: &str,
         response: Self::ResponseBody,
@@ -125,15 +122,12 @@ impl OcrFormat for ReductoParseLegacyFormat {
     type ResponseBody = ReductoResponse;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn map_ocr_params(
-        &self,
-        params: Self::InputParams,
-    ) -> Result<Self::MappedParams, OcrRequestError> {
+    fn map_params(&self, params: Self::InputParams) -> Result<Self::MappedParams, OcrRequestError> {
         Ok(params)
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn transform_ocr_request(
+    fn transform_request(
         &self,
         _model: &str,
         document: ReductoFileId,
@@ -146,7 +140,7 @@ impl OcrFormat for ReductoParseLegacyFormat {
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn transform_ocr_response(
+    fn transform_response(
         &self,
         model: &str,
         response: Self::ResponseBody,

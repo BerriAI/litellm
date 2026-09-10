@@ -18,17 +18,17 @@ pub struct PreparedOcrBackend {
 }
 
 pub trait OcrIntegration: Send + Sync + Sized + 'static {
-    type Host: OcrHost;
+    type Backend: OcrBackend;
     type Format: OcrFormat;
     type PreparedDocument: Into<<Self::Format as OcrFormat>::PreparedDocument> + Send;
     const FORMAT: Self::Format;
 
-    fn provider_name(&self) -> &'static str {
-        Self::Host::PROVIDER.as_str()
+    fn supports_native_request_format(&self) -> bool {
+        false
     }
 
-    fn format(&self) -> Self::Format {
-        Self::FORMAT
+    fn guard_document_before_preparation(&self) -> bool {
+        false
     }
 
     fn decode_input_params(
@@ -39,7 +39,7 @@ pub trait OcrIntegration: Send + Sync + Sized + 'static {
         super::registry::validate_request_format(
             &params,
             self.supports_native_request_format(),
-            self.provider_name(),
+            Self::Backend::PROVIDER.as_str(),
         )?;
         Self::Format::validate_input_params(&params)?;
         super::wire::decode_request_value(serde_json::Value::Object(params), prefix)
@@ -48,7 +48,7 @@ pub trait OcrIntegration: Send + Sync + Sized + 'static {
     fn prepare(
         &self,
         connection: &OcrConnection,
-        config: &HostConfig<Self>,
+        config: &BackendConfig<Self>,
         model: &str,
         params: &MappedParams<Self>,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -73,10 +73,6 @@ pub trait OcrIntegration: Send + Sync + Sized + 'static {
         false
     }
 
-    fn guard_document_before_preparation(&self) -> bool {
-        false
-    }
-
     fn read_response(
         &self,
         _client: &OcrClient,
@@ -90,17 +86,13 @@ pub trait OcrIntegration: Send + Sync + Sized + 'static {
     > + Send {
         super::client::read_json_response(response, self.preserve_native_response(params))
     }
-
-    fn supports_native_request_format(&self) -> bool {
-        false
-    }
 }
 
-pub trait OcrHost: Send + Sync + 'static {
+pub trait OcrBackend: Send + Sync + 'static {
     type Config: Clone + std::fmt::Debug + Send + Sync + 'static;
     const PROVIDER: super::registry::OcrProvider;
 }
 
 pub type InputParams<I> = <<I as OcrIntegration>::Format as OcrFormat>::InputParams;
 pub type MappedParams<I> = <<I as OcrIntegration>::Format as OcrFormat>::MappedParams;
-pub type HostConfig<I> = <<I as OcrIntegration>::Host as OcrHost>::Config;
+pub type BackendConfig<I> = <<I as OcrIntegration>::Backend as OcrBackend>::Config;

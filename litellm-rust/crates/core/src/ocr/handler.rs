@@ -109,7 +109,7 @@ where
     I: OcrIntegration,
 {
     let backend = &request.integration;
-    let format = &request.integration.format();
+    let format = &I::FORMAT;
     let prepared_backend = backend
         .prepare(
             &request.connection,
@@ -138,7 +138,7 @@ where
     let document = backend
         .prepare_document(client, document, &request.connection, &headers)
         .await?;
-    let body = format.transform_ocr_request(&request.model, document.into(), &request.params)?;
+    let body = format.transform_request(&request.model, document.into(), &request.params)?;
     let body = if !backend.guard_document_before_preparation() && hooks.has_guardrails() {
         let guarded = hooks
             .during_call(OcrDuringCallRequest {
@@ -220,7 +220,7 @@ async fn send_ocr_call<I: OcrIntegration>(
         body,
     } = request;
     let backend = &integration;
-    let format = integration.format();
+    let format = I::FORMAT;
     let mut builder = client
         .provider_http()
         .post(&url)
@@ -235,7 +235,7 @@ async fn send_ocr_call<I: OcrIntegration>(
     let decoded = backend
         .read_response(client, response, &url, &headers, &connection, &params)
         .await?;
-    let response = format.transform_ocr_response(&model, decoded.data, &params)?;
+    let response = format.transform_response(&model, decoded.data, &params)?;
     Ok(OcrResponseData {
         provider_native_response: decoded.native,
         ..response

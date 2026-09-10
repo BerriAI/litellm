@@ -1,5 +1,5 @@
 use crate::constants::{VERTEX_DEEPSEEK_API_BASE, VERTEX_OCR_DEFAULT_LOCATION};
-use crate::ocr::backends::{HostConfig, OcrHost, OcrIntegration, PreparedOcrBackend};
+use crate::ocr::backends::{BackendConfig, OcrBackend, OcrIntegration, PreparedOcrBackend};
 use crate::ocr::error::OcrError;
 use crate::ocr::formats::deepseek::{DeepSeekOcrFormat, types::DeepSeekOcrParams};
 use crate::ocr::formats::mistral::{MistralOcrFormat, types::MistralOcrParams};
@@ -30,7 +30,7 @@ fn location(config: &VertexAuthInputs, env_lookup: &dyn Fn(&str) -> Option<Strin
 pub struct VertexMistral;
 
 impl OcrIntegration for VertexMistral {
-    type Host = VertexHost;
+    type Backend = VertexBackend;
     type Format = MistralOcrFormat;
     type PreparedDocument = crate::ocr::document::InlineOcrDocument;
     const FORMAT: Self::Format = MistralOcrFormat;
@@ -39,7 +39,7 @@ impl OcrIntegration for VertexMistral {
     async fn prepare(
         &self,
         connection: &OcrConnection,
-        config: &HostConfig<Self>,
+        config: &BackendConfig<Self>,
         model: &str,
         _params: &MistralOcrParams,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -89,7 +89,7 @@ impl OcrIntegration for VertexMistral {
 pub struct VertexDeepSeek;
 
 impl OcrIntegration for VertexDeepSeek {
-    type Host = VertexHost;
+    type Backend = VertexBackend;
     type Format = DeepSeekOcrFormat;
     type PreparedDocument = OcrDocument;
     const FORMAT: Self::Format = DeepSeekOcrFormat;
@@ -97,7 +97,7 @@ impl OcrIntegration for VertexDeepSeek {
     async fn prepare(
         &self,
         connection: &OcrConnection,
-        config: &HostConfig<Self>,
+        config: &BackendConfig<Self>,
         _model: &str,
         _params: &DeepSeekOcrParams,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -130,9 +130,9 @@ impl OcrIntegration for VertexDeepSeek {
 }
 
 #[derive(Clone, Debug)]
-pub struct VertexHost;
+pub struct VertexBackend;
 
-impl OcrHost for VertexHost {
+impl OcrBackend for VertexBackend {
     type Config = VertexAuthInputs;
     const PROVIDER: crate::ocr::registry::OcrProvider = crate::ocr::registry::OcrProvider::VertexAi;
 }

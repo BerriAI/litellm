@@ -12,10 +12,10 @@ COMMON_MAPPINGS: Final = (
     mapping(rust_span="prepare_ocr_call", python_frame=r"ocr/main\.py:\d+ _prepare_ocr_request$"),
     mapping(rust_span="ocr_provider_config", python_frame=r"ProviderConfigManager\.get_provider_ocr_config$"),
     mapping(rust_span="supported_ocr_params", python_frame=r"get_supported_ocr_params$"),
-    mapping(rust_span="map_ocr_params", python_frame=r"(?<!async_)map_ocr_params$"),
+    mapping(rust_span="map_params", python_frame=r"(?<!async_)map_ocr_params$"),
     mapping(rust_span="validate_environment", python_frame=r"(?<!_)validate_environment$"),
     mapping(rust_span="complete_url", python_frame=r"get_complete_url$"),
-    mapping(rust_span="transform_ocr_request", python_frame=r"(?<!async_)transform_ocr_request$"),
+    mapping(rust_span="transform_request", python_frame=r"(?<!async_)transform_ocr_request$"),
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),
 )
 
@@ -38,7 +38,7 @@ SYNC_MAPPINGS: Final = (
     mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
     mapping(span="python_transform_ocr_response_wrapper", python_frame=r"BaseLLMHTTPHandler\._transform_ocr_response$"),
     mapping(
-        rust_span="transform_ocr_response",
+        rust_span="transform_response",
         python_frame=r"MistralOCRConfig\.transform_ocr_response$",
     ),
 )
@@ -48,7 +48,7 @@ ASYNC_MAPPINGS: Final = (
     mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
     mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
     mapping(
-        rust_span="transform_ocr_response",
+        rust_span="transform_response",
         python_frame=r"MistralOCRConfig\.transform_ocr_response$",
     ),
 )
@@ -71,7 +71,7 @@ CALLBACK_FAILURE_ASYNC_MAPPINGS: Final = (
 AZURE_COMMON_MAPPINGS: Final = (
     *COMMON_MAPPINGS[:7],
     mapping(
-        rust_span="transform_ocr_request",
+        rust_span="transform_request",
         python_frame=(
             r"AzureAIOCRConfig\.(?:async_)?transform_ocr_request$"
             r"|MistralOCRConfig\.transform_ocr_request$"
@@ -87,7 +87,7 @@ AZURE_SYNC_MAPPINGS: Final = (
         python_frame=r"BaseLLMHTTPHandler\._transform_ocr_response$",
     ),
     mapping(
-        rust_span="transform_ocr_response",
+        rust_span="transform_response",
         python_frame=r"MistralOCRConfig\.transform_ocr_response$",
     ),
 )
@@ -96,7 +96,7 @@ AZURE_ASYNC_MAPPINGS: Final = (
     mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
     mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
     mapping(
-        rust_span="transform_ocr_response",
+        rust_span="transform_response",
         python_frame=r"MistralOCRConfig\.transform_ocr_response$",
     ),
 )
@@ -252,7 +252,7 @@ def _azure_document_intelligence_fixture(engine: Engine, base_url: str) -> Route
 VERTEX_COMMON_MAPPINGS: Final = (
     *COMMON_MAPPINGS[:7],
     mapping(
-        rust_span="transform_ocr_request",
+        rust_span="transform_request",
         python_frame=(
             r"VertexAIOCRConfig\.(?:async_)?transform_ocr_request$"
             r"|MistralOCRConfig\.transform_ocr_request$"
@@ -264,13 +264,13 @@ VERTEX_SYNC_MAPPINGS: Final = (
     *VERTEX_COMMON_MAPPINGS,
     mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
     mapping(span="python_transform_ocr_response_wrapper", python_frame=r"BaseLLMHTTPHandler\._transform_ocr_response$"),
-    mapping(rust_span="transform_ocr_response", python_frame=r"MistralOCRConfig\.transform_ocr_response$"),
+    mapping(rust_span="transform_response", python_frame=r"MistralOCRConfig\.transform_ocr_response$"),
 )
 VERTEX_ASYNC_MAPPINGS: Final = (
     *VERTEX_COMMON_MAPPINGS,
     mapping(span="python_ocr_wrapper", python_frame=r"BaseLLMHTTPHandler\.ocr$"),
     mapping(rust_span="execute_ocr_provider_call", python_frame=r"BaseLLMHTTPHandler\.async_ocr$"),
-    mapping(rust_span="transform_ocr_response", python_frame=r"MistralOCRConfig\.transform_ocr_response$"),
+    mapping(rust_span="transform_response", python_frame=r"MistralOCRConfig\.transform_ocr_response$"),
 )
 
 DEEPSEEK_COMMON_MAPPINGS: Final = (
@@ -278,16 +278,16 @@ DEEPSEEK_COMMON_MAPPINGS: Final = (
     mapping(rust_span="prepare_ocr_call", python_frame=r"ocr/main\.py:\d+ _prepare_ocr_request$"),
     mapping(rust_span="ocr_provider_config", python_frame=r"ProviderConfigManager\.get_provider_ocr_config$"),
     mapping(rust_span="supported_ocr_params", python_frame=r"get_supported_ocr_params$"),
-    mapping(rust_span="map_ocr_params", python_frame=r"(?<!async_)map_ocr_params$"),
+    mapping(rust_span="map_params", python_frame=r"(?<!async_)map_ocr_params$"),
     mapping(rust_span="validate_environment", python_frame=r"(?<!_)validate_environment$"),
     mapping(rust_span="complete_url", python_frame=r"get_complete_url$"),
     mapping(
-        rust_span="transform_ocr_request",
+        rust_span="transform_request",
         python_frame=r"VertexAIDeepSeekOCRConfig\.transform_ocr_request$",
     ),
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),
     mapping(
-        rust_span="transform_ocr_response",
+        rust_span="transform_response",
         python_frame=r"VertexAIDeepSeekOCRConfig\.transform_ocr_response$",
     ),
 )
@@ -313,13 +313,13 @@ DOCUMENT_INTELLIGENCE_COMMON_MAPPINGS: Final = (
     mapping(
         rust_span="supported_ocr_params", python_frame=r"AzureDocumentIntelligenceOCRConfig\.get_supported_ocr_params$"
     ),
-    mapping(rust_span="map_ocr_params", python_frame=r"AzureDocumentIntelligenceOCRConfig\.map_ocr_params$"),
+    mapping(rust_span="map_params", python_frame=r"AzureDocumentIntelligenceOCRConfig\.map_ocr_params$"),
     mapping(
         rust_span="validate_environment", python_frame=r"AzureDocumentIntelligenceOCRConfig\.validate_environment$"
     ),
     mapping(rust_span="complete_url", python_frame=r"AzureDocumentIntelligenceOCRConfig\.get_complete_url$"),
     mapping(
-        rust_span="transform_ocr_request", python_frame=r"AzureDocumentIntelligenceOCRConfig\.transform_ocr_request$"
+        rust_span="transform_request", python_frame=r"AzureDocumentIntelligenceOCRConfig\.transform_ocr_request$"
     ),
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),
     mapping(
@@ -327,7 +327,7 @@ DOCUMENT_INTELLIGENCE_COMMON_MAPPINGS: Final = (
         python_frame=r"AzureDocumentIntelligenceOCRConfig\._poll_operation_(?:sync|async)$",
     ),
     mapping(
-        rust_span="transform_ocr_response",
+        rust_span="transform_response",
         python_frame=r"AzureDocumentIntelligenceOCRConfig\._transform_completed_response$",
     ),
 )
