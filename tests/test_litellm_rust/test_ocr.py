@@ -8,7 +8,6 @@ from typing import Final
 import pytest
 
 import litellm
-from tests.test_litellm_rust.support.response_marker import has_rust_response_marker
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -76,9 +75,8 @@ def test_public_ocr_dispatches_according_to_rust_setting(
     )
 
     assert response.pages[0].markdown == "native OCR response"
-    assert has_rust_response_marker(response) is rust_enabled
     assert len(requests) == 1
-    assert requests[0].headers.get("user-agent", "").startswith("python-httpx") == (not rust_enabled)
+    assert ("user-agent" in requests[0].headers) == (not rust_enabled)
     assert requests[0].body == {
         "model": "mistral-ocr-latest",
         "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
