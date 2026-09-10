@@ -154,11 +154,17 @@ class TestExecuteWithMcpClient:
         assert saved.url == "https://stored.example/mcp"
 
     @pytest.mark.parametrize(
-        "url", ("https://other.example/mcp", "http://stored.example/mcp", "https://stored.example:8443/mcp")
+        ("url", "same_origin"),
+        (
+            ("https://other.example/mcp", False),
+            ("http://stored.example/mcp", False),
+            ("https://stored.example:8443/mcp", False),
+            ("https://stored.example:443/mcp", True),
+        ),
     )
     @pytest.mark.parametrize("explicit_credential", (None, "preview:explicit"))
-    def test_static_preview_does_not_inherit_credentials_across_origins(
-        self, monkeypatch: pytest.MonkeyPatch, url: str, explicit_credential: str | None
+    def test_static_preview_respects_origin_when_inheriting_credentials(
+        self, monkeypatch: pytest.MonkeyPatch, url: str, same_origin: bool, explicit_credential: str | None
     ) -> None:
         from starlette.datastructures import Headers
 
@@ -185,8 +191,9 @@ class TestExecuteWithMcpClient:
             credentials={"auth_value": explicit_credential} if explicit_credential else None,
         )
         staged: Final = rest_endpoints._stage_server_test(payload, Headers())
-        assert staged.mcp_auth_header == explicit_credential
-        assert staged.request.credentials == payload.credentials
+        expected: Final = explicit_credential or ("preview:stored" if same_origin else None)
+        assert staged.mcp_auth_header == expected
+        assert staged.request.credentials == ({"auth_value": expected} if expected else None)
 
     @pytest.mark.asyncio
     async def test_redacts_stack_trace(self, monkeypatch):

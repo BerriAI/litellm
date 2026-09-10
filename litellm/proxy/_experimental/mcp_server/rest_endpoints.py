@@ -1261,8 +1261,11 @@ if MCP_AVAILABLE:
             else None
         )
         saved_origin: Final = _redact_mcp_resource_url(saved_server.url) if saved_server else None
+        preview_origin: Final = _redact_mcp_resource_url(new_mcp_server_request.url)
         may_inherit: Final = new_mcp_server_request.auth_type not in _STAGED_AUTH_VALUE_AUTH_TYPES or (
-            saved_origin is not None and saved_origin == _redact_mcp_resource_url(new_mcp_server_request.url)
+            saved_origin is not None
+            and preview_origin is not None
+            and httpx.URL(saved_origin) == httpx.URL(preview_origin)
         )
         request: Final = (
             _inherit_credentials_from_existing_server(new_mcp_server_request) if may_inherit else new_mcp_server_request
