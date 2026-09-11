@@ -1,11 +1,3 @@
-import sys
-import os
-
-# Add litellm to sys.path
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-)
-
 from litellm.llms.a2a.chat.transformation import A2AConfig
 from litellm.llms.a2a.common_utils import extract_text_from_a2a_message
 

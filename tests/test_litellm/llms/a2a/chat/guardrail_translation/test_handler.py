@@ -9,13 +9,9 @@ inspected `kind: "text"` parts, so guarded output checks were skipped for
 that content path.
 """
 
-import os
-import sys
 from typing import Any, Literal, Optional
 
 import pytest
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.a2a.chat.guardrail_translation.handler import A2AGuardrailHandler
