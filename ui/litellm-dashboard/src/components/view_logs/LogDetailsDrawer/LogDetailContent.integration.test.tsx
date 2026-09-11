@@ -56,6 +56,29 @@ describe("LogDetailContent", () => {
     expect(screen.getByText("completion")).toBeInTheDocument();
   });
 
+  it("shows the requesting user's email and id in Request Details when the email is resolved", () => {
+    render(
+      <LogDetailContent logEntry={createLogEntry({ user: "106514937785257944828" })} userEmail="alice@example.com" />,
+    );
+
+    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByText("alice@example.com")).toBeInTheDocument();
+    expect(screen.getByText("106514937785257944828")).toBeInTheDocument();
+  });
+
+  it("falls back to the user id in Request Details when no email is resolved", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ user: "106514937785257944828" })} />);
+
+    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByText("106514937785257944828")).toBeInTheDocument();
+  });
+
+  it("omits the User row when the log has no internal user", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ user: undefined })} />);
+
+    expect(screen.queryByText("User")).not.toBeInTheDocument();
+  });
+
   it("should display error alert when request has failed", () => {
     render(
       <LogDetailContent
