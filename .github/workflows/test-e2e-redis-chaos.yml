@@ -1,8 +1,6 @@
-name: "Weekly Redis Chaos E2E"
+name: "Redis Chaos E2E"
 
 on:
-  schedule:
-    - cron: "0 12 * * 6"
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -16,7 +14,6 @@ permissions:
 
 jobs:
   redis-chaos-e2e:
-    if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest-16-cores
     timeout-minutes: 30
     services:

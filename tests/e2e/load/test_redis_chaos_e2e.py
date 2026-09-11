@@ -76,7 +76,7 @@ REDIS_PAUSE_MS: Final = int(CHAOS_SECONDS * 1000)
 # identical local runs, so it stays loose; CPU per request held steady at 1.33x-1.36x across the
 # same runs, so it sits close to what is actually measured. That makes CPU the likeliest of these
 # to flake first on a runner whose core count shifts how much of baseline CPU is fixed per-request
-# work: loosen it rather than widening the others if a weekly run trips it without a real cause.
+# work: loosen it rather than widening the others if a CI run trips it without a real cause.
 CHAOS_RSS_RATIO_CEILING: Final = 2.0
 CHAOS_CPU_PER_REQUEST_RATIO_CEILING: Final = 2.0
 
