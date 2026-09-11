@@ -59,13 +59,16 @@ def test_registries_populated() -> None:
 def test_only_pre_call_event_hook_advertised() -> None:
     """Regression for veria-ai finding on #38143 —
     ``during_call`` mode was silently accepted but never evaluated.
-    Since plugin 0.2.3 the supported-hooks contract lives on
+    Since plugin 0.2.4 the supported-hooks contract lives on
     ``ConductGuard`` in the plugin package itself; the LiteLLM shim
-    is a pure alias, so we verify against the alias."""
+    is a pure alias, so we verify against the alias. LiteLLM's
+    registry calls ``.value`` on each entry, so the hooks must be
+    ``GuardrailEventHooks`` enum members, not bare strings."""
     from litellm.proxy.guardrails.guardrail_hooks.conduct import ConductGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
 
     hooks = ConductGuardrail.get_supported_event_hooks()
-    assert hooks == ["pre_call"]
+    assert hooks == [GuardrailEventHooks.pre_call]
 
 
 def test_initialize_guardrail_returns_wired_callback(

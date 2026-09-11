@@ -2,7 +2,7 @@
 
 Thin alias for the ``conduct-litellm-guard`` PyPI package. The
 ``ConductGuard`` class ships with ``SUPPORTED_EVENT_HOOKS`` +
-``get_supported_event_hooks`` since plugin 0.2.3, so this file no
+``get_supported_event_hooks`` since plugin 0.2.4, so this file no
 longer needs a subclass wrapper — keeps LiteLLM's type-discipline /
 basedpyright / test-quality budget gates satisfied.
 
@@ -13,7 +13,7 @@ BerriAI/litellm#38143 CI regression: registry iteration expects every
 registered class to expose the hooks classmethod). Instantiation of
 the stub raises ``ImportError`` via ``raise_if_missing_package``.
 
-Install: ``pip install "conduct-litellm-guard>=0.2.3"``
+Install: ``pip install "conduct-litellm-guard>=0.2.4"``
 Source:  https://github.com/sseshachala/conductai/tree/main/packages/conduct-litellm-guard
 Docs:    https://conductai.ai/guard
 """
@@ -23,10 +23,11 @@ from __future__ import annotations
 from typing import ClassVar
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.types.guardrails import GuardrailEventHooks
 
 _import_error_message = (
     "conduct-litellm-guard is required for the Conduct guardrail. "
-    'Install it with: pip install "conduct-litellm-guard>=0.2.3"'
+    'Install it with: pip install "conduct-litellm-guard>=0.2.4"'
 )
 
 
@@ -52,10 +53,10 @@ except ImportError as _err:
         ``pip install`` error rather than the stub silently activating.
         """
 
-        SUPPORTED_EVENT_HOOKS: ClassVar[tuple[str, ...]] = ("pre_call",)
+        SUPPORTED_EVENT_HOOKS: ClassVar[tuple[GuardrailEventHooks, ...]] = (GuardrailEventHooks.pre_call,)
 
         @classmethod
-        def get_supported_event_hooks(cls) -> list[str]:
+        def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
             return list(cls.SUPPORTED_EVENT_HOOKS)  # mutable-ok: LiteLLM registry expects a fresh list
 
     ConductGuardrailBlocked = None
