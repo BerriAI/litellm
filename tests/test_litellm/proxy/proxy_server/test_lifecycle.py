@@ -1077,7 +1077,6 @@ async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absen
 
 @pytest.mark.asyncio
 async def test_proxy_startup_event_warns_but_does_not_raise_for_docs_example_master_key(monkeypatch):
-    """With LITELLM_MASTER_KEY=sk-1234 the lifespan logs a loud warning and keeps booting."""
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-1234")
 
     with patch.object(ps.verbose_proxy_logger, "warning") as mock_warning:
