@@ -486,6 +486,7 @@ def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment
             "aws_role_name": "arn:aws:iam::123456789012:role/caller",
             "aws_session_token": "caller-token",
             "aws_web_identity_token": "caller-web-identity",
+            "aws_session_tags": [{"Key": "team", "Value": "caller-chosen"}],
             "timeout": 600,
         },
     )
@@ -500,6 +501,7 @@ def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment
         "aws_role_name",
         "aws_session_token",
         "aws_web_identity_token",
+        "aws_session_tags",
     ):
         assert stripped not in merged
 
@@ -614,6 +616,60 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
     assert "ASIABATCHSIGNROLE" in authorization
     assert signed_data == b'{"jobName": "litellm-batch-job"}'
+
+
+def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
+    """Batch and file signing must carry the deployment's session tags into the AssumeRole call too."""
+    import datetime
+    from unittest.mock import patch
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
+
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    tags = [{"Key": "team", "Value": "genai"}]
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if list(params.get("Tags", ())) != tags:
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIABATCHSIGNTAGGED",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIABATCHSIGNCALLER",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-batch-sign-role",
+        "aws_session_name": "litellm-batch-sign-session",
+        "aws_session_tags": tags,
+    }
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        signed_headers, _signed_data = CommonBatchFilesUtils().sign_aws_request(
+            service_name="bedrock",
+            data={"jobName": "litellm-batch-job"},
+            endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
+            optional_params=optional_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "Credential=ASIABATCHSIGNTAGGED/" in authorization
 
 
 # --------------------------------------------------------------------------- #

@@ -2049,18 +2049,44 @@ if MCP_AVAILABLE:
             return texts[0][1]
         return "\n\n---\n\n".join(f"[{lbl}]\n{txt}" for lbl, txt in texts)
 
+    async def _raise_if_initialize_grants_no_mcp_servers(
+        allowed: Sequence[MCPServer],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_servers: Sequence[str] | None,
+        client_ip: str | None,
+    ) -> None:
+        if allowed or user_api_key_auth is None or not user_api_key_auth.api_key:
+            return
+        if mcp_servers:
+            await raise_denied_scoped_mcp_access(
+                requested_names=mcp_servers,
+                user_api_key_auth=user_api_key_auth,
+                client_ip=client_ip,
+            )
+        no_servers_denial: Final[_McpDeniedDetail] = {
+            "error": (
+                "The key has no MCP servers granted, or none of its granted servers is loaded and allowed for "
+                "this client IP. Grant servers or access groups to the key, its team, or its organization "
+                "(object_permission.mcp_servers), check the server's allowed IPs, and reconnect."
+            )
+        }
+        raise HTTPException(status_code=403, detail=no_servers_denial)
+
     @contextlib.asynccontextmanager
     async def _gateway_initialize_instructions_request_scope(
         user_api_key_auth: UserAPIKeyAuth | None,
         mcp_servers: list[str] | None,
         client_ip: str | None,
         scoped_server_endpoint: bool = False,
+        is_initialize: bool = False,
     ) -> AsyncIterator[None]:
         allowed: Final = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
+        if is_initialize:
+            await _raise_if_initialize_grants_no_mcp_servers(allowed, user_api_key_auth, mcp_servers, client_ip)
         if allowed:
             # return_exceptions=True: a per-server probe failure (incl. CancelledError
             # bubbled from anyio task group teardown on connection refused) must not
@@ -4692,6 +4718,7 @@ if MCP_AVAILABLE:
                     mcp_servers,
                     _client_ip,
                     scoped_server_endpoint=scoped_server_endpoint,
+                    is_initialize=is_initialize,
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":
@@ -4828,6 +4855,7 @@ if MCP_AVAILABLE:
                 mcp_servers,
                 _sse_client_ip,
                 scoped_server_endpoint=scoped_server_endpoint,
+                is_initialize=scope.get("method") == "GET",
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:

@@ -7,12 +7,15 @@ extension, and AWS credential resolution is stubbed so nothing reaches STS.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import boto3
 import httpx
 import pytest
 
 from botocore.credentials import Credentials
+from botocore.exceptions import ClientError
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import chat_completions as bridge
@@ -562,3 +565,54 @@ def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, co
 
     assert response.choices[0].message.content == "hi"
     assert client.post.call_args.kwargs["headers"]["Authorization"] == "Bearer bedrock-bearer-token"
+
+
+def test_session_tags_sign_the_request_and_stay_out_of_the_body(monkeypatch):
+    """The tagged STS session signs the Converse call and the tags never reach the request body (#34069)."""
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    tags = [{"Key": "team", "Value": "genai"}]
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if list(params.get("Tags", ())) != tags:
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIACONVERSETAGGED",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.now(timezone.utc) + timedelta(minutes=30),
+                }
+            }
+
+    client = _sync_client_returning_converse_response()
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        response = BedrockConverseLLM().completion(
+            **_completion_kwargs(
+                optional_params={
+                    "maxTokens": 16,
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "AKIACONVERSECALLER",
+                    "aws_secret_access_key": "pod-caller-secret",
+                    "aws_role_name": "arn:aws:iam::999999999999:role/litellm-converse-role",
+                    "aws_session_name": "litellm-converse-session",
+                    "aws_session_tags": tags,
+                },
+                litellm_params={},
+                client=client,
+            )
+        )
+
+    assert response.choices[0].message.content == "hi"
+    sent = client.post.call_args.kwargs
+    assert "Credential=ASIACONVERSETAGGED/" in sent["headers"]["Authorization"]
+    assert "aws_session_tags" not in sent["data"]
