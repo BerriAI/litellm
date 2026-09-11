@@ -33,7 +33,7 @@ CHUNK_SIZE = 1024
 
 # LiteLLM proxy configuration
 LITELLM_PROXY_URL = "ws://localhost:4000/v1/realtime?model=bedrock-sonic"
-LITELLM_API_KEY = "sk-12345"  # Your LiteLLM API key
+LITELLM_API_KEY = "sk-<your-litellm-api-key>"  # Your LiteLLM API key
 
 
 class RealtimeClient:
