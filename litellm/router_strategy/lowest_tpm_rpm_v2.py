@@ -12,7 +12,7 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
-from litellm.types.router import RouterErrors
+from litellm.types.router import RouterErrors, RouterNoDeploymentsAvailableError
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
 
@@ -620,6 +620,6 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                         "current_rpm": current_rpm,
                         "rpm_limit": _deployment_rpm,
                     }
-            raise ValueError(
+            raise RouterNoDeploymentsAvailableError(
                 f"{RouterErrors.no_deployments_available.value}. Passed model={model_group}. Deployments={deployment_dict}"
             )
