@@ -149,7 +149,7 @@ def test_native_ocr_normalizes_provider_response_model_and_usage(ocr_server: Rec
     assert response.usage_info.pages_processed == 1
 
 
-def test_native_ocr_maps_provider_400_without_exposing_response_body(ocr_server: RecordingServer) -> None:
+def test_native_ocr_maps_provider_400_with_response_body(ocr_server: RecordingServer) -> None:
     ocr_server.enqueue(ResponseSpec(body={"message": "invalid OCR request"}, status=400))
 
     with pytest.raises(litellm.BadRequestError) as caught:
@@ -158,7 +158,7 @@ def test_native_ocr_maps_provider_400_without_exposing_response_body(ocr_server:
     assert caught.value.status_code == 400
     assert caught.value.model == "mistral-ocr-latest"
     assert caught.value.llm_provider == "mistral"
-    assert "invalid OCR request" not in str(caught.value)
+    assert "invalid OCR request" in str(caught.value)
 
 
 def test_native_ocr_raises_transport_error_when_request_exceeds_timeout(ocr_server: RecordingServer) -> None:

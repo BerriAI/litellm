@@ -28,7 +28,7 @@ pub struct OcrDuringCallRequest {
     pub body: Value,
 }
 
-pub struct OcrPreparedRequest {
+pub struct OcrRequestDraft {
     pub model: String,
     pub url: String,
     pub headers: Vec<(String, String)>,
@@ -36,11 +36,11 @@ pub struct OcrPreparedRequest {
 }
 
 pub trait OcrHooks: Send + Sync {
-    fn prepared_request(
-        &self,
-        request: OcrPreparedRequest,
-    ) -> OcrHookFuture<'_, OcrPreparedRequest> {
+    fn before_send(&self, request: OcrRequestDraft) -> OcrHookFuture<'_, OcrRequestDraft> {
         Box::pin(async move { Ok(request) })
+    }
+    fn post_call<'a>(&'a self, _response: &'a str) -> OcrHookFuture<'a, ()> {
+        Box::pin(async { Ok(()) })
     }
     fn pre_call(&self, request: OcrPreCallRequest) -> OcrHookFuture<'_, OcrPreCallRequest> {
         Box::pin(async move { Ok(request) })

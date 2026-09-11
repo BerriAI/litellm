@@ -65,6 +65,7 @@ class RecordingBridge:
         logging_obj: object = None,
         callback_loop: asyncio.AbstractEventLoop | None = None,
         token_provider: object = None,
+        call_completion: object = None,
     ) -> dict[str, object]:
         self.logging_obj = logging_obj
         self.calls.append(
@@ -103,6 +104,7 @@ class RecordingAsyncBridge:
         logging_obj: object = None,
         callback_loop: asyncio.AbstractEventLoop | None = None,
         token_provider: object = None,
+        call_completion: object = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -135,6 +137,7 @@ class RaisingBridge:
         logging_obj: object = None,
         callback_loop: asyncio.AbstractEventLoop | None = None,
         token_provider: object = None,
+        call_completion: object = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -154,6 +157,7 @@ class RaisingAsyncBridge:
         logging_obj: object = None,
         callback_loop: asyncio.AbstractEventLoop | None = None,
         token_provider: object = None,
+        call_completion: object = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 

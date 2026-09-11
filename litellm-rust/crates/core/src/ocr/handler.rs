@@ -64,6 +64,7 @@ async fn execute_ocr_provider_call<A: OcrAdapter>(
     let decoded = adapter
         .read_response(client, response, &url, &headers, &request)
         .await?;
+    request.hooks.post_call(&decoded.text).await?;
     let response = adapter.transform_ocr_response(&request, decoded.data)?;
     Ok(LiteLLMOcrResponse {
         provider_native_response: decoded.native,

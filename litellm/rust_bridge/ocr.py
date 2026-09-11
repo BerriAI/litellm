@@ -73,6 +73,7 @@ class RustOcr(Protocol):
         logging_obj: _OCRLogging | None,
         callback_loop: asyncio.AbstractEventLoop | None,
         token_provider: object,
+        call_completion: object,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -92,6 +93,7 @@ class RustAocr(Protocol):
         logging_obj: _OCRLogging | None,
         callback_loop: asyncio.AbstractEventLoop | None,
         token_provider: object,
+        call_completion: object,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
 
@@ -347,10 +349,11 @@ def run(
             optional_params=dict(marshalled.kwargs),  # mutable-ok: PyO3 OCR binding requires a concrete dict
             input_sources=marshalled.input_sources,
             timeout=marshalled.timeout,
-            logging_obj=cast(
+            logging_obj=cast(  # cast-ok: client decorator injects Logging
                 _OCRLogging, request.kwargs["litellm_logging_obj"]
-            ),  # cast-ok: client decorator injects Logging
+            ),
             token_provider=request.kwargs.get("azure_ad_token_provider"),
+            call_completion=request.call_completion,
         )
     except Exception as error:
         mapped: Final = _map_error(error, request)
@@ -379,10 +382,11 @@ async def arun(
             optional_params=dict(marshalled.kwargs),  # mutable-ok: PyO3 OCR binding requires a concrete dict
             input_sources=marshalled.input_sources,
             timeout=marshalled.timeout,
-            logging_obj=cast(
+            logging_obj=cast(  # cast-ok: client decorator injects Logging
                 _OCRLogging, request.kwargs["litellm_logging_obj"]
-            ),  # cast-ok: client decorator injects Logging
+            ),
             token_provider=request.kwargs.get("azure_ad_token_provider"),
+            call_completion=request.call_completion,
         )
     except Exception as error:
         mapped: Final = _map_error(error, request)
@@ -405,6 +409,7 @@ def ocr(
     input_sources: Mapping[str, str] | None = None,
     logging_obj: _OCRLogging | None = None,
     token_provider: object = None,
+    call_completion: object = None,
 ) -> dict[str, object] | None:
     rust_ocr: Final = load_rust_ocr()
     if rust_ocr is None:
@@ -422,6 +427,7 @@ def ocr(
         logging_obj=logging_obj,
         callback_loop=None,
         token_provider=token_provider,
+        call_completion=call_completion,
     )
 
 
@@ -438,6 +444,7 @@ async def aocr(
     input_sources: Mapping[str, str] | None = None,
     logging_obj: _OCRLogging | None = None,
     token_provider: object = None,
+    call_completion: object = None,
 ) -> dict[str, object] | None:
     rust_aocr: Final = load_rust_aocr()
     if rust_aocr is None:
@@ -455,4 +462,5 @@ async def aocr(
         logging_obj=logging_obj,
         callback_loop=asyncio.get_running_loop(),
         token_provider=token_provider,
+        call_completion=call_completion,
     )

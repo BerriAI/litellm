@@ -89,9 +89,9 @@ pub(crate) fn ocr_route_error(err: Error) -> BridgeError {
         Error::MissingField("document_url" | "image_url") => {
             BridgeError::InvalidArgument("Document URL is required".into())
         }
-        Error::Http { status, .. } => BridgeError::Upstream {
+        Error::Http { status, body } => BridgeError::Upstream {
             status: Some(status),
-            message: "OCR provider request failed".into(),
+            message: body,
         },
         other => required_route_error(other),
     }
@@ -147,7 +147,7 @@ mod ocr_error_tests {
     }
 
     #[test]
-    fn ocr_errors_preserve_status_without_provider_body() {
+    fn ocr_errors_preserve_provider_body() {
         Python::initialize();
         Python::attach(|py| {
             for field in ["document_url", "image_url"] {
@@ -166,7 +166,7 @@ mod ocr_error_tests {
                 .getattr("args")
                 .and_then(|args| args.extract())
                 .expect("OCR failures retain status and unprefixed provider message");
-            assert_eq!(args, (429, "OCR provider request failed".to_string()));
+            assert_eq!(args, (429, r#"{"message":"rate limited"}"#.to_string()));
         });
     }
 }

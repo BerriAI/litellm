@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use serde_json::Value;
 use std::future::Future;
 
-use crate::errors::fallback_route_error;
+use crate::errors::required_route_error;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, required_value};
 
 fn prepare_messages(
@@ -61,5 +61,5 @@ bridge_route! {
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_messages,
-    errors = fallback_route_error,
+    errors = required_route_error,
 }

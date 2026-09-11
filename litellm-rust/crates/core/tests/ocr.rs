@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 
 use super::OcrClient;
-use super::hooks::{OcrHookFuture, OcrHooks, OcrLogFuture, OcrPreCallRequest, OcrPreparedRequest};
+use super::hooks::{OcrHookFuture, OcrHooks, OcrLogFuture, OcrPreCallRequest, OcrRequestDraft};
 use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
 use super::wire::{OcrWireRequest, decode_request};
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleTiming};
@@ -123,13 +123,10 @@ struct RecordingHooks {
     block: bool,
 }
 
-struct EditPreparedRequest;
+struct EditRequestDraft;
 
-impl OcrHooks for EditPreparedRequest {
-    fn prepared_request(
-        &self,
-        mut request: OcrPreparedRequest,
-    ) -> OcrHookFuture<'_, OcrPreparedRequest> {
+impl OcrHooks for EditRequestDraft {
+    fn before_send(&self, mut request: OcrRequestDraft) -> OcrHookFuture<'_, OcrRequestDraft> {
         Box::pin(async move {
             assert_eq!(request.model, "model");
             assert!(request.url.ends_with("/v1/ocr"));
@@ -148,14 +145,14 @@ impl OcrHooks for EditPreparedRequest {
 }
 
 #[tokio::test]
-async fn prepared_request_hook_edits_wire_body_and_headers_without_guardrails() {
+async fn before_send_hook_edits_wire_body_and_headers_without_guardrails() {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
     let request = wire_request(
         "mistral/model",
         &base,
         json!({"include_image_base64":false}),
     )
-    .with_host_hooks(Arc::new(EditPreparedRequest), None);
+    .with_host_hooks(Arc::new(EditRequestDraft), None);
     perform_ocr(request).await.unwrap();
     server.await.unwrap();
     let requests = seen.lock().unwrap();
@@ -166,12 +163,9 @@ async fn prepared_request_hook_edits_wire_body_and_headers_without_guardrails() 
 }
 
 impl OcrHooks for RecordingHooks {
-    fn prepared_request(
-        &self,
-        request: OcrPreparedRequest,
-    ) -> OcrHookFuture<'_, OcrPreparedRequest> {
+    fn before_send(&self, request: OcrRequestDraft) -> OcrHookFuture<'_, OcrRequestDraft> {
         Box::pin(async move {
-            self.events.lock().unwrap().push("prepared");
+            self.events.lock().unwrap().push("before_send");
             Ok(request)
         })
     }
@@ -235,7 +229,7 @@ async fn lifecycle_orders_hooks_and_emits_one_success() {
     server.await.unwrap();
     assert_eq!(
         *events.lock().unwrap(),
-        ["pre", "during", "prepared", "success"]
+        ["pre", "during", "before_send", "success"]
     );
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
@@ -277,7 +271,7 @@ async fn upstream_failure_emits_one_terminal_failure() {
     server.await.unwrap();
     assert_eq!(
         *events.lock().unwrap(),
-        ["pre", "during", "prepared", "failure"]
+        ["pre", "during", "before_send", "failure"]
     );
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
@@ -333,7 +327,7 @@ async fn every_adapter_runs_the_complete_lifecycle() {
         server.await.unwrap();
         assert_eq!(
             *events.lock().unwrap(),
-            ["pre", "during", "prepared", "success"],
+            ["pre", "during", "before_send", "success"],
             "{model}"
         );
         assert_eq!(seen.lock().unwrap().len(), 1, "{model}");
@@ -343,7 +337,7 @@ async fn every_adapter_runs_the_complete_lifecycle() {
 #[derive(Clone, Copy, Debug)]
 enum FailureStage {
     During,
-    Prepared,
+    BeforeSend,
     InvalidBody,
     Preparation,
     Response,
@@ -372,17 +366,14 @@ impl OcrHooks for FailingHooks {
         })
     }
 
-    fn prepared_request(
-        &self,
-        request: OcrPreparedRequest,
-    ) -> OcrHookFuture<'_, OcrPreparedRequest> {
+    fn before_send(&self, request: OcrRequestDraft) -> OcrHookFuture<'_, OcrRequestDraft> {
         Box::pin(async move {
-            let request = self.recording.prepared_request(request).await?;
+            let request = self.recording.before_send(request).await?;
             match self.stage {
-                FailureStage::Prepared => Err(crate::Error::InvalidRequest(
-                    "blocked prepared request".into(),
+                FailureStage::BeforeSend => Err(crate::Error::InvalidRequest(
+                    "blocked before_send request".into(),
                 )),
-                FailureStage::InvalidBody => Ok(OcrPreparedRequest {
+                FailureStage::InvalidBody => Ok(OcrRequestDraft {
                     body: json!({"document":null}),
                     ..request
                 }),
@@ -416,7 +407,7 @@ impl OcrHooks for FailingHooks {
 
 #[rstest::rstest]
 #[case(FailureStage::During)]
-#[case(FailureStage::Prepared)]
+#[case(FailureStage::BeforeSend)]
 #[case(FailureStage::InvalidBody)]
 #[case(FailureStage::Preparation)]
 #[case(FailureStage::Response)]
@@ -454,7 +445,7 @@ async fn lifecycle_reports_failures_once_at_each_boundary(#[case] stage: Failure
     let expected = match stage {
         FailureStage::Preparation => vec!["pre", "failure"],
         FailureStage::During => vec!["pre", "during", "failure"],
-        _ => vec!["pre", "during", "prepared", "failure"],
+        _ => vec!["pre", "during", "before_send", "failure"],
     };
     assert_eq!(*events.lock().unwrap(), expected);
     assert_eq!(

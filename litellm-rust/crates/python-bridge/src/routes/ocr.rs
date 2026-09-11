@@ -42,6 +42,7 @@ fn prepare_ocr(
                         })
                         .transpose()?,
                     error: Mutex::new(None),
+                    execution_body: Mutex::new(None),
                 }))
             })
         })
@@ -84,6 +85,10 @@ fn prepare_ocr(
                 timeout_seconds: timeout.map(|value| value.as_secs_f64()),
             })
             .map_err(ocr_route_error)?;
+            if let Some(call_completion) = &inputs.call_completion {
+                callbacks::NativeOcrCompletion::attach(call_completion)
+                    .map_err(BridgeError::Host)?;
+            }
             if let Some(hooks) = &hooks
                 && hooks.token_provider.is_some()
             {
@@ -151,6 +156,7 @@ bridge_route! {
         logging_obj: Option<Py<PyAny>>,
         callback_loop: Option<Py<PyAny>>,
         token_provider: Option<Py<PyAny>>,
+        call_completion: Option<Py<PyAny>>,
     },
     prepare = prepare_ocr,
     errors = std::convert::identity,

@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 
 use super::OcrClient;
 use super::error::{OcrError, OcrRequestError};
-use super::hooks::{OcrDuringCallRequest, OcrPreparedRequest};
+use super::hooks::{OcrDuringCallRequest, OcrRequestDraft};
 use super::types::{LiteLLMOcrRequest, OcrDocument};
 
 #[derive(Debug, Deserialize)]
@@ -94,9 +94,9 @@ pub(crate) async fn build_http_request<B>(
 where
     B: Serialize + DeserializeOwned,
 {
-    let prepared = request
+    let draft = request
         .hooks
-        .prepared_request(OcrPreparedRequest {
+        .before_send(OcrRequestDraft {
             model: request.model.clone(),
             url: url.into(),
             headers: headers.to_vec(),
@@ -105,15 +105,15 @@ where
             })?,
         })
         .await?;
-    let body: B = super::wire::decode_request_value(prepared.body, "guardrail.body")?;
+    let body: B = super::wire::decode_request_value(draft.body, "guardrail.body")?;
     let builder = client
         .provider_http()
-        .post(&prepared.url)
+        .post(&draft.url)
         .json(&body)
         .timeout(request.connection.timeout);
     crate::http_utils::with_headers(
         builder,
-        &prepared.headers,
+        &draft.headers,
         crate::http_utils::HeaderPolicy::All,
     )
     .build()
