@@ -2576,7 +2576,7 @@ def handle_realtime_stream_cost_calculation(
         completion_tokens_cost_usd_dollar=output_cost_per_token,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=total_cost,
-        additional_costs={
+        additional_costs={  # mutable-ok: logging cost breakdown requires a concrete dict
             name: cost
             for name, cost in (("transcription_cost", transcription_cost), ("live_audio_cost", live_audio_cost))
             if cost > 0

@@ -317,6 +317,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_profile_name",
     "aws_session_name",
     "aws_external_id",
+    "aws_session_tags",
     "vertex_credentials",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
@@ -1877,7 +1878,8 @@ def _extract_model_candidates_from_request(
         and isinstance(session_model, str)
         and session_model
     ):
-        return [session_model]
+        candidates.append(session_model)
+        return candidates
 
     body_model: Final = request_data.get("model")
     _append_model_candidates(candidates, body_model)

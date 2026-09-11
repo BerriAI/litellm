@@ -12,6 +12,8 @@ from litellm.llms.chatgpt.realtime import ChatGPTRealtime
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 
+pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["closed", "network"])

@@ -6,7 +6,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
-use crate::ocr::types::{OcrRequestData, OcrResponseData};
+use crate::ocr::types::{LiteLLMOcrResponse, OcrRequestData};
 
 pub const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
 pub const REDUCTO_API_KEY_ENV: &str = "REDUCTO_API_KEY";
@@ -283,7 +283,7 @@ fn build_pages(result: &Map<String, Value>) -> Vec<Value> {
 pub fn transform_reducto_response(
     model: &str,
     response_json: Value,
-) -> Result<OcrResponseData, Error> {
+) -> Result<LiteLLMOcrResponse, Error> {
     let response = response_json
         .as_object()
         .ok_or_else(|| Error::InvalidType {
@@ -311,7 +311,7 @@ pub fn transform_reducto_response(
         "credits": usage.get("credits").cloned().unwrap_or(Value::Null),
     }));
 
-    Ok(OcrResponseData {
+    Ok(LiteLLMOcrResponse {
         pages: build_pages(result),
         model: model.to_string(),
         document_annotation: None,
@@ -341,7 +341,7 @@ impl OcrProviderConfig for ReductoParseV3Config {
         &self,
         model: &str,
         response_json: Value,
-    ) -> Result<OcrResponseData, Error> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         transform_reducto_response(model, response_json)
     }
 
@@ -383,7 +383,7 @@ impl OcrProviderConfig for ReductoParseLegacyConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> Result<OcrResponseData, Error> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         transform_reducto_response(model, response_json)
     }
 

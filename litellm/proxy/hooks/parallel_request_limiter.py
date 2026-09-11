@@ -84,7 +84,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         self.internal_usage_cache = internal_usage_cache
 
     def begin_realtime_attachment(self, request_data: dict[str, object]) -> None:
-        request_data["_legacy_realtime_attachment_reservations"] = _RealtimeAttachmentReservations()
+        request_data["_legacy_realtime_attachment_reservations"] = (  # rebind-ok: request-scoped cleanup receipt
+            _RealtimeAttachmentReservations()
+        )
 
     async def async_release_realtime_attachment(
         self, request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
@@ -109,7 +111,12 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         raw: Final[object] = local.get_cache(key)
         current: Final = TypeAdapter(Mapping[str, int] | None).validate_python(raw)
         updated: Final = (
-            {**current, "current_requests": max(current["current_requests"] - 1, 0)} if current is not None else None
+            {  # mutable-ok: shared cache counter dict
+                **current,
+                "current_requests": max(current["current_requests"] - 1, 0),
+            }
+            if current is not None
+            else None
         )
         if updated is not None:
             local.set_cache(key, updated, ttl=60)

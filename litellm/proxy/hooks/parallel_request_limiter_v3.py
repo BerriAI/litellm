@@ -6,6 +6,7 @@ This is currently in development and not yet ready for production.
 
 import asyncio
 import binascii
+import logging
 import os
 import uuid
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence, Set
@@ -28,6 +29,7 @@ from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -1270,7 +1272,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
-                verbose_proxy_logger.warning("Redis Lua script failed for hash tag %s: %s", hash_tag, e)
+                log_redis_failure(
+                    verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
+                )
                 # Fallback to in-memory cache for this group
                 group_cache_values = await self.in_memory_cache_sliding_window(
                     keys=group_keys,
@@ -1520,7 +1524,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                     counts = [max(0, int(value)) for value in raw_counts]
                 except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror, never a 500
-                    verbose_proxy_logger.warning("parallel_count_script failed, using local mirror: %s", e)
+                    log_redis_failure(
+                        verbose_proxy_logger, logging.WARNING, "parallel_count_script failed, using local mirror", e
+                    )
                     counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
             else:
                 counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
@@ -1550,7 +1556,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ],
                 )
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to in-memory enforcement, never a 500
-                verbose_proxy_logger.warning("parallel_acquire_script failed, falling back to in-memory gauge: %s", e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "parallel_acquire_script failed, falling back to in-memory gauge",
+                    e,
+                )
                 async with self._check_and_increment_lock:
                     return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
             if int(raw[0]) == 1:
@@ -1626,7 +1637,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     await self._rollback_cluster_parallel_slots(tuple(attempted), slot_id, parent_otel_span)
                     return RateLimitResponse(
                         overall_code="OVER_LIMIT",
-                        statuses=[self._gauge_status(by_key[keys[int(raw[1]) - 1]], int(raw[2]), "OVER_LIMIT")],
+                        statuses=[  # mutable-ok: response contract requires a list
+                            self._gauge_status(by_key[keys[int(raw[1]) - 1]], int(raw[2]), "OVER_LIMIT")
+                        ],
                     )
                 counts.update((key, int(count)) for key, count in zip(keys, raw[1:], strict=True))
                 for key in keys:
@@ -1651,7 +1664,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         return RateLimitResponse(
             overall_code="OVER_LIMIT" if any(item["code"] == "OVER_LIMIT" for item in statuses) else "OK",
-            statuses=list(statuses),
+            statuses=list(statuses),  # mutable-ok: RateLimitResponse contract requires a list
         )
 
     async def _rollback_cluster_parallel_slots(
@@ -1825,7 +1838,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     return False
                 await self.internal_usage_cache.async_set_cache(
                     key=counter_key,
-                    value={**value, slot_id: now},
+                    value={**value, slot_id: now},  # mutable-ok: slot registry readers require a concrete dict
                     ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
                     local_only=True,
                     litellm_parent_otel_span=None,
@@ -1868,7 +1881,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
-                verbose_proxy_logger.warning("parallel_release_script failed, falling back to in-memory release: %s", e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "parallel_release_script failed, falling back to in-memory release",
+                    e,
+                )
 
         async with self._check_and_increment_lock:
             for counter_key in counter_keys:
@@ -2051,12 +2069,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # state ambiguous. Refund any prior groups so Redis returns
                 # to its pre-call state, then fall back to in-memory for the
                 # whole call (counters there are independent of Redis).
-                verbose_proxy_logger.error(
-                    "atomic_check_and_increment_by_n: Redis Lua execution failed (%s: %s). Refunding %s prior descriptors and falling back to in-memory enforcement — counters will diverge from Redis until window expires (window_size=%ss).",
-                    type(e).__name__,
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.ERROR,
+                    f"atomic_check_and_increment_by_n: Redis Lua execution failed ({type(e).__name__}). Refunding "
+                    f"{len(applied)} prior descriptors and falling back to in-memory enforcement, counters will "
+                    f"diverge from Redis until window expires (window_size={self.window_size}s)",
                     e,
-                    len(applied),
-                    self.window_size,
                 )
                 await self._refund_applied_descriptor_groups(applied)
                 flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
@@ -2103,8 +2122,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         value=-entry["increment"],
                     )
                 except Exception as e:
-                    verbose_proxy_logger.warning(
-                        "Failed to refund %s on cross-descriptor rollback: %s", entry["counter_key"], e
+                    log_redis_failure(
+                        verbose_proxy_logger,
+                        logging.WARNING,
+                        f"Failed to refund {entry['counter_key']} on cross-descriptor rollback",
+                        e,
                     )
 
     def _build_atomic_response(
@@ -4101,7 +4123,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         except Exception as e:
-            verbose_proxy_logger.warning("TTL preservation failed, falling back to regular pipeline: %s", e)
+            log_redis_failure(
+                verbose_proxy_logger, logging.WARNING, "TTL preservation failed, falling back to regular pipeline", e
+            )
             # Fallback to regular pipeline on error
             await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                 increment_list=pipeline_operations,
@@ -4167,9 +4191,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                     continue
                 except Exception as e:  # noqa: BLE001  # Redis failures use the plain increment fallback
-                    verbose_proxy_logger.warning(
-                        "Window-guarded token adjustment failed for %s: %s",
-                        operation["key"],
+                    log_redis_failure(
+                        verbose_proxy_logger,
+                        logging.WARNING,
+                        f"Window-guarded token adjustment failed for {operation['key']}",
                         e,
                     )
             if operation["increment_value"] > 0:

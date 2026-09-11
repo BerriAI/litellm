@@ -978,6 +978,11 @@ def test_realtime_calls_auth_uses_executed_session_model_despite_decoys(session)
     )
 
 
+@pytest.mark.parametrize("model", ["voice,alias", " voice "])
+def test_realtime_calls_auth_preserves_exact_session_model(model):
+    assert get_model_from_request(request_data={"session": {"model": model}}, route="/v1/realtime/calls") == model
+
+
 @pytest.mark.parametrize("session", ["invalid", "null", "[]", "12", '"text"', "{}"])
 def test_realtime_model_extraction_ignores_invalid_serialized_session(session):
     assert get_model_from_request(request_data={"session": session}, route="/v1/realtime/calls") is None
@@ -3548,7 +3553,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
     @pytest.mark.parametrize(
         "selector",
-        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+        ["aws_profile_name", "aws_session_name", "aws_external_id", "aws_session_tags"],
     )
     def test_aws_identity_selector_in_batch_body_is_rejected(self, selector):
         with pytest.raises(ValueError, match=selector):
@@ -3567,7 +3572,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
     @pytest.mark.parametrize(
         "selector",
-        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+        ["aws_profile_name", "aws_session_name", "aws_external_id", "aws_session_tags"],
     )
     def test_aws_identity_selector_under_extra_body_is_rejected(self, selector):
         with pytest.raises(ValueError, match=selector):

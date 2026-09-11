@@ -244,14 +244,16 @@ class ChatGPTRealtimeHTTPConfig(OpenAIRealtimeHTTPConfig):
     def transform_realtime_calls_response(
         self, response: Response, model: str, model_id: str | None, headers: Mapping[str, object] | None
     ) -> Response:
-        response.extensions["chatgpt_realtime"] = MappingProxyType(
-            {
-                "model": model,
-                "model_id": model_id,
-                "api_base": ChatGPTRealtime.get_api_base(self._params.api_base),
-                "extra_headers": configured_realtime_headers(headers),
-                "extra_query": configured_realtime_query(self._params),
-            }
+        response.extensions["chatgpt_realtime"] = (
+            MappingProxyType(  # rebind-ok: HTTPX response extensions carry provider routing metadata
+                {
+                    "model": model,
+                    "model_id": model_id,
+                    "api_base": ChatGPTRealtime.get_api_base(self._params.api_base),
+                    "extra_headers": configured_realtime_headers(headers),
+                    "extra_query": configured_realtime_query(self._params),
+                }
+            )
         )
         return response
 

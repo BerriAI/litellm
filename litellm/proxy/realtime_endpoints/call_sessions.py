@@ -13,7 +13,7 @@ import httpx
 from fastapi import HTTPException, Request, Response, WebSocket
 from pydantic import TypeAdapter
 from starlette.formparsers import MultiPartException, MultiPartParser
-from starlette.types import Message
+from starlette.types import Message, Scope
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -93,13 +93,14 @@ async def _start_codex_supervisor(
     effective_handler: ChatGPTRealtime | None = None  # rebind-ok: reuse hook-enriched credentials for cleanup
     sockets: Final = AsyncExitStack()
     try:
-        observer_request: Final = Request({**request.scope}, receive=receive)  # mutable-ok: ASGI request scope
+        observer_scope: Final[Scope] = {**request.scope}
+        observer_request: Final = Request(observer_scope, receive=receive)
         processed, logger = await process_codex_request(
             observer_request,
-            {
+            {  # mutable-ok: common request processing enriches metadata
                 **build_sideband_request(call),
                 "model": call.alias,
-            },  # mutable-ok: common request processing enriches metadata
+            },
             auth,
             call.alias,
             "_arealtime",
@@ -108,18 +109,29 @@ async def _start_codex_supervisor(
         pinned: Final = {  # mutable-ok: logging and provider parameter contract
             **processed,
             **build_sideband_request(call),
-            "extra_headers": {
-                **configured_realtime_headers(
-                    TypeAdapter(Mapping[str, object] | None).validate_python(processed.get("extra_headers"))
+            "extra_headers": MappingProxyType(
+                {
+                    **configured_realtime_headers(
+                        TypeAdapter(Mapping[str, object] | None).validate_python(processed.get("extra_headers"))
+                    ),
+                    **configured_realtime_headers(call.extra_headers),
+                }
+            ),
+            "litellm_metadata": {  # mutable-ok: Logging.update_from_kwargs requires a dict to retain ownership metadata
+                **TypeAdapter(Mapping[str, object]).validate_python(
+                    processed.get("litellm_metadata") or MappingProxyType({})
                 ),
-                **configured_realtime_headers(call.extra_headers),
-            },
-            "litellm_metadata": {
-                **TypeAdapter(Mapping[str, object]).validate_python(processed.get("litellm_metadata") or {}),
                 **(
-                    {"model_info": {**litellm.get_model_info(model=call.model_id), "id": call.model_id}}
+                    MappingProxyType(
+                        {
+                            "model_info": {  # mutable-ok: logging and cost callbacks require a concrete model-info dict
+                                **litellm.get_model_info(model=call.model_id),
+                                "id": call.model_id,
+                            }
+                        }
+                    )
                     if call.model_id is not None
-                    else {}
+                    else MappingProxyType({})
                 ),
             },
         }
@@ -128,11 +140,11 @@ async def _start_codex_supervisor(
             model=call.model,
             user=None,
             optional_params={},  # mutable-ok: logging contract
-            litellm_params={
+            litellm_params={  # mutable-ok: Logging.update_from_kwargs pops metadata from its argument
                 **logger.litellm_params,
                 "litellm_metadata": pinned["litellm_metadata"],
                 "arealtime": True,
-            },  # mutable-ok: logging contract
+            },
             custom_llm_provider="chatgpt",
         )
         params: Final = GenericLiteLLMParams.model_validate(pinned)
@@ -150,9 +162,8 @@ async def _start_codex_supervisor(
         async def force_close_call() -> None:
             await handler.hangup_call(api_base)
 
-        frontend: Final = WebSocket(
-            {**request.scope, "type": "websocket"}, receive=receive, send=send
-        )  # mutable-ok: ASGI scope
+        frontend_scope: Final[Scope] = {**request.scope, "type": "websocket"}
+        frontend: Final = WebSocket(frontend_scope, receive=receive, send=send)
         stream: Final = RealTimeStreaming(frontend, connection, logger, model=call.model, user_api_key_dict=auth)
         supervisor: Final = CallSupervisor(
             connection,
@@ -217,7 +228,7 @@ async def read_codex_offer(request: Request) -> CodexRealtimeOffer:
     if _normalize_media_type(content_type) == "multipart/form-data":
         if content_type.split(";", 1)[0] != "multipart/form-data" and not await request.form():
             try:
-                request._form = await MultiPartParser(request.headers, request.stream()).parse()  # pyright: ignore[reportPrivateUsage]  # Starlette exposes no setter for its shared form cache
+                request._form = await MultiPartParser(request.headers, request.stream()).parse()  # pyright: ignore[reportPrivateUsage]  # Starlette exposes no setter for its shared form cache; # rebind-ok: Request.close must own and close uploaded files
                 request.scope.pop("parsed_body", None)
             except MultiPartException as exc:
                 raise HTTPException(400, "Invalid realtime multipart offer") from exc
@@ -322,9 +333,7 @@ async def _create_codex_realtime_call(request: Request) -> Response:
             llm_router=server.llm_router,
         )
         data: Final = build_call_request(offer, request.query_params, request.headers)
-        signaling_auth: Final = auth.model_copy(
-            update={"budget_reservation": None}
-        )  # mutable-ok: Pydantic update contract
+        signaling_auth: Final = auth.model_copy(update=MappingProxyType({"budget_reservation": None}))
         if isinstance(limiter, _PROXY_MaxParallelRequestsHandler) and (
             auth.max_parallel_requests is not None
             or server.general_settings.get("global_max_parallel_requests") is not None
@@ -363,8 +372,8 @@ async def _create_codex_realtime_call(request: Request) -> Response:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         supervised_call: Final = call.model_copy(
-            update={"usage_supervised": True, "parallel_reserved": call_lease is not None}
-        )  # mutable-ok: Pydantic update contract
+            update=MappingProxyType({"usage_supervised": True, "parallel_reserved": call_lease is not None})
+        )
         token: Final = encode_call(supervised_call)
         supervision_started = True
         if call_lease is None:
@@ -474,25 +483,29 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
         await litellm._arealtime(  # pyright: ignore[reportPrivateUsage]  # dispatch for an already authorized call
             model=f"chatgpt/{call.model}",
             websocket=websocket,
-            **{
-                key: value
-                for key, value in {  # mutable-ok: retain processed metadata with pinned routing
-                    **processed,
-                    **build_sideband_request(call),
-                    "extra_headers": MappingProxyType(
-                        {
-                            **configured_realtime_headers(
-                                TypeAdapter(Mapping[str, object] | None).validate_python(processed.get("extra_headers"))
-                            ),
-                            **configured_realtime_headers(call.extra_headers),
-                        }
-                    ),
-                    "websocket": websocket,
-                    "user_api_key_dict": auth,
-                    "chatgpt_call_accounting": CallAccounting.SUPERVISED if call.usage_supervised else None,
-                }.items()
-                if key not in ("model", "websocket")
-            },
+            **MappingProxyType(
+                {
+                    key: value
+                    for key, value in {  # mutable-ok: retain processed metadata with pinned routing
+                        **processed,
+                        **build_sideband_request(call),
+                        "extra_headers": MappingProxyType(
+                            {
+                                **configured_realtime_headers(
+                                    TypeAdapter(Mapping[str, object] | None).validate_python(
+                                        processed.get("extra_headers")
+                                    )
+                                ),
+                                **configured_realtime_headers(call.extra_headers),
+                            }
+                        ),
+                        "websocket": websocket,
+                        "user_api_key_dict": auth,
+                        "chatgpt_call_accounting": CallAccounting.SUPERVISED if call.usage_supervised else None,
+                    }.items()
+                    if key not in ("model", "websocket")
+                }
+            ),
         )
     finally:
         try:
