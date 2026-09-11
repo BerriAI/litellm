@@ -52,6 +52,22 @@ func TestHandleAPIResponseAcceptsFullSuccessRange(t *testing.T) {
 	}
 }
 
+func TestHandleAPIResponseAcceptsEmptyBodyOn2xx(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.WriteHeader(http.StatusNoContent)
+	resp := rec.Result()
+
+	client := NewClient("http://localhost:4000", "test-key", true)
+	got, err := handleAPIResponse(resp, map[string]interface{}{"model_name": "gpt-4o"}, client)
+
+	if err != nil {
+		t.Fatalf("handleAPIResponse returned unexpected error for empty-body 204: %v", err)
+	}
+	if got == nil {
+		t.Fatal("handleAPIResponse returned nil ModelResponse for empty-body 204")
+	}
+}
+
 func TestHandleMCPAPIResponseAcceptsFullSuccessRange(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -94,5 +110,19 @@ func TestHandleMCPAPIResponseAcceptsFullSuccessRange(t *testing.T) {
 				t.Errorf("mcpResp.ServerID = %q, want srv-1", mcpResp.ServerID)
 			}
 		})
+	}
+}
+
+func TestHandleMCPAPIResponseAcceptsEmptyBodyOn2xx(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.WriteHeader(http.StatusNoContent)
+	resp := rec.Result()
+
+	client := NewClient("http://localhost:4000", "test-key", true)
+	var mcpResp MCPServerResponse
+	err := handleMCPAPIResponse(resp, &mcpResp, client)
+
+	if err != nil {
+		t.Fatalf("handleMCPAPIResponse returned unexpected error for empty-body 204: %v", err)
 	}
 }

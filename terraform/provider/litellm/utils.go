@@ -54,6 +54,10 @@ func handleAPIResponse(resp *http.Response, reqBody interface{}, client *Client)
 			resp.Status, client.redactSensitiveData(string(bodyBytes)), client.redactSensitiveData(string(reqBodyBytes)))
 	}
 
+	if len(bodyBytes) == 0 || string(bodyBytes) == "null" {
+		return &ModelResponse{}, nil
+	}
+
 	var modelResp ModelResponse
 	if err := json.Unmarshal(bodyBytes, &modelResp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %v", err)
@@ -141,6 +145,10 @@ func handleMCPAPIResponse(resp *http.Response, result interface{}, client *Clien
 		}
 		return fmt.Errorf("API request failed: Status: %s, Response: %s",
 			resp.Status, client.redactSensitiveData(string(bodyBytes)))
+	}
+
+	if len(bodyBytes) == 0 || string(bodyBytes) == "null" {
+		return nil
 	}
 
 	if err := json.Unmarshal(bodyBytes, result); err != nil {
