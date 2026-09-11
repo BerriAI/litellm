@@ -125,12 +125,7 @@ pub fn validate_azure_ai_environment(
     }
     non_empty(azure_ad_token)
         .map(|token| prepend_auth_header(headers, "Authorization", format!("Bearer {token}")))
-        .ok_or_else(|| {
-            Error::Auth(
-                "Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token"
-                    .to_string(),
-            )
-        })
+        .ok_or(Error::MissingAzureAiCredentialsOrAdToken)
 }
 
 pub fn validate_document_intelligence_environment(

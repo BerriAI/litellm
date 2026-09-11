@@ -10,12 +10,28 @@ pub enum OcrRequestError {
     RequestField { path: String },
     #[error("missing required field: {0}")]
     MissingField(&'static str),
+    #[error("invalid OCR document data URI")]
+    InvalidDataUri,
+    #[error("inline OCR document exceeds the size limit")]
+    InlineDocumentTooLarge,
+    #[error("OCR document URL is blocked by network policy")]
+    BlockedDocumentUrl,
+    #[error("OCR document downloads are disabled")]
+    DownloadDisabled,
+    #[error("OCR document download exceeds the size limit")]
+    DownloadTooLarge,
+    #[error("OCR document download exceeded the redirect limit")]
+    TooManyRedirects,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OcrResponseError {
     #[error("invalid OCR response field: {path}")]
     ResponseField { path: String },
+    #[error("OCR document redirect is missing a location")]
+    MissingRedirectLocation,
+    #[error("OCR document redirect location is invalid")]
+    InvalidRedirect,
 }
 
 #[derive(Debug, Error)]

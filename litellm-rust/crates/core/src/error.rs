@@ -21,6 +21,12 @@ pub enum Error {
         "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
     )]
     MissingApiKey { provider: &'static str },
+    #[error(
+        "Missing Azure AI credentials - set AZURE_AI_API_KEY or provide an Authorization header"
+    )]
+    MissingAzureAiCredentials,
+    #[error("Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token")]
+    MissingAzureAiCredentialsOrAdToken,
     #[error("upstream request failed with status {status}: {body}")]
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]
@@ -38,6 +44,28 @@ pub enum Error {
     /// keep a reference implementation treat this as "fall back", not "fail".
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
+}
+
+#[derive(Debug, ThisError)]
+pub(crate) enum MediaError {
+    #[error("media URL rejected by network policy")]
+    BlockedUrl,
+    #[error("media download is disabled")]
+    DownloadDisabled,
+    #[error("media download exceeds the maximum size")]
+    DownloadTooLarge,
+    #[error("too many redirects while fetching media")]
+    TooManyRedirects,
+    #[error("media redirect is missing a Location header")]
+    MissingRedirectLocation,
+    #[error("invalid media redirect")]
+    InvalidRedirect,
+    #[error("media download failed with status {0}")]
+    Http(u16),
+    #[error("media download timed out")]
+    Timeout,
+    #[error("{0}")]
+    Transport(#[from] TransportError),
 }
 
 #[derive(Clone, Debug, ThisError, PartialEq, Eq)]
