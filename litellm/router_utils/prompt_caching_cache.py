@@ -217,6 +217,8 @@ class PromptCachingCache:
         if cacheable_messages is not None and not cacheable_messages:
             return None
 
+        # Only exact cached-prefix matches can establish deployment affinity.
+        # Partial matches must fall back to normal routing.
         # Use serialize_object for consistent and stable serialization
         data_to_hash: Final = {}
         if cacheable_messages is not None:
