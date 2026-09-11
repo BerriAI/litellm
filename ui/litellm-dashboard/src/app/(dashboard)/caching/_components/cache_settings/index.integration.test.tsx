@@ -138,6 +138,26 @@ describe("CacheSettings advanced settings round-trip", () => {
     expect(updateCacheSettingsCall.mock.calls[0][1]).not.toHaveProperty("redis_startup_nodes");
   });
 
+  it("saves the semantic cache scope picked from the select and shows the loaded value", async () => {
+    getCacheSettingsCall.mockResolvedValue({
+      current_values: { redis_type: "semantic", host: "redis.internal", semantic_cache_scope: "key" },
+    });
+    const user = userEvent.setup();
+    renderSettings();
+    const trigger = await screen.findByLabelText("Semantic Cache Scope");
+    expect(trigger).toHaveTextContent("Key (shared by all end users of the key/team/org)");
+
+    await user.click(trigger);
+    await user.click(await screen.findByRole("option", { name: "End user (isolated per end user)" }));
+    await save(user);
+
+    await waitFor(() => expect(updateCacheSettingsCall).toHaveBeenCalledTimes(1));
+    expect(updateCacheSettingsCall.mock.calls[0][1]).toMatchObject({
+      type: "redis-semantic",
+      semantic_cache_scope: "end_user",
+    });
+  });
+
   it("does not block the save on a malformed value inside a collapsed advanced section", async () => {
     getCacheSettingsCall.mockResolvedValue({ current_values: { host: "redis.internal" } });
     const user = userEvent.setup();

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from typing import Final
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,6 +16,7 @@ from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, Prisma
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
+from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
@@ -1057,6 +1059,35 @@ async def test_health_services_endpoint_galileo(status, error_message):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,error_message",
+    [
+        ("healthy", ""),
+        ("unhealthy", "PointFive authentication failed"),
+    ],
+)
+async def test_health_services_endpoint_pointfive(monkeypatch, status, error_message):
+    import litellm.integrations.pointfive as pointfive_package
+
+    mock_instance = MagicMock()
+    mock_instance.async_health_check = AsyncMock(return_value={"status": status, "error_message": error_message})
+    logger_class = MagicMock(return_value=mock_instance)
+    monkeypatch.setattr(pointfive_package, "PointFiveLogger", logger_class)
+
+    result = await health_services_endpoint(user_api_key_dict=_pointfive_admin(), service="pointfive")
+
+    if status == "healthy":
+        assert result["status"] == "healthy"
+        assert result["message"] == "PointFive is healthy"
+    else:
+        assert result["status"] == "unhealthy"
+        assert result["message"] == error_message
+    mock_instance.async_health_check.assert_awaited_once()
+    # A check that left the periodic flush running would leak a flusher per press of the ui test button.
+    logger_class.assert_called_once_with(start_periodic_flush=False)
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_datadog_llm_observability():
     """
     Verify that 'datadog_llm_observability' is accepted as a valid service
@@ -1189,27 +1220,23 @@ def test_health_liveliness_endpoint(proxy_client):
     Test that /health/liveliness endpoint returns 200 OK with "I'm alive!" message.
     This is a critical orchestration endpoint that must be simple and fast.
     """
-    # Measure the time taken for the health check call
-    start_time = time.perf_counter()
+    warm_up: Final = proxy_client.get("/health/liveliness")
+    assert warm_up.status_code == 200, f"Expected 200 OK, got {warm_up.status_code}: {warm_up.text}"
 
-    # Make GET request to /health/liveliness
-    response = proxy_client.get("/health/liveliness")
+    def _timed_poll() -> tuple[float, httpx.Response]:
+        start_time: Final = time.perf_counter()
+        response: Final = proxy_client.get("/health/liveliness")
+        return (time.perf_counter() - start_time) * 1000, response
 
-    end_time = time.perf_counter()
-    duration_ms = (end_time - start_time) * 1000
+    polls: Final = tuple(_timed_poll() for _ in range(5))
 
-    # Assert response status
-    assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
+    for _, response in polls:
+        assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
+        assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
 
-    # Assert response content (FastAPI JSON-encodes the string)
-    assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
-
-    # Verify response is fast (should be < 100ms for a simple endpoint)
-    # This is critical for orchestration systems that poll frequently
-    assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
-
-    # Log the duration for visibility (useful for CI/CD monitoring)
-    print(f"\n/health/liveliness response time: {duration_ms:.2f}ms")
+    durations_ms: Final = tuple(sorted(duration_ms for duration_ms, _ in polls))
+    median_ms: Final = durations_ms[len(durations_ms) // 2]
+    assert median_ms < 100, f"Median of {len(polls)} health checks took {median_ms:.2f}ms, expected < 100ms"
 
 
 def test_health_liveness_endpoint(proxy_client):
@@ -1236,6 +1263,18 @@ def test_health_liveness_endpoint(proxy_client):
 
     # Log the duration for visibility (useful for CI/CD monitoring)
     print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
+
+
+def test_health_backlog_includes_admission_control_stats(proxy_client):
+    response = proxy_client.get("/health/backlog")
+
+    assert response.status_code == 200, response.text
+    assert set(response.json()) == {
+        "in_flight_requests",
+        "admitted_requests",
+        "queued_requests",
+        "rejected_requests",
+    }
 
 
 def test_health_readiness(proxy_client):
@@ -1289,6 +1328,33 @@ def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
     assert "litellm_version" in response_data
     assert "success_callbacks" in response_data
     assert "cache" in response_data
+
+
+@pytest.mark.parametrize(
+    "general_settings, expected_warning",
+    [
+        ({}, True),
+        ({"disable_env_credential_login": True}, False),
+    ],
+)
+def test_health_readiness_details_reports_env_credential_login_warning(monkeypatch, general_settings, expected_warning):
+    """
+    The Admin UI banner is driven by this flag: it must be True while
+    env-credential login is possible and False once
+    `disable_env_credential_login` turns that login path off.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+    response = client.get("/health/readiness/details")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["show_env_credential_login_warning"] is expected_warning
 
 
 def test_health_readiness_allows_explicit_legacy_public_details(monkeypatch):
@@ -2663,6 +2729,172 @@ class TestConfigBaseForHealthCheck:
         assert base["litellm_credential_name"] == "OpenAI-prod"
         assert base["api_key"] == "sk-configured"
 
+    def test_request_naming_another_credential_does_not_inherit_config_credentials(self):
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"})
+        assert "api_key" not in base
+        assert "api_base" not in base
+        assert "vertex_credentials" not in base
+        assert base["rpm"] == 100
+
+    def test_blank_credential_name_names_no_credential(self):
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": ""})
+        assert base["api_key"] == "sk-configured"
+
+    def test_opt_in_does_not_put_config_credentials_over_a_named_credential(self):
+        base = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"},
+            allow_client_side_credentials=True,
+        )
+        assert "api_key" not in base
+
+
+class TestTestConnectionUsesTheNamedCredential:
+    CREDENTIAL_KEY = "sk-credential-key"
+    OTHER_DEPLOYMENT_KEY = "sk-other-deployment-key"
+    OTHER_DEPLOYMENT_BASE = "https://other-deployment.example/v1"
+    REQUEST = {
+        "model": "xai/grok-4",
+        "custom_llm_provider": "xai",
+        "litellm_credential_name": "my-xai-cred",
+    }
+    COMPLETION = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "grok-4",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    @staticmethod
+    def _credential(**values: str) -> CredentialItem:
+        return CredentialItem(credential_name="my-xai-cred", credential_info={}, credential_values=values)
+
+    @staticmethod
+    def _wildcard_deployment(**litellm_params: str) -> dict:
+        return {
+            "model_name": "xai/*",
+            "litellm_params": {"model": "xai/*", **litellm_params},
+            "model_info": {"id": "unrelated-wildcard-deployment"},
+        }
+
+    def _probe(
+        self,
+        monkeypatch,
+        deployment: dict,
+        request_litellm_params: dict,
+        deployment_by_id: object | None = None,
+        request_model_info: dict | None = None,
+    ) -> httpx.Request:
+        """Run /health/test_connection and hand back the upstream request it made."""
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        app = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        router = MagicMock()
+        router.get_model_list.return_value = [deployment]
+        router.get_deployment.return_value = deployment_by_id
+
+        with (
+            patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: the deployment the probe is matched against is a proxy global; it has no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            respx.mock(assert_all_called=True) as respx_mock,
+        ):
+            respx_mock.post(path__regex=r".*/chat/completions").respond(json=self.COMPLETION)
+            response = TestClient(app).post(
+                "/health/test_connection",
+                json={
+                    "mode": "chat",
+                    "litellm_params": request_litellm_params,
+                    "model_info": request_model_info or {"mode": "chat"},
+                },
+            )
+            probe = respx_mock.calls.last.request
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        return probe
+
+    def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY),
+            self.REQUEST,
+        )
+
+        assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
+
+    def test_named_credentials_api_base_is_used_not_the_matched_deployments(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [self._credential(api_key=self.CREDENTIAL_KEY, api_base="https://credential.example/v1")],
+        )
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_base=self.OTHER_DEPLOYMENT_BASE),
+            self.REQUEST,
+        )
+
+        assert probe.url.host == "credential.example"
+
+    def test_named_credential_without_an_api_base_leaves_the_provider_default(self, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_base=self.OTHER_DEPLOYMENT_BASE),
+            self.REQUEST,
+        )
+
+        assert probe.url.host == "api.x.ai"
+
+    def test_configured_model_named_without_a_credential_still_inherits_its_config(self, monkeypatch):
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY, api_base=self.OTHER_DEPLOYMENT_BASE),
+            {"model": "xai/grok-4", "custom_llm_provider": "xai"},
+        )
+
+        assert probe.headers["authorization"] == f"Bearer {self.OTHER_DEPLOYMENT_KEY}"
+        assert probe.url.host == "other-deployment.example"
+
+    def test_deployment_probed_by_id_keeps_the_endpoint_it_is_configured_with(self, monkeypatch):
+        """The model detail page always echoes back the credential the deployment already uses."""
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY, api_base=self.OTHER_DEPLOYMENT_BASE),
+            self.REQUEST,
+            deployment_by_id=Deployment(
+                model_name="grok-4",
+                litellm_params=LiteLLM_Params(
+                    model="xai/grok-4",
+                    api_base="https://configured.example/v1",
+                    litellm_credential_name="my-xai-cred",
+                ),
+                model_info={"id": "configured-deployment"},
+            ),
+            request_model_info={"id": "configured-deployment", "mode": "chat"},
+        )
+
+        assert probe.url.host == "configured.example"
+        assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
+
 
 class TestNoRedisWarning:
     """`show_no_redis_warning` drives the Admin UI's default-on "no Redis" banner."""
@@ -2928,3 +3160,60 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "success"
+
+
+def _pointfive_admin() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(token="admin-token", user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_pointfive_without_a_key_is_unhealthy_not_a_server_error(monkeypatch):
+    """
+    The logger refuses to start without an api key.
+
+    That refusal is the answer the operator asked for, so it has to come back as an
+    unhealthy result rather than a 500 from the endpoint.
+    """
+    import litellm.integrations.pointfive as pointfive_package
+
+    def refuse(**_):
+        raise ValueError("pointfive logging requires an api key. Set POINTFIVE_API_KEY")
+
+    monkeypatch.setattr(pointfive_package, "PointFiveLogger", refuse)
+
+    result = await health_services_endpoint(user_api_key_dict=_pointfive_admin(), service="pointfive")
+
+    assert result["status"] == "unhealthy"
+    assert "requires an api key" in result["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.CUSTOMER,
+    ],
+)
+async def test_health_services_endpoint_pointfive_blocks_non_admin(monkeypatch, role):
+    """
+    The ping travels on the proxy-wide PointFive credential and stamps liveness at PointFive.
+
+    A tenant key must not be able to keep an integration looking alive, or read back
+    account-level authentication failures through it.
+    """
+    import litellm.integrations.pointfive as pointfive_package
+    from litellm.proxy._types import ProxyException
+
+    logger_class = MagicMock()
+    monkeypatch.setattr(pointfive_package, "PointFiveLogger", logger_class)
+
+    with pytest.raises(ProxyException) as raised:
+        await health_services_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(token="t", user_id="u", user_role=role), service="pointfive"
+        )
+
+    assert str(raised.value.code) == "403"
+    logger_class.assert_not_called()

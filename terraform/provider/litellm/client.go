@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,20 @@ type Client struct {
 	APIKey             string
 	httpClient         *http.Client
 	InsecureSkipVerify bool
+}
+
+type apiError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("API request failed with status code %d: %s", e.StatusCode, e.Body)
+}
+
+func isNotFound(err error) bool {
+	var apiErr *apiError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
 func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
@@ -57,6 +72,9 @@ func (c *Client) CreateKey(key *Key) (*Key, error) {
 
 func (c *Client) GetKey(keyID string) (*Key, error) {
 	resp, err := c.sendRequest("GET", fmt.Sprintf("/key/info?key=%s", keyID), nil)
+	if isNotFound(err) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -69,10 +87,38 @@ func (c *Client) GetKey(keyID string) (*Key, error) {
 				info["key"] = k
 			}
 		}
+		hoistKeyFieldsStoredInMetadata(info)
 		return c.parseKeyResponse(info)
 	}
 
 	return c.parseKeyResponse(resp)
+}
+
+var keyFieldsStoredInMetadata = []string{
+	"model_rpm_limit",
+	"model_tpm_limit",
+	"guardrails",
+	"tags",
+	"enforced_params",
+	"allowed_passthrough_routes",
+	"rpm_limit_type",
+	"tpm_limit_type",
+	"prompts",
+}
+
+func hoistKeyFieldsStoredInMetadata(info map[string]interface{}) {
+	metadata, ok := info["metadata"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	for _, field := range keyFieldsStoredInMetadata {
+		if existing, present := info[field]; present && existing != nil {
+			continue
+		}
+		if v, present := metadata[field]; present {
+			info[field] = v
+		}
+	}
 }
 
 func (c *Client) UpdateKey(key *Key) (*Key, error) {
@@ -80,20 +126,31 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	updateData := map[string]interface{}{
 		"key":              key.Key,
 		"team_id":          key.TeamID,
-		"metadata":         key.Metadata,
 		"key_alias":        key.KeyAlias,
 		"aliases":          key.Aliases,
 		"permissions":      key.Permissions,
 		"model_max_budget": key.ModelMaxBudget,
-		"model_rpm_limit":  key.ModelRPMLimit,
-		"model_tpm_limit":  key.ModelTPMLimit,
 		"blocked":          key.Blocked,
+	}
+
+	// The proxy keeps the stored metadata only when the field is absent, so nil means omit.
+	if key.Metadata != nil {
+		updateData["metadata"] = key.Metadata
+	}
+	if key.ModelRPMLimit != nil {
+		updateData["model_rpm_limit"] = key.ModelRPMLimit
+	}
+	if key.ModelTPMLimit != nil {
+		updateData["model_tpm_limit"] = key.ModelTPMLimit
 	}
 
 	// The proxy rejects an empty-string budget_duration with a 400, so only
 	// send it when set.
 	if key.BudgetDuration != "" {
 		updateData["budget_duration"] = key.BudgetDuration
+	}
+	if key.Duration != "" {
+		updateData["duration"] = key.Duration
 	}
 
 	// Only add pointer fields if they are explicitly set
@@ -366,7 +423,7 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 	log.Printf("Response body: %s", c.redactSensitiveData(string(bodyBytes)))
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed with status code %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, &apiError{StatusCode: resp.StatusCode, Body: string(bodyBytes)}
 	}
 
 	var result map[string]interface{}
