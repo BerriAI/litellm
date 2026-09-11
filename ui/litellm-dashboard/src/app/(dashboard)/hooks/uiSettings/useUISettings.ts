@@ -17,7 +17,7 @@ export const useUISettings = (options?: { staleTime?: number; refetchInterval?: 
   return useQuery<Record<string, any>>({
     queryKey: uiSettingsKeys.list({}),
     queryFn: async () => await getUiSettings(),
-    staleTime: options?.staleTime ?? 60 * 60 * 1000, // 1 hour - data rarely changes
+    staleTime: options?.staleTime ?? 60 * 60 * 1000,
     gcTime: 60 * 60 * 1000, // 1 hour - keep in cache for 1 hour
     refetchInterval: options?.refetchInterval,
   });

@@ -1,4 +1,4 @@
-import { BarChart3, Bot, Building2, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
+import { BarChart3, Bot, Building2, Folder, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
 import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,6 +9,7 @@ export type UsageOption =
   | "my-usage"
   | "organization"
   | "team"
+  | "project"
   | "customer"
   | "tag"
   | "agent"
@@ -20,6 +21,7 @@ export interface UsageViewSelectProps {
   userRole: string | null;
   canViewTagUsage?: boolean;
   isOrgAdmin?: boolean;
+  enableProjectsUI?: boolean;
   title?: string;
   description?: string;
   "data-id"?: string;
@@ -69,6 +71,13 @@ const OPTIONS: OptionConfig[] = [
     icon: <Users className="size-4" />,
   },
   {
+    value: "project",
+    label: "Project Usage",
+    description: "View usage by project",
+    icon: <Folder className="size-4" />,
+    capability: "viewProjectUsage",
+  },
+  {
     value: "customer",
     label: "Customer Usage",
     description: "View usage by customer accounts",
@@ -110,6 +119,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   userRole,
   canViewTagUsage = false,
   isOrgAdmin = false,
+  enableProjectsUI = true,
   title = "Usage View",
   description = "Select the usage data you want to view",
   "data-id": dataId,
@@ -117,6 +127,9 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
     return OPTIONS.filter((option) => {
+      if (option.value === "project" && !enableProjectsUI) {
+        return false;
+      }
       if (option.capability) {
         return hasCapability(userRole, option.capability, isOrgAdmin);
       }

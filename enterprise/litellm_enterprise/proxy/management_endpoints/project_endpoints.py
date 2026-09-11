@@ -1178,7 +1178,9 @@ async def _resolve_project_daily_activity_scope(
     found_by_id: Final = {p.project_id: p for p in projects}
     missing: Final = [pid for pid in requested if pid not in found_by_id]
     if missing:
-        raise _project_daily_activity_error(status_code=404, message=f"Project(s) not found: {missing}")
+        raise _project_daily_activity_error(
+            status_code=404, message=f"Project(s) not found: {', '.join(sorted(missing))}"
+        )
 
     if not user_api_key_has_admin_view(user_api_key_dict):
         for project_id in requested:
