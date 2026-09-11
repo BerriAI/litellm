@@ -109,6 +109,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     # Health & ops
     "/health",
     "/metrics",
+    "/debug/asyncio-tasks",
     "/watsonx",
 )
 
