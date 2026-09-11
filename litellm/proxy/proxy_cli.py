@@ -46,7 +46,8 @@ sys.path.append(os.getcwd())
 config_filename: Final = "litellm.secrets"
 
 litellm_mode: Final = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
-if litellm_mode == "DEV":
+disable_dotenv: Final = os.getenv("LITELLM_DISABLE_DOTENV", "").lower() in ("1", "true", "t", "yes", "y")
+if litellm_mode == "DEV" and not disable_dotenv:
     load_dotenv()
 from enum import Enum
 
