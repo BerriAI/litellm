@@ -1,6 +1,7 @@
 # Start tracing memory allocations
 import asyncio
 import gc
+import itertools
 import json
 import os
 import sys
@@ -68,12 +69,11 @@ def _task_coroutine_name(task: asyncio.Task[object]) -> str:
     return coroutine_name if isinstance(coroutine_name, str) else repr(coroutine)
 
 
-def _task_stack_group(stack_key: _TaskStackKey, records: tuple[_TaskStackRecord, ...]) -> _TaskStackGroup:
-    matching_records: Final = tuple(record for record in records if record[0] == stack_key)
-    sample_record: Final = matching_records[0]
-    sample_tasks: Final = tuple(record[2] for record in matching_records)
+def _task_stack_group(records: tuple[_TaskStackRecord, ...]) -> _TaskStackGroup:
+    sample_record: Final = records[0]
+    sample_tasks: Final = tuple(record[2] for record in records)
     result: Final[_TaskStackGroup] = {
-        "count": len(matching_records),
+        "count": len(records),
         "coroutine": _task_coroutine_name(sample_tasks[0]),
         "task_names": tuple(task.get_name() for task in sample_tasks[:5]),
         "stack": sample_record[1],
@@ -83,13 +83,19 @@ def _task_stack_group(stack_key: _TaskStackKey, records: tuple[_TaskStackRecord,
 
 def _group_task_stacks(tasks: tuple[asyncio.Task[object], ...], max_frames: int) -> tuple[_TaskStackGroup, ...]:
     records: Final = tuple(
-        (stack_key, stack, task)
-        for task in tasks
-        for stack in (_task_stack(task, max_frames),)
-        for stack_key in (_task_stack_key(stack),)
+        sorted(
+            (
+                (stack_key, stack, task)
+                for task in tasks
+                for stack in (_task_stack(task, max_frames),)
+                for stack_key in (_task_stack_key(stack),)
+            ),
+            key=lambda record: record[0],
+        )
     )
-    stack_keys: Final = tuple(dict.fromkeys(record[0] for record in records))
-    groups: Final = tuple(_task_stack_group(stack_key, records) for stack_key in stack_keys)
+    groups: Final = tuple(
+        _task_stack_group(tuple(group)) for _, group in itertools.groupby(records, key=lambda record: record[0])
+    )
     return tuple(sorted(groups, key=lambda group: group["count"], reverse=True))
 
 
