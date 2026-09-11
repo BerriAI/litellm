@@ -2203,6 +2203,14 @@ def _attempt_json_repair(s: str) -> object | None:
     return None
 
 
+# Upper bound on how many argument objects a single tool-call string may
+# recover into.  Concatenated recovery fans one provider tool call out into
+# multiple proxy-side actions (e.g. guardrail retrievals), so an unbounded
+# split would let a crafted model response amplify one call into arbitrarily
+# many authenticated downstream requests.
+MAX_RECOVERED_ARGUMENT_OBJECTS: Final = 8
+
+
 def parse_tool_call_arguments(
     arguments: str | None,
     tool_name: str | None = None,
@@ -2254,7 +2262,17 @@ def parse_tool_call_arguments(
             return repaired
 
         if allow_concatenated:
-            split_arguments: Final = split_concatenated_json_objects(arguments)
+            # strict=True: refuse partial recovery -- recovering the complete
+            # prefix while silently dropping a malformed tail would execute an
+            # incomplete tool sequence.
+            split_arguments: Final = split_concatenated_json_objects(arguments, strict=True)
+            if len(split_arguments) > MAX_RECOVERED_ARGUMENT_OBJECTS:
+                raise ValueError(
+                    f"Failed to parse tool call arguments for tool '{tool_name or '<unknown>'}' "
+                    f"({context or 'unknown context'}): recovered {len(split_arguments)} "
+                    f"concatenated argument objects, exceeding the per-call limit of "
+                    f"{MAX_RECOVERED_ARGUMENT_OBJECTS}. Arguments: {arguments}"
+                ) from original_error
             if split_arguments:
                 verbose_logger.warning(
                     "Recovered %d concatenated tool call argument object(s) for tool '%s' "
@@ -2280,7 +2298,7 @@ def parse_tool_call_arguments(
         raise ValueError(error_message) from original_error
 
 
-def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
+def split_concatenated_json_objects(raw: str, strict: bool = False) -> list[dict[str, object]]:
     """
     Split a string that contains one or more concatenated JSON objects into
     a list of parsed dicts.
@@ -2300,6 +2318,10 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     parsed before the bad tail are returned and the remainder is discarded
     with a warning, rather than raising.  Callers treat an empty result as
     ``input={}`` so the conversation can continue instead of hard-failing.
+
+    Pass ``strict=True`` to reject partial recovery entirely: an unparseable
+    tail then yields an empty list, so callers that would execute the
+    recovered objects never run an incomplete sequence.
 
     Returns
     -------
@@ -2336,6 +2358,8 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
                 idx,
                 e,
             )
+            if strict:
+                return []
             break
         if isinstance(obj, dict):
             results.append(obj)

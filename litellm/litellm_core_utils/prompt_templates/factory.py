@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Any, Final, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
+from typing_extensions import ReadOnly
 
 import litellm
 import litellm.types
@@ -5348,9 +5349,9 @@ def get_attribute_or_key(tool_or_function, attribute, default=None):
 
 
 class NormalizedToolCall(TypedDict):
-    id: str | None
-    name: str | None
-    arguments: Mapping[str, object]
+    id: ReadOnly[str | None]
+    name: ReadOnly[str | None]
+    arguments: ReadOnly[Mapping[str, object]]
 
 
 def _parse_tool_call_arguments(
@@ -5402,78 +5403,85 @@ def _normalized_tool_calls(
     )
 
 
+def _chat_tool_calls_of_choice(choice: object) -> tuple[object, ...]:
+    message: Final = get_attribute_or_key(choice, "message", None)
+    choice_tool_calls: Final = get_attribute_or_key(message, "tool_calls", None) if message else None
+    if isinstance(choice_tool_calls, list):
+        return tuple(choice_tool_calls)
+    return ()
+
+
+def _normalized_from_chat_tool_call(tool_call: object) -> tuple[NormalizedToolCall, ...]:
+    function: Final = get_attribute_or_key(tool_call, "function", None)
+    if function is None:
+        return ()
+    name: Final = get_attribute_or_key(function, "name")
+    return _normalized_tool_calls(
+        get_attribute_or_key(tool_call, "id"),
+        name,
+        _parse_tool_call_arguments(
+            get_attribute_or_key(function, "arguments", "{}"),
+            tool_name=name,
+            context="chat completions",
+        ),
+    )
+
+
 def _tool_calls_from_chat_completion_response(
     response: object, include_all_choices: bool = False
-) -> list[NormalizedToolCall]:
+) -> tuple[NormalizedToolCall, ...]:
     choices: Final = get_attribute_or_key(response, "choices", None)
     if not (isinstance(choices, list) and choices):
-        return []
-    tool_calls: Final[list[object]] = []
-    for choice in choices if include_all_choices else choices[:1]:
-        message = get_attribute_or_key(choice, "message", None)
-        choice_tool_calls = get_attribute_or_key(message, "tool_calls", None) if message else None
-        if isinstance(choice_tool_calls, list):
-            tool_calls.extend(choice_tool_calls)
-    result: Final[list[NormalizedToolCall]] = []
-    for tc in tool_calls:
-        fn = get_attribute_or_key(tc, "function", None)
-        if fn is None:
-            continue
-        name = get_attribute_or_key(fn, "name")
-        result.extend(
-            _normalized_tool_calls(
-                get_attribute_or_key(tc, "id"),
-                name,
-                _parse_tool_call_arguments(
-                    get_attribute_or_key(fn, "arguments", "{}"),
-                    tool_name=name,
-                    context="chat completions",
-                ),
-            )
-        )
-    return result
+        return ()
+    selected_choices: Final = choices if include_all_choices else choices[:1]
+    return tuple(
+        normalized
+        for choice in selected_choices
+        for tool_call in _chat_tool_calls_of_choice(choice)
+        for normalized in _normalized_from_chat_tool_call(tool_call)
+    )
 
 
-def _tool_calls_from_responses_api_response(response: object) -> list[NormalizedToolCall]:
+def _normalized_from_responses_item(item: object) -> tuple[NormalizedToolCall, ...]:
+    if get_attribute_or_key(item, "type") != "function_call":
+        return ()
+    name: Final = get_attribute_or_key(item, "name")
+    return _normalized_tool_calls(
+        get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id"),
+        name,
+        _parse_tool_call_arguments(
+            get_attribute_or_key(item, "arguments", "{}"),
+            tool_name=name,
+            context="responses API",
+        ),
+    )
+
+
+def _tool_calls_from_responses_api_response(response: object) -> tuple[NormalizedToolCall, ...]:
     output: Final = get_attribute_or_key(response, "output", None)
     if not isinstance(output, list):
-        return []
-    result: Final[list[NormalizedToolCall]] = []
-    for item in output:
-        if get_attribute_or_key(item, "type") != "function_call":
-            continue
-        name = get_attribute_or_key(item, "name")
-        result.extend(
-            _normalized_tool_calls(
-                get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id"),
-                name,
-                _parse_tool_call_arguments(
-                    get_attribute_or_key(item, "arguments", "{}"),
-                    tool_name=name,
-                    context="responses API",
-                ),
-            )
-        )
-    return result
+        return ()
+    return tuple(normalized for item in output for normalized in _normalized_from_responses_item(item))
 
 
-def _tool_calls_from_anthropic_messages_response(response: object) -> list[NormalizedToolCall]:
+def _normalized_from_anthropic_block(block: object) -> tuple[NormalizedToolCall, ...]:
+    if get_attribute_or_key(block, "type") != "tool_use":
+        return ()
+    raw_input: Final = get_attribute_or_key(block, "input", {})
+    return (
+        NormalizedToolCall(
+            id=get_attribute_or_key(block, "id"),
+            name=get_attribute_or_key(block, "name"),
+            arguments=raw_input if isinstance(raw_input, dict) else {},
+        ),
+    )
+
+
+def _tool_calls_from_anthropic_messages_response(response: object) -> tuple[NormalizedToolCall, ...]:
     content: Final = get_attribute_or_key(response, "content", None)
     if not isinstance(content, list):
-        return []
-    result: Final[list[NormalizedToolCall]] = []
-    for block in content:
-        if get_attribute_or_key(block, "type") != "tool_use":
-            continue
-        raw_input = get_attribute_or_key(block, "input", {})
-        result.append(
-            NormalizedToolCall(
-                id=get_attribute_or_key(block, "id"),
-                name=get_attribute_or_key(block, "name"),
-                arguments=raw_input if isinstance(raw_input, dict) else {},
-            )
-        )
-    return result
+        return ()
+    return tuple(normalized for block in content for normalized in _normalized_from_anthropic_block(block))
 
 
 def get_tool_calls_from_response(response: object, include_all_choices: bool = False) -> list[NormalizedToolCall]:
@@ -5494,17 +5502,15 @@ def get_tool_calls_from_response(response: object, include_all_choices: bool = F
     Callers that only care about a specific tool should filter the result by
     ``name`` themselves -- this returns every tool call found.
     """
-    chat_tool_calls = _tool_calls_from_chat_completion_response(response, include_all_choices=include_all_choices)
+    chat_tool_calls: Final = _tool_calls_from_chat_completion_response(
+        response, include_all_choices=include_all_choices
+    )
     if chat_tool_calls:
-        return chat_tool_calls
-    for extractor in (
-        _tool_calls_from_responses_api_response,
-        _tool_calls_from_anthropic_messages_response,
-    ):
-        tool_calls = extractor(response)
-        if tool_calls:
-            return tool_calls
-    return []
+        return list(chat_tool_calls)
+    responses_tool_calls: Final = _tool_calls_from_responses_api_response(response)
+    if responses_tool_calls:
+        return list(responses_tool_calls)
+    return list(_tool_calls_from_anthropic_messages_response(response))
 
 
 def has_tool_with_name(tools: object, tool_name: str) -> bool:

@@ -211,16 +211,47 @@ def test_parse_tool_call_arguments_concatenated_objects_disabled_by_default():
         parse_tool_call_arguments(raw, tool_name="weather", context="chat completions")
 
 
-def test_parse_tool_call_arguments_concatenated_partial_tail():
-    """Only complete objects before a truncated tail are recovered."""
+def test_parse_tool_call_arguments_concatenated_partial_tail_rejected():
+    """
+    A truncated tail rejects the whole recovery instead of executing an
+    incomplete tool sequence (only the complete prefix would have run).
+    """
     raw = '{"city": "Paris"}{"units": "celsius"}{"forecast":'
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        parse_tool_call_arguments(
+            raw,
+            tool_name="weather",
+            context="chat completions",
+            allow_concatenated=True,
+        )
+
+
+def test_parse_tool_call_arguments_concatenated_over_limit_rejected():
+    """
+    Recovery fans one provider tool call out into many proxy-side actions, so
+    it is capped: more objects than the per-call limit raises instead of
+    amplifying the call.
+    """
+    raw = "".join(f'{{"n": {index}}}' for index in range(9))
+    with pytest.raises(ValueError, match="exceeding the per-call limit"):
+        parse_tool_call_arguments(
+            raw,
+            tool_name="weather",
+            context="chat completions",
+            allow_concatenated=True,
+        )
+
+
+def test_parse_tool_call_arguments_concatenated_at_limit_accepted():
+    """Exactly the per-call limit of objects still recovers."""
+    raw = "".join(f'{{"n": {index}}}' for index in range(8))
     result = parse_tool_call_arguments(
         raw,
         tool_name="weather",
         context="chat completions",
         allow_concatenated=True,
     )
-    assert result == [{"city": "Paris"}, {"units": "celsius"}]
+    assert result == [{"n": index} for index in range(8)]
 
 
 def test_split_concatenated_json_single_object():
@@ -295,6 +326,17 @@ def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
     """
     result = split_concatenated_json_objects('{"a": 1}{"b": 2}{"c":')
     assert result == [{"a": 1}, {"b": 2}]
+
+
+def test_split_concatenated_json_strict_rejects_truncated_tail():
+    """
+    strict=True discards the whole result when a tail cannot be parsed, so
+    callers that execute the recovered objects never run a partial sequence.
+    """
+    raw = '{"a": 1}{"b": 2}{"c":'
+    assert split_concatenated_json_objects(raw, strict=True) == []
+    # Default mode keeps the graceful salvage behavior (Bedrock replay path).
+    assert split_concatenated_json_objects(raw) == [{"a": 1}, {"b": 2}]
 
 
 # ---------------------------------------------------------------------------

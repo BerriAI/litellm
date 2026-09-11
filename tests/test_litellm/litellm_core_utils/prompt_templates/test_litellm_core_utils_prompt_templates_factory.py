@@ -3458,6 +3458,72 @@ def test_get_tool_calls_from_response_splits_concatenated_responses_arguments():
     ]
 
 
+def test_get_tool_calls_from_response_rejects_partial_concatenated_tail():
+    """
+    A truncated tail must not execute an incomplete tool sequence: the whole
+    recovery is rejected and the single original call degrades to {}.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "search",
+                                "arguments": '{"query": "first"}{"query":',
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "search", "arguments": {}}]
+
+
+def test_get_tool_calls_from_response_caps_concatenated_expansion():
+    """
+    One provider tool call must not amplify into arbitrarily many proxy-side
+    calls: recovering more objects than the per-call limit is rejected.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "search",
+                                "arguments": "".join(
+                                    f'{{"query": "q{index}"}}' for index in range(9)
+                                ),
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "search", "arguments": {}}]
+
+
 def test_get_tool_calls_from_response_non_object_arguments_returns_empty():
     from litellm.litellm_core_utils.prompt_templates.factory import (
         get_tool_calls_from_response,
