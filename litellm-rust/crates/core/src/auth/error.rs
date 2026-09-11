@@ -6,6 +6,8 @@ pub enum AuthError {
     Configuration(#[from] AuthConfigurationError),
     #[error("credential acquisition failed: {0}")]
     AzureTokenAcquisition(String),
+    #[error("credential acquisition failed: Vertex AI credentials: {0}")]
+    VertexTokenAcquisition(String),
     #[error("credential acquisition failed: {}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
     CredentialChain(Vec<AuthError>),
     #[error("credential caller failed: credential caller returned an empty credential")]
@@ -73,6 +75,12 @@ pub enum AuthConfigurationError {
     RequestAzureCredentialReference,
     #[error("host credentials cannot be sent to a request-controlled Azure endpoint")]
     RequestAzureCredentialDestination,
+    #[error("credentials cannot be sent to a request-controlled Vertex AI endpoint")]
+    RequestVertexCredentialDestination,
+    #[error(
+        "request-controlled Vertex credentials must use the canonical Google OAuth token endpoint"
+    )]
+    RequestVertexTokenEndpoint,
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]

@@ -13,9 +13,7 @@ use litellm_core::providers::azure_ai::ocr::transformation::{
 };
 use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
-use litellm_core::providers::vertex_ai::ocr::transformation::{
-    VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
-};
+use litellm_core::providers::vertex_ai::ocr::transformation::VERTEX_AI_DEEPSEEK_OCR_CONFIG;
 
 use crate::client::http_client;
 
@@ -44,7 +42,7 @@ pub(super) fn ocr_provider_config(
         }
         "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
         "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
-        "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),
+        "vertex_ai" => None,
         _ => None,
     }
 }

@@ -111,6 +111,7 @@ mod tests {
         ));
         assert!(is_supported_request("parse-v3", Some("reducto")));
         assert!(is_supported_request("parse-legacy", Some("reducto")));
-        assert!(!is_supported_request("mistral-ocr", Some("vertex_ai")));
+        assert!(is_supported_request("mistral-ocr", Some("vertex_ai")));
+        assert!(!is_supported_request("deepseek-ocr", Some("vertex_ai")));
     }
 }
