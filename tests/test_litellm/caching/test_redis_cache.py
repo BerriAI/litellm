@@ -1202,3 +1202,68 @@ async def test_a_probe_overtaken_by_a_later_outage_leaves_the_breaker_to_the_new
     new_probe_release.set()
     assert await new_probe == "new probe"
     assert breaker._state == breaker.CLOSED
+
+
+class _SpyRedisCommands:
+    def __init__(self, eval_result: object) -> None:
+        self.commands: list[str] = []
+        self.eval_calls: list[tuple[object, ...]] = []
+        self._eval_result = eval_result
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:
+        self.commands.append("eval")
+        self.eval_calls.append((script, numkeys, *keys_and_args))
+        return self._eval_result
+
+    async def incrbyfloat(self, name: str, amount: float) -> float:
+        self.commands.append("incrbyfloat")
+        return amount
+
+    async def ttl(self, name: str) -> int:
+        self.commands.append("ttl")
+        return -1
+
+    async def expire(self, name: str, time: int) -> bool:
+        self.commands.append("expire")
+        return True
+
+
+class _SpyRedisCache(RedisCache):
+    def __init__(self, spy: _SpyRedisCommands, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.spy = spy
+
+    def init_async_client(self, *args: object, **kwargs: object) -> object:
+        return self.spy
+
+
+@pytest.mark.parametrize(("namespace", "expected_key"), [(None, "spend:key:abc"), ("ns", "ns:spend:key:abc")])
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_arms_ttl_in_the_same_command(
+    namespace, expected_key, monkeypatch, redis_no_ping
+):
+    """The increment and its TTL reach Redis as one server-side step."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    spy = _SpyRedisCommands(eval_result=b"1.25")
+    redis_cache = _SpyRedisCache(spy, namespace=namespace)
+
+    result = await redis_cache.async_increment(key="spend:key:abc", value=0.25, ttl=30)
+
+    assert result == 1.25
+    assert spy.commands == ["eval"]
+    script, numkeys, key, amount, ttl, refresh = spy.eval_calls[0]
+    assert "INCRBYFLOAT" in script and "EXPIRE" in script and "TTL" in script
+    assert (numkeys, key, amount, ttl, refresh) == (1, expected_key, 0.25, 30, "0")
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_refresh_ttl_sends_refresh_flag(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    spy = _SpyRedisCommands(eval_result="2.5")
+    redis_cache = _SpyRedisCache(spy)
+
+    result = await redis_cache.async_increment(key="spend:team:t1", value=0.5, refresh_ttl=True)
+
+    assert result == 2.5
+    assert spy.commands == ["eval"]
+    assert spy.eval_calls[0][3:] == (0.5, 60, "1")

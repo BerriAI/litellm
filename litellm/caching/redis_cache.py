@@ -98,7 +98,16 @@ _INCREMENT_WITH_FLOOR_LUA: Final = (
     "return count"
 )
 
+_INCREMENT_WITH_TTL_LUA: Final = (
+    "local value = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1]) "
+    "local ttl = tonumber(ARGV[2]) "
+    "if ttl > 0 and (ARGV[3] == '1' or redis.call('TTL', KEYS[1]) == -1) then "
+    "redis.call('EXPIRE', KEYS[1], ttl) end "
+    "return value"
+)
+
 _LUA_COUNT: Final = TypeAdapter(int)
+_LUA_FLOAT: Final = TypeAdapter(float)
 _OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
 
 
@@ -1242,21 +1251,15 @@ class RedisCache(BaseCache):
         parent_otel_span: Span | None = None,
         refresh_ttl: bool = False,
     ) -> float:
-        from redis.asyncio import Redis
-
-        _redis_client: Final[Redis] = self.init_async_client()
+        _redis_client: Final = self._async_commands()
         start_time: Final = time.time()
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
         try:
-            result: Final = await _redis_client.incrbyfloat(name=key, amount=value)
-            if _used_ttl is not None:
-                if refresh_ttl:
-                    await _redis_client.expire(key, _used_ttl)
-                else:
-                    current_ttl: Final = await _redis_client.ttl(key)
-                    if current_ttl == -1:
-                        await _redis_client.expire(key, _used_ttl)
+            raw_value: Final = await _redis_client.eval(
+                _INCREMENT_WITH_TTL_LUA, 1, key, value, _used_ttl or 0, "1" if refresh_ttl else "0"
+            )
+            result: Final = _LUA_FLOAT.validate_python(raw_value)
 
             ## LOGGING ##
             end_time = time.time()
