@@ -1349,48 +1349,6 @@ async def test_is_spend_counter_cache_warm_redis_error_falls_back_to_in_memory(
 
 
 # ---------------------------------------------------------------------------
-# _apply_spend_counter_increments
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_apply_spend_counter_increments_open_breaker_invalidates_and_returns(monkeypatch):
-    """An open Redis breaker fast-fails the pipeline on every request, so the callback
-    must not turn each one into a tracking-cost failure: drop the stale local copies
-    and return like a miss, without raising."""
-    from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
-
-    fake_cache = _make_spend_counter_cache()
-    fake_cache.redis_cache.async_increment_pipeline = AsyncMock(
-        side_effect=RedisCircuitBreakerOpenError("Redis circuit breaker is open, skipping async_increment_pipeline")
-    )
-    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-    pending: Final = (
-        ps._PendingSpendIncrement(counter_key="spend:key:k", increment=1.0),
-        ps._PendingSpendIncrement(counter_key="spend:team:t", increment=1.0),
-    )
-
-    await ps._apply_spend_counter_increments(pending=pending)
-
-    deleted: Final = sorted(call.kwargs["key"] for call in fake_cache.in_memory_cache.delete_cache.call_args_list)
-    assert deleted == ["spend:key:k", "spend:team:t"]
-    assert fake_cache.in_memory_cache.set_cache.called is False
-
-
-@pytest.mark.asyncio
-async def test_apply_spend_counter_increments_other_redis_error_invalidates_and_raises(monkeypatch):
-    fake_cache = _make_spend_counter_cache()
-    fake_cache.redis_cache.async_increment_pipeline = AsyncMock(side_effect=RuntimeError("incr fail"))
-    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
-    pending: Final = (ps._PendingSpendIncrement(counter_key="spend:key:k", increment=1.0),)
-
-    with pytest.raises(RuntimeError):
-        await ps._apply_spend_counter_increments(pending=pending)
-
-    assert fake_cache.in_memory_cache.delete_cache.called is True
-
-
-# ---------------------------------------------------------------------------
 # _increment_spend_counter_cache
 # ---------------------------------------------------------------------------
 

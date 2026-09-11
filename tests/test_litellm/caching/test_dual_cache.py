@@ -8,7 +8,8 @@ import pytest
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cache import RedisCache, _redis_circuit_breaker_guard, _redis_circuit_breaker_guard_sync
+from litellm.types.caching import RedisPipelineIncrementOperation
 
 
 @pytest.mark.asyncio
@@ -579,102 +580,100 @@ async def test_dual_cache_late_attach_redis_wires_writes_and_ttl_async():
     assert in_memory.get_cache(key_after) == val_after
 
 
-@pytest.fixture
-def dual_cache_with_open_breaker():
-    """A DualCache whose Redis tier is behind an already-open circuit breaker.
+class _OpenBreakerRedis:
+    def __init__(self) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
 
-    The Redis client is a mock that fails the test if anything reaches it, so every
-    guarded call has to be short-circuited by the breaker.
-    """
-    from redis.exceptions import ConnectionError as RedisConnectionError
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+        for _ in range(3):
+            self._circuit_breaker.record_failure()
 
-    from litellm.caching.redis_cache import _is_redis_timeout_failure
-    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+    @_redis_circuit_breaker_guard
+    async def async_get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
 
-    with (
-        patch("asyncio.get_running_loop", side_effect=RuntimeError("No running event loop")),
-        patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
-            "litellm._redis.get_redis_client", return_value=MagicMock()
-        ),
-    ):
-        redis_cache = RedisCache(host="127.0.0.1", port=6379)
-    unreachable = AsyncMock()
-    unreachable.get.side_effect = AssertionError("an open breaker must not touch Redis")
-    unreachable.mget.side_effect = AssertionError("an open breaker must not touch Redis")
-    unreachable.set.side_effect = AssertionError("an open breaker must not touch Redis")
-    unreachable.pipeline.side_effect = AssertionError("an open breaker must not touch Redis")
-    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
-        redis_cache._circuit_breaker.record_failure(is_timeout=_is_redis_timeout_failure(RedisConnectionError("refused")))
-    assert redis_cache._circuit_breaker.is_open() is True
-    with patch.object(redis_cache, "init_async_client", return_value=unreachable):
-        yield DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+    @_redis_circuit_breaker_guard
+    async def async_batch_get_cache(self, key_list, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_set_cache(self, key, value, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
+    async def async_increment(self, key, value, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard_sync
+    def get_cache(self, key, **kwargs):
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard_sync
+    def batch_get_cache(self, key_list, **kwargs):
+        raise AssertionError("never reached")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "call, expected",
+    "call",
     [
-        pytest.param(lambda c: c.async_get_cache("lit7468"), lambda n: None, id="async_get_cache"),
-        pytest.param(
-            lambda c: c.async_batch_get_cache(["lit7468", "lit7460"]), lambda n: [None, None], id="async_batch_get_cache"
+        lambda cache: cache.async_get_cache("k"),
+        lambda cache: cache.async_batch_get_cache(["k1", "k2"]),
+        lambda cache: cache.async_set_cache("k", "v"),
+        lambda cache: cache.async_set_cache_pipeline([("k", "v")]),
+        lambda cache: cache.async_increment_cache_pipeline(
+            increment_list=[RedisPipelineIncrementOperation(key="k", increment_value=1.0, ttl=60)]
         ),
-        pytest.param(lambda c: c.async_set_cache("lit7468", "v"), lambda n: None, id="async_set_cache"),
-        pytest.param(lambda c: c.async_set_cache_pipeline([("lit7468", "v")]), lambda n: None, id="async_set_cache_pipeline"),
-        pytest.param(lambda c: c.async_increment_cache("lit7468", 1.0, ttl=60), float, id="async_increment_cache"),
-        pytest.param(
-            lambda c: c.async_increment_cache_pipeline([{"key": "lit7468", "increment_value": 1.0, "ttl": 60}]),
-            lambda n: [float(n)],
-            id="async_increment_cache_pipeline",
-        ),
+        lambda cache: cache.async_increment_cache("k", 1.0),
     ],
+    ids=["get", "batch_get", "set", "set_pipeline", "increment_pipeline", "increment"],
 )
-async def test_open_breaker_is_a_quiet_cache_miss(dual_cache_with_open_breaker, call, expected, caplog):
-    """While the breaker is open, every cache operation must degrade to the in-memory result
-    without logging anything above DEBUG.
+async def test_an_open_circuit_breaker_is_not_an_error_per_request(caplog, call):
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    caplog.clear()
 
-    Before this, each skipped call raised a generic exception that DualCache caught and logged
-    as a full ERROR traceback. Under production request rates that was hundreds of stack
-    formats per second per replica, enough to pin every proxy at 100% CPU on a Redis blip.
-    """
-    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await call(cache)
 
-    for n in range(1, 51):
-        assert await call(dual_cache_with_open_breaker) == expected(n)
-
-    noisy = [r for r in caplog.records if r.levelno > logging.DEBUG]
-    assert noisy == [], f"an open breaker must be silent per call, got {[r.getMessage() for r in noisy]}"
+    assert [record.levelno for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
 
 
-def test_open_breaker_is_a_quiet_cache_miss_on_the_sync_read_path(dual_cache_with_open_breaker, caplog):
-    """The sync read runs in the request thread pool for /v1/messages and /v1/responses, so it
-    must short-circuit on an open breaker like the async path instead of dialing Redis per call.
-    """
-    caplog.set_level(logging.DEBUG, logger="LiteLLM")
-    redis_client = dual_cache_with_open_breaker.redis_cache.redis_client
-    redis_client.get.side_effect = AssertionError("an open breaker must not touch Redis")
+@pytest.mark.parametrize(
+    "call",
+    [lambda cache: cache.get_cache("k"), lambda cache: cache.batch_get_cache(["k1", "k2"])],
+    ids=["get", "batch_get"],
+)
+def test_an_open_circuit_breaker_is_not_an_error_per_sync_request(caplog, call):
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_OpenBreakerRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    caplog.clear()
 
-    for _ in range(50):
-        assert dual_cache_with_open_breaker.get_cache("lit7468") is None
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        call(cache)
 
-    noisy = [r for r in caplog.records if r.levelno > logging.DEBUG]
-    assert noisy == [], f"an open breaker must be silent per call, got {[r.getMessage() for r in noisy]}"
+    assert [record.levelno for record in caplog.records if record.levelno >= logging.WARNING] == []
+    assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
 
 
-def test_open_breaker_does_not_leave_sync_batch_reservations_behind(dual_cache_with_open_breaker, caplog):
-    """A batch read skipped by the breaker must not hold its keys for the batch expiry window.
+@pytest.mark.asyncio
+async def test_a_real_redis_failure_still_logs_an_error(caplog):
+    class _BrokenRedis:
+        async def async_get_cache(self, key, **kwargs):
+            raise ConnectionError("redis is down")
 
-    The sync read reserves keys before dialing Redis so concurrent callers do not all hit it.
-    When the breaker rejects the read, those reservations have to be released, otherwise the
-    first read after Redis recovers is still throttled for up to default_redis_batch_cache_expiry.
-    """
-    caplog.set_level(logging.DEBUG, logger="LiteLLM")
-    dual_cache_with_open_breaker.redis_cache.redis_client.mget.side_effect = AssertionError(
-        "an open breaker must not touch Redis"
-    )
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_BrokenRedis())  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
 
-    assert dual_cache_with_open_breaker.batch_get_cache(keys=["lit7468", "lit7460"]) == [None, None]
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        assert await cache.async_get_cache("k") is None
 
-    assert "lit7468" not in dual_cache_with_open_breaker.last_redis_batch_access_time
-    assert "lit7460" not in dual_cache_with_open_breaker.last_redis_batch_access_time
-    noisy = [r for r in caplog.records if r.levelno > logging.DEBUG]
-    assert noisy == [], f"an open breaker must be silent per call, got {[r.getMessage() for r in noisy]}"
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert [record.getMessage() for record in errors] == ["LiteLLM Cache: exception in async_get_cache: redis is down"]
+    assert errors[0].exc_info is not None

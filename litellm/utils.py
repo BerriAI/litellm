@@ -1843,6 +1843,9 @@ def client(original_function):
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                     return _caching_handler_response.final_embedding_cached_response
 
+            if _llm_caching_handler.preset_cache_key is not None:
+                logging_obj.litellm_params["preset_cache_key"] = _llm_caching_handler.preset_cache_key
+
             # CHECK MAX TOKENS
             if (
                 kwargs.get("max_tokens", None) is not None
@@ -2197,13 +2200,17 @@ def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
     return {"type": "openai_tokenizer", "tokenizer": _get_default_encoding()}
 
 
+def uses_anthropic_tokenizer(model: str) -> bool:
+    return model in litellm.anthropic_models and "claude-3" not in model
+
+
 def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     if model in litellm.cohere_models and "command-r" in model:
         # cohere
         cohere_tokenizer: Final = Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
-    elif model in litellm.anthropic_models and "claude-3" not in model:
+    elif uses_anthropic_tokenizer(model):
         claude_tokenizer: Final = Tokenizer.from_str(claude_json_str)
         return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
     # llama2
@@ -2967,24 +2974,33 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
     return None
 
 
+def is_generalized_model_info(model_info: ModelInfo) -> bool:
+    """Whether ``model_info`` came from a fallback-generalization capability rule.
+
+    Detected as the resolved key missing ``litellm.model_cost`` while matching a
+    capability rule. A rule-derived entry carries no pricing and only a conservative
+    family-baseline context window, so callers holding a second candidate name should
+    prefer an exact cost-map entry from that name over this one.
+    """
+    key: Final = cast("Mapping[str, object]", model_info).get("key")  # cast-ok: partial dicts may omit "key"
+    if not isinstance(key, str):
+        return False
+    return key not in litellm.model_cost and match_capability_generalizations(key) is not None
+
+
 def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
     Returns ``None`` when the lookup raises or when it resolved via a
-    fallback-generalization capability rule, detected as the resolved key missing
-    ``litellm.model_cost`` while matching a capability rule. A rule-derived entry
-    carries no pricing, so treating it as a hit would skip the built-in
-    cache-pricing inheritance for prefix-mangled keys.
+    fallback-generalization capability rule. A rule-derived entry carries no
+    pricing, so treating it as a hit would skip the built-in cache-pricing
+    inheritance for prefix-mangled keys.
     """
     try:
         info: Final = get_model_info(model=model)
     except Exception:
         return None
-    if info["key"] in litellm.model_cost:
-        return info
-    if match_capability_generalizations(info["key"]) is None:
-        return info
-    return None
+    return None if is_generalized_model_info(info) else info
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
@@ -3095,7 +3111,10 @@ def register_model(
                 existing_model = cast(dict, builtin_model_info)
                 model_cost_key = existing_model["key"]
             else:
-                existing_model = {}
+                # An exact entry ends the lookup ladder before the capability rules are
+                # consulted, so seed from them: otherwise registering an unmapped model
+                # shadows the very defaults it would have resolved to unregistered.
+                existing_model = dict(match_capability_generalizations(_key_str) or {})  # mutable-ok: merge target
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
                 if builtin_entry is not None:

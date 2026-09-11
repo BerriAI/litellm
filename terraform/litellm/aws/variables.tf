@@ -200,6 +200,44 @@ variable "gateway_num_workers" {
   }
 }
 
+variable "gateway_connection_pool_enabled" {
+  description = <<-EOT
+    Run an in-container PgBouncer (transaction mode, loopback) in each gateway
+    task, shared by every uvicorn worker. Without it each of the
+    `gateway_num_workers` workers opens its own Prisma pool straight to
+    Postgres, so a task's footprint against the database connection ceiling is
+    workers x connection_limit and grows with every task. Sets
+    LITELLM_PGBOUNCER_ENABLED / LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS /
+    LITELLM_PGBOUNCER_MAX_CLIENT_CONN on the gateway container only. Works with
+    the module-created Aurora too: the pooler mints the IAM token itself and
+    renews it before it expires.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gateway_pool_max_db_connections" {
+  description = "Upstream Postgres connections one gateway task may hold when gateway_connection_pool_enabled is set, regardless of gateway_num_workers. 20 suits 4 workers; a 5000-connection database then fits roughly 200 tasks."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.gateway_pool_max_db_connections >= 1
+    error_message = "gateway_pool_max_db_connections must be >= 1."
+  }
+}
+
+variable "gateway_pool_max_client_conn" {
+  description = "Client connections the in-container PgBouncer accepts from the gateway workers when gateway_connection_pool_enabled is set."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.gateway_pool_max_client_conn >= 1
+    error_message = "gateway_pool_max_client_conn must be >= 1."
+  }
+}
+
 variable "backend_cpu" {
   description = "Fargate CPU units for the backend task (1024 = 1 vCPU)."
   type        = number
@@ -769,4 +807,74 @@ variable "billing_metrics_ca_cert_pem" {
   type        = string
   default     = ""
   sensitive   = true
+}
+
+# ---------- Collector sidecar ----------
+#
+# Opt-in offload of spend tracking from the gateway's uvicorn workers to a
+# `python -m litellm.proxy.collector` sidecar in the same Fargate task (helm's
+# `gateway.collector`). Fargate awsvpc tasks share one network namespace,
+# so the sidecar listens on loopback TCP. Disabled (the default) adds nothing
+# to the task definition.
+
+variable "collector_enabled" {
+  description = "Run the collector sidecar next to the gateway container and have the gateway ship spend events to it (sets LITELLM_COLLECTOR_ENABLED=true on both). Autoscaling still targets the whole task's CPU/memory, sidecar included."
+  type        = bool
+  default     = false
+}
+
+variable "collector_port" {
+  description = "Loopback TCP port the sidecar listens on (LITELLM_COLLECTOR_ADDRESS=tcp://127.0.0.1:<port>)."
+  type        = number
+  default     = 4010
+
+  validation {
+    condition     = var.collector_port >= 1024 && var.collector_port <= 65535 && var.collector_port != 4000
+    error_message = "collector_port must be in 1024-65535 and not 4000."
+  }
+}
+
+variable "collector_cpu" {
+  description = "CPU units reserved for the sidecar container, carved out of gateway_cpu. Matches helm's collector.resources.requests.cpu (500m)."
+  type        = number
+  default     = 512
+}
+
+variable "collector_memory" {
+  description = "Hard memory limit (MiB) for the sidecar container, carved out of gateway_memory. Matches helm's collector.resources.limits.memory (2Gi)."
+  type        = number
+  default     = 2048
+}
+
+variable "collector_buffer_size" {
+  description = "Per-worker in-memory queue of spend events waiting to be shipped to the sidecar (LITELLM_COLLECTOR_BUFFER_SIZE)."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.collector_buffer_size >= 1
+    error_message = "collector_buffer_size must be >= 1."
+  }
+}
+
+variable "collector_on_unavailable" {
+  description = "What the gateway does with spend events when the sidecar is unreachable or the buffer is full (LITELLM_COLLECTOR_ON_UNAVAILABLE): `fallback` runs the pipeline in-process, `drop` discards them."
+  type        = string
+  default     = "fallback"
+
+  validation {
+    condition     = contains(["fallback", "drop"], var.collector_on_unavailable)
+    error_message = "collector_on_unavailable must be one of: fallback, drop."
+  }
+}
+
+variable "collector_drain_timeout_seconds" {
+  description = "Seconds a gateway worker waits on shutdown for its buffered spend events to reach the sidecar (LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.collector_drain_timeout_seconds > 0
+    error_message = "collector_drain_timeout_seconds must be > 0."
+  }
 }
