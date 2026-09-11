@@ -456,7 +456,7 @@ async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
         with pytest.raises(MCPServerListError):
             await manager._fetch_tools_with_timeout(mock_client, "sample_docs")
 
-    assert "POST https://upstream/apis/mcp -> HTTP 500" in caplog.text
+    assert "POST https://upstream/ -> HTTP 500" in caplog.text
     assert '"method":"initialize"' in caplog.text
     assert "upstream-token-0123456789" not in caplog.text
 
@@ -473,5 +473,5 @@ async def test_client_creation_failure_logs_sanitized_exchange(monkeypatch, capl
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         with pytest.raises(MCPServerListError):
             await manager._get_tools_from_server(server)
-    assert "POST https://upstream/mcp -> HTTP 500" in caplog.text
+    assert "POST https://upstream/ -> HTTP 500" in caplog.text
     assert "missing_scope" in caplog.text and "query-secret" not in caplog.text

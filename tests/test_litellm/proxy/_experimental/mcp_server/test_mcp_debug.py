@@ -233,7 +233,7 @@ class TestDescribeUpstreamHttpFailure:
         )
         described = describe_upstream_http_failure(exc)
         assert described is not None
-        assert "POST https://upstream.example/apis/mcp -> HTTP 500" in described
+        assert "POST https://upstream.example/ -> HTTP 500" in described
         assert '{"method":"initialize"' in described
         assert 'response body: {"error":"boom"}' in described
 
@@ -545,3 +545,15 @@ async def test_streamed_error_redacts_reflected_credentials_before_capture():
     assert detail is not None and "invalid_client" in detail and "Rejected" in detail
     assert secret not in detail and "REDACTED" in detail
     assert await response.aread() == raw
+
+
+@pytest.mark.parametrize("path", ["/credential-path-value/mcp", "/oauth/credential-path-value/token"])
+def test_failure_diagnostics_omit_credential_bearing_url_paths(path):
+    request = httpx.Request("POST", "https://upstream.example" + path)
+    response = httpx.Response(401, request=request, json={"error": "access_denied"})
+    error = httpx.HTTPStatusError("denied", request=request, response=response)
+    diagnostic = describe_upstream_http_failure(error)
+    assert diagnostic is not None
+    assert "credential-path-value" not in diagnostic
+    assert "POST https://upstream.example/ -> HTTP 401" in diagnostic
+    assert "access_denied" in diagnostic
