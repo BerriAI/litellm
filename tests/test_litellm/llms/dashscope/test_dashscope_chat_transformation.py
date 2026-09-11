@@ -193,7 +193,7 @@ class TestDashScopeThinkingParams:
     """thinking and reasoning_effort reach DashScope as enable_thinking, thinking_budget and reasoning_effort."""
 
     @staticmethod
-    def _map(**non_default_params) -> dict:
+    def _map(**non_default_params: object) -> dict[str, object]:
         return DashScopeChatConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
