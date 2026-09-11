@@ -406,6 +406,7 @@ def post_form_external[R: BaseModel](
     *,
     form: BaseModel,
     response_type: type[R],
+    headers: BaseModel | None = None,
     timeout: float = 30.0,
 ) -> Result[R]:
     """POST an absolute URL outside the proxy as `application/x-www-form-urlencoded`,
@@ -415,6 +416,7 @@ def post_form_external[R: BaseModel](
         resp = requests.post(
             url,
             data=_flat(form),
+            headers=_headers(headers) if headers is not None else None,
             timeout=timeout,
         )
     except requests.RequestException as exc:

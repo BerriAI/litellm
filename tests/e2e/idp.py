@@ -1,40 +1,15 @@
-"""The identity provider the JWT suite authenticates against: a real Keycloak
-realm, imported from `idp_realm.json`.
-
-A real IdP rather than a hand-rolled signer because every JWT bug this suite
-exists to catch lives in the shape of what an IdP actually emits: `sub` is an
-opaque uuid and not a friendly name, group membership arrives as a claim built
-by a protocol mapper, the JWKS carries a signing key next to an encryption key
-so the proxy has to select on `kid`, and `aud` is the IdP's own audience rather
-than the proxy's. A stand-in issuer that mints exactly the claims the tests
-assert on can only prove the proxy agrees with the tests.
-
-Tests never hold a signing key. They provision an identity through Keycloak's
-admin API (a group named after the litellm team, a user in it with a password
-generated for that test alone), then ask Keycloak for an access token through
-the direct-access grant, the same way a CLI or service account signs in. The
-proxy's `JWT_PUBLIC_KEY_URL` points at this realm's JWKS, so the token the
-tests carry is trusted for exactly one reason: Keycloak signed it.
-
-The realm declares two clients. `litellm-e2e-tests` mints ordinary tokens; the
-`litellm-e2e-shortlived` client sets `access.token.lifespan` to one second, so
-the expiry test lets a genuine token expire instead of forging a stale `exp`.
-
-Connection details come from the environment (`E2E_KEYCLOAK_URL` and the admin
-credential). A missing or unreachable IdP is a hard failure naming the start
-command, never a skip, so a stack deployed without it turns the run red.
-"""
+"""Provision isolated identities and obtain signed tokens from the test Keycloak realm."""
 
 from __future__ import annotations
 
 import os
 import secrets
-from dataclasses import dataclass
+import warnings
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Final, Literal
 
 import pytest
-from pydantic import BaseModel, Field
-
 from e2e_http import (
     AuthHeaders,
     ExternalWrite,
@@ -45,6 +20,7 @@ from e2e_http import (
     post_form_external,
     post_json_external,
 )
+from pydantic import BaseModel, Field
 
 KEYCLOAK_URL_ENV: Final = "E2E_KEYCLOAK_URL"
 KEYCLOAK_REALM_ENV: Final = "E2E_KEYCLOAK_REALM"
@@ -55,7 +31,8 @@ DEFAULT_KEYCLOAK_URL: Final = "http://127.0.0.1:8480"
 DEFAULT_REALM: Final = "litellm-e2e"
 TESTS_CLIENT_ID: Final = "litellm-e2e-tests"
 SHORT_LIVED_CLIENT_ID: Final = "litellm-e2e-shortlived"
-SHORT_LIVED_TOKEN_SECONDS: Final = 1
+ADMIN_CLIENT_ID: Final = "litellm-e2e-admin"
+WRONG_AUDIENCE_CLIENT_ID: Final = "litellm-e2e-other-app"
 
 _START_HINT: Final = (
     "Start it with the `docker run ... quay.io/keycloak/keycloak` command in tests/e2e/CONTRIBUTING.md, "
@@ -73,7 +50,11 @@ class TokenGrantForm(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    access_token: str
+    access_token: str = Field(repr=False)
+
+
+class TokenRequestHeaders(BaseModel):
+    host: str | None = None
 
 
 class GroupCreateBody(BaseModel):
@@ -105,8 +86,10 @@ class UserCreateBody(BaseModel):
 def created_id(write: ExternalWrite, context: str) -> str:
     """The new resource's id, which Keycloak returns only as the last segment of
     the Location header on a 201."""
-    if not write.ok:
+    if write.status_code != 201:
         pytest.fail(f"Keycloak refused to create {context}: HTTP {write.status_code} {write.body[:300]}")
+    if not write.location or write.location.endswith("/"):
+        pytest.fail(f"Keycloak created {context} without a resource id in its Location header")
     return write.location.rsplit("/", 1)[-1]
 
 
@@ -117,7 +100,7 @@ class Identity:
 
     user_id: str
     username: str
-    password: str
+    password: str = field(repr=False)
     group: str
     group_id: str
 
@@ -127,7 +110,7 @@ class Keycloak:
     base_url: str
     realm: str
     admin_username: str
-    admin_password: str
+    admin_password: str = field(repr=False)
 
     @property
     def issuer(self) -> str:
@@ -183,29 +166,48 @@ class Keycloak:
         )
 
     def delete_user(self, user_id: str) -> None:
-        delete_external(self._admin_url(f"/users/{user_id}"), headers=self._admin_headers())
+        self._delete(f"/users/{user_id}")
 
     def delete_group(self, group_id: str) -> None:
-        delete_external(self._admin_url(f"/groups/{group_id}"), headers=self._admin_headers())
+        self._delete(f"/groups/{group_id}")
 
-    def provision(self, *, marker: str, group: str) -> Identity:
+    def _delete(self, path: str) -> None:
+        try:
+            headers: Final = self._admin_headers()
+        except pytest.fail.Exception as exc:
+            warnings.warn(f"Keycloak cleanup could not authenticate for {path}: {exc}", RuntimeWarning, stacklevel=2)
+            return
+        result: Final = delete_external(self._admin_url(path), headers=headers)
+        if result.status_code not in (204, 404):
+            warnings.warn(
+                f"Keycloak cleanup failed for {path}: HTTP {result.status_code} {result.body[:300]}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    def provision(self, *, marker: str, group: str, defer: Callable[[Callable[[], object]], None]) -> Identity:
         """Create `group` and a user in it, credentialed with a password generated
         for this test alone, and hand back the identity a token can be minted for."""
         group_id: Final = self.create_group(group)
+        defer(lambda: self.delete_group(group_id))
         username: Final = f"e2e-jwt-user-{marker}"
         password: Final = secrets.token_urlsafe(24)
         user_id: Final = self.create_user(
             username=username, email=f"{username}@example.com", password=password, group=group
         )
+        defer(lambda: self.delete_user(user_id))
         return Identity(user_id=user_id, username=username, password=password, group=group, group_id=group_id)
 
-    def access_token(self, identity: Identity, *, client_id: str = TESTS_CLIENT_ID) -> str:
+    def access_token(
+        self, identity: Identity, *, client_id: str = TESTS_CLIENT_ID, issuer_host: str | None = None
+    ) -> str:
         """Sign `identity` in through the direct-access grant and hand back the
         access token Keycloak signed, exactly as it came off the wire."""
         result: Final = post_form_external(
             self.token_url(self.realm),
             form=TokenGrantForm(client_id=client_id, username=identity.username, password=identity.password),
             response_type=TokenResponse,
+            headers=TokenRequestHeaders(host=issuer_host),
         )
         return self._token(result, f"a token for {identity.username}")
 
