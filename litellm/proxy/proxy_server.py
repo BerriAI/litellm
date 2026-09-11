@@ -1160,7 +1160,12 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
 
-    _insecure_master_key_warning: Final = insecure_master_key_warning(master_key)
+    _alternative_auth_enabled: Final = any(
+        general_settings.get(k, False) for k in ("enable_jwt_auth", "enable_oauth2_auth", "enable_oauth2_proxy_auth")
+    )
+    _insecure_master_key_warning: Final = insecure_master_key_warning(
+        master_key, alternative_auth_enabled=_alternative_auth_enabled
+    )
     if _insecure_master_key_warning is not None:
         verbose_proxy_logger.warning(_insecure_master_key_warning)
 

@@ -1090,3 +1090,20 @@ async def test_proxy_startup_event_warns_but_does_not_raise_for_docs_example_mas
         pass
 
     assert "sk-1234" in caplog.text, "startup should log the insecure master key warning"
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_event_warns_but_does_not_raise_for_missing_master_key(monkeypatch, caplog):
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            async with proxy_startup_event(app=None):
+                pass
+    except ValueError as e:
+        if "master key" in str(e).lower():
+            pytest.fail("proxy_startup_event refused to boot without a master key")
+    except Exception:
+        pass
+
+    assert "No master key" in caplog.text, "startup should log the missing master key warning"
