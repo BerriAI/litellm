@@ -1267,6 +1267,31 @@ def test_settings_that_arrive_as_environment_strings_are_honored(monkeypatch):
     assert throttle.window_seconds == 900, "garbage still falls back to the default"
 
 
+def test_the_disable_flag_is_read_once_not_per_login_attempt(monkeypatch):
+    """Regression: the kill switch was read through the secret manager on every unauthenticated request.
+
+    With a hosted secret manager in read mode that is a synchronous network call per guess, so a
+    flood of wrong passwords could exhaust the secret manager even after the source was refused.
+    """
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.auth import login_throttle
+
+    reads: Final[list[str]] = []  # mutable-ok: test-only call recorder
+    monkeypatch.setattr(login_throttle, "get_secret_bool", lambda name, default: reads.append(name) or default)
+    login_throttle._rate_limit_disabled.cache_clear()
+    monkeypatch.setattr(ps, "general_settings", {})
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "1.2.3.4"
+
+    for _ in range(50):
+        assert login_throttle.LoginThrottle.from_request(request).enabled is True
+
+    login_throttle._rate_limit_disabled.cache_clear()
+    assert reads == ["LITELLM_DISABLE_LOGIN_RATE_LIMIT"]
+
+
 def test_a_negative_or_boolean_setting_falls_back_to_the_default(monkeypatch):
     """A limit below one would refuse everyone; a bool is a typo, not a count."""
     from litellm.proxy import proxy_server as ps
