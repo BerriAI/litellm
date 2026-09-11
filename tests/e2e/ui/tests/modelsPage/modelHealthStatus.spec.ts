@@ -148,21 +148,20 @@ async function withDeployment(
     await expect
       .poll(
         async () => {
-          const response = await page.request.get("/health", {
+          const response = await page.request.get("/v1/models", {
             headers: { Authorization: `Bearer ${masterKey()}` },
-            params: { model_id: id },
           });
-          if (![200, 503].includes(response.status())) return 0;
-          const body: { healthy_count?: number; unhealthy_count?: number } = await response.json();
-          return (body.healthy_count ?? 0) + (body.unhealthy_count ?? 0);
+          expect(response.ok(), `/v1/models failed: ${response.status()}`).toBe(true);
+          const body: { data: { id: string }[] } = await response.json();
+          return body.data.some((model) => model.id === name);
         },
         {
-          message: `deployment ${name} never became available to /health`,
+          message: `deployment ${name} never appeared on the serving path`,
           timeout: PROPAGATION_TIMEOUT_MS,
           intervals: [2_000],
         },
       )
-      .toBe(1);
+      .toBe(true);
     await use(name);
   } finally {
     await deleteDeployment(page, id);
