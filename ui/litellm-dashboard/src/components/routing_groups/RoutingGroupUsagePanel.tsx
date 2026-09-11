@@ -29,7 +29,7 @@ const buildPythonSnippet = (group: RoutingGroup, baseUrl: string): string =>
   `from openai import OpenAI
 
 client = OpenAI(
-    api_key="$LITELLM_API_KEY",
+    api_key="sk-<your-litellm-api-key>",
     base_url="${baseUrl}",
 )
 

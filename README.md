@@ -168,7 +168,7 @@ from a2a.utils.constants import TransportProtocol
 from uuid import uuid4
 
 base_url = "http://localhost:4000/a2a/my-agent"  # LiteLLM proxy + agent name
-headers = {"Authorization": "Bearer $LITELLM_API_KEY"}    # LiteLLM Virtual Key
+headers = {"Authorization": "Bearer sk-<your-litellm-api-key>"}    # LiteLLM Virtual Key
 
 async with httpx.AsyncClient(headers=headers, timeout=60.0) as http_client:
     resolver = A2ACardResolver(httpx_client=http_client, base_url=base_url)
@@ -255,7 +255,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
     "LiteLLM": {
       "url": "http://localhost:4000/mcp/",
       "headers": {
-        "x-litellm-api-key": "Bearer $LITELLM_API_KEY"
+        "x-litellm-api-key": "Bearer sk-<your-litellm-api-key>"
       }
     }
   }
