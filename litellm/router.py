@@ -3444,7 +3444,7 @@ class Router:
         wrapper_ref: Final = weakref.ref(wrapped_response)
         return wrapped_response
 
-    async def _silent_experiment_ageneric(self, silent_model: str, original_function: Callable, **kwargs: Any) -> None:
+    async def _silent_experiment_ageneric(self, silent_model: str, original_function: Callable, **kwargs) -> None:
         """
         Run a silent experiment in the background for a call that goes through
         `_ageneric_api_call_with_fallbacks` (Responses API, Anthropic Messages).
