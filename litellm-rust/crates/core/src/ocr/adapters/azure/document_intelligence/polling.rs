@@ -71,7 +71,8 @@ async fn poll_operation(
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(OCR_POLL_RETRY_SECS);
+            .unwrap_or(OCR_POLL_RETRY_SECS)
+            .max(1);
         let decoded = tokio::time::timeout_at(
             deadline,
             read_json_response::<AzureDocumentIntelligenceOperation>(response, native),
