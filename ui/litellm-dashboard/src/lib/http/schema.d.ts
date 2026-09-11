@@ -25084,6 +25084,8 @@ export interface components {
          * @description Represents an OpenAI Responses API reasoning item for round-tripping in conversation history.
          */
         ChatCompletionReasoningItem: {
+            /** Content */
+            content?: components["schemas"]["ChatCompletionReasoningTextBlock"][];
             /** Encrypted Content */
             encrypted_content?: string | null;
             /** Id */
@@ -25105,6 +25107,16 @@ export interface components {
              * @constant
              */
             type: "summary_text";
+        };
+        /** ChatCompletionReasoningTextBlock */
+        ChatCompletionReasoningTextBlock: {
+            /** Text */
+            text?: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "reasoning_text";
         };
         /** ChatCompletionRedactedThinkingBlock */
         ChatCompletionRedactedThinkingBlock: {
