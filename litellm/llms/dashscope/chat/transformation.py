@@ -2,7 +2,7 @@
 Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
 from typing import Any, Final, Literal, overload
 
@@ -111,11 +111,11 @@ class DashScopeChatConfig(OpenAIGPTConfig):
 
     def _map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = frozenset(self.get_supported_openai_params(model))
         passthrough_params: Final = MappingProxyType(
             {
@@ -130,7 +130,7 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         if not native:
             return {**optional_params, **passthrough_params}  # mutable-ok: dict return contract of OpenAIGPTConfig
         existing: Final = optional_params.get("extra_body")
-        existing_body: Final = existing if isinstance(existing, dict) else MappingProxyType({})
+        existing_body: Final = existing if isinstance(existing, Mapping) else MappingProxyType({})
         return {  # mutable-ok: dict return contract of OpenAIGPTConfig
             **optional_params,
             **passthrough_params,
