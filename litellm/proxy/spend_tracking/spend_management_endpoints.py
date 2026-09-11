@@ -2925,6 +2925,32 @@ async def _fetch_session_representatives(
     return [rep_by_key[key] for key in session_keys if key in rep_by_key]  # mutable-ok: rows are enriched in place
 
 
+async def _count_grouped_sessions(
+    prisma_client: "PrismaClient",
+    where_clause: str,
+    sql_params: Sequence[object],
+    next_param_index: int,
+) -> tuple[int, bool]:
+    """Count the sessions matching the filter, returning ``(total, total_is_capped)`` bounded by the count cap."""
+    count_query: Final = f"""
+        SELECT COUNT(*) AS total_count
+        FROM (
+            SELECT 1
+            FROM "LiteLLM_SpendLogs"
+            WHERE {where_clause}
+            GROUP BY {_SESSION_GROUP_KEY_SQL}
+            LIMIT ${next_param_index}
+        ) AS bounded_sessions
+    """
+    count_rows: Final[Sequence[_SpendLogsCountRow]] = await _query_raw(
+        prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
+    )
+    raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
+    return (
+        (SPEND_LOGS_PAGINATION_COUNT_CAP, True) if raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP else (raw_total, False)
+    )
+
+
 async def _ui_session_grouped_spend_logs(
     prisma_client: "PrismaClient",
     sql_conditions: Sequence[str],
@@ -2953,7 +2979,9 @@ async def _ui_session_grouped_spend_logs(
     by its newest non-MCP row, enriched by ``_build_ui_spend_logs_response``
     exactly like the flat listing, and the response carries
     ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
-    (capped like the flat total).
+    (capped like the flat total). A page that runs out of sessions is itself
+    the end of the list, so its ``total`` is ``offset + len(page)`` and the
+    grouped count query is skipped.
     """
     where_clause: Final = " AND ".join(sql_conditions) if sql_conditions else "TRUE"
     cmp_op: Final = "<" if sort_desc else ">"
@@ -2998,22 +3026,12 @@ async def _ui_session_grouped_spend_logs(
         else None
     )
 
-    count_query: Final = f"""
-        SELECT COUNT(*) AS total_count
-        FROM (
-            SELECT 1
-            FROM "LiteLLM_SpendLogs"
-            WHERE {where_clause}
-            GROUP BY {_SESSION_GROUP_KEY_SQL}
-            LIMIT ${next_param_index}
-        ) AS bounded_sessions
-    """
-    count_rows: Final[Sequence[_SpendLogsCountRow]] = await _query_raw(
-        prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
+    page_ends_the_list: Final = cursor is None and page_limit > 0 and not has_more
+    total_records, total_is_capped = (
+        (offset + len(page_rows), False)
+        if page_ends_the_list
+        else await _count_grouped_sessions(prisma_client, where_clause, sql_params, next_param_index)
     )
-    raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
-    total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
-    total_records: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
 
     session_keys: Final = tuple((row["session_key"], row["api_key"]) for row in visible_rows)
     data: Final[list[dict[str, object]]] = (  # mutable-ok: _build_ui_spend_logs_response writes onto each row
