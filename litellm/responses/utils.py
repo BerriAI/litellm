@@ -285,10 +285,11 @@ class ResponsesAPIRequestUtils:
         )
 
         # decode previous_response_id if it's a litellm encoded id
-        if "previous_response_id" in non_default_params:
+        previous_response_id: Final = non_default_params.get("previous_response_id")
+        if isinstance(previous_response_id, str):
             decoded_previous_response_id: Final = (
                 ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-                    cast(str, non_default_params["previous_response_id"])
+                    previous_response_id
                 )
             )
             non_default_params["previous_response_id"] = decoded_previous_response_id
@@ -296,9 +297,8 @@ class ResponsesAPIRequestUtils:
         if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            converted_metadata: Final = add_openai_metadata(
-                cast(Mapping[str, object] | None, non_default_params["metadata"])
-            )
+            raw_metadata: Final = non_default_params["metadata"]
+            converted_metadata: Final = add_openai_metadata(raw_metadata if _is_object_dict(raw_metadata) else None)
             if converted_metadata is not None:
                 non_default_params["metadata"] = converted_metadata
             else:
