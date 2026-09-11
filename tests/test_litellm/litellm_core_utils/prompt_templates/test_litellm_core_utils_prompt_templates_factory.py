@@ -3524,6 +3524,70 @@ def test_get_tool_calls_from_response_caps_concatenated_expansion():
     assert tool_calls == [{"id": "call_1", "name": "search", "arguments": {}}]
 
 
+def test_get_tool_calls_from_response_valid_json_array_not_expanded():
+    """
+    A valid JSON array of objects is not concatenated recovery: it keeps the
+    historical object-only semantics (degrades to {}) and never expands, so
+    it cannot bypass the per-call expansion cap.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "search",
+                                "arguments": json.dumps(
+                                    [{"query": f"q{index}"} for index in range(9)]
+                                ),
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "search", "arguments": {}}]
+
+
+def test_get_tool_calls_from_response_valid_json_array_of_two_not_expanded():
+    """Even a small valid JSON array degrades to {} (object-only contract)."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "search",
+                                "arguments": json.dumps([{"query": "a"}, {"query": "b"}]),
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "search", "arguments": {}}]
+
+
 def test_get_tool_calls_from_response_non_object_arguments_returns_empty():
     from litellm.litellm_core_utils.prompt_templates.factory import (
         get_tool_calls_from_response,

@@ -5366,8 +5366,19 @@ def _parse_tool_call_arguments(
         return {}
     normalized_raw: Final = "{}" if raw == REDACTED_BY_LITELLM else raw
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        MAX_RECOVERED_ARGUMENT_OBJECTS,
         parse_tool_call_arguments,
     )
+
+    try:
+        direct: Final = json.loads(normalized_raw)
+    except json.JSONDecodeError:
+        pass  # malformed JSON: fall through to repair / concatenated recovery
+    else:
+        # Valid JSON keeps the historical object-only contract: a non-object
+        # root (e.g. a JSON array of objects) degrades to {} rather than
+        # becoming an uncapped expansion vector.
+        return direct if isinstance(direct, dict) else {}
 
     try:
         parsed: Final = parse_tool_call_arguments(
@@ -5381,7 +5392,15 @@ def _parse_tool_call_arguments(
         return {}
     if isinstance(parsed, dict):
         return parsed
-    if isinstance(parsed, list) and parsed and all(isinstance(item, dict) for item in parsed):
+    # Only malformed-input recovery (repair or concatenated split) can yield a
+    # sequence here; hold it to the same per-call bound as concatenated
+    # recovery so expansion is never an amplification vector.
+    if (
+        isinstance(parsed, list)
+        and parsed
+        and all(isinstance(item, dict) for item in parsed)
+        and len(parsed) <= MAX_RECOVERED_ARGUMENT_OBJECTS
+    ):
         return parsed
     return {}
 
