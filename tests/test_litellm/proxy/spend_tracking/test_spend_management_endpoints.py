@@ -6743,6 +6743,48 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_jumps_to_page_without_cursor(client, monkeypatch):
+    """page > 1 with no session_cursor (the UI's last-page jump) skips (page - 1) * page_size sessions by OFFSET."""
+    page_rows = [_session_page_row("sess-3", "2026-08-29 06:00:00")]
+    reps = [_session_representative_row("req-3", "sess-3")]
+    mock_prisma = _session_grouped_mock_prisma(page_rows, 60, reps)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page": 3,
+                "page_size": 25,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["page"] == 3
+        assert data["has_more"] is False
+        assert [row["request_id"] for row in data["data"]] == ["req-3"]
+
+        page_query_call = mock_prisma.db.query_raw.await_args_list[0]
+        page_query_sql = page_query_call.args[0]
+        assert "HAVING" not in page_query_sql
+        assert "OFFSET" in page_query_sql
+        assert page_query_call.args[-2:] == (26, 50), "LIMIT page_size + 1 then OFFSET (page - 1) * page_size"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_offset_for_non_starttime_sort(
     client, monkeypatch
 ):

@@ -2944,7 +2944,10 @@ async def _ui_session_grouped_spend_logs(
     next ``page_size`` sessions ordered by ``(MAX(startTime), session_key,
     api_key)``, resumed from the ``session_cursor`` keyset
     ``'<last_activity>|<api_key>|<session_key>'`` instead of an OFFSET, so
-    page depth does not degrade the query plan. Each session is represented
+    page depth does not degrade the query plan. A request for ``page > 1``
+    without a cursor (the UI jumping straight to the last page, or back to a
+    page it never walked through) falls back to ``OFFSET (page - 1) *
+    page_size``, bounded by the capped total. Each session is represented
     by its newest non-MCP row, enriched by ``_build_ui_spend_logs_response``
     exactly like the flat listing, and the response carries
     ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
@@ -2963,6 +2966,8 @@ async def _ui_session_grouped_spend_logs(
     )
     cursor_params: Final[tuple[object, ...]] = cursor if cursor else ()
     limit_index: Final = next_param_index + len(cursor_params)
+    offset_params: Final[tuple[int, ...]] = ((page - 1) * page_size,) if cursor is None and page > 1 else ()
+    offset_clause: Final = f"OFFSET ${limit_index + 1}" if offset_params else ""
 
     page_query: Final = f"""
         SELECT {_SESSION_KEY_EXPR} AS session_key,
@@ -2973,10 +2978,10 @@ async def _ui_session_grouped_spend_logs(
         GROUP BY {_SESSION_GROUP_KEY_SQL}
         {having_clause}
         ORDER BY MAX("startTime") {direction}, {_SESSION_KEY_EXPR} {direction}, api_key {direction}
-        LIMIT ${limit_index}
+        LIMIT ${limit_index} {offset_clause}
     """
     page_rows: Final[Sequence[_SessionPageRow]] = await _query_raw(
-        prisma_client, page_query, *sql_params, *cursor_params, page_size + 1
+        prisma_client, page_query, *sql_params, *cursor_params, page_size + 1, *offset_params
     )
 
     has_more: Final = len(page_rows) > page_size
