@@ -59,6 +59,9 @@ class XTrustHook(CustomLogger):
         payload = self._verify(token) if token else None
         score = payload["score"] if payload else 0.0
         trusted = payload is not None and score >= self.min_score
+        # Redact token after verification to prevent replay via logging
+        if "headers" in data.get("metadata", {}):
+            data["metadata"]["headers"].pop("x-trust", None)
         if "metadata" not in data:
             data["metadata"] = {}
         data["metadata"]["x_trust"] = {
