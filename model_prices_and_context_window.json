@@ -13219,7 +13219,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-3-7-sonnet-20250219": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -13378,7 +13379,8 @@
         "supports_native_structured_output": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-4-5-20250929": {
         "deprecation_date": "2026-09-29",
@@ -13452,7 +13454,7 @@
         },
         "supports_output_config": true,
         "prompt_cache_min_tokens": 1024,
-        "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-4-6": {
         "deprecation_date": "2027-02-17",
@@ -13488,7 +13490,8 @@
         "prompt_cache_min_tokens": 1024,
         "provider_specific_entry": {
             "us": 1.1
-        }
+        },
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -13665,7 +13668,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-6": {
         "deprecation_date": "2027-02-05",
@@ -13702,7 +13706,8 @@
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
         "supports_speed": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-6-20260205": {
         "deprecation_date": "2027-02-05",
@@ -13777,7 +13782,8 @@
         },
         "supports_output_config": true,
         "supports_speed": true,
-        "prompt_cache_min_tokens": 2048
+        "prompt_cache_min_tokens": 2048,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-7-20260416": {
         "deprecation_date": "2027-04-16",
@@ -13855,7 +13861,7 @@
         "supports_output_config": true,
         "prompt_cache_min_tokens": 512,
         "supports_native_structured_output": true,
-        "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-1": {
         "deprecation_date": "2027-09-01",
@@ -13896,7 +13902,7 @@
         "supports_output_config": true,
         "prompt_cache_min_tokens": 512,
         "supports_native_structured_output": true,
-        "source": "https://platform.claude.com/docs/en/models/fable-5-1/overview"
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-5": {
         "deprecation_date": "2027-07-24",
@@ -13937,7 +13943,7 @@
         "supports_output_config": true,
         "supports_speed": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-8": {
         "deprecation_date": "2027-05-28",
@@ -13977,7 +13983,8 @@
         },
         "supports_output_config": true,
         "supports_speed": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-4-20250514": {
         "deprecation_date": "2026-06-15",
@@ -57174,7 +57181,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
-        "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing",
         "supports_adaptive_thinking": true,
         "thinking_always_on": true,
         "supports_mid_conversation_system": true,
@@ -57235,7 +57242,7 @@
         "supports_output_config": true,
         "prompt_cache_min_tokens": 512,
         "supports_native_structured_output": true,
-        "source": "https://platform.claude.com/docs/en/models/mythos-5-1/overview"
+        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-mythos-preview": {
         "cache_creation_input_token_cost": 1.25e-05,
