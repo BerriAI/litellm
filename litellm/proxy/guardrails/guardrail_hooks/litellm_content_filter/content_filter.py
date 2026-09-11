@@ -153,6 +153,7 @@ class CategoryConfig:
         self.inherit_from = inherit_from
         self.additional_block_words = [w.lower() for w in additional_block_words] if additional_block_words else []
         # Phrase patterns: regex patterns for catching paraphrases
+        self.phrase_pattern_sources: tuple[str, ...] = tuple(phrase_patterns or ())
         self.phrase_patterns: list[tuple[str, Pattern]] = []
         for p in phrase_patterns or []:
             try:
@@ -240,11 +241,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
         self._competitor_intent_checker: BaseCompetitorIntentChecker | None = None
-        self._competitor_intent_config: Final = (
-            competitor_intent_config
-            if competitor_intent_config and isinstance(competitor_intent_config, dict)
-            else None
-        )
+        self._competitor_intent_config: Final = competitor_intent_config or None
         if competitor_intent_config and isinstance(competitor_intent_config, dict):
             self._init_competitor_intent_checker(competitor_intent_config)
 
@@ -407,7 +404,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     tuple(category.always_block_keywords),
                     category.inherit_from,
                     tuple(category.additional_block_words),
-                    tuple(source for source, _ in category.phrase_patterns),
+                    category.phrase_pattern_sources,
                 )
                 for name, category in sorted(self.loaded_categories.items())
             ),
@@ -2018,9 +2015,6 @@ class ContentFilterGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("ContentFilterGuardrail: Guardrail applied successfully")
             if new_texts is None:
                 inputs["texts"] = processed_texts
-            else:
-                # inputs["texts"] stays intact: handlers write it back positionally, and MASK is gated off at init
-                await self._mark_request_texts_scanned(texts=texts, request_data=request_data)
 
             self._scan_tool_call_arguments(inputs=inputs, detections=detections)
 
@@ -2028,6 +2022,11 @@ class ContentFilterGuardrail(CustomGuardrail):
                 self._scan_mcp_tool_call_arguments(
                     request_data=request_data, detections=detections, logging_obj=logging_obj
                 )
+
+            if new_texts is not None:
+                # Marked only after every check passed; inputs["texts"] stays intact because the handlers
+                # write it back positionally, and MASK is gated off at init
+                await self._mark_request_texts_scanned(texts=texts, request_data=request_data)
 
             # Count masked entities by type
             self._count_masked_entities(detections, masked_entity_count)
