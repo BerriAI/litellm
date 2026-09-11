@@ -17,7 +17,6 @@ class CacheControlMessageInjectionPoint(TypedDict):
     role: Literal["user", "system", "assistant"] | None  # Optional: target by role (user, system, assistant)
     index: int | str | None  # Optional: target by specific index
     control: ChatCompletionCachedContent | None
-    _litellm_judged: NotRequired[bool]  # Internal: written back by litellm once the client cache_control judgment ran
     _litellm_openai_dialect: NotRequired[ReadOnly[bool]]
 
 
@@ -26,7 +25,6 @@ class CacheControlToolConfigInjectionPoint(TypedDict):
 
     location: Literal["tool_config"]
     control: ChatCompletionCachedContent | None
-    _litellm_judged: NotRequired[bool]  # Internal: written back by litellm once the client cache_control judgment ran
     _litellm_openai_dialect: NotRequired[ReadOnly[bool]]
 
 

@@ -251,14 +251,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         # Points this pass did not place: non-message ones for the provider transform, and
         # the deferred role-targeted ones. Deferring is what reaches the Responses API's
-        # `instructions`, which is only a system message once the bridge builds one. The
-        # judged stamp is what makes it safe: the next pass must not re-judge points
-        # against messages this pass already marked (see `_should_stand_down`).
+        # `instructions`, which is only a system message once the bridge builds one.
         carried_points: Final[Sequence[CacheControlInjectionPoint]] = (*remaining_points, *carried_message_points)
         if carried_points:
-            non_default_params["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_as_judged(
-                carried_points
-            )
+            non_default_params["cache_control_injection_points"] = list(carried_points)
 
         return model, processed_messages, non_default_params
 
@@ -555,28 +551,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return ChatCompletionCachedContent(type="ephemeral", ttl=ttl)
         return ChatCompletionCachedContent(type="ephemeral")
 
-    @staticmethod
-    def _stamped_as_judged(points: Sequence[CacheControlInjectionPoint]) -> Sequence[Mapping[str, object]]:
-        """Mark written-back points as having passed the client cache_control judgment.
-
-        Builds copies because config-owned point dicts are shared across
-        requests; mutating them would leak the stamp into future requests.
-        """
-        return AnthropicCacheControlHook._stamped(points, "_litellm_judged", True)
-
-    @staticmethod
-    def _judged_configured_points(
+    def _configured_points_for_request(
         points: Sequence[CacheControlInjectionPoint],
-        messages: list[AllMessageValues],
-        tools: list[object] | None,
-        cache_control: object,
         model: str,
         custom_llm_provider: str | None,
         api_base: object,
         prompt_cache_options: object,
-    ) -> Sequence[Mapping[str, object]] | None:
-        if AnthropicCacheControlHook._should_stand_down(points, messages, None, tools, cache_control):
-            return None
+    ) -> Sequence[Mapping[str, object]]:
         return AnthropicCacheControlHook._stamped_with_dialect(
             points, model, custom_llm_provider, api_base, prompt_cache_options
         )
@@ -605,28 +586,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     ) -> Sequence[Mapping[str, object]]:
         return [{**point, key: value} for point in points]
 
-    @staticmethod
-    def _should_stand_down(
-        points: Sequence[CacheControlInjectionPoint],
-        messages: list[AllMessageValues],
-        system: str | list | None,
-        tools: list | None,
-        cache_control: object = None,
-    ) -> bool:
-        """Whether configured injection points must yield to client-set cache_control.
-
-        Points that a prior pass over this request already judged and wrote
-        back carry the internal judged stamp; any re-entry (acompletion
-        re-entering completion, the async-to-sync /v1/messages dispatch,
-        interceptor sub-calls reusing the request kwargs) must not re-judge
-        them, because by then the messages carry litellm's own injected marks
-        and the judgment would misread those as client breakpoints.
-        """
-        if all(point.get("_litellm_judged") for point in points):
-            return False
-        return AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control)
-
-    @staticmethod
     def _request_has_cache_control(
         messages: list[AllMessageValues],
         system: str | list | None,
@@ -635,8 +594,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     ) -> bool:
         """Return True if the request already carries any client-supplied cache_control.
 
-        When the client (e.g. Claude Code) already marks its own breakpoints we
-        stand down entirely rather than add more, per the auto-caching contract.
+        The automatic cache-injection path stands down when the client (e.g.
+        Claude Code) already marks its own breakpoints, per the auto-caching
+        contract.
         Tools count: they are a breakpoint the client can mark, they count toward
         the provider's four-block limit, and caching only the tool definitions is
         a common pattern, so injecting alongside them can exceed the cap. Tools
@@ -779,31 +739,24 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     ) -> None:
         """For /chat/completions: resolve the injection points the request should carry.
 
-        Configured injection points win over the automatic defaults, but stand
-        down entirely when the client already marked its own cache_control
-        breakpoints (messages or tools): injecting alongside them clashes with
-        the client's caching strategy and can exceed the provider's four-block
-        limit. The judgment happens once per request; points a prior pass
-        wrote back carry the judged stamp and are never re-judged (see
-        ``_should_stand_down``). Seeding the param lets the existing
-        prompt-management gate and the AnthropicCacheControlHook run
-        unchanged.
+        Configured injection points are explicit operator directives and are
+        always passed through to the downstream injection logic. That logic
+        preserves client-supplied breakpoints, skips already-marked messages,
+        and enforces the provider's four-block limit. Automatic defaults still
+        stand down when the client supplies its own cache_control. Seeding the
+        param lets the existing prompt-management gate and the
+        AnthropicCacheControlHook run unchanged.
         """
         if non_default_params.get("cache_control_injection_points"):
-            judged: Final = AnthropicCacheControlHook._judged_configured_points(
-                non_default_params["cache_control_injection_points"],
-                messages,
-                tools,
-                non_default_params.get("cache_control"),
-                model,
-                custom_llm_provider,
-                api_base,
-                non_default_params.get("prompt_cache_options"),
+            non_default_params["cache_control_injection_points"] = (
+                AnthropicCacheControlHook._configured_points_for_request(
+                    non_default_params["cache_control_injection_points"],
+                    model,
+                    custom_llm_provider,
+                    api_base,
+                    non_default_params.get("prompt_cache_options"),
+                )
             )
-            if judged is None:
-                non_default_params.pop("cache_control_injection_points")
-            else:
-                non_default_params["cache_control_injection_points"] = judged
             return
         points: Final = AnthropicCacheControlHook.get_default_injection_points(
             messages=messages,
@@ -904,11 +857,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     ) -> tuple[list[dict], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
-        Configured points stand down entirely when the client already marked
-        its own cache_control breakpoints anywhere in the request. The
-        judgment happens once per request; points a prior pass wrote back
-        carry the judged stamp and are never re-judged (see
-        ``_should_stand_down``). When none are configured but
+        Configured points are explicit operator directives and are always
+        passed through to the downstream injection logic, which preserves
+        client-supplied breakpoints and enforces the provider's four-block
+        limit. When none are configured but
         ``litellm.enable_anthropic_prompt_caching`` or the per-request
         ``enable_prompt_caching`` kwarg (stamped from key metadata) is on,
         synthesize default breakpoints for the native /v1/messages path. Pops
@@ -924,10 +876,6 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         configured: Final = cast(  # cast-ok: kwargs is untyped; this key only holds the documented injection-point list
             list[CacheControlInjectionPoint] | None, kwargs.pop("cache_control_injection_points", None)
         )
-        if configured and AnthropicCacheControlHook._should_stand_down(
-            configured, typed_messages, system, tools, cache_control
-        ):
-            return messages, system
         injection_points: list[CacheControlInjectionPoint] = configured or []
         if not injection_points and model is not None:
             injection_points = AnthropicCacheControlHook.get_default_injection_points(
@@ -960,7 +908,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if openai_dialect and breakpoints_added > 0:
             kwargs.setdefault("prompt_cache_options", PromptCacheOptions(mode="explicit"))
         if remaining:
-            kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_as_judged(remaining)
+            kwargs["cache_control_injection_points"] = remaining
         return messages, system
 
     @property
