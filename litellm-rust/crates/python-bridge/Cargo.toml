@@ -30,6 +30,7 @@ pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

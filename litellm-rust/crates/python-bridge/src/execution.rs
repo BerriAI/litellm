@@ -11,6 +11,18 @@ use serde::Serialize;
 use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
 
+#[derive(Debug, thiserror::Error)]
+enum ExecutionError {
+    #[error("synchronous native routes cannot run from a Tokio context; use the async route")]
+    SyncRouteInTokioContext,
+}
+
+impl From<ExecutionError> for PyErr {
+    fn from(error: ExecutionError) -> Self {
+        PyRuntimeError::new_err(error.to_string())
+    }
+}
+
 pub(crate) fn run_sync<T, F>(
     py: Python<'_>,
     future: F,
@@ -39,9 +51,7 @@ where
     F: Future<Output = Result<T, Error>> + Send + 'static,
 {
     if Handle::try_current().is_ok() {
-        return Err(PyRuntimeError::new_err(
-            "synchronous native routes cannot run from a Tokio context; use the async route",
-        ));
+        return Err(ExecutionError::SyncRouteInTokioContext.into());
     }
 
     let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;

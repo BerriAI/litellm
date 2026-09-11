@@ -16,6 +16,10 @@ pyo3::create_exception!(
     "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
 );
 
+fn upstream_error(status: u16, message: String) -> PyErr {
+    RustUpstreamError::new_err((status, message))
+}
+
 pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     match err {
         Error::Auth(message) => PyValueError::new_err(message),
@@ -46,11 +50,9 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
         // Nothing reached the provider, so serving it on Python cannot double
         // bill and is the only way the caller gets an answer at all.
         | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
-        Error::Http { status, body } => {
-            RustUpstreamError::new_err((status, format!("{status}: {body}")))
-        }
+        Error::Http { status, body } => upstream_error(status, format!("{status}: {body}")),
         Error::Network(message) | Error::InvalidResponse(message) => {
-            RustUpstreamError::new_err((0u16, message))
+            upstream_error(0, message)
         }
     }
 }
@@ -66,7 +68,7 @@ pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
         Error::MissingField("document_url" | "image_url") => {
             PyValueError::new_err("Document URL is required")
         }
-        Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
+        Error::Http { status, body } => upstream_error(status, body),
         other => core_error_to_pyerr(other),
     }
 }
