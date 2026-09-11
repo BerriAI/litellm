@@ -1,0 +1,47 @@
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  disable_spend_logs: true
+mcp_servers:
+  figma:
+    url: https://mcp.figma.com/mcp
+    transport: http
+    auth_type: true_passthrough
+    authorization_url: https://www.figma.com/oauth/mcp
+    token_url: https://api.figma.com/v1/oauth/token
+    registration_url: https://api.figma.com/v1/oauth/mcp/register
+  figma_true_passthrough_false:
+    url: https://mcp.figma.com/mcp
+    transport: http
+    auth_type: true_passthrough
+    dcr_bridge: false
+    authorization_url: https://www.figma.com/oauth/mcp
+    token_url: https://api.figma.com/v1/oauth/token
+    registration_url: https://api.figma.com/v1/oauth/mcp/register
+  figma_true_passthrough_true:
+    url: https://mcp.figma.com/mcp
+    transport: http
+    auth_type: true_passthrough
+    dcr_bridge: true
+    authorization_url: https://www.figma.com/oauth/mcp
+    token_url: https://api.figma.com/v1/oauth/token
+    registration_url: https://api.figma.com/v1/oauth/mcp/register
+  figma_oauth_delegate_false:
+    url: https://mcp.figma.com/mcp
+    transport: http
+    auth_type: oauth_delegate
+    dcr_bridge: false
+    authorization_url: https://www.figma.com/oauth/mcp
+    token_url: https://api.figma.com/v1/oauth/token
+    registration_url: https://api.figma.com/v1/oauth/mcp/register
+  figma_oauth_delegate_true:
+    url: https://mcp.figma.com/mcp
+    transport: http
+    auth_type: oauth_delegate
+    dcr_bridge: true
+    authorization_url: https://www.figma.com/oauth/mcp
+    token_url: https://api.figma.com/v1/oauth/token
+    registration_url: https://api.figma.com/v1/oauth/mcp/register
+  deepwiki:
+    url: https://mcp.deepwiki.com/mcp
+    transport: http
+    auth_type: none
