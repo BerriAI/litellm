@@ -35,6 +35,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     PrivateAttr,
     SkipValidation,
     field_serializer,
@@ -3373,7 +3374,12 @@ class StandardAuditLogPayload(TypedDict):
     updated_values: str | None
 
 
-class StandardLoggingPayload(TypedDict):
+class ClassifierAudit(TypedDict, total=False):
+    classifier_input: ReadOnly[Mapping[str, JsonValue]]
+    originating_request_masked: ReadOnly[Mapping[str, JsonValue]]
+
+
+class StandardLoggingPayload(ClassifierAudit):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
