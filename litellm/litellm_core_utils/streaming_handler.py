@@ -1641,7 +1641,7 @@ class CustomStreamWrapper:
                         except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
-                    if self.stream_options is not None and self.stream_options["include_usage"] is True:
+                    if self.send_stream_usage is True:
                         model_response.choices = []
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)
