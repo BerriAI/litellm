@@ -321,6 +321,43 @@ launcher reads these variables, starts the pooler once per instance before
 uvicorn forks the workers and hands them its loopback `DATABASE_URL`. It also
 honours `KEEPALIVE_TIMEOUT` from `gateway_extra_env` the way the image does
 
+### Collector sidecar
+
+`collector_enabled = true` adds a `spend-collector` container to the gateway
+Cloud Run service that runs `python -m litellm.proxy.collector` from the gateway
+image, and sets `LITELLM_COLLECTOR_ENABLED=true` on the gateway so its
+uvicorn workers ship spend events (SpendLogs writes, key/team/user spend
+updates, budget alerts) to the sidecar instead of running that pipeline in
+the request path. This is the Terraform counterpart of helm's
+`gateway.collector`. The default (`false`) leaves the service exactly as
+before. It is independent of the metrics sidecars above, whose GMP scraper
+already owns the `collector` container name.
+
+Containers in one Cloud Run instance share localhost, so the sidecar listens
+on loopback TCP (`tcp://127.0.0.1:${collector_port}`, default 4010)
+instead of the Unix socket helm uses; the proxy rejects any non-loopback
+address. The sidecar runs the same Redis CA + `DATABASE_URL` bootstrap as
+the gateway container, gets the same database, Redis, master-key, license,
+proxy config, and `gateway_extra_env` / `gateway_extra_secrets` values, and
+runs with `LITELLM_JOB_ROLE=collector`. When it is unreachable the
+gateway falls back to in-process spend tracking.
+
+```hcl
+collector_enabled = true
+# collector_cpu               = "1000m"  # added on top of gateway_cpu
+# collector_memory            = "2Gi"    # added on top of gateway_memory
+# collector_buffer_size       = 1000
+# collector_on_unavailable    = "fallback"  # or "drop"
+# collector_drain_timeout_seconds = 10
+```
+
+Cloud Run allocates CPU per instance while requests are in flight, and the
+sidecar shares that allocation. Spend events are shipped right after each
+response, so this works with request-based billing, but keep
+`gateway_min_instances >= 1` if spend must keep draining while an instance
+is otherwise idle. Variable names match the AWS stack; only the resource
+units differ (Cloud Run strings vs Fargate units)
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or

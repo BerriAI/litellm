@@ -57258,6 +57258,14 @@
                 "model_info": {
                     "supports_mid_conversation_system": true
                 }
+            },
+            {
+                "name": "wandb-reasoning-baseline",
+                "pattern": "^wandb/",
+                "description": "Any Weights & Biases Inference model id, anchored to the wandb/ namespace so only that provider's ids match. W&B's serverless catalog is reasoning-first and grows faster than this registry names it, so an id the map has not described yet is treated as reasoning-capable and keeps the caller's reasoning_effort instead of dropping it or raising UnsupportedParamsError. Rules lose to exact entries, so a mapped non-reasoning model such as wandb/meta-llama/Llama-3.1-8B-Instruct is unaffected. Carries no mode and no pricing, so cost stays on the standard unpriced behavior and the deployment does not read as catalog-mapped to the router's reasoning-effort resolver.",
+                "model_info": {
+                    "supports_reasoning": true
+                }
             }
         ]
     },
