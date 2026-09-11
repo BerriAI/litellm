@@ -318,14 +318,14 @@ async def test_router_silent_experiment_aresponses():
     mock_aresponses = AsyncMock(return_value=MagicMock())
     mock_aresponses.__name__ = "aresponses"
 
-    with patch.object(litellm, "aresponses", mock_aresponses):
-        router = Router(model_list=_generic_silent_model_list())
-        await router.aresponses(
-            model="primary-model",
-            input=[{"role": "user", "content": "hi"}],
-            metadata={"trace": "user-supplied"},
-        )
-        await asyncio.sleep(0.1)
+    router = Router(model_list=_generic_silent_model_list())
+    router.aresponses = router.factory_function(mock_aresponses, call_type="aresponses")
+    await router.aresponses(
+        model="primary-model",
+        input=[{"role": "user", "content": "hi"}],
+        metadata={"trace": "user-supplied"},
+    )
+    await asyncio.sleep(0.1)
 
     assert mock_aresponses.call_count == 2
     primary_call, silent_call = _split_generic_calls(mock_aresponses)
@@ -358,14 +358,14 @@ async def test_router_silent_experiment_anthropic_messages():
     mock_messages = AsyncMock(return_value=MagicMock())
     mock_messages.__name__ = "anthropic_messages"
 
-    with patch.object(litellm, "anthropic_messages", mock_messages):
-        router = Router(model_list=_generic_silent_model_list())
-        await router.aanthropic_messages(
-            model="primary-model",
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=16,
-        )
-        await asyncio.sleep(0.1)
+    router = Router(model_list=_generic_silent_model_list())
+    router.aanthropic_messages = router.factory_function(mock_messages, call_type="anthropic_messages")
+    await router.aanthropic_messages(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16,
+    )
+    await asyncio.sleep(0.1)
 
     assert mock_messages.call_count == 2
     primary_call, silent_call = _split_generic_calls(mock_messages)
@@ -388,20 +388,20 @@ async def test_router_silent_experiment_generic_does_not_corrupt_primary_metadat
     mock_aresponses = AsyncMock(return_value=MagicMock())
     mock_aresponses.__name__ = "aresponses"
 
-    with patch.object(litellm, "aresponses", mock_aresponses):
-        router = Router(model_list=_generic_silent_model_list())
-        litellm_metadata = {
-            "user_api_key_auth": _FakeUserAPIKeyAuth(
-                key_alias="primary-key",
-                parent_otel_span=_NonCopyableSpan(),
-            )
-        }
-        await router.aresponses(
-            model="primary-model",
-            input=[{"role": "user", "content": "hi"}],
-            litellm_metadata=litellm_metadata,
+    router = Router(model_list=_generic_silent_model_list())
+    router.aresponses = router.factory_function(mock_aresponses, call_type="aresponses")
+    litellm_metadata = {
+        "user_api_key_auth": _FakeUserAPIKeyAuth(
+            key_alias="primary-key",
+            parent_otel_span=_NonCopyableSpan(),
         )
-        await asyncio.sleep(0.1)
+    }
+    await router.aresponses(
+        model="primary-model",
+        input=[{"role": "user", "content": "hi"}],
+        litellm_metadata=litellm_metadata,
+    )
+    await asyncio.sleep(0.1)
 
     assert mock_aresponses.call_count == 2
     primary_call, silent_call = _split_generic_calls(mock_aresponses)
@@ -419,14 +419,16 @@ async def test_router_silent_experiment_skips_non_allowlisted_generic_call_types
     helper serves file/fine-tuning/passthrough calls that must not be replayed
     against the silent deployment.
     """
-    mock_file_content = AsyncMock(return_value=MagicMock())
+    sentinel_response = MagicMock()
+    mock_file_content = AsyncMock(return_value=sentinel_response)
     mock_file_content.__name__ = "afile_content"
 
-    with patch.object(litellm, "afile_content", mock_file_content):
-        router = Router(model_list=_generic_silent_model_list())
-        await router.afile_content(model="primary-model", file_id="file-123")
-        await asyncio.sleep(0.1)
+    router = Router(model_list=_generic_silent_model_list())
+    router.afile_content = router.factory_function(mock_file_content, call_type="afile_content")
+    response = await router.afile_content(model="primary-model", file_id="file-123")
+    await asyncio.sleep(0.1)
 
+    assert response is sentinel_response
     assert mock_file_content.call_count == 1
     assert "silent_model" not in mock_file_content.call_args.kwargs
 
@@ -483,11 +485,13 @@ async def test_silent_experiment_ageneric_error_is_caught():
         new_callable=AsyncMock,
         side_effect=Exception("downstream failure"),
     ):
-        await router._silent_experiment_ageneric(
+        result = await router._silent_experiment_ageneric(
             silent_model="silent-model",
             original_function=litellm.aresponses,
             silent_kwargs={"input": [{"role": "user", "content": "hi"}]},
         )
+
+    assert result is None
 
 
 def test_is_silent_experiment_marker():
