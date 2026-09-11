@@ -185,11 +185,7 @@ async def test_router_silent_experiment_acompletion():
 
         # Find the silent call
         silent_call = next(
-            (
-                c
-                for c in call_args_list
-                if c[1].get("metadata", {}).get("is_silent_experiment") is True
-            ),
+            (c for c in call_args_list if c[1].get("metadata", {}).get("is_silent_experiment") is True),
             None,
         )
         assert silent_call is not None
@@ -197,11 +193,7 @@ async def test_router_silent_experiment_acompletion():
 
         # Find the primary call
         primary_call = next(
-            (
-                c
-                for c in call_args_list
-                if not c[1].get("metadata", {}).get("is_silent_experiment")
-            ),
+            (c for c in call_args_list if not c[1].get("metadata", {}).get("is_silent_experiment")),
             None,
         )
         assert primary_call is not None
@@ -270,11 +262,7 @@ def test_router_silent_experiment_completion():
 
         # Find the silent call
         silent_call = next(
-            (
-                c
-                for c in call_args_list
-                if c[1].get("metadata", {}).get("is_silent_experiment") is True
-            ),
+            (c for c in call_args_list if c[1].get("metadata", {}).get("is_silent_experiment") is True),
             None,
         )
         assert silent_call is not None
@@ -443,23 +431,43 @@ async def test_router_silent_experiment_skips_non_allowlisted_generic_call_types
     assert "silent_model" not in mock_file_content.call_args.kwargs
 
 
-@pytest.mark.asyncio
-async def test_silent_experiment_ageneric_no_recurse():
+def test_silent_experiment_generic_kwargs_skips_recursion_and_mcp():
     """
-    _silent_experiment_ageneric must not fire when the request is already a
-    silent experiment (marker in either litellm_metadata or metadata).
+    The generic-path snapshot must return None when the request is already a
+    silent experiment (marker in either litellm_metadata or metadata) or when it
+    carries MCP tooling that the provider may execute.
     """
     router = Router(model_list=_generic_silent_model_list())
+    base = {"input": [{"role": "user", "content": "hi"}]}
 
-    for key in ("litellm_metadata", "metadata"):
-        with patch.object(router, "_ageneric_api_call_with_fallbacks", new_callable=AsyncMock) as mock_call:
-            await router._silent_experiment_ageneric(
-                silent_model="silent-model",
-                original_function=litellm.aresponses,
-                input=[{"role": "user", "content": "hi"}],
-                **{key: {"is_silent_experiment": True}},
-            )
-        mock_call.assert_not_called()
+    assert router._silent_experiment_generic_kwargs(**base, litellm_metadata={"is_silent_experiment": True}) is None
+    assert router._silent_experiment_generic_kwargs(**base, metadata={"is_silent_experiment": True}) is None
+    assert router._silent_experiment_generic_kwargs(**base, mcp_servers=[{"type": "url", "url": "x"}]) is None
+    assert (
+        router._silent_experiment_generic_kwargs(
+            **base, tools=[{"type": "mcp", "server_label": "x", "require_approval": "never"}]
+        )
+        is None
+    )
+
+    snapshot = router._silent_experiment_generic_kwargs(**base, tools=[{"type": "web_search"}])
+    assert snapshot is not None
+    assert snapshot["litellm_metadata"]["is_silent_experiment"] is True
+    assert snapshot["stream"] is False
+    assert "metadata" not in snapshot
+
+
+def test_silent_experiment_generic_kwargs_snapshots_before_mutation():
+    """
+    Regression: the snapshot is taken synchronously, so metadata merged into the
+    caller's kwargs afterwards (deployment tags etc.) never reaches the mirror.
+    """
+    router = Router(model_list=_generic_silent_model_list())
+    litellm_metadata = {"model_group": "primary-model"}
+    snapshot = router._silent_experiment_generic_kwargs(input="hi", litellm_metadata=litellm_metadata)
+    assert snapshot is not None
+    litellm_metadata["tags"] = ["primary-deployment-tag"]
+    assert "tags" not in snapshot["litellm_metadata"]
 
 
 @pytest.mark.asyncio
@@ -478,5 +486,5 @@ async def test_silent_experiment_ageneric_error_is_caught():
         await router._silent_experiment_ageneric(
             silent_model="silent-model",
             original_function=litellm.aresponses,
-            input=[{"role": "user", "content": "hi"}],
+            silent_kwargs={"input": [{"role": "user", "content": "hi"}]},
         )

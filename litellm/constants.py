@@ -1913,7 +1913,7 @@ ADVISOR_MAX_USES: Final[int] = 5
 # `silent_model`. Only side-effect-free inference endpoints belong here: the same
 # router helper also serves file/fine-tuning/passthrough calls that must never be
 # replayed against a second deployment.
-SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES: Final[frozenset] = frozenset({"aresponses", "anthropic_messages"})
+SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES: Final[frozenset[str]] = frozenset({"aresponses", "anthropic_messages"})
 # Description injected into the synthetic advisor tool definition sent to non-native providers.
 ADVISOR_TOOL_DESCRIPTION: Final[str] = (
     "Consult a highly intelligent advisor model when you need expert guidance, "
