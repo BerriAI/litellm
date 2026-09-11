@@ -51,6 +51,7 @@ class CompletionExecutor(Protocol):
     def submit(
         self,
         function: Callable[..., object],
+        /,
         *args: object,
     ) -> Future[object]: ...
 
