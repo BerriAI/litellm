@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Final
 from starlette.types import Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.route_priority import hot_routes_first
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, FastAPI
@@ -331,6 +332,7 @@ async def _force_load(app: "FastAPI", feat: LazyFeature) -> bool:
             loop: Final = asyncio.get_running_loop()
             module: Final = await loop.run_in_executor(None, importlib.import_module, feat.module_path)
             feat.register_fn(app, module)
+            app.router.routes = hot_routes_first(app.router.routes)
             app.state.lazy_loaded.add(feat.module_path)
             app.openapi_schema = None
             verbose_proxy_logger.info(
