@@ -2476,12 +2476,21 @@ class BaseLLMHTTPHandler:
                 extra_headers=headers,
                 timeout=timeout,
             )
-        except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
-            verbose_logger.debug(
-                "Rust Anthropic messages bridge raised %s; falling back to Python path",
-                type(rust_error).__name__,
-            )
-            return None
+        except Exception as rust_error:  # noqa: BLE001  # only explicit pre-dispatch declines permit fallback
+            from litellm.rust_bridge.bindings import native_exception_types, upstream_error_details
+
+            exceptions: Final = native_exception_types()
+            if exceptions is not None and isinstance(rust_error, exceptions[0]):
+                return None
+            if exceptions is not None and isinstance(rust_error, exceptions[1]):
+                status, message = upstream_error_details(rust_error)
+                raise litellm.APIError(
+                    status_code=status,
+                    message=message,
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                ) from rust_error
+            raise
         if rust_response is None:
             return None
 

@@ -4,6 +4,7 @@ import builtins
 import asyncio
 import importlib
 import types
+from typing import Final, cast
 
 import httpx
 import pytest
@@ -214,6 +215,14 @@ def build_request(
     )
 
 
+def run_rust_ocr(*, request, resolve_api_key):
+    return rust_bridge.run(
+        request=request,
+        resolve_secret=resolve_api_key,
+        convert_file_document=ocr_main.convert_file_document_to_url_document,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
@@ -388,6 +397,12 @@ def test_timeout_to_seconds_handles_float_timeout_and_none():
     assert rust_bridge._timeout_to_seconds(httpx.Timeout(30.0, read=42.0)) == 42.0
 
 
+def test_provider_recognizes_unprefixed_mistral_ocr_model():
+    request = build_request(model="mistral-ocr-latest", custom_llm_provider=None)
+
+    assert rust_bridge.provider(request) == "mistral"
+
+
 def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
     bridge = RecordingBridge()
 
@@ -461,7 +476,7 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
-    response = ocr_main._run_rust_ocr(
+    response = run_rust_ocr(
         request=build_request(
             logging_obj=logging_obj,
             api_base="https://proxy.internal",
@@ -489,18 +504,45 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
     }
 
 
-def test_rust_upstream_error_uses_ocr_provider_error_mapping():
+def test_rust_upstream_error_uses_ocr_provider_error_mapping(monkeypatch: pytest.MonkeyPatch):
     error = RustUpstreamError(400, '{"message":"invalid model"}')
+    monkeypatch.setattr(rust_bridge, "native_exception_types", lambda: (RuntimeError, RustUpstreamError))
 
-    mapped = ocr_main._map_rust_ocr_error(
-        error,
-        build_request(),
-        (RuntimeError, RustUpstreamError),
-    )
+    mapped = rust_bridge._map_error(error, build_request())
 
     assert isinstance(mapped, BaseLLMException)
     assert mapped.status_code == 400
     assert mapped.message == '{"message":"invalid model"}'
+
+
+def test_rust_upstream_error_without_provider_is_preserved(monkeypatch: pytest.MonkeyPatch):
+    error = RustUpstreamError(500, "upstream failed")
+    request = build_request(model="custom-model", custom_llm_provider=None)
+    monkeypatch.setattr(rust_bridge, "native_exception_types", lambda: (RuntimeError, RustUpstreamError))
+
+    assert rust_bridge._map_error(error, request) is error
+
+
+def test_rust_upstream_error_without_provider_config_is_preserved(monkeypatch: pytest.MonkeyPatch):
+    error = RustUpstreamError(500, "upstream failed")
+    monkeypatch.setattr(rust_bridge, "native_exception_types", lambda: (RuntimeError, RustUpstreamError))
+    monkeypatch.setattr(rust_bridge.ProviderConfigManager, "get_provider_ocr_config", lambda **_kwargs: None)
+
+    assert rust_bridge._map_error(error, build_request()) is error
+
+
+def test_run_rust_ocr_rejects_non_mapping_document():
+    bridge = RecordingBridge()
+    litellm.rust(True)
+    rust_bridge._OCR.override(bridge)
+
+    with pytest.raises(TypeError, match="document must be a dict"):
+        run_rust_ocr(
+            request=build_request(document=cast(dict[str, object], [])),
+            resolve_api_key=lambda _name: None,
+        )
+
+    assert bridge.calls == []
 
 
 def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
@@ -508,7 +550,7 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(api_key=None, timeout=None),
         resolve_api_key=lambda name: "sk-from-vault" if name == "MISTRAL_API_KEY" else None,
     )
@@ -524,7 +566,7 @@ def test_run_rust_ocr_prefers_explicit_key_over_resolver():
     def _resolver(name: str) -> str | None:
         raise AssertionError(f"resolver should not be called for {name}")
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             api_key="sk-explicit",
             timeout=None,
@@ -545,7 +587,7 @@ def test_run_rust_ocr_uses_mistral_secret_manager_without_provider_config():
         resolver_calls.append(name)
         return "sk-provider-env"
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             model="mistral-ocr-latest",
             api_key=None,
@@ -563,7 +605,7 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             custom_llm_provider="vertex_ai",
             model="mistral-ocr-maas",
@@ -598,7 +640,7 @@ def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_mana
             "VERTEXAI_CREDENTIALS": "credentials-from-secret",
         }.get(name)
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             custom_llm_provider="vertex_ai",
             model="mistral-ocr-maas",
@@ -617,7 +659,7 @@ def test_prepare_rust_ocr_call_defers_azure_environment_resolution_to_rust():
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             custom_llm_provider="azure_ai",
             model="pixtral-12b-2409",
@@ -638,7 +680,7 @@ def test_prepare_rust_ocr_call_defers_document_intelligence_environment_to_rust(
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             custom_llm_provider="azure_ai",
             model="doc-intelligence/prebuilt-layout",
@@ -656,7 +698,7 @@ def test_prepare_rust_ocr_call_forwards_raw_azure_auth_inputs():
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             custom_llm_provider="azure_ai",
             model="pixtral-12b-2409",
@@ -705,29 +747,30 @@ def test_prepare_rust_ocr_call_preserves_proxy_input_sources():
         "client_secret": "secret",
         "azure_authority_host": "https://login.example.com",
         "api_base": "https://azure.example.com",
+        "api_key": "request-secret",
     }
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             custom_llm_provider="azure_ai",
             model="pixtral-12b-2409",
-            api_key="request-key",
+            api_key="request-secret",
             api_base="https://azure.example.com",
             litellm_params={
                 "tenant_id": "tenant",
                 "client_id": "client",
                 "client_secret": "secret",
                 "azure_authority_host": "https://login.example.com",
-                "proxy_server_request": {"body": request_values, "credential_fields": ("api_key",)},
+                "proxy_server_request": {
+                    "body": {name: value for name, value in request_values.items() if name != "api_key"},
+                    "body_fields": list(request_values),
+                },
             },
         ),
         resolve_api_key=lambda _name: None,
     )
 
-    assert bridge.calls[0]["input_sources"] == {
-        **{name: "request" for name in request_values},
-        "api_key": "request",
-    }
+    assert bridge.calls[0]["input_sources"] == {name: "request" for name in request_values}
 
     marshaled = rust_bridge._marshal(
         build_request(
@@ -754,7 +797,7 @@ def test_rust_ocr_logging_redacts_azure_credentials():
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             logging_obj=logging_obj,
             custom_llm_provider="azure_ai",
@@ -778,7 +821,7 @@ def test_rust_eligibility_rejects_python_only_azure_auth_modes():
         {"azure_username": "user"},
         {"azure_password": "password"},
     ):
-        assert not ocr_main._rust_ocr_supported(
+        assert not rust_bridge.supported(
             build_request(
                 custom_llm_provider="azure_ai",
                 model="pixtral-12b-2409",
@@ -793,7 +836,7 @@ def test_prepare_rust_ocr_call_forwards_global_azure_refresh(monkeypatch: pytest
     rust_bridge._OCR.override(bridge)
     monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", True)
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             custom_llm_provider="azure_ai",
             model="pixtral-12b-2409",
@@ -815,7 +858,7 @@ def test_run_rust_ocr_passes_retained_logger_to_native_dispatch():
     litellm.rust(True)
     rust_bridge._OCR.override(bridge)
 
-    ocr_main._run_rust_ocr(
+    run_rust_ocr(
         request=build_request(
             logging_obj=logging_obj,
             api_base="https://api.mistral.ai/v1",
@@ -991,6 +1034,30 @@ def test_ocr_does_not_route_to_rust_when_disabled():
     # The impl stays available for injection, but the disabled flag gates usage,
     # so ocr() never reaches the Rust path (asserted via the enabled-path test).
     assert bridge.calls == []
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.asyncio
+async def test_python_validation_error_preserves_original_context(asynchronous: bool, enabled: bool) -> None:
+    litellm.rust(enabled)
+    rust_bridge._OCR.override(None)
+    rust_bridge._AOCR.override(None)
+
+    async def invoke() -> None:
+        if asynchronous:
+            await litellm.aocr(model=MODEL, document={"type": "invalid"}, api_key="test-key")
+        else:
+            litellm.ocr(model=MODEL, document={"type": "invalid"}, api_key="test-key")
+
+    with pytest.raises(litellm.APIConnectionError) as exc_info:
+        await invoke()
+    error: Final = exc_info.value
+    assert error.model == MODEL
+    assert error.llm_provider is None
+    assert str(error).splitlines()[0] == (
+        "litellm.APIConnectionError: Invalid document type: invalid. Must be 'document_url', 'image_url', or 'file'"
+    )
 
 
 def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):

@@ -238,15 +238,64 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
 
 @pytest.mark.asyncio
-async def test_gate_falls_back_to_python_when_bridge_raises():
+async def test_gate_propagates_unclassified_bridge_failure():
     bridge = RaisingAsyncMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
 
-    response = await _gate()
-
-    assert response is None
+    with pytest.raises(RuntimeError, match="upstream request failed"):
+        await _gate()
     assert bridge.calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [0, 400, 429, 500])
+async def test_gate_never_falls_back_after_possible_dispatch(monkeypatch, status):
+    from types import SimpleNamespace
+    from litellm.rust_bridge import bindings
+
+    class Declined(Exception):
+        pass
+
+    class Upstream(Exception):
+        pass
+
+    error = Upstream(status, "provider failure")
+
+    async def bridge(**kwargs):
+        raise error
+
+    monkeypatch.setattr(
+        bindings, "get_native_bridge", lambda: SimpleNamespace(RustBridgeDeclined=Declined, RustUpstreamError=Upstream)
+    )
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
+    with pytest.raises(litellm.APIError) as caught:
+        await _gate()
+    assert caught.value.status_code == (status or 500)
+    assert caught.value.__cause__ is error
+
+
+@pytest.mark.asyncio
+async def test_gate_falls_back_only_for_explicit_decline(monkeypatch):
+    from types import SimpleNamespace
+    from litellm.rust_bridge import bindings
+
+    class Declined(Exception):
+        pass
+
+    class Upstream(Exception):
+        pass
+
+    async def bridge(**kwargs):
+        raise Declined("unsupported before dispatch")
+
+    monkeypatch.setattr(
+        bindings, "get_native_bridge", lambda: SimpleNamespace(RustBridgeDeclined=Declined, RustUpstreamError=Upstream)
+    )
+    litellm.rust(True)
+    rust_messages.set_rust_messages(amessages=bridge)
+    assert await _gate() is None
 
 
 @pytest.mark.asyncio
