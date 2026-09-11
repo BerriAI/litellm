@@ -1,3 +1,4 @@
+from types import MappingProxyType
 from typing import Final
 
 from litellm.secret_managers.main import get_secret_str
@@ -6,6 +7,7 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 ZAI_API_BASE: Final = "https://api.z.ai/api/paas/v4"
+ZAI_REASONING_PARAMS: Final = frozenset(("thinking", "reasoning_effort"))
 
 
 class ZAIChatConfig(OpenAIGPTConfig):
@@ -49,8 +51,31 @@ class ZAIChatConfig(OpenAIGPTConfig):
 
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
-                base_params.append("thinking")
+                return [*base_params, *sorted(ZAI_REASONING_PARAMS)]  # mutable-ok: base class returns a list
         except Exception:
             pass
 
         return base_params
+
+    def _map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        supported_openai_params: Final = frozenset(self.get_supported_openai_params(model))
+        reasoning_params: Final = MappingProxyType(
+            {k: v for k, v in non_default_params.items() if k in ZAI_REASONING_PARAMS and k in supported_openai_params}
+        )
+        optional_params.update(
+            (k, v)
+            for k, v in non_default_params.items()
+            if k in supported_openai_params and k not in ZAI_REASONING_PARAMS
+        )
+        if reasoning_params:
+            optional_params["extra_body"] = {  # mutable-ok: the OpenAI SDK json-encodes extra_body from a plain dict
+                **(optional_params.get("extra_body") or MappingProxyType({})),
+                **reasoning_params,
+            }
+        return optional_params
