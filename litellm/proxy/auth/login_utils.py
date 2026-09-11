@@ -98,6 +98,14 @@ def _matches_env_credentials(username: str, password: str, master_key: str | Non
     )
 
 
+def _admin_credentials_match(
+    username: str, password: str, master_key: str, general_settings: Mapping[str, object]
+) -> bool:
+    return general_settings.get("disable_env_credential_login") is not True and _matches_env_credentials(
+        username, password, master_key
+    )
+
+
 def _invalid_credentials_message(general_settings: Mapping[str, object]) -> str:
     """One rejection message for unknown usernames and wrong passwords alike, so neither can be enumerated."""
     if is_env_credential_login_enabled(general_settings):
@@ -209,9 +217,7 @@ async def authenticate_user(
             code=500,
         )
 
-    admin_credentials_match: Final = general_settings.get("disable_env_credential_login") is not True and (
-        _matches_env_credentials(username, password, master_key)
-    )
+    admin_credentials_match: Final = _admin_credentials_match(username, password, master_key, general_settings)
 
     if not admin_credentials_match:
         await throttle.raise_if_blocked(username)
@@ -247,12 +253,7 @@ async def authenticate_user(
         user_id = LITELLM_PROXY_ADMIN_NAME
 
         # we want the key created to have PROXY_ADMIN_PERMISSIONS
-        key_user_id = LITELLM_PROXY_ADMIN_NAME
-        if (
-            os.getenv("PROXY_ADMIN_ID", None) is not None and os.environ["PROXY_ADMIN_ID"] == user_id
-        ) or user_id == LITELLM_PROXY_ADMIN_NAME:
-            # checks if user is admin
-            key_user_id = os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)
+        key_user_id: Final = os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)
 
         # Admin is Authe'd in - generate key for the UI to access Proxy
 
