@@ -173,7 +173,9 @@ class PromptCachingCache:
         tools: list[ChatCompletionToolParam] | None = None,
     ) -> int:
         cacheable_prefix: Final = (
-            PromptCachingCache.extract_cacheable_prefix(messages) if messages is not None else []  # mutable-ok: TTL helper requires a concrete list
+            PromptCachingCache.extract_cacheable_prefix(messages)
+            if messages is not None
+            else []  # mutable-ok: TTL helper requires a concrete list
         )
         return PromptCachingCache.get_prompt_caching_ttl_from_prefix(cacheable_prefix, tools)
 
@@ -182,7 +184,9 @@ class PromptCachingCache:
         cacheable_prefix: list[AllMessageValues],
         tools: list[ChatCompletionToolParam] | None,
     ) -> int:
-        cacheable_tools: Final = PromptCachingCache.extract_cacheable_tools(tools or [])  # mutable-ok: tool API requires a concrete list
+        cacheable_tools: Final = PromptCachingCache.extract_cacheable_tools(
+            tools or []  # mutable-ok: tool API requires a concrete list
+        )
         cache_control_values: Final = tuple(
             cache_control
             for message in cacheable_prefix
