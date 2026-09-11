@@ -51,7 +51,7 @@ jobs:
             echo "${TAG} is a stable or RC tag and must pass the chaos gate"
           fi
 
-  redis-chaos-gate:
+  redis-chaos-check:
     name: Redis Chaos E2E
     needs: run-stable-release-checks
     if: needs.run-stable-release-checks.outputs.gated == 'true'
@@ -63,8 +63,8 @@ jobs:
 
   release:
     name: Create Release
-    needs: [run-stable-release-checks, redis-chaos-gate]
-    if: always() && needs.run-stable-release-checks.result == 'success' && (needs.redis-chaos-gate.result == 'success' || needs.redis-chaos-gate.result == 'skipped')
+    needs: [run-stable-release-checks, redis-chaos-check]
+    if: always() && needs.run-stable-release-checks.result == 'success' && (needs.redis-chaos-check.result == 'success' || needs.redis-chaos-check.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
