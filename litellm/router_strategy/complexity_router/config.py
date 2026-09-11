@@ -971,9 +971,11 @@ class ComplexityRouterConfig(BaseModel):
             "classified against what it refers to. Counts turns of both roles when "
             "classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier "
             "model, which may "
-            "be a different deployment or provider than the routed completion model; that call already "
-            "carries the current user ask and the caller's system prompt in full. Set to 0 to send neither "
-            "prior turns nor any conversation context beyond the current ask. Only applies when "
+            "be a different deployment or provider than the routed completion model; that call carries "
+            "the current user ask and, except for Claude Code requests, the extracted system-role text in full. "
+            "Claude Code system text is omitted to avoid classifying harness instructions; the routed "
+            "completion still receives it. Set to 0 to send neither prior turns nor "
+            "any conversation context beyond the current ask. Only applies when "
             "classifier_type is 'llm'."
         ),
     )
@@ -985,9 +987,9 @@ class ComplexityRouterConfig(BaseModel):
             "context window, per classification call. Turns are taken newest first and quoted whole "
             "while they fit, so a conversation small enough to quote entirely is never cut; once the "
             "budget runs out the older turns are dropped whole and only the turn straddling the "
-            "boundary is truncated, into whatever space is left. The current ask and the caller's "
-            "system prompt sit outside this budget and are always sent in full, as does the numbering "
-            "each quoted turn carries. A budget under 120 leaves no room to quote a turn and "
+            "boundary is truncated, into whatever space is left. The current ask and, except for Claude "
+            "Code requests, the extracted system-role text sit outside this budget and are sent in full, as does "
+            "the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and "
             "suppresses the block; set classifier_context_window_size to 0 to turn context off "
             "deliberately. Only applies when classifier_type is 'llm'."
         ),
