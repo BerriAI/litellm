@@ -1,4 +1,4 @@
-"""Live e2e: the proxy under load keeps serving every request while Redis writes time out.
+"""Live e2e: the proxy under load keeps serving every request while Redis is down entirely.
 
 Runs against a proxy booted from tests/e2e/gateway/redis_chaos_ci_config.yml, which points
 cache_params at a real Redis with litellm's default socket_timeout. That one client backs all
@@ -11,11 +11,13 @@ retries on the failing pair (a 500 is retryable, so retries keep re-picking insi
 order) and the router's order-based fallback then re-targets order 2. Every request is expected
 to succeed, and each one carries retry breadcrumbs into cost tracking.
 
-Phase A is a baseline with Redis healthy; phase B holds Redis in CLIENT PAUSE WRITE, so the
-spend counter increment times out and the callback stringifies the request metadata,
-breadcrumbs included, into a failed-tracking alert. On v1.100.0 that string doubled per request
-until the worker hung (LIT-6780), which is what the per-phase RSS and CPU percentiles are here
-to catch.
+Phase A is a baseline with Redis healthy; phase B holds Redis in CLIENT PAUSE ALL for the
+length of the phase, simulating Redis being down outright rather than merely slow to write.
+Every touchpoint times out: the auth cache read falls back to Postgres, the response cache
+read and write both fail, and the spend counter increment times out and the callback
+stringifies the request metadata, breadcrumbs included, into a failed-tracking alert. On
+v1.100.0 that string doubled per request until the worker hung (LIT-6780), which is what the
+per-phase RSS and CPU percentiles are here to catch.
 
 Needs the proxy on the same host, since RSS and CPU come from psutil on its process tree:
 a multi-worker proxy serves /metrics from the prometheus multiprocess collector, which drops
@@ -26,8 +28,10 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Final
 
 import pytest
@@ -38,12 +42,13 @@ from lifecycle import ResourceManager
 from load_client import LoadClient
 from locust_load import LoadResult, run_chat_load
 from models import KeyGenerateBody, LiteLLMParamsBody
+from phase_budget import Budget, violations
 from proxy_client import ProxyClient
 from proxy_usage import ProxyUsageSampler, UsageWindow
 
-pytestmark = [pytest.mark.e2e, pytest.mark.redis_chaos]
+pytestmark: Final = pytest.mark.e2e
 
-MODEL_GROUP: Final = "redis-chaos-fable"
+MODEL_GROUP: Final = f"redis-chaos-fable-{unique_marker()}"
 MOCK_MODEL: Final = "anthropic/claude-fable-5-1"
 FAILING_DEPLOYMENTS: Final = 2
 SERVING_DEPLOYMENTS: Final = 1
@@ -54,19 +59,42 @@ LOCUST_USERS: Final = 50
 LOCUST_SPAWN_RATE: Final = 50.0
 BASELINE_SECONDS: Final = 60.0
 CHAOS_SECONDS: Final = 90.0
-REDIS_PAUSE_MS: Final = 600_000
-BASELINE_TIMEOUT_RATE_CEILING: Final = 0.05
-CHAOS_TIMEOUT_RATE_FLOOR: Final = 0.20
+REDIS_PAUSE_MS: Final = int(CHAOS_SECONDS * 1000)
+
+# Chaos-phase ceilings, as a multiple of the same metric in the baseline phase. Ratios rather
+# than absolutes because every absolute here is machine-shaped: RSS scales with worker count
+# and latency with core count, so a number calibrated on one runner means nothing on another.
+# Calibrated from local runs under CLIENT PAUSE ALL that came in around 4x latency at every
+# percentile, 1.03x RSS and 4.4x CPU per request, and deliberately loose: the regression these
+# guard against grew memory by an order of magnitude, so catching it does not need a tight
+# bound, and a tight one would flake on a shared CI runner. Latency gets the most slack because
+# it is the metric a Redis outage is legitimately allowed to move, by its socket timeout on
+# every call a request attempts.
+CHAOS_LATENCY_RATIO_CEILING: Final = 12.0
+CHAOS_RSS_RATIO_CEILING: Final = 1.5
+CHAOS_CPU_PER_REQUEST_RATIO_CEILING: Final = 6.0
+
+DRAIN_TIMEOUT_SECONDS: Final = 30.0
+DRAIN_POLL_SECONDS: Final = 1.0
 
 TIMEOUT_FAILURES_RE: Final = re.compile(
     r'^litellm_redis_circuit_breaker_failures_total\{failure_class="timeout"\} ([0-9.e+]+)$', re.M
 )
-BREAKER_OPEN_RE: Final = re.compile(r'^litellm_redis_circuit_breaker_state\{state="open"\} ([0-9.e+]+)$', re.M)
+# The state gauge carries a pid label under the multiprocess collector, one series per worker,
+# so this matches any label order rather than a bare {state="open"} that never appears.
+BREAKER_OPEN_RE: Final = re.compile(
+    r'^litellm_redis_circuit_breaker_state\{[^}]*state="open"[^}]*\} ([0-9.e+]+)$', re.M
+)
 BREAKER_TRANSITIONS_RE: Final = re.compile(
     r'^litellm_redis_circuit_breaker_transitions_total\{state="[a-z_]+"\} ([0-9.e+]+)$', re.M
 )
-RETRIES_RE: Final = re.compile(r"^litellm_deployment_failure_responses_total\{[^}]*\} ([0-9.e+]+)$", re.M)
-COOLDOWN_RE: Final = re.compile(r"^litellm_deployment_cooled_down_total\{[^}]*\} ([0-9.e+]+)$", re.M)
+
+
+def _deployment_metric_re(name: str, model_ids: tuple[str, ...]) -> re.Pattern[str]:
+    """A per-deployment counter, narrowed to the deployments one run registered, so traffic
+    anything else sends the same proxy during the run cannot pad the retry count."""
+    ids: Final = "|".join(re.escape(model_id) for model_id in model_ids)
+    return re.compile(rf'^litellm_{name}\{{[^}}]*model_id="(?:{ids})"[^}}]*\}} ([0-9.e+]+)$', re.M)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,11 +104,22 @@ class Phase:
     name: str
     load: LoadResult
     usage: UsageWindow
+    redis_timeouts: float
+
+    @property
+    def timeouts_per_request(self) -> float:
+        return self.redis_timeouts / self.load.requests if self.load.requests else 0.0
+
+    @property
+    def cpu_seconds_per_request(self) -> float:
+        return self.usage.cpu_seconds_per_request(self.load.requests)
 
     def report(self) -> str:
         return (
             f"{self.name}: {self.load.requests} requests, {self.load.failures} failures, "
-            f"{self.load.requests_per_second:.0f} rps, {self.load.latency_summary()}; {self.usage.summary()}"
+            f"{self.load.requests_per_second:.0f} rps, {self.load.latency_summary()}; {self.usage.summary()}; "
+            f"{self.cpu_seconds_per_request * 1000:.1f} ms CPU per request; "
+            f"{self.timeouts_per_request:.2f} Redis timeouts per request"
         )
 
 
@@ -119,10 +158,12 @@ def proxy_pid() -> int:
 
 @pytest.fixture
 def redis_control() -> Iterator[redis.Redis[bytes]]:
-    """A control connection to the proxy's Redis, which unpauses writes in teardown.
+    """A control connection to the proxy's Redis, which unpauses it in teardown as a safety net.
 
-    Only writes are paused: CLIENT PAUSE ALL would freeze this connection too, leaving
-    nothing able to lift the pause.
+    CLIENT PAUSE ALL freezes every connection including this one, so REDIS_PAUSE_MS is sized
+    to the chaos phase: by the time teardown runs, the pause has
+    already lapsed on its own and CLIENT UNPAUSE here returns immediately. It only actually
+    waits out a lapsed pause if the chaos phase itself overran that duration.
     """
     host: Final = os.environ.get("REDIS_HOST")
     port: Final = os.environ.get("REDIS_PORT")
@@ -135,18 +176,54 @@ def redis_control() -> Iterator[redis.Redis[bytes]]:
         control.close()
 
 
-def _metric(proxy: ProxyClient, pattern: re.Pattern[str]) -> float:
-    body: Final = proxy.probe("/metrics", params=NoBody()).body
-    return sum(float(match.group(1)) for match in pattern.finditer(body))
+def _scrape(proxy: ProxyClient) -> str:
+    """One /metrics body, read once per checkpoint so every counter comes from the same instant."""
+    scrape: Final = proxy.probe("/metrics", params=NoBody())
+    assert scrape.status_code == 200, (
+        f"/metrics did not answer ({scrape.status_code}: {scrape.body[:200]}), so no counter can be read; "
+        f"a silent 0 here would turn every before-and-after difference negative"
+    )
+    return scrape.body
 
 
-def _register_deployments(proxy: ProxyClient, resources: ResourceManager) -> None:
-    for _ in range(FAILING_DEPLOYMENTS):
-        failing_id = proxy.create_model(MODEL_GROUP, _failing_params())
-        resources.defer(lambda model_id=failing_id: proxy.delete_model(model_id))
-    for _ in range(SERVING_DEPLOYMENTS):
-        serving_id = proxy.create_model(MODEL_GROUP, _serving_params())
-        resources.defer(lambda model_id=serving_id: proxy.delete_model(model_id))
+def _metric(scrape: str, pattern: re.Pattern[str]) -> float:
+    return sum(float(match.group(1)) for match in pattern.finditer(scrape))
+
+
+def _scrape_after_drain(proxy: ProxyClient, pattern: re.Pattern[str]) -> str:
+    """A /metrics body taken once `pattern`'s count has stopped moving.
+
+    `set_llm_deployment_failure_metrics` runs from the async logging callback queue, so a load
+    generator that just stopped sending traffic can still have thousands of failure increments
+    in flight, and a scrape taken the instant load stops undercounts them. Settling on the
+    counter rather than sleeping a fixed duration keeps the wait proportional to how backed up
+    the queue actually is.
+    """
+    deadline: Final = time.monotonic() + DRAIN_TIMEOUT_SECONDS
+
+    def scrapes() -> Iterator[str]:
+        yield _scrape(proxy)
+        while time.monotonic() < deadline:
+            time.sleep(DRAIN_POLL_SECONDS)
+            yield _scrape(proxy)
+
+    settled: Final = next(
+        (later for earlier, later in pairwise(scrapes()) if _metric(earlier, pattern) == _metric(later, pattern)),
+        None,
+    )
+    return settled if settled is not None else _scrape(proxy)
+
+
+def _register_deployments(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, ...]:
+    """The model ids this run registered, which scope its per-deployment metric reads."""
+    params: Final = (
+        *(_failing_params() for _ in range(FAILING_DEPLOYMENTS)),
+        *(_serving_params() for _ in range(SERVING_DEPLOYMENTS)),
+    )
+    model_ids: Final = tuple(proxy.create_model(MODEL_GROUP, one) for one in params)
+    for model_id in model_ids:
+        resources.defer(lambda doomed=model_id: proxy.delete_model(doomed))
+    return model_ids
 
 
 def _generate_key_pool(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, ...]:
@@ -174,12 +251,68 @@ def _drive(keys: tuple[str, ...], seconds: float) -> LoadResult:
     )
 
 
+def _latency_budget(percentile: str, baseline: float, degraded: float) -> Budget:
+    return Budget(
+        name=f"{percentile} latency",
+        baseline=baseline,
+        degraded=degraded,
+        ratio_ceiling=CHAOS_LATENCY_RATIO_CEILING,
+        unit="s",
+        decimals=3,
+    )
+
+
+def _rss_budget(percentile: str, baseline: UsageWindow, degraded: UsageWindow, fraction: float) -> Budget:
+    return Budget(
+        name=f"{percentile} RSS",
+        baseline=baseline.rss_percentile(fraction) / 2**20,
+        degraded=degraded.rss_percentile(fraction) / 2**20,
+        ratio_ceiling=CHAOS_RSS_RATIO_CEILING,
+        unit=" MB",
+        decimals=0,
+    )
+
+
+def _chaos_budgets(baseline: Phase, chaos: Phase) -> tuple[Budget, ...]:
+    """What a Redis outage is allowed to cost, measured against the same run's healthy phase.
+
+    Every request still succeeding is the headline assertion, but a proxy can answer every
+    request while leaking: the v1.100.0 regression (LIT-6780) served traffic the whole way up
+    to a 61 GB worker. These bound the cost of serving it.
+
+    Latency and RSS are budgeted at p50, p90 and p99 so a regression that only shows up in the
+    tail (or only in the median) cannot hide behind the other. Latency gets the loosest bound
+    because a timing-out Redis legitimately adds its socket_timeout to every request that
+    touches it, several times over on a retried request. RSS gets the tightest: the failure
+    path has no business allocating more per request. CPU is budgeted once, as CPU seconds per
+    request rather than per percentile: cores-busy saturates at the worker count under load, so
+    its percentiles read the same whether a request costs 10 ms of CPU or 40, and cannot budget
+    anything; seconds per request is the CPU figure that actually moves.
+    """
+    return (
+        _latency_budget("p50", baseline.load.p50_seconds, chaos.load.p50_seconds),
+        _latency_budget("p90", baseline.load.p90_seconds, chaos.load.p90_seconds),
+        _latency_budget("p99", baseline.load.p99_seconds, chaos.load.p99_seconds),
+        _rss_budget("p50", baseline.usage, chaos.usage, 0.5),
+        _rss_budget("p90", baseline.usage, chaos.usage, 0.9),
+        _rss_budget("p99", baseline.usage, chaos.usage, 0.99),
+        Budget(
+            name="CPU per request",
+            baseline=baseline.cpu_seconds_per_request * 1000,
+            degraded=chaos.cpu_seconds_per_request * 1000,
+            ratio_ceiling=CHAOS_CPU_PER_REQUEST_RATIO_CEILING,
+            unit=" ms",
+        ),
+    )
+
+
+@pytest.mark.redis_chaos
 class TestRedisChaos:
     @pytest.mark.covers(
         "reliability.circuit_breaker.redis_timeout.stays_responsive",
-        exercised_on=["chat_completions"],
+        exercised_on=("chat_completions",),
     )
-    def test_load_survives_redis_write_timeouts(
+    def test_load_survives_redis_being_down(
         self,
         client: LoadClient,
         resources: ResourceManager,
@@ -187,20 +320,36 @@ class TestRedisChaos:
         redis_control: redis.Redis[bytes],
     ) -> None:
         proxy: Final = client.proxy
-        _register_deployments(proxy, resources)
+        model_ids: Final = _register_deployments(proxy, resources)
         keys: Final = _generate_key_pool(proxy, resources)
 
-        timeouts_at_start: Final = _metric(proxy, TIMEOUT_FAILURES_RE)
-        retries_before: Final = _metric(proxy, RETRIES_RE)
-        cooldowns_before: Final = _metric(proxy, COOLDOWN_RE)
+        retries_re: Final = _deployment_metric_re("deployment_failure_responses_total", model_ids)
+        cooldown_re: Final = _deployment_metric_re("deployment_cooled_down_total", model_ids)
+
+        at_start: Final = _scrape(proxy)
 
         with ProxyUsageSampler(proxy_pid) as sampler:
-            baseline: Final = Phase(name="baseline", load=_drive(keys, BASELINE_SECONDS), usage=sampler.split())
-            timeouts_after_baseline: Final = _metric(proxy, TIMEOUT_FAILURES_RE)
+            baseline_load: Final = _drive(keys, BASELINE_SECONDS)
+            baseline_usage: Final = sampler.split()
+            after_baseline: Final = _scrape(proxy)
 
-            redis_control.client_pause(REDIS_PAUSE_MS, all=False)  # pyright: ignore[reportUnknownMemberType]  # redis-py stubs return Any
-            chaos: Final = Phase(name="chaos", load=_drive(keys, CHAOS_SECONDS), usage=sampler.split())
+            redis_control.client_pause(REDIS_PAUSE_MS, all=True)  # pyright: ignore[reportUnknownMemberType]  # redis-py stubs return Any
+            chaos_load: Final = _drive(keys, CHAOS_SECONDS)
+            chaos_usage: Final = sampler.split()
+        at_end: Final = _scrape_after_drain(proxy, retries_re)
 
+        baseline: Final = Phase(
+            name="baseline",
+            load=baseline_load,
+            usage=baseline_usage,
+            redis_timeouts=_metric(after_baseline, TIMEOUT_FAILURES_RE) - _metric(at_start, TIMEOUT_FAILURES_RE),
+        )
+        chaos: Final = Phase(
+            name="chaos",
+            load=chaos_load,
+            usage=chaos_usage,
+            redis_timeouts=_metric(at_end, TIMEOUT_FAILURES_RE) - _metric(after_baseline, TIMEOUT_FAILURES_RE),
+        )
         report: Final = f"{baseline.report()} | {chaos.report()}"
 
         for phase in (baseline, chaos):
@@ -215,13 +364,13 @@ class TestRedisChaos:
                 f"a Redis failure reached the response path. {phase.load.diagnosis()}. {report}"
             )
 
-        cooldowns: Final = _metric(proxy, COOLDOWN_RE) - cooldowns_before
+        cooldowns: Final = _metric(at_end, cooldown_re) - _metric(at_start, cooldown_re)
         assert cooldowns == 0, (
             f"{cooldowns:.0f} deployments were cooled down during the run; the failing deployments are supposed "
             f"to stay in rotation so every request keeps exercising the retry path. {report}"
         )
 
-        retries: Final = _metric(proxy, RETRIES_RE) - retries_before
+        retries: Final = _metric(at_end, retries_re) - _metric(at_start, retries_re)
         assert retries >= baseline.load.requests + chaos.load.requests, (
             f"only {retries:.0f} deployment failures were counted across "
             f"{baseline.load.requests + chaos.load.requests} requests; the mock deployments did not fail, so no "
@@ -229,24 +378,17 @@ class TestRedisChaos:
             f"{report}"
         )
 
-        baseline_timeout_rate: Final = (timeouts_after_baseline - timeouts_at_start) / baseline.load.requests
-        assert baseline_timeout_rate <= BASELINE_TIMEOUT_RATE_CEILING, (
-            f"a healthy Redis timed out on {baseline_timeout_rate:.1%} of baseline requests, over the "
-            f"{BASELINE_TIMEOUT_RATE_CEILING:.0%} this test tolerates; at litellm's default socket_timeout a "
-            f"loaded Redis does time out occasionally, but this much means the baseline is already degraded and "
-            f"the two phases are not comparable. {report}"
+        transitions: Final = _metric(at_end, BREAKER_TRANSITIONS_RE) - _metric(after_baseline, BREAKER_TRANSITIONS_RE)
+        breaker_open: Final = _metric(at_end, BREAKER_OPEN_RE) >= 1
+        assert transitions >= 1 or breaker_open, (
+            f"pausing Redis produced no circuit breaker state transitions and it ended closed; nothing on the "
+            f"request path ever saw Redis fail, so this run proved nothing. {report}"
         )
 
-        chaos_timeouts: Final = _metric(proxy, TIMEOUT_FAILURES_RE) - timeouts_after_baseline
-        chaos_timeout_rate: Final = chaos_timeouts / chaos.load.requests
-        transitions: Final = _metric(proxy, BREAKER_TRANSITIONS_RE)
-        breaker_open: Final = _metric(proxy, BREAKER_OPEN_RE) >= 1
-        assert chaos_timeout_rate >= CHAOS_TIMEOUT_RATE_FLOOR or transitions >= 1 or breaker_open, (
-            f"with writes paused the breaker saw Redis time out on only {chaos_timeout_rate:.1%} of requests "
-            f"against {baseline_timeout_rate:.1%} at baseline, under the {CHAOS_TIMEOUT_RATE_FLOOR:.0%} a real "
-            f"outage produces, and it counted {transitions:.0f} state transitions and ended "
-            f"{'open' if breaker_open else 'closed'}. The spend counter increment never failed, so this run "
-            f"proved nothing. {report}"
+        blown: Final = violations(_chaos_budgets(baseline, chaos))
+        assert not blown, (
+            f"pausing Redis cost the proxy more than the socket timeout on the calls it attempts: "
+            f"{'; '.join(blown)}. {report}"
         )
 
         rows: Final = proxy.poll_logs_for_key(keys[0], min_rows=1)

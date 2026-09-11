@@ -50,6 +50,18 @@ class TestCpuUtilization:
         assert window.cpu_utilization_percentiles() == (0.0, 0.0, 0.0)
         assert window.cpu_seconds_consumed() == 0.0
 
+    def test_cost_per_request_separates_runs_that_cores_busy_reports_identically(self) -> None:
+        # Both windows pin 4 cores for 10 seconds, so utilization cannot tell them apart. The
+        # second one served a tenth of the traffic for the same CPU, which is the regression shape.
+        window: Final = _window(*((float(i), _MB, 4.0 * i) for i in range(11)))
+
+        assert window.cpu_utilization_percentiles()[0] == 4.0
+        assert window.cpu_seconds_per_request(4000) == 0.01
+        assert window.cpu_seconds_per_request(400) == 0.1
+
+    def test_no_requests_reports_zero_cost_rather_than_dividing_by_zero(self) -> None:
+        assert _window((0.0, _MB, 0.0), (1.0, _MB, 1.0)).cpu_seconds_per_request(0) == 0.0
+
     def test_summary_reports_every_percentile_in_human_units(self) -> None:
         window: Final = _window((0.0, 200 * _MB, 0.0), (1.0, 200 * _MB, 1.5), (2.0, 200 * _MB, 3.0))
 
