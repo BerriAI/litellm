@@ -51,7 +51,7 @@ export const teamsUserCanAssign = (
   userRole: string | null,
   userID: string | null,
 ): Team[] | null => {
-  if (teams == null || all_admin_roles.includes(userRole ?? "")) {
+  if (teams == null || all_admin_roles.includes(userRole ?? "") || isOrgAdminSessionRole(userRole)) {
     return teams;
   }
   return teams.filter((team) => isUserTeamAdminForSingleTeam(team.members_with_roles, userID ?? ""));
