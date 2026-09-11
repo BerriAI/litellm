@@ -25,6 +25,7 @@ from collections.abc import (
 )
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
 from urllib.parse import ParseResult, urlparse
@@ -881,6 +882,53 @@ def _redacted_origin_list(urls: Sequence[str]) -> str:
 
 def _sanitized_error_text(exc: Exception) -> str:
     return re.sub(r"https?://\S+", "<url>", str(exc))[:200]
+
+
+async def _openapi_spec_health(
+    spec_path: str, *, timeout: float
+) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None]:
+    """Check specification availability, not upstream operations or user credentials."""
+    from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+
+    if not spec_path.startswith(("http://", "https://")):
+        return "unknown", "OpenAPI servers have no protocol-level health probe"
+    try:
+        await asyncio.wait_for(load_openapi_spec_async(spec_path, max_bytes=10 * 1024 * 1024), timeout=timeout)
+    except asyncio.TimeoutError:
+        return "unhealthy", f"OpenAPI specification check timed out after {timeout} seconds"
+    except HTTPStatusError as exc:
+        return "unhealthy", f"OpenAPI specification request failed (HTTP {exc.response.status_code})"
+    except HTTPResponseLimitError as exc:
+        return "unknown", f"OpenAPI specification probe refused: {exc}"
+    except (httpx.RequestError, ValueError, OSError) as exc:
+        return "unhealthy", f"OpenAPI specification could not be loaded ({type(exc).__name__})"
+    return "healthy", None
+
+
+class _OpenAPIHealthProbe:
+    def __init__(self, spec_path: str, clock: Callable[[], float] = time.monotonic) -> None:
+        self.spec_path = spec_path
+        self.clock = clock
+        self.lock = asyncio.Lock()
+        self.checked_at = float("-inf")
+        self.result: tuple[Literal["healthy", "unhealthy", "unknown"], str | None, datetime.datetime] | None = None
+
+    async def check(self) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None, datetime.datetime]:
+        async with self.lock:
+            if self.result is not None and self.clock() - self.checked_at < 30.0:
+                return self.result
+            try:
+                status, error = await _openapi_spec_health(self.spec_path, timeout=MCP_HEALTH_CHECK_TIMEOUT)
+            except asyncio.CancelledError:
+                return (
+                    "unknown",
+                    "OpenAPI specification check was cancelled",
+                    datetime.datetime.now(datetime.timezone.utc),
+                )
+            self.result = (status, error, datetime.datetime.now(datetime.timezone.utc))
+            self.checked_at = self.clock()
+            return self.result
 
 
 def _discovery_failure_leaves_needs_unresolved(
@@ -1749,6 +1797,7 @@ class MCPServerManager:
             token_exchanger=build_token_exchanger(),
         )
         self.registry: dict[str, MCPServer] = {}
+        self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
         """
         eg.
@@ -6696,6 +6745,18 @@ class MCPServerManager:
                 status="unknown",
                 health_check_error="Server not found",
                 last_health_check=datetime.now(),
+            )
+
+        if server.spec_path:
+            spec_status, spec_error, spec_checked_at = await self._openapi_health_probes(server.spec_path).check()
+            return self._build_mcp_server_table(server).model_copy(
+                update=MappingProxyType(
+                    {
+                        "status": spec_status,
+                        "health_check_error": spec_error,
+                        "last_health_check": spec_checked_at,
+                    }
+                )
             )
 
         status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
