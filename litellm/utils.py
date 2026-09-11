@@ -65,6 +65,7 @@ from litellm.constants import (
     DEFAULT_EMBEDDING_PARAM_VALUES,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
@@ -278,7 +279,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 from litellm import utils as litellm_utils
@@ -1646,9 +1647,6 @@ def client(original_function):
                 kwargs=kwargs,
             )
 
-            verbose_logger.info("Wrapper: Completed Call, calling success_handler")
-            completion.success(result, start_time, end_time)
-            # RETURN RESULT
             update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
             update_response_metadata(
                 result=result,
@@ -1658,6 +1656,8 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
+            verbose_logger.info("Wrapper: Completed Call, calling success_handler")
+            completion.success(result, start_time, end_time)
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -1934,13 +1934,13 @@ def client(original_function):
                 args=args,
             )
 
-            completion.success(result, start_time, end_time)
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
                 and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response is not None
             ):
+                completion.success(result, start_time, end_time)
                 return _llm_caching_handler._combine_cached_embedding_response_with_api_result(
                     _caching_handler_response=_caching_handler_response,
                     embedding_response=result,
@@ -1956,6 +1956,7 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
+            completion.success(result, start_time, end_time)
 
             return result
         except Exception as e:
@@ -6953,7 +6954,26 @@ class TextCompletionStreamWrapper:
             raise StopAsyncIteration
 
 
-def mock_completion_streaming_obj(model_response, mock_response, model, n: int | None = None):
+def mock_stream_usage_chunk(model_response: ModelResponseStream, model: str, prompt_tokens: int) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=model_response.id,
+        choices=[],  # mutable-ok: ModelResponseStream only treats a list as explicit choices, a tuple gets a default choice
+        model=model,
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+            total_tokens=prompt_tokens + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+        ),
+    )
+
+
+def mock_completion_streaming_obj(
+    model_response: ModelResponseStream,
+    mock_response: str | MockException | ModelResponseStream,
+    model: str,
+    n: int | None = None,
+    prompt_tokens: int | None = None,
+) -> Iterator[ModelResponseStream]:
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
     if isinstance(mock_response, ModelResponseStream):
@@ -6973,14 +6993,17 @@ def mock_completion_streaming_obj(model_response, mock_response, model, n: int |
                 _all_choices.append(_streaming_choice)
             model_response.choices = _all_choices
         yield model_response
+    if prompt_tokens is not None:
+        yield mock_stream_usage_chunk(model_response, model=model, prompt_tokens=prompt_tokens)
 
 
 async def async_mock_completion_streaming_obj(
-    model_response,
+    model_response: ModelResponseStream,
     mock_response: str | MockException | ModelResponseStream,
-    model,
+    model: str,
     n: int | None = None,
-):
+    prompt_tokens: int | None = None,
+) -> AsyncIterator[ModelResponseStream]:
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
     if isinstance(mock_response, ModelResponseStream):
@@ -7000,6 +7023,8 @@ async def async_mock_completion_streaming_obj(
                 _all_choices.append(_streaming_choice)
             model_response.choices = _all_choices
         yield model_response
+    if prompt_tokens is not None:
+        yield mock_stream_usage_chunk(model_response, model=model, prompt_tokens=prompt_tokens)
 
 
 ########## Reading Config File ############################
