@@ -582,8 +582,8 @@ def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(monkeyp
         "prisma_was_set": True,
     }
     assert normalize(observed) == {
-        "added_to_callbacks": 2,
-        "added_to_async_success": 1,
+        "added_to_callbacks": 3,
+        "added_to_async_success": 2,
         "shadow_eval_loggers": 1,
         "prisma_was_set": True,
     }

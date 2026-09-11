@@ -1437,17 +1437,22 @@ def get_billed_token_rates(
     vertex_location: str | None = None,
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
+    model_info: ModelInfo | None = None,
 ) -> BilledTokenRates | None:
     """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
     breakdown resolve them. None when the model's pricing cannot be resolved."""
     if custom_cost_per_token is not None:
         return _custom_pricing_rates(custom_cost_per_token)
     try:
-        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        effective_model_info: Final = (
+            model_info
+            if model_info is not None
+            else get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        )
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
         return None
     return _cost_map_billed_rates(
-        model_info=model_info,
+        model_info=effective_model_info,
         usage=usage,
         custom_llm_provider=custom_llm_provider,
         service_tier=service_tier,
