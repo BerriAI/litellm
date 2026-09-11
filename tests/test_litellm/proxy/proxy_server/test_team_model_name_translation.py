@@ -1109,7 +1109,11 @@ async def test_v1_models_team_alias_inherits_token_limits_and_chat_mode(monkeypa
     router.get_model_names.return_value = ["model_name_teamX_terra_uuid"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_terra_uuid"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (876000, 128000)
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("azure/gpt-4.1",),
+        max_input_tokens=876000,
+        max_output_tokens=128000,
+    )
     router.get_configured_mode.return_value = "chat"
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
@@ -1153,7 +1157,11 @@ async def test_v1_models_team_image_alias_inherits_image_generation_mode(monkeyp
     router.get_model_names.return_value = ["model_name_teamX_image_uuid"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_image_uuid"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("openai/gpt-image-1",),
+        max_input_tokens=None,
+        max_output_tokens=None,
+    )
     router.get_configured_mode.return_value = "image_generation"
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
