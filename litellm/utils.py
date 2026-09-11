@@ -66,6 +66,7 @@ from litellm.constants import (
     DEFAULT_EMBEDDING_PARAM_VALUES,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
@@ -278,7 +279,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 from litellm import utils as litellm_utils
@@ -1195,6 +1196,47 @@ def function_setup(
         raise e
 
 
+def _dispatch_success_logging(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    is_completion_with_fallbacks: bool,
+    is_litellm_internal_call: bool,
+) -> None:
+    if not is_litellm_internal_call:
+        if getattr(logging_obj, "_defer_async_logging", False):
+
+            def _enqueue_deferred_logging() -> None:
+                asyncio.create_task(
+                    _client_async_logging_helper(
+                        logging_obj=logging_obj,
+                        result=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    )
+                )
+
+            logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging
+        else:
+            asyncio.create_task(
+                _client_async_logging_helper(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                )
+            )
+
+    logging_obj.handle_sync_success_callbacks_for_async_calls(
+        result=result,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+
 async def _client_async_logging_helper(
     logging_obj: LiteLLMLoggingObject,
     result,
@@ -1662,6 +1704,16 @@ def client(original_function):
                 kwargs=kwargs,
             )
 
+            _update_response_metadata: Final = getattr(sys.modules[__name__], "update_response_metadata")
+            _update_response_metadata(
+                result=result,
+                logging_obj=logging_obj,
+                model=model,
+                kwargs=kwargs,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
             # Copy the current context to propagate it to the background thread
@@ -1676,15 +1728,6 @@ def client(original_function):
                 end_time,
             )
             # RETURN RESULT
-            update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
-            update_response_metadata(
-                result=result,
-                logging_obj=logging_obj,
-                model=model,
-                kwargs=kwargs,
-                start_time=start_time,
-                end_time=end_time,
-            )
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -1843,6 +1886,9 @@ def client(original_function):
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                     return _caching_handler_response.final_embedding_cached_response
 
+            if _llm_caching_handler.preset_cache_key is not None:
+                logging_obj.litellm_params["preset_cache_key"] = _llm_caching_handler.preset_cache_key
+
             # CHECK MAX TOKENS
             if (
                 kwargs.get("max_tokens", None) is not None
@@ -1941,48 +1987,20 @@ def client(original_function):
                 args=args,
             )
 
-            # LOG SUCCESS - handle streaming success logging in the _next_ object
-            # Internal sub-calls (e.g. emulated file-search steps) share the
-            # parent's logging obj; skip async logging here so only the outer call bills once.
-            # NOTE: streaming requests return early (before this point) via
-            # CustomStreamWrapper, so this block is non-streaming only.
-            if not _is_litellm_internal_call:
-                if getattr(logging_obj, "_defer_async_logging", False):
-
-                    def _enqueue_deferred_logging() -> None:
-                        asyncio.create_task(
-                            _client_async_logging_helper(
-                                logging_obj=logging_obj,
-                                result=result,
-                                start_time=start_time,
-                                end_time=end_time,
-                                is_completion_with_fallbacks=is_completion_with_fallbacks,
-                            )
-                        )
-
-                    logging_obj._enqueue_deferred_logging = _enqueue_deferred_logging
-                else:
-                    asyncio.create_task(
-                        _client_async_logging_helper(
-                            logging_obj=logging_obj,
-                            result=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            is_completion_with_fallbacks=is_completion_with_fallbacks,
-                        )
-                    )
-
-            logging_obj.handle_sync_success_callbacks_for_async_calls(
-                result=result,
-                start_time=start_time,
-                end_time=end_time,
-            )
             # REBUILD EMBEDDING CACHING
             if (
                 isinstance(result, EmbeddingResponse)
                 and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response is not None
             ):
+                _dispatch_success_logging(
+                    logging_obj=logging_obj,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    is_completion_with_fallbacks=is_completion_with_fallbacks,
+                    is_litellm_internal_call=_is_litellm_internal_call,
+                )
                 return _llm_caching_handler._combine_cached_embedding_response_with_api_result(
                     _caching_handler_response=_caching_handler_response,
                     embedding_response=result,
@@ -1997,6 +2015,14 @@ def client(original_function):
                 kwargs=kwargs,
                 start_time=start_time,
                 end_time=end_time,
+            )
+            _dispatch_success_logging(
+                logging_obj=logging_obj,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                is_completion_with_fallbacks=is_completion_with_fallbacks,
+                is_litellm_internal_call=_is_litellm_internal_call,
             )
 
             return result
@@ -2197,13 +2223,17 @@ def _return_openai_tokenizer(model: str) -> SelectTokenizerResponse:
     return {"type": "openai_tokenizer", "tokenizer": _get_default_encoding()}
 
 
+def uses_anthropic_tokenizer(model: str) -> bool:
+    return model in litellm.anthropic_models and "claude-3" not in model
+
+
 def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     if model in litellm.cohere_models and "command-r" in model:
         # cohere
         cohere_tokenizer: Final = Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         return {"type": "huggingface_tokenizer", "tokenizer": cohere_tokenizer}
     # anthropic
-    elif model in litellm.anthropic_models and "claude-3" not in model:
+    elif uses_anthropic_tokenizer(model):
         claude_tokenizer: Final = Tokenizer.from_str(claude_json_str)
         return {"type": "huggingface_tokenizer", "tokenizer": claude_tokenizer}
     # llama2
@@ -2293,15 +2323,7 @@ def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: st
     dict: A dictionary with the tokenizer and its type.
     """
 
-    try:
-        tokenizer = Tokenizer.from_pretrained(
-            identifier,
-            revision=revision,
-            auth_token=auth_token,
-        )
-    except Exception as e:
-        verbose_logger.error("Error creating pretrained tokenizer: %s. Defaulting to version without 'auth_token'.", e)
-        tokenizer = Tokenizer.from_pretrained(identifier, revision=revision)
+    tokenizer: Final = Tokenizer.from_pretrained(identifier, revision=revision, token=auth_token)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -2975,24 +2997,33 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
     return None
 
 
+def is_generalized_model_info(model_info: ModelInfo) -> bool:
+    """Whether ``model_info`` came from a fallback-generalization capability rule.
+
+    Detected as the resolved key missing ``litellm.model_cost`` while matching a
+    capability rule. A rule-derived entry carries no pricing and only a conservative
+    family-baseline context window, so callers holding a second candidate name should
+    prefer an exact cost-map entry from that name over this one.
+    """
+    key: Final = cast("Mapping[str, object]", model_info).get("key")  # cast-ok: partial dicts may omit "key"
+    if not isinstance(key, str):
+        return False
+    return key not in litellm.model_cost and match_capability_generalizations(key) is not None
+
+
 def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
     Returns ``None`` when the lookup raises or when it resolved via a
-    fallback-generalization capability rule, detected as the resolved key missing
-    ``litellm.model_cost`` while matching a capability rule. A rule-derived entry
-    carries no pricing, so treating it as a hit would skip the built-in
-    cache-pricing inheritance for prefix-mangled keys.
+    fallback-generalization capability rule. A rule-derived entry carries no
+    pricing, so treating it as a hit would skip the built-in cache-pricing
+    inheritance for prefix-mangled keys.
     """
     try:
         info: Final = get_model_info(model=model)
     except Exception:
         return None
-    if info["key"] in litellm.model_cost:
-        return info
-    if match_capability_generalizations(info["key"]) is None:
-        return info
-    return None
+    return None if is_generalized_model_info(info) else info
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
@@ -3079,7 +3110,7 @@ def register_model(
         # Convert stringified numbers to appropriate numeric types
         loaded_model_cost = model_cost
     elif isinstance(model_cost, str):
-        loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
+        loaded_model_cost = litellm.get_model_cost_map(url=model_cost, max_attempts=1)
 
     if persist_across_reloads:
         _registrations: Final[Mapping[str, Mapping[str, object]]] = loaded_model_cost
@@ -3103,7 +3134,10 @@ def register_model(
                 existing_model = cast(dict, builtin_model_info)
                 model_cost_key = existing_model["key"]
             else:
-                existing_model = {}
+                # An exact entry ends the lookup ladder before the capability rules are
+                # consulted, so seed from them: otherwise registering an unmapped model
+                # shadows the very defaults it would have resolved to unregistered.
+                existing_model = dict(match_capability_generalizations(_key_str) or {})  # mutable-ok: merge target
                 model_cost_key = key
                 builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
                 if builtin_entry is not None:
@@ -3412,7 +3446,7 @@ def get_optional_params_image_gen(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model or "",
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=litellm.drop_params is True or drop_params is True,
         )
     elif (
         custom_llm_provider == "openai"
@@ -5913,6 +5947,7 @@ def _get_model_info_helper(
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
                 output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
+                output_cost_per_second_720p=_model_info.get("output_cost_per_second_720p", None),
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
@@ -6989,7 +7024,26 @@ class TextCompletionStreamWrapper:
             raise StopAsyncIteration
 
 
-def mock_completion_streaming_obj(model_response, mock_response, model, n: int | None = None):
+def mock_stream_usage_chunk(model_response: ModelResponseStream, model: str, prompt_tokens: int) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=model_response.id,
+        choices=[],  # mutable-ok: ModelResponseStream only treats a list as explicit choices, a tuple gets a default choice
+        model=model,
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+            total_tokens=prompt_tokens + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+        ),
+    )
+
+
+def mock_completion_streaming_obj(
+    model_response: ModelResponseStream,
+    mock_response: str | MockException | ModelResponseStream,
+    model: str,
+    n: int | None = None,
+    prompt_tokens: int | None = None,
+) -> Iterator[ModelResponseStream]:
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
     if isinstance(mock_response, ModelResponseStream):
@@ -7009,14 +7063,17 @@ def mock_completion_streaming_obj(model_response, mock_response, model, n: int |
                 _all_choices.append(_streaming_choice)
             model_response.choices = _all_choices
         yield model_response
+    if prompt_tokens is not None:
+        yield mock_stream_usage_chunk(model_response, model=model, prompt_tokens=prompt_tokens)
 
 
 async def async_mock_completion_streaming_obj(
-    model_response,
+    model_response: ModelResponseStream,
     mock_response: str | MockException | ModelResponseStream,
-    model,
+    model: str,
     n: int | None = None,
-):
+    prompt_tokens: int | None = None,
+) -> AsyncIterator[ModelResponseStream]:
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
     if isinstance(mock_response, ModelResponseStream):
@@ -7036,6 +7093,8 @@ async def async_mock_completion_streaming_obj(
                 _all_choices.append(_streaming_choice)
             model_response.choices = _all_choices
         yield model_response
+    if prompt_tokens is not None:
+        yield mock_stream_usage_chunk(model_response, model=model, prompt_tokens=prompt_tokens)
 
 
 ########## Reading Config File ############################
@@ -8857,6 +8916,12 @@ class ProviderConfigManager:
             )
 
             return AzurePassthroughConfig()
+        elif LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.passthrough.transformation import (
+                AzureAIPassthroughConfig,
+            )
+
+            return AzureAIPassthroughConfig()
         elif LlmProviders.GIGACHAT == provider:
             from litellm.llms.gigachat.passthrough.transformation import (
                 GigaChatPassthroughConfig,
@@ -9241,6 +9306,10 @@ class ProviderConfigManager:
             from litellm.llms.openai.image_edit import get_openai_image_edit_config
 
             return get_openai_image_edit_config(model=model)
+        elif LlmProviders.HOSTED_VLLM == provider:
+            from litellm.llms.hosted_vllm.image_edit import get_hosted_vllm_image_edit_config
+
+            return get_hosted_vllm_image_edit_config(model=model)
         elif LlmProviders.AZURE == provider:
             from litellm.llms.azure.image_edit.transformation import (
                 AzureImageEditConfig,

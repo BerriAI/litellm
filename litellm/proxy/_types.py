@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple
 
 import httpx
@@ -496,6 +497,9 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/messages/count_tokens",
         "/v1/skills",
         "/v1/skills/{skill_id}",
+        "/claude-code/marketplace.json",
+        "/claude-code/plugins",
+        "/claude-code/plugins/{plugin_name}",
     ]
 
     # MCP tool-call / passthrough routes — data-plane. Gated by DISABLE_LLM_API_ENDPOINTS.
@@ -699,6 +703,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs",
         "/spend/logs/v2",
         "/spend/logs/ui",
+        "/spend/logs/ui/{request_id}",
         "/spend/logs/session/ui",
         "/key/spend/report",
         "/user/spend/report",
@@ -928,10 +933,10 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session) and the filter facets.
-            # The list endpoint `/spend/logs/ui` is covered via
-            # spend_tracking_routes below.
-            "/spend/logs/ui/{logId}",
+            # UI Logs page session detail drawer and the end-user filter facet.
+            # The list endpoint `/spend/logs/ui` and the single-log detail route
+            # `/spend/logs/ui/{request_id}` are covered via spend_tracking_routes
+            # below.
             "/spend/logs/session/ui",
             "/management/v1/spend_logs/end_users",
             "/management/v1/spend_logs/users",
@@ -1123,6 +1128,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     models: list[str] | None = None
     search_tools: list[str] | None = None
     mcp_tool_search_enabled: bool | None = None
+    skills: list[str] | None = None
 
 
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
@@ -1293,6 +1299,13 @@ class UpdateKeyRequest(KeyRequestBase):
     auto_rotate: bool | None = None
     rotation_interval: str | None = None
     organization_id: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_blank_team_id(cls, values: object) -> object:
+        if isinstance(values, Mapping) and values.get("team_id") == "":
+            return MappingProxyType({k: v for k, v in values.items() if k != "team_id"})
+        return values
 
     @field_validator("organization_id", mode="before")
     @classmethod
@@ -2419,6 +2432,13 @@ class CoordinationRedisParams(LiteLLMPydanticObjectBase):
     )
     sentinel_password: str | None = Field(None, description="password for the sentinel nodes")
     service_name: str | None = Field(None, description="sentinel service name")
+    aws_iam_auth: bool | str | None = Field(None, description="enable AWS ElastiCache IAM authentication")
+    aws_iam_user_name: str | None = Field(None, description="AWS ElastiCache IAM user name")
+    aws_iam_cache_name: str | None = Field(None, description="AWS ElastiCache cache name")
+    aws_iam_region: str | None = Field(None, description="AWS region for ElastiCache IAM authentication")
+    aws_iam_serverless: bool | str | None = Field(
+        None, description="the ElastiCache cache is serverless rather than a self-designed cluster"
+    )
 
     def has_connection_target(self) -> bool:
         return any(value is not None for value in (self.host, self.url, self.startup_nodes, self.sentinel_nodes))
@@ -2826,6 +2846,18 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Admin UI. An admin locked out of the UI can still administer the proxy over the "
             "API with the master key; unset this setting and restart the proxy to restore "
             "UI username/password login. Default is False."
+        ),
+    )
+    disable_env_credential_login: bool | None = Field(
+        None,
+        description=(
+            "If True, disables signing in to the Admin UI with the environment credentials: "
+            "UI_USERNAME/UI_PASSWORD, or the master key when UI_PASSWORD is unset (that fallback "
+            "means env-credential login is always live by default). Database users with passwords "
+            "are unaffected. LOCKOUT RISK: create at least one proxy admin user with a password "
+            "before enabling, or nobody can sign in to the UI. A locked-out admin can still "
+            "administer the proxy over the API with the master key, and can unset this setting "
+            "and restart the proxy to restore env-credential login. Default is False."
         ),
     )
     disable_budget_reservation: bool | None = Field(
@@ -3703,6 +3735,15 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="New Relic",
         litellm_callback_params=[
             "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED",
+        ],
+    )
+
+    pointfive: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="pointfive",
+        ui_callback_name="PointFive",
+        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+            "POINTFIVE_API_KEY",
+            "POINTFIVE_API_URL",
         ],
     )
 
@@ -5148,8 +5189,25 @@ class CostEstimateRequest(LiteLLMPydanticObjectBase):
     model: str = Field(description="Model name (from /model_group/info)")
     input_tokens: int = Field(description="Expected input tokens per request", ge=0)
     output_tokens: int = Field(description="Expected output tokens per request", ge=0)
+    cache_read_input_tokens: int = Field(
+        default=0, description="Input tokens read from the prompt cache; counted within input_tokens", ge=0
+    )
+    cache_creation_input_tokens: int = Field(
+        default=0, description="Input tokens written to the prompt cache; counted within input_tokens", ge=0
+    )
+    reasoning_tokens: int = Field(
+        default=0, description="Reasoning tokens the model emits; counted within output_tokens", ge=0
+    )
     num_requests_per_day: int | None = Field(default=None, description="Number of requests per day", ge=0)
     num_requests_per_month: int | None = Field(default=None, description="Number of requests per month", ge=0)
+
+    @model_validator(mode="after")
+    def validate_token_subsets(self) -> "CostEstimateRequest":
+        if self.cache_read_input_tokens + self.cache_creation_input_tokens > self.input_tokens:
+            raise ValueError("cache_read_input_tokens plus cache_creation_input_tokens cannot exceed input_tokens")
+        if self.reasoning_tokens > self.output_tokens:
+            raise ValueError("reasoning_tokens cannot exceed output_tokens")
+        return self
 
 
 class CostEstimateResponse(LiteLLMPydanticObjectBase):
@@ -5158,6 +5216,9 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
     model: str
     input_tokens: int
     output_tokens: int
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    reasoning_tokens: int = 0
     num_requests_per_day: int | None = None
     num_requests_per_month: int | None = None
     # Per-request costs
@@ -5165,17 +5226,33 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
     input_cost_per_request: float = Field(description="Input token cost per request (before margin)")
     output_cost_per_request: float = Field(description="Output token cost per request (before margin)")
     margin_cost_per_request: float = Field(default=0.0, description="Margin/fee added per request")
+    cache_read_cost_per_request: float = Field(default=0.0, description="Cache-read share of input_cost_per_request")
+    cache_creation_cost_per_request: float = Field(
+        default=0.0, description="Cache-write share of input_cost_per_request"
+    )
+    reasoning_cost_per_request: float = Field(default=0.0, description="Reasoning share of output_cost_per_request")
     # Daily costs (if num_requests_per_day provided)
     daily_cost: float | None = Field(default=None, description="Total daily cost (includes margin)")
     daily_input_cost: float | None = Field(default=None, description="Daily input token cost")
     daily_output_cost: float | None = Field(default=None, description="Daily output token cost")
     daily_margin_cost: float | None = Field(default=None, description="Daily margin/fee")
+    daily_cache_read_cost: float | None = Field(default=None, description="Cache-read share of daily_input_cost")
+    daily_cache_creation_cost: float | None = Field(default=None, description="Cache-write share of daily_input_cost")
+    daily_reasoning_cost: float | None = Field(default=None, description="Reasoning share of daily_output_cost")
     # Monthly costs (if num_requests_per_month provided)
     monthly_cost: float | None = Field(default=None, description="Total monthly cost (includes margin)")
     monthly_input_cost: float | None = Field(default=None, description="Monthly input token cost")
     monthly_output_cost: float | None = Field(default=None, description="Monthly output token cost")
     monthly_margin_cost: float | None = Field(default=None, description="Monthly margin/fee")
-    # Pricing info
-    input_cost_per_token: float | None = None
-    output_cost_per_token: float | None = None
+    monthly_cache_read_cost: float | None = Field(default=None, description="Cache-read share of monthly_input_cost")
+    monthly_cache_creation_cost: float | None = Field(
+        default=None, description="Cache-write share of monthly_input_cost"
+    )
+    monthly_reasoning_cost: float | None = Field(default=None, description="Reasoning share of monthly_output_cost")
+    # Pricing info: the rates this request's usage bills at, after token tiers and regional multipliers
+    input_cost_per_token: float | None = Field(default=None, description="Rate billed per input token")
+    output_cost_per_token: float | None = Field(default=None, description="Rate billed per output token")
+    cache_read_input_token_cost: float | None = Field(default=None, description="Rate billed per cache-read token")
+    cache_creation_input_token_cost: float | None = Field(default=None, description="Rate billed per cache-write token")
+    output_cost_per_reasoning_token: float | None = Field(default=None, description="Rate billed per reasoning token")
     provider: str | None = None

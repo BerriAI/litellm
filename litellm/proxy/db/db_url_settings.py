@@ -34,16 +34,25 @@ writer's connection params (pool size, timeouts, pgbouncer mode) for the
 ones the reader URL does not pin itself.
 """
 
+import _ssl
+import hashlib
 import os
+import socket
+import ssl
+import struct
+import sys
+import tempfile
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
+from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, Final, cast
+from typing import Annotated, Final, Protocol, TypeAlias, cast
 
 from pydantic import AliasChoices, BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from litellm.proxy.db.pgbouncer import database_url_is_pooled
 from litellm.proxy.db.token_auth import (
     AZURE_POSTGRESQL_AUTH_ENV_VAR,
     DEFAULT_POSTGRES_PORT,
@@ -126,21 +135,100 @@ def add_missing_query_params(url: str, params: Mapping[str, str | int | float]) 
 
 
 LIBPQ_VERIFY_SSLMODES: Final[frozenset[str]] = frozenset({"verify-ca", "verify-full"})
+PEM_CERT_HEADER: Final = b"-----BEGIN CERTIFICATE-----"
+PG_SSL_REQUEST: Final = struct.pack("!ii", 8, 80877103)
+TLS_PROBE_TIMEOUT_SECONDS: Final = 10.0
+
+RootCertResolver: TypeAlias = Callable[[str, str, int], str]  # mutable-ok: Callable parameter syntax
 
 
-def translate_libpq_ssl_params(url: str) -> str:
+class _VerifiedChainSource(Protocol):
+    def get_verified_chain(self) -> Sequence[_ssl.Certificate] | None: ...
+
+
+def _verified_chain_der(tls: ssl.SSLSocket) -> tuple[bytes, ...]:
+    if sys.version_info >= (3, 13):
+        return tuple(tls.get_verified_chain())
+    legacy: Final = cast(  # cast-ok: the stub omits _sslobj, the C object has get_verified_chain since 3.10
+        "_VerifiedChainSource | None",
+        tls._sslobj,  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # public API only from 3.13
+    )
+    chain: Final = () if legacy is None else legacy.get_verified_chain() or ()
+    return tuple(cert.public_bytes(_ssl.ENCODING_DER) for cert in chain)
+
+
+def _server_trust_anchor(cafile: str, host: str, port: int) -> bytes | None:
+    try:
+        context: Final = ssl.create_default_context(cafile=cafile)
+        with socket.create_connection((host, port), timeout=TLS_PROBE_TIMEOUT_SECONDS) as raw:
+            raw.sendall(PG_SSL_REQUEST)
+            if raw.recv(1) != b"S":
+                return None
+            with context.wrap_socket(raw, server_hostname=host) as tls:
+                chain: Final = _verified_chain_der(tls)
+    except (OSError, ValueError):
+        return None
+    return chain[-1] if chain else None
+
+
+def pin_bundle_root(cert_path: str, host: str, port: int) -> str:
+    """Reduce a multi-root CA bundle to the one root that verifies ``host``.
+
+    Prisma's ``sslcert`` loads a single PEM certificate (native-tls
+    ``Certificate::from_pem``), so pointing it at a bundle such as the AWS RDS
+    global bundle trusts only the first of its 108 regional roots and the
+    handshake fails with "unable to get local issuer certificate" for every
+    other region. A single-certificate file is returned as is. For a bundle,
+    one verifying handshake (chain and hostname, whole bundle as trust store)
+    identifies the trust anchor the server actually chains to, which is
+    written to a single-certificate file for Prisma. If the probe fails the
+    bundle path is returned unchanged, so Prisma fails closed exactly as
+    before rather than trusting anything the bundle would not.
+    """
+    try:
+        if Path(cert_path).read_bytes().count(PEM_CERT_HEADER) < 2:
+            return cert_path
+    except OSError:
+        return cert_path
+    root: Final = _server_trust_anchor(cert_path, host, port)
+    if root is None:
+        return cert_path
+    pinned: Final = Path(tempfile.gettempdir()) / f"litellm-sslcert-{hashlib.sha256(root).hexdigest()[:16]}.pem"
+    return str(pinned) if _replace_file(pinned, ssl.DER_cert_to_PEM_cert(root)) else cert_path
+
+
+def _replace_file(target: Path, content: str) -> bool:
+    """Write ``content`` to a private temp file and rename it over ``target``, so
+    readers never see a partial file and a symlink planted at ``target`` is
+    replaced rather than followed."""
+    try:
+        fd, staged = tempfile.mkstemp(dir=target.parent, prefix=f"{target.name}.")
+    except OSError:
+        return False
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(content)
+        os.replace(staged, target)
+    except OSError:
+        Path(staged).unlink(missing_ok=True)
+        return False
+    return True
+
+
+def translate_libpq_ssl_params(url: str, resolve_root_cert: RootCertResolver = pin_bundle_root) -> str:
     """Rewrite libpq's certificate-verification params into Prisma's dialect.
 
     Prisma's engine only knows ``sslmode=disable|prefer|require``, ``sslcert``
-    (the CA bundle) and ``sslaccept=strict``. It silently discards
+    (a single CA certificate) and ``sslaccept=strict``. It silently discards
     ``sslrootcert`` and downgrades ``sslmode=verify-ca`` / ``verify-full`` to
     ``prefer``, so a URL copied from libpq / RDS docs connects over TLS with no
     certificate check at all. ``verify-ca`` and ``verify-full`` both become
     ``require`` (Prisma has no CA-only mode), ``sslrootcert`` becomes
-    ``sslcert``, and either one turns on ``sslaccept=strict`` (chain and
-    hostname), matching libpq where a root cert makes ``require`` verify.
-    Prisma params the operator pinned themselves win; anything else is left
-    untouched.
+    ``sslcert`` (run through ``resolve_root_cert``, which pins a multi-root
+    bundle down to the server's root), and either one turns on
+    ``sslaccept=strict`` (chain and hostname), matching libpq where a root
+    cert makes ``require`` verify. Prisma params the operator pinned
+    themselves win; anything else is left untouched.
     """
     parsed: Final = urllib.parse.urlsplit(url)
     pairs: Final = tuple(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
@@ -154,7 +242,9 @@ def translate_libpq_ssl_params(url: str) -> str:
         if key != "sslrootcert"
     )
     root_cert: Final = tuple(
-        ("sslcert", value) for key, value in pairs if key == "sslrootcert" and "sslcert" not in keys
+        ("sslcert", resolve_root_cert(value, parsed.hostname or "", parsed.port or int(DEFAULT_POSTGRES_PORT)))
+        for key, value in pairs
+        if key == "sslrootcert" and "sslcert" not in keys
     )
     strict: Final = () if "sslaccept" in keys else (("sslaccept", "strict"),)
     query: Final = urllib.parse.urlencode(translated + root_cert + strict)
@@ -269,8 +359,12 @@ class DatabaseURLSettings(BaseSettings):
         Raises ``RuntimeError`` (naming the offending vars) when token auth is
         enabled but a required field is missing — the proxy cannot recover
         from this and a clear startup error beats a Prisma connect failure.
+        A ``DATABASE_URL`` the supervisor pointed at the in-container PgBouncer
+        is kept even under token auth: the pooler renews the token upstream.
         """
         auth: Final = self.token_auth()
+        if auth is not None and database_url_is_pooled():
+            return None
         if auth is not None:
             missing: Final = tuple(
                 env

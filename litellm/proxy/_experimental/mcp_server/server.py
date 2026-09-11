@@ -49,7 +49,11 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_gateway_server_name,
     _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # server-owned request mode
 )
-from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
+from litellm.proxy._experimental.mcp_server.mcp_debug import (
+    MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
+    MCPAuthDiagnostics,
+    MCPDebug,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     get_passthrough_www_authenticate,
@@ -767,12 +771,12 @@ if MCP_AVAILABLE:
                     _stateful_auth_context_cleanup_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await _stateful_auth_context_cleanup_task
-                if _session_manager_cm:
-                    await _session_manager_cm.__aexit__(None, None, None)
-                if _session_manager_stateful_cm:
-                    await _session_manager_stateful_cm.__aexit__(None, None, None)
                 if _sse_session_manager_cm:
                     await _sse_session_manager_cm.__aexit__(None, None, None)
+                if _session_manager_stateful_cm:
+                    await _session_manager_stateful_cm.__aexit__(None, None, None)
+                if _session_manager_cm:
+                    await _session_manager_cm.__aexit__(None, None, None)
             except Exception as e:
                 verbose_logger.exception("Error during session manager shutdown: %s", e)
 
@@ -1005,6 +1009,7 @@ if MCP_AVAILABLE:
 
         if _mcp_proxy_mode.get() and name in MCP_PROXY_TOOL_NAMES:
             assert user_api_key_auth is not None
+            proxy_call_start: Final = datetime.now()  # noqa: DTZ005  # logging pipeline uses naive datetimes
             proxy_logging_obj: Final = (
                 await _build_virtual_call_logging_obj(
                     name=name,
@@ -1016,18 +1021,55 @@ if MCP_AVAILABLE:
                 if name == MCP_PROXY_CALL_TOOL_NAME
                 else None
             )
-            return await handle_mcp_proxy_tool(
-                name=name,
-                arguments=arguments or {},  # mutable-ok: proxy handler payload
-                user_api_key_dict=user_api_key_auth,
-                client_ip=client_ip,
-                mcp_servers=mcp_servers,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                litellm_logging_obj=proxy_logging_obj,
-            )
+            try:
+                proxy_result: Final = await handle_mcp_proxy_tool(
+                    name=name,
+                    arguments=arguments or {},  # mutable-ok: proxy handler payload
+                    user_api_key_dict=user_api_key_auth,
+                    client_ip=client_ip,
+                    mcp_servers=mcp_servers,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    litellm_logging_obj=proxy_logging_obj,
+                )
+            except Exception as exc:
+                if proxy_logging_obj is not None:
+                    from litellm.proxy.proxy_server import proxy_logging_obj as request_logging_obj
+
+                    failure_end: Final = datetime.now()  # noqa: DTZ005  # matches the logging pipeline start time
+                    failure_traceback: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+                    try:
+                        proxy_logging_obj.failure_handler(exc, failure_traceback, proxy_call_start, failure_end)
+                        await proxy_logging_obj.async_failure_handler(
+                            exc, failure_traceback, proxy_call_start, failure_end
+                        )
+                        if not isinstance(exc, MCPUpstreamAuthError):
+                            await request_logging_obj.post_call_failure_hook(
+                                request_data={  # mutable-ok: failure hook mutates its request payload
+                                    "name": name,
+                                    "arguments": arguments,
+                                    "litellm_logging_obj": proxy_logging_obj,
+                                },
+                                original_exception=exc,
+                                user_api_key_dict=user_api_key_auth,
+                                route="/mcp/call_tool",
+                                traceback_str=failure_traceback,
+                            )
+                    except Exception:  # noqa: BLE001  # a failing failure hook must not mask the tool call's own error
+                        verbose_logger.exception("Error logging failed MCP proxy tool call")
+                raise
+            if proxy_logging_obj is not None:
+                return await _fire_mcp_tool_call_logging(
+                    logging_obj=proxy_logging_obj,
+                    result=proxy_result,
+                    start_time=proxy_call_start,
+                    end_time=datetime.now(),  # noqa: DTZ005  # matches the logging pipeline start time
+                    user_api_key_auth=user_api_key_auth,
+                    request_data=types.MappingProxyType({"name": name, "arguments": arguments}),
+                )
+            return proxy_result
 
         if name not in VIRTUAL_TOOL_NAMES:
             return None
@@ -2006,18 +2048,44 @@ if MCP_AVAILABLE:
             return texts[0][1]
         return "\n\n---\n\n".join(f"[{lbl}]\n{txt}" for lbl, txt in texts)
 
+    async def _raise_if_initialize_grants_no_mcp_servers(
+        allowed: Sequence[MCPServer],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_servers: Sequence[str] | None,
+        client_ip: str | None,
+    ) -> None:
+        if allowed or user_api_key_auth is None or not user_api_key_auth.api_key:
+            return
+        if mcp_servers:
+            await raise_denied_scoped_mcp_access(
+                requested_names=mcp_servers,
+                user_api_key_auth=user_api_key_auth,
+                client_ip=client_ip,
+            )
+        no_servers_denial: Final[_McpDeniedDetail] = {
+            "error": (
+                "The key has no MCP servers granted, or none of its granted servers is loaded and allowed for "
+                "this client IP. Grant servers or access groups to the key, its team, or its organization "
+                "(object_permission.mcp_servers), check the server's allowed IPs, and reconnect."
+            )
+        }
+        raise HTTPException(status_code=403, detail=no_servers_denial)
+
     @contextlib.asynccontextmanager
     async def _gateway_initialize_instructions_request_scope(
         user_api_key_auth: UserAPIKeyAuth | None,
         mcp_servers: list[str] | None,
         client_ip: str | None,
         scoped_server_endpoint: bool = False,
+        is_initialize: bool = False,
     ) -> AsyncIterator[None]:
         allowed: Final = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
+        if is_initialize:
+            await _raise_if_initialize_grants_no_mcp_servers(allowed, user_api_key_auth, mcp_servers, client_ip)
         if allowed:
             # return_exceptions=True: a per-server probe failure (incl. CancelledError
             # bubbled from anyio task group teardown on connection refused) must not
@@ -3493,7 +3561,9 @@ if MCP_AVAILABLE:
         server_name: str | None,
         session_id: str | None = None,
     ) -> StandardLoggingMCPToolCall:
-        mcp_server: Final = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        mcp_server: Final = global_mcp_server_manager._get_mcp_server_from_tool_name(
+            add_server_prefix_to_name(name, server_name) if server_name else name
+        )
         namespaced_tool_name: Final = f"{server_name}/{name}" if server_name else name
         if mcp_server:
             mcp_info: Final = mcp_server.mcp_info or {}
@@ -4432,13 +4502,15 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 scope=dict(scope),
                 mcp_servers=mcp_servers,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 client_ip=_client_ip,
             )
-            if _debug_headers:
-                send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers)
+            diagnostics: Final = MCPAuthDiagnostics() if _debug_headers else None
+            if diagnostics is not None:
+                scope[MCP_AUTH_DIAGNOSTICS_SCOPE_KEY] = diagnostics
+                send = MCPDebug.wrap_send_with_debug_headers(
+                    send, _debug_headers, diagnostics.headers, request_method=scope.get("method")
+                )
 
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -4637,6 +4709,7 @@ if MCP_AVAILABLE:
                     mcp_servers,
                     _client_ip,
                     scoped_server_endpoint=scoped_server_endpoint,
+                    is_initialize=is_initialize,
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":
@@ -4773,6 +4846,7 @@ if MCP_AVAILABLE:
                 mcp_servers,
                 _sse_client_ip,
                 scoped_server_endpoint=scoped_server_endpoint,
+                is_initialize=scope.get("method") == "GET",
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:
