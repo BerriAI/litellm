@@ -7157,9 +7157,13 @@ async def test_agent_365_gated_server_prm_names_the_entra_tenant(agent_365_guard
 
 
 @pytest.mark.asyncio
-async def test_agent_365_prm_falls_back_to_gateway_without_scopes(agent_365_guardrail):
+async def test_agent_365_prm_defaults_scopeless_server_to_the_gateway_app_scope(agent_365_guardrail):
     response = await _agent_365_gated_prm(scopes=None)
-    assert response["authorization_servers"] == ["https://litellm.example.com/mcp"]
+    assert jsonable_encoder(response) == {
+        "authorization_servers": ["https://login.microsoftonline.com/tenant-abc/v2.0"],
+        "resource": "https://litellm.example.com/mcp/tools",
+        "scopes_supported": ["api://client-xyz/access_as_user"],
+    }
 
 
 def _token_request(headers):

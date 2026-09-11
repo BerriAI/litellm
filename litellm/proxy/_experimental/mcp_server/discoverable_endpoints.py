@@ -82,7 +82,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import agent_365_authorization_servers
+from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import (
+    agent_365_authorization_servers,
+    agent_365_scopes_supported,
+)
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPTokenEndpointAuthMethod
 
@@ -2485,7 +2488,7 @@ async def _build_oauth_protected_resource_response(
         agent_365_metadata: Final[_ProtectedResourceMetadata] = {
             "authorization_servers": agent_365_issuers,
             "resource": resource_url,
-            "scopes_supported": tuple(mcp_server.scopes or ()),
+            "scopes_supported": agent_365_scopes_supported(mcp_server, None),
         }
         return agent_365_metadata
 

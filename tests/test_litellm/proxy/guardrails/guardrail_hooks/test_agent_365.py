@@ -20,7 +20,10 @@ from litellm.proxy.guardrails.guardrail_hooks.agent_365 import (
     guardrail_initializer_registry,
     initialize_guardrail,
 )
-from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import agent_365_authorization_servers
+from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import (
+    agent_365_authorization_servers,
+    agent_365_scopes_supported,
+)
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
@@ -591,6 +594,40 @@ class TestUnreachableFallback:
         assert "invalid_grant" in exc_info.value.detail["message"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error_code", ["invalid_client", "unauthorized_client", "invalid_scope", "invalid_resource"]
+    )
+    async def test_gateway_credential_rejection_is_unavailable_not_a_caller_401(self, error_code: str):
+        handler: Final = FakeHandler(
+            [_response(401, {"error": error_code, "error_description": "AADSTS7000215: invalid client secret"})]
+        )
+        guardrail: Final = _make_guardrail(handler)
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.headers is None or "WWW-Authenticate" not in exc_info.value.headers
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
+        assert info["guardrail_response"]["verdict"] == "Unavailable"
+        assert error_code in info["guardrail_response"]["reason"]
+        assert "client_secret" in info["guardrail_response"]["reason"]
+
+    @pytest.mark.asyncio
+    async def test_gateway_credential_rejection_follows_fail_open(self):
+        handler: Final = FakeHandler(
+            [_response(401, {"error": "invalid_client", "error_description": "AADSTS7000215: invalid client secret"})]
+        )
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        result: Final = await _run(guardrail, data)
+        assert result is data
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
+        assert info["guardrail_response"]["verdict"] == "Unscanned"
+        assert "invalid_client" in info["guardrail_response"]["reason"]
+
+    @pytest.mark.asyncio
     async def test_obo_endpoint_5xx_fail_open(self):
         handler: Final = FakeHandler([_response(503, text="entra down")])
         guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
@@ -948,9 +985,17 @@ class TestAgent365AuthorizationServers:
             _mcp_server(MCPAuth.api_key, scopes=[GATEWAY_SCOPE], auth_value="k"), None
         ) == (ENTRA_ISSUER,)
 
-    def test_silent_without_advertised_scopes(self, registered_guardrail):
-        assert agent_365_authorization_servers(_mcp_server(scopes=None), None) == ()
-        assert agent_365_authorization_servers(_mcp_server(scopes=[]), None) == ()
+    @pytest.mark.parametrize("scopes", [None, []], ids=["unset", "empty"])
+    def test_scopeless_server_signs_in_with_the_gateway_app_scope(self, registered_guardrail, scopes):
+        server: Final = _mcp_server(scopes=scopes)
+        assert agent_365_authorization_servers(server, None) == (ENTRA_ISSUER,)
+        assert agent_365_scopes_supported(server, None) == ("api://client-xyz/access_as_user",)
+
+    def test_admin_scopes_override_the_default_gateway_scope(self, registered_guardrail):
+        assert agent_365_scopes_supported(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == (GATEWAY_SCOPE,)
+
+    def test_no_default_scope_when_no_guardrail_gates_the_server(self):
+        assert agent_365_scopes_supported(_mcp_server(scopes=None), None) == ()
 
     def test_silent_when_no_guardrail_is_registered(self):
         assert agent_365_authorization_servers(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == ()
