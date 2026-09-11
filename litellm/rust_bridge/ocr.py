@@ -52,6 +52,7 @@ class LiteLLMOcrRequest:
     custom_llm_provider: str | None
     extra_headers: dict[str, object] | None
     kwargs: Mapping[str, object]
+    call_completion: object = None
     input_sources: Mapping[str, str] | None = None
 
 
@@ -294,6 +295,7 @@ def _marshal(
         custom_llm_provider=request.custom_llm_provider,
         extra_headers=request.extra_headers,
         kwargs=optional_params,
+        call_completion=request.call_completion,
         input_sources=input_sources,
     )
 
