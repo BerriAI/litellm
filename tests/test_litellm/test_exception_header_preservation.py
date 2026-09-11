@@ -263,7 +263,6 @@ class TestExceptionAttributes:
         assert str(midstream_fallback.response.request.url) == "https://openai.com/v1/"
 
     def test_midstream_fallback_error_accepts_non_numeric_provider_status(self):
-        """Provider error codes can be strings while the response still has an HTTP status."""
         original_response = httpx.Response(
             status_code=400,
             request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions"),
