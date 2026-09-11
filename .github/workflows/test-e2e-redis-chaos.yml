@@ -40,6 +40,7 @@ jobs:
       DATABASE_URL: postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
       LITELLM_MASTER_KEY: sk-redis-chaos-e2e
       LITELLM_LOG: WARNING
+      JSON_LOGS: "true"
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -73,6 +74,7 @@ jobs:
         run: |
           nohup uv run --no-sync litellm --config tests/e2e/gateway/redis_chaos_ci_config.yml --port 4000 --num_workers 4 > proxy.log 2>&1 &
           echo "E2E_PROXY_PID=$!" >> "$GITHUB_ENV"
+          echo "E2E_PROXY_LOG=$(pwd)/proxy.log" >> "$GITHUB_ENV"
           for _ in $(seq 1 90); do
             if curl -fs http://localhost:4000/health/liveliness > /dev/null; then
               exit 0

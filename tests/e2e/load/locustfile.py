@@ -11,17 +11,20 @@ from locust import FastHttpUser, constant, task
 _MODEL: Final = os.environ["LOAD_MODEL"]
 _API_KEYS: Final = tuple(os.environ["LOAD_API_KEYS"].split(","))
 _NEXT_ENDPOINT: Final = cycle(os.environ["LOAD_ENDPOINTS"].split(","))
+_FILLER: Final = "x" * 40_000
 
 
 def _payload() -> dict[str, object]:
     """A prompt no other request sent, so the response cache never answers for the deployment.
 
     Both endpoints take the same body: /v1/messages requires max_tokens, which /chat/completions
-    also accepts, so one payload serves the whole round robin.
+    also accepts, so one payload serves the whole round robin. Padded to tens of KB so a
+    per-request bookkeeping cost that scales with body size (string formatting, hashing) shows
+    up in the CPU and log-size budgets instead of hiding behind a 40-byte prompt.
     """
     return {
         "model": _MODEL,
-        "messages": [{"role": "user", "content": f"load test ping {uuid.uuid4().hex}"}],
+        "messages": [{"role": "user", "content": f"load test ping {uuid.uuid4().hex} {_FILLER}"}],
         "max_tokens": 16,
     }
 

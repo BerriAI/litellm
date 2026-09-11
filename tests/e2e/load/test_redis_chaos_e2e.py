@@ -22,11 +22,13 @@ Every touchpoint times out: the auth cache read falls back to Postgres, the resp
 read and write both fail, and the spend counter increment times out and the callback
 stringifies the request metadata, breadcrumbs included, into a failed-tracking alert. On
 v1.100.0 that string doubled per request until the worker hung (LIT-6780), which is what the
-per-phase RSS and CPU percentiles are here to catch.
+per-phase RSS, CPU, and log-bytes budgets are here to catch.
 
 Needs the proxy on the same host, since RSS and CPU come from psutil on its process tree:
 a multi-worker proxy serves /metrics from the prometheus multiprocess collector, which drops
-the process collector's memory and CPU series. Deselected unless E2E_REDIS_CHAOS is set.
+the process collector's memory and CPU series. Log bytes are read from the file the proxy's
+stdout/stderr was redirected to, so the same host requirement covers that too. Deselected
+unless E2E_REDIS_CHAOS is set.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import pairwise
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -79,6 +82,11 @@ REDIS_PAUSE_MS: Final = int(CHAOS_SECONDS * 1000)
 CHAOS_LATENCY_RATIO_CEILING: Final = 12.0
 CHAOS_RSS_RATIO_CEILING: Final = 1.5
 CHAOS_CPU_PER_REQUEST_RATIO_CEILING: Final = 6.0
+# Uncalibrated: no chaos run has measured this yet, since JSON_LOGS and the padded payload
+# landed after the last run this file's other ceilings were calibrated from. Deliberately loose
+# until a real run tightens it; the failed-tracking alert body that motivates this test already
+# logs the full request metadata per timeout, so a JSON-encoded traceback storm should dwarf this.
+CHAOS_LOG_BYTES_PER_REQUEST_RATIO_CEILING: Final = 20.0
 
 DRAIN_TIMEOUT_SECONDS: Final = 30.0
 DRAIN_POLL_SECONDS: Final = 1.0
@@ -111,6 +119,7 @@ class Phase:
     load: LoadResult
     usage: UsageWindow
     redis_timeouts: float
+    log_bytes: int
 
     @property
     def timeouts_per_request(self) -> float:
@@ -120,11 +129,16 @@ class Phase:
     def cpu_seconds_per_request(self) -> float:
         return self.usage.cpu_seconds_per_request(self.load.requests)
 
+    @property
+    def log_bytes_per_request(self) -> float:
+        return self.log_bytes / self.load.requests if self.load.requests else 0.0
+
     def report(self) -> str:
         return (
             f"{self.name}: {self.load.requests} requests, {self.load.failures} failures, "
             f"{self.load.requests_per_second:.0f} rps, {self.load.latency_summary()}; {self.usage.summary()}; "
             f"{self.cpu_seconds_per_request * 1000:.1f} ms CPU per request; "
+            f"{self.log_bytes_per_request:.0f} log bytes per request; "
             f"{self.timeouts_per_request:.2f} Redis timeouts per request; "
             f"by endpoint: {self.load.endpoint_summary()}"
         )
@@ -161,6 +175,22 @@ def proxy_pid() -> int:
         "its process tree because a multi-worker proxy does not report them on /metrics"
     )
     return int(pid)
+
+
+@pytest.fixture
+def proxy_log() -> Path:
+    """Path to the proxy's stdout/stderr log, which the workflow captures to a file.
+
+    Required rather than discovered for the same reason as proxy_pid: a developer machine may
+    have more than one proxy log around.
+    """
+    path: Final = os.environ.get("E2E_PROXY_LOG")
+    assert path, "E2E_PROXY_LOG must hold the path the proxy's stdout/stderr was redirected to"
+    return Path(path)
+
+
+def _log_bytes(path: Path) -> int:
+    return path.stat().st_size
 
 
 @pytest.fixture
@@ -292,10 +322,13 @@ def _chaos_budgets(baseline: Phase, chaos: Phase) -> tuple[Budget, ...]:
     tail (or only in the median) cannot hide behind the other. Latency gets the loosest bound
     because a timing-out Redis legitimately adds its socket_timeout to every request that
     touches it, several times over on a retried request. RSS gets the tightest: the failure
-    path has no business allocating more per request. CPU is budgeted once, as CPU seconds per
-    request rather than per percentile: cores-busy saturates at the worker count under load, so
-    its percentiles read the same whether a request costs 10 ms of CPU or 40, and cannot budget
-    anything; seconds per request is the CPU figure that actually moves.
+    path has no business allocating more per request. CPU and log bytes are each budgeted once,
+    as an amount per request rather than per percentile: cores-busy saturates at the worker
+    count under load, so its percentiles read the same whether a request costs 10 ms of CPU or
+    40, and cannot budget anything; per-request is the figure that actually moves. Log bytes
+    isolates the cost of the failed-tracking alert's own noisy error handling from the CPU it
+    burns doing useful retry work, since the two would otherwise be indistinguishable in one
+    CPU number.
     """
     return (
         _latency_budget("p50", baseline.load.p50_seconds, chaos.load.p50_seconds),
@@ -311,6 +344,14 @@ def _chaos_budgets(baseline: Phase, chaos: Phase) -> tuple[Budget, ...]:
             ratio_ceiling=CHAOS_CPU_PER_REQUEST_RATIO_CEILING,
             unit=" ms",
         ),
+        Budget(
+            name="log bytes per request",
+            baseline=baseline.log_bytes_per_request,
+            degraded=chaos.log_bytes_per_request,
+            ratio_ceiling=CHAOS_LOG_BYTES_PER_REQUEST_RATIO_CEILING,
+            unit=" B",
+            decimals=0,
+        ),
     )
 
 
@@ -325,6 +366,7 @@ class TestRedisChaos:
         client: LoadClient,
         resources: ResourceManager,
         proxy_pid: int,
+        proxy_log: Path,
         redis_control: redis.Redis[bytes],
     ) -> None:
         proxy: Final = client.proxy
@@ -335,28 +377,33 @@ class TestRedisChaos:
         cooldown_re: Final = _deployment_metric_re("deployment_cooled_down_total", model_ids)
 
         at_start: Final = _scrape(proxy)
+        log_at_start: Final = _log_bytes(proxy_log)
 
         with ProxyUsageSampler(proxy_pid) as sampler:
             baseline_load: Final = _drive(keys, BASELINE_SECONDS)
             baseline_usage: Final = sampler.split()
             after_baseline: Final = _scrape(proxy)
+            log_after_baseline: Final = _log_bytes(proxy_log)
 
             redis_control.client_pause(REDIS_PAUSE_MS, all=True)  # pyright: ignore[reportUnknownMemberType]  # redis-py stubs return Any
             chaos_load: Final = _drive(keys, CHAOS_SECONDS)
             chaos_usage: Final = sampler.split()
         at_end: Final = _scrape_after_drain(proxy, retries_re)
+        log_at_end: Final = _log_bytes(proxy_log)
 
         baseline: Final = Phase(
             name="baseline",
             load=baseline_load,
             usage=baseline_usage,
             redis_timeouts=_metric(after_baseline, TIMEOUT_FAILURES_RE) - _metric(at_start, TIMEOUT_FAILURES_RE),
+            log_bytes=log_after_baseline - log_at_start,
         )
         chaos: Final = Phase(
             name="chaos",
             load=chaos_load,
             usage=chaos_usage,
             redis_timeouts=_metric(at_end, TIMEOUT_FAILURES_RE) - _metric(after_baseline, TIMEOUT_FAILURES_RE),
+            log_bytes=log_at_end - log_after_baseline,
         )
         report: Final = f"{baseline.report()} | {chaos.report()}"
 
