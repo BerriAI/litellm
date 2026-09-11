@@ -315,6 +315,7 @@ class SpendCounterReseed:
         entity_id: str,
         window_duration: str | None,
         window_start: datetime,
+        include_logs_floor: bool = False,
     ) -> float | None:
         """
         Authoritative window spend: the maintained row first, falling back to
@@ -322,7 +323,18 @@ class SpendCounterReseed:
 
         The aggregate range-scans an unindexed table, so it must stay a
         transitional path (window configured before the row existed) rather
-        than a steady-state read.
+        than a steady-state read. The stale-counter recheck runs
+        ``window_from_db`` every few seconds while it holds a window counter,
+        so by default (``include_logs_floor=False``) a current row
+        short-circuits before the aggregate runs.
+
+        ``include_logs_floor=True`` is for reseeding a cold counter: the row
+        lags real spend by up to one flush interval of increments queued on
+        other pods, so restoring a counter from the row alone can admit
+        traffic that already exceeded the window budget. The aggregate cannot
+        lag behind what any pod has already counted, so the reseed takes the
+        larger of the two; a cold reseed is rare by design, which keeps the
+        extra scan off the steady-state path.
         """
         if window_duration is not None:
             from_table: Final = await SpendCounterReseed.window_from_table(
@@ -333,7 +345,17 @@ class SpendCounterReseed:
                 expected_window_start=window_start,
             )
             if from_table is not None:
-                return from_table
+                if not include_logs_floor:
+                    return from_table
+                aggregate: Final = await SpendCounterReseed.window_from_spend_logs(
+                    prisma_client=prisma_client,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    window_start=window_start,
+                )
+                if aggregate is None:
+                    return from_table
+                return max(from_table, aggregate)
         return await SpendCounterReseed.window_from_spend_logs(
             prisma_client=prisma_client,
             entity_type=entity_type,
@@ -389,6 +411,7 @@ class SpendCounterReseed:
         entity_id: str,
         window_duration: str | None,
         window_start: datetime,
+        include_logs_floor: bool = False,
     ) -> float | None:
         lock: Final = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
@@ -412,9 +435,11 @@ class SpendCounterReseed:
                 entity_id=entity_id,
                 window_duration=window_duration,
                 window_start=window_start,
+                include_logs_floor=include_logs_floor,
             )
             if window_spend is None:
                 return None
+            current_value: float = window_spend
             try:
                 if spend_counter_cache.redis_cache is not None:
                     seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(
@@ -422,9 +447,13 @@ class SpendCounterReseed:
                         value=window_spend,
                         nx=True,
                     )
-                    if seeded:
-                        current_value = window_spend
-                    else:
+                    if not seeded:
+                        # NX lost: another caller reseeded the same counter
+                        # while this DB read was in flight. That value is the
+                        # one subsequent increments coordinated against, so
+                        # adopt it instead of returning an uncoordinated
+                        # snapshot (which admitted traffic past the budget
+                        # when the loser's snapshot was stale-low).
                         current_cached_value = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
                         if current_cached_value is None:
                             current_value = await spend_counter_cache.redis_cache.async_increment(
@@ -444,5 +473,10 @@ class SpendCounterReseed:
                     "SpendCounterReseed.coalesced_window: failed to warm counter %s",
                     counter_key,
                 )
-                raise
-            return window_spend
+                # Without a warm counter the DB snapshot never coordinated
+                # with concurrent reservations (they skipped the cold counter
+                # instead of incrementing it), so returning it here would let
+                # every subsequent read under-count their reservations. Drop
+                # it and let the caller fall back to its conservative value.
+                return None
+            return float(current_value)

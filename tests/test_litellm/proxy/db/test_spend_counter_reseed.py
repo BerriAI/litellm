@@ -250,6 +250,58 @@ async def test_window_from_db_without_a_duration_skips_the_row_lookup():
 
 
 @pytest.mark.asyncio
+async def test_window_from_db_logs_floor_only_when_requested():
+    """Default keeps the steady-state short-circuit (no aggregate scan); a
+    reseed (``include_logs_floor=True``) must also read the aggregate because
+    the maintained row lags queued increments by up to one flush interval."""
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=7.25)
+
+    default_result = await SpendCounterReseed.window_from_db(
+        prisma_client=prisma,
+        entity_type="Key",
+        entity_id="tok-1",
+        window_duration="30d",
+        window_start=WINDOW_START,
+    )
+    # Snapshot between the two calls: the default call must not scan the
+    # aggregate (steady-state path has a performance pin on it).
+    calls_after_default = prisma.db.litellm_spendlogs.call_count
+    floored_result = await SpendCounterReseed.window_from_db(
+        prisma_client=prisma,
+        entity_type="Key",
+        entity_id="tok-1",
+        window_duration="30d",
+        window_start=WINDOW_START,
+        include_logs_floor=True,
+    )
+
+    assert default_result == 4.5
+    assert calls_after_default == 0
+    # max(row, aggregate): the aggregate cannot lag what pods already counted,
+    # so it floors a lagging row instead of the row overriding it.
+    assert floored_result == 7.25
+    assert prisma.db.litellm_spendlogs.call_count == calls_after_default + 1
+
+
+@pytest.mark.asyncio
+async def test_window_from_db_logs_floor_keeps_row_when_aggregate_lower():
+    """The row is the running total once the aggregate falls behind (rolled
+    window, retention cleanup): the floor must not lower the reseed either."""
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 9.0), spend_logs_total=4.5)
+
+    result = await SpendCounterReseed.window_from_db(
+        prisma_client=prisma,
+        entity_type="Key",
+        entity_id="tok-1",
+        window_duration="30d",
+        window_start=WINDOW_START,
+        include_logs_floor=True,
+    )
+
+    assert result == 9.0
+
+
+@pytest.mark.asyncio
 async def test_coalesced_window_seeds_a_cold_counter_from_the_row():
     prisma = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=100.0)
     cache = DualCache()
@@ -268,6 +320,120 @@ async def test_coalesced_window_seeds_a_cold_counter_from_the_row():
     assert result == 4.5
     assert cache.in_memory_cache.get_cache(key=counter_key) == 4.5
     assert prisma.db.litellm_spendlogs.call_count == 0
+
+
+class _FakeRedisCache:
+    """Minimal Redis stand-in: NX set behaves like the real one and can be made
+    to fail to exercise the un-warmed-snapshot paths."""
+
+    def __init__(self, *, warm_error: Exception | None = None, race_value: float | None = None,
+                 nx_lost_vanished: bool = False) -> None:
+        self._warm_error = warm_error
+        self._race_value = race_value  # appears only after the NX attempt (winner landed mid-read)
+        self._nx_lost_vanished = nx_lost_vanished  # NX fails but the value vanished (TTL race)
+        self.store: dict[str, float] = {}
+
+    async def async_increment(self, key: str, value: float) -> float:
+        self.store[key] = self.store.get(key, 0.0) + float(value)
+        return self.store[key]
+
+    async def async_get_cache(self, key: str):
+        if self._warm_error is not None and key not in self.store:
+            raise self._warm_error
+        return self.store.get(key)
+
+    async def async_set_cache(self, key: str, value, nx: bool = False):
+        if self._warm_error is not None:
+            raise self._warm_error
+        if self._race_value is not None:
+            # Simulate losing the race: the winner seeded while our DB read was
+            # in flight, so our NX fails and the winner's value is visible.
+            self.store[key] = self._race_value
+            return False
+        if self._nx_lost_vanished:
+            # NX fails but a re-read finds nothing (TTL raced the winner away):
+            # the last-resort increment path must seed the counter.
+            return False
+        if nx and key in self.store:
+            return False
+        self.store[key] = float(value)
+        return True
+
+    async def async_increment(self, key: str, value: float):
+        if self._warm_error is not None:
+            raise self._warm_error
+        self.store[key] = self.store.get(key, 0.0) + float(value)
+        return self.store[key]
+
+
+@pytest.mark.asyncio
+async def test_coalesced_window_returns_none_when_warm_fails():
+    """Greptile P1 (failed warm loses coordination): when the counter cannot be
+    warmed in Redis, the DB snapshot never coordinated with concurrent
+    reservations (they skipped the cold counter), so it must NOT be served as
+    an admission value."""
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=4.5)
+    redis = _FakeRedisCache(warm_error=RuntimeError("redis down"))
+    cache = DualCache(redis_cache=redis)
+
+    result = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma,
+        spend_counter_cache=cache,
+        counter_key="spend:key:tok-1:window:30d",
+        entity_type="Key",
+        entity_id="tok-1",
+        window_duration="30d",
+        window_start=WINDOW_START,
+        include_logs_floor=True,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_coalesced_window_adopts_winner_when_nx_loses():
+    """Two concurrent reseeds of the same counter: the NX loser must return the
+    winner's value (the one increments coordinate against), not its own
+    un-coordinated snapshot."""
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=4.5)
+    redis = _FakeRedisCache(race_value=9.0)  # winner seeds 9.0 while our DB read is in flight
+    cache = DualCache(redis_cache=redis)
+
+    result = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma,
+        spend_counter_cache=cache,
+        counter_key="spend:key:tok-1:window:30d",
+        entity_type="Key",
+        entity_id="tok-1",
+        window_duration="30d",
+        window_start=WINDOW_START,
+    )
+
+    assert result == 9.0
+    assert cache.in_memory_cache.get_cache(key="spend:key:tok-1:window:30d") == 9.0
+
+
+@pytest.mark.asyncio
+async def test_coalesced_window_floors_row_at_aggregate():
+    """Greptile P1 (lagging persisted spend): a row lagging increments queued on
+    other pods must reseed the counter at the aggregate floor, not restore a
+    stale-low counter."""
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=7.25)
+    cache = DualCache()
+
+    result = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma,
+        spend_counter_cache=cache,
+        counter_key="spend:key:tok-1:window:30d",
+        entity_type="Key",
+        entity_id="tok-1",
+        window_duration="30d",
+        window_start=WINDOW_START,
+        include_logs_floor=True,
+    )
+
+    assert result == 7.25
+    assert cache.in_memory_cache.get_cache(key="spend:key:tok-1:window:30d") == 7.25
 
 
 @pytest.mark.asyncio
@@ -345,3 +511,85 @@ async def test_from_db_still_never_reads_the_end_user_row():
 
     assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:end_user:customer-42") is None
     assert prisma.db.litellm_endusertable.where_clauses == []
+
+
+@pytest.mark.asyncio
+async def test_coalesced_window_returns_none_when_db_has_no_value():
+    """Codecov line: with no readable window value in the DB (row missing and
+    the aggregate read failing), coalesced_window must return None so callers
+    fall back to their conservative value - never a fabricated 0.0."""
+    prisma = _FakePrismaClient(row=None, spend_logs_total=0.0)
+
+    async def _broken_group_by(**kwargs):
+        raise RuntimeError("db down")
+
+    prisma.db.litellm_spendlogs.group_by = _broken_group_by
+    redis = _FakeRedisCache()
+    cache = DualCache(redis_cache=redis)
+
+    result = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma,
+        spend_counter_cache=cache,
+        counter_key="spend:key:tok-1:window:30d",
+        entity_type="Key",
+        entity_id="tok-1",
+        window_duration="30d",
+        window_start=WINDOW_START,
+    )
+
+    assert result is None
+    assert redis.store == {}
+
+
+@pytest.mark.asyncio
+async def test_coalesced_window_keeps_row_when_aggregate_read_fails():
+    """The logs-floor reseed must still succeed when the aggregate read fails:
+    the maintained row alone is the fallback (better than returning None and
+    forcing every read onto the conservative fallback)."""
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=0.0)
+
+    async def _broken_group_by(**kwargs):
+        raise RuntimeError("db down")
+
+    prisma.db.litellm_spendlogs.group_by = _broken_group_by
+    redis = _FakeRedisCache()
+    cache = DualCache(redis_cache=redis)
+
+    result = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma,
+        spend_counter_cache=cache,
+        counter_key="spend:key:tok-1:window:30d",
+        entity_type="Key",
+        entity_id="tok-1",
+        window_duration="30d",
+        window_start=WINDOW_START,
+        include_logs_floor=True,
+    )
+
+    assert result == 4.5
+    assert redis.store["spend:key:tok-1:window:30d"] == 4.5
+
+
+@pytest.mark.asyncio
+async def test_coalesced_window_seeds_via_increment_when_nx_lost_and_value_vanished():
+    """Codecov line: NX lost the race but the re-read finds nothing (the
+    winner's key expired between the two calls). The increment path is the
+    last resort to still seed a counter instead of returning an
+    un-coordinated snapshot."""
+    prisma = _FakePrismaClient(row=_row(WINDOW_START, 4.5), spend_logs_total=4.5)
+    redis = _FakeRedisCache(nx_lost_vanished=True)
+    cache = DualCache(redis_cache=redis)
+
+    result = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma,
+        spend_counter_cache=cache,
+        counter_key="spend:key:tok-1:window:30d",
+        entity_type="Key",
+        entity_id="tok-1",
+        window_duration="30d",
+        window_start=WINDOW_START,
+    )
+
+    assert result == 4.5
+    assert redis.store["spend:key:tok-1:window:30d"] == 4.5
+    assert cache.in_memory_cache.get_cache(key="spend:key:tok-1:window:30d") == 4.5
