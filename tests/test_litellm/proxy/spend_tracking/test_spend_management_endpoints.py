@@ -6629,6 +6629,21 @@ def _session_page_row(session_key, last_activity):
     return {"session_key": session_key, "api_key": "hashed-key", "last_activity": last_activity}
 
 
+def test_infer_grouped_total_from_page_lookahead():
+    from litellm.proxy.spend_tracking.spend_management_endpoints import _infer_grouped_total
+
+    assert _infer_grouped_total(1, False, None, [], False) == (0, False)
+    assert _infer_grouped_total(1, False, None, [_session_page_row("sess-1", "time")], False) == (1, False)
+    assert _infer_grouped_total(1, False, None, [_session_page_row("sess-1", "time")] * 2, True) is None
+    assert _infer_grouped_total(4, False, 6, [_session_page_row("sess-1", "time")], False) == (7, False)
+    assert _infer_grouped_total(4, False, 6, [], False) is None
+    assert _infer_grouped_total(400, False, 9975, [_session_page_row("sess-1", "time")] * 26, True) == (
+        10000,
+        True,
+    )
+    assert _infer_grouped_total(1, True, None, [_session_page_row("sess-1", "time")], False) is None
+
+
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatch):
     """One row per (session, api_key), session-count total, and a keyset cursor for the next page."""

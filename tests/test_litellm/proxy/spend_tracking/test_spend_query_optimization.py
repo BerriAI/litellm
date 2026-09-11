@@ -575,14 +575,7 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     assert "OFFSET" not in page_sql, "the startTime page must be keyset-selected, not offset-selected"
     assert emitted[0][-1] == 51, "the page query fetches page_size + 1 sessions to detect has_more"
 
-    count_call = emitted[1]
-    count_sql = count_call[0]
-    assert f"GROUP BY {group_key}" in count_sql, f"grouped total must count sessions. SQL was:\n{count_sql}"
-    assert "COUNT(*) OVER ()" not in count_sql
-    assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
-    assert count_call[-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1
-
-    rep_sql = emitted[2][0]
+    rep_sql = emitted[1][0]
     assert f"DISTINCT ON ({group_key})" in rep_sql, f"page must return one row per session. SQL was:\n{rep_sql}"
     assert f"ORDER BY {group_key}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC" in rep_sql, (
         "the session representative must prefer the newest non-MCP call"
@@ -590,7 +583,7 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     assert "COUNT(*) OVER ()" not in rep_sql
 
     assert [row["request_id"] for row in response["data"]] == ["req-1", "req-2"]
-    assert response["total"] == 12
+    assert response["total"] == 2
     assert response["total_is_capped"] is False
     assert response["total_pages"] == 1
     assert response["has_more"] is False
