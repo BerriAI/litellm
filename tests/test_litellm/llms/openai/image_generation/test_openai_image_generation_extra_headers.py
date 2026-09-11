@@ -6,10 +6,9 @@ litellm.aimage_generation() are forwarded to the OpenAI API client as
 extra_headers in the images.generate() call.
 """
 
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 from litellm.llms.openai.openai import OpenAIChatCompletion
 
@@ -30,9 +29,7 @@ def mock_logging_obj():
 class TestImageGenerationExtraHeaders:
     """Test that extra_headers are properly injected into OpenAI image generation calls."""
 
-    def test_sync_image_generation_with_headers(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    def test_sync_image_generation_with_headers(self, openai_chat_completions, mock_logging_obj):
         """Sync image_generation should pass headers as extra_headers to images.generate()."""
         mock_image_data = MagicMock()
         mock_image_data.model_dump.return_value = {
@@ -61,9 +58,7 @@ class TestImageGenerationExtraHeaders:
         _, kwargs = mock_openai_client.images.generate.call_args
         assert kwargs.get("extra_headers") == test_headers
 
-    def test_sync_image_generation_without_headers(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    def test_sync_image_generation_without_headers(self, openai_chat_completions, mock_logging_obj):
         """Sync image_generation without headers should not inject extra_headers."""
         mock_image_data = MagicMock()
         mock_image_data.model_dump.return_value = {
@@ -90,9 +85,7 @@ class TestImageGenerationExtraHeaders:
         assert "extra_headers" not in kwargs
 
     @pytest.mark.asyncio
-    async def test_async_image_generation_with_headers(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    async def test_async_image_generation_with_headers(self, openai_chat_completions, mock_logging_obj):
         """Async aimage_generation should pass headers as extra_headers to images.generate()."""
         mock_image_data = MagicMock()
         mock_image_data.model_dump.return_value = {
@@ -121,9 +114,7 @@ class TestImageGenerationExtraHeaders:
         assert kwargs.get("extra_headers") == test_headers
 
     @pytest.mark.asyncio
-    async def test_async_image_generation_without_headers(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    async def test_async_image_generation_without_headers(self, openai_chat_completions, mock_logging_obj):
         """Async aimage_generation without headers should not inject extra_headers."""
         mock_image_data = MagicMock()
         mock_image_data.model_dump.return_value = {
@@ -193,20 +184,14 @@ class TestImageGenerationExtraHeaders:
                 client=mock_openai_client,
             )
 
-        logged_body = mock_logging_obj.pre_call.call_args[1]["additional_args"][
-            "complete_input_dict"
-        ]
+        logged_body = mock_logging_obj.pre_call.call_args[1]["additional_args"]["complete_input_dict"]
         assert "extra_headers" not in logged_body
         _, kwargs = mock_openai_client.images.generate.call_args
         assert kwargs.get("extra_headers") == test_headers
 
-    def test_sync_image_generation_forwards_headers_to_async(
-        self, openai_chat_completions, mock_logging_obj
-    ):
+    def test_sync_image_generation_forwards_headers_to_async(self, openai_chat_completions, mock_logging_obj):
         """When aimg_generation=True, image_generation should forward headers to aimage_generation."""
-        with patch.object(
-            openai_chat_completions, "aimage_generation"
-        ) as mock_aimage_gen:
+        with patch.object(openai_chat_completions, "aimage_generation") as mock_aimage_gen:
             mock_aimage_gen.return_value = MagicMock()
 
             test_headers = {"x-custom-header": "value"}
@@ -225,6 +210,97 @@ class TestImageGenerationExtraHeaders:
             mock_aimage_gen.assert_called_once()
             call_kwargs = mock_aimage_gen.call_args[1]
             assert call_kwargs["headers"] == test_headers
+
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.asyncio
+    async def test_optional_params_extra_headers_never_enter_the_json_body(
+        self, openai_chat_completions, mock_logging_obj, is_async
+    ):
+        """Proxy credentials put extra_headers on optional_params (and often
+        extra_body). Those must reach images.generate only as the SDK
+        extra_headers kwarg. OpenAI rejects extra_headers in the JSON body."""
+        mock_image_data = MagicMock()
+        mock_image_data.model_dump.return_value = {
+            "created": 1700000000,
+            "data": [{"url": "https://example.com/image.png"}],
+        }
+
+        mock_openai_client = MagicMock()
+        mock_openai_client.api_key = "test-key"
+        mock_openai_client._base_url._uri_reference = "https://api.openai.com"
+
+        test_headers = {"cf-aig-authorization": "Bearer custom-token"}
+        optional_params = {
+            "size": "1024x1024",
+            "quality": "low",
+            "extra_headers": test_headers,
+            "extra_body": {"extra_headers": test_headers, "foo": "bar"},
+        }
+
+        if is_async:
+            mock_openai_client.images.generate = AsyncMock(return_value=mock_image_data)
+            await openai_chat_completions.aimage_generation(
+                prompt="A white cat",
+                data={"model": "gpt-image-2", "prompt": "A white cat", **optional_params},
+                model_response=MagicMock(),
+                timeout=60.0,
+                logging_obj=mock_logging_obj,
+                api_key="test-key",
+                client=mock_openai_client,
+            )
+        else:
+            mock_openai_client.images.generate.return_value = mock_image_data
+            openai_chat_completions.image_generation(
+                model="gpt-image-2",
+                prompt="A white cat",
+                timeout=60.0,
+                optional_params=optional_params,
+                logging_obj=mock_logging_obj,
+                api_key="test-key",
+                client=mock_openai_client,
+            )
+
+        _, kwargs = mock_openai_client.images.generate.call_args
+        assert kwargs.get("extra_headers") == test_headers
+        assert kwargs.get("size") == "1024x1024"
+        assert kwargs.get("quality") == "low"
+        extra_body = kwargs.get("extra_body") or {}
+        assert "extra_headers" not in extra_body
+        assert extra_body.get("foo") == "bar"
+
+        logged_body = mock_logging_obj.pre_call.call_args[1]["additional_args"]["complete_input_dict"]
+        assert "extra_headers" not in logged_body
+        assert "extra_headers" not in (logged_body.get("extra_body") or {})
+
+    def test_optional_params_headers_merge_prefers_caller_headers(self, openai_chat_completions, mock_logging_obj):
+        """When both optional_params and the headers arg carry extra_headers,
+        the explicit headers arg wins, matching the previous overwrite."""
+        mock_image_data = MagicMock()
+        mock_image_data.model_dump.return_value = {
+            "created": 1700000000,
+            "data": [{"url": "https://example.com/image.png"}],
+        }
+
+        mock_openai_client = MagicMock()
+        mock_openai_client.images.generate.return_value = mock_image_data
+        mock_openai_client.api_key = "test-key"
+        mock_openai_client._base_url._uri_reference = "https://api.openai.com"
+
+        openai_chat_completions.image_generation(
+            model="gpt-image-2",
+            prompt="A white cat",
+            timeout=60.0,
+            optional_params={
+                "extra_headers": {"cf-aig-authorization": "Bearer from-optional"},
+            },
+            logging_obj=mock_logging_obj,
+            api_key="test-key",
+            headers={"cf-aig-authorization": "Bearer from-headers"},
+            client=mock_openai_client,
+        )
+
+        _, kwargs = mock_openai_client.images.generate.call_args
+        assert kwargs.get("extra_headers") == {"cf-aig-authorization": "Bearer from-headers"}
 
 
 class TestImageGenerationEntryPointHeaders:
@@ -259,3 +335,4 @@ class TestImageGenerationEntryPointHeaders:
         mock_openai_client.images.generate.assert_called_once()
         _, kwargs = mock_openai_client.images.generate.call_args
         assert kwargs.get("extra_headers") == test_headers
+        assert "extra_headers" not in (kwargs.get("extra_body") or {})
