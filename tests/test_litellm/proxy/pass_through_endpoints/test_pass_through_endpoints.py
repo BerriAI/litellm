@@ -4884,7 +4884,8 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
 
 
 @pytest.mark.asyncio
-async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch):
+@pytest.mark.parametrize("forward_headers", [True, False])
+async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch, forward_headers: bool):
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.trace import get_current_span
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
@@ -4931,14 +4932,14 @@ async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch
             target="wss://upstream.example.test/v1/realtime",
             custom_headers={},
             user_api_key_dict=UserAPIKeyAuth(),
-            forward_headers=True,
+            forward_headers=forward_headers,
             endpoint="/realtime",
             accept_websocket=True,
         )
 
     propagated = get_current_span(TraceContextTextMapPropagator().extract(captured["headers"]))
     assert propagated.get_span_context().trace_id == span.get_span_context().trace_id
-    assert captured["headers"]["authorization"] == "Bearer client"
+    assert captured["headers"].get("authorization") == ("Bearer client" if forward_headers else None)
 
 
 class ClosingUpstreamWebSocket:
