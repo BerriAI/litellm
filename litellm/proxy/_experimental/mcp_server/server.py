@@ -56,6 +56,7 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
+    get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
     well_known_root_suffix,
@@ -4155,7 +4156,11 @@ if MCP_AVAILABLE:
                     get_request_root_path,
                 )
 
-                raise_token_exchange_challenge(server, root_path=get_request_root_path())
+                raise_token_exchange_challenge(
+                    server,
+                    root_path=get_request_root_path(),
+                    resource_metadata_url=get_passthrough_resource_metadata_url(scope=scope, server_name=server_name),
+                )
 
             # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run
             # the exchange here at the transport edge, so a rejected subject raises the RFC 9728
@@ -4180,6 +4185,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     user_api_key_auth=user_api_key_auth,
                     raw_headers=raw_headers,
+                    resource_metadata_url=get_passthrough_resource_metadata_url(scope=scope, server_name=server_name),
                 )
 
             # Pass-through OAuth: when the admin has opted a server into
