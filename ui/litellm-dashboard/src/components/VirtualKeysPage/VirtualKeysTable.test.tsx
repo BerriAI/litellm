@@ -476,11 +476,13 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
 describe("entity links out of the key rows", () => {
   const keyRow = async () => (await screen.findByText("Test Key Alias")).closest("tr") as HTMLElement;
 
-  const enableCreatedByColumn = async (user: ReturnType<typeof userEvent.setup>) => {
+  const enableColumn = async (user: ReturnType<typeof userEvent.setup>, title: string) => {
     await user.click(screen.getByRole("button", { name: "Columns" }));
-    await user.click(await screen.findByText("Created By"));
+    await user.click(await screen.findByText(title));
     await user.keyboard("{Escape}");
   };
+
+  const enableCreatedByColumn = (user: ReturnType<typeof userEvent.setup>) => enableColumn(user, "Created By");
 
   it("points the User and Team cells at their detail pages", async () => {
     renderWithProviders(<VirtualKeysTable />);
@@ -491,6 +493,19 @@ describe("entity links out of the key rows", () => {
       "/ui/users?user=user-1",
     );
     expect(within(row).getByRole("link", { name: "Test Team" })).toHaveAttribute("href", "/ui/teams?team=team-1");
+  });
+
+  it("points the Organization cell at the org's detail page", async () => {
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, org_id: "org-1" }]));
+    const user = userEvent.setup();
+    renderWithProviders(<VirtualKeysTable />);
+    await enableColumn(user, "Organization");
+
+    const row = await keyRow();
+    expect(within(row).getByRole("link", { name: "Test Organization" })).toHaveAttribute(
+      "href",
+      "/ui/organizations?org=org-1",
+    );
   });
 
   it("points the Created By cell at the creator's detail page", async () => {
