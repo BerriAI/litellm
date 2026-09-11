@@ -32,8 +32,11 @@ impl OcrAdapter for VertexDeepSeekAdapter {
             known: params,
             extra_params: _extra_params,
         } = _prepare_ocr_request::<DeepSeekOcrParams>(request)?;
-        let config =
-            VertexConfig::from_optional_params(&request.optional_params).map_err(Error::from)?;
+        let config = VertexConfig::from_sourced_optional_params(
+            &request.optional_params,
+            &request.input_sources,
+        )
+        .map_err(Error::from)?;
         let authentication = client
             .vertex_auth()
             .validate_environment(
