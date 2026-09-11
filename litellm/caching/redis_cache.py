@@ -18,6 +18,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
@@ -197,6 +198,9 @@ class RedisCircuitBreaker:
         self._opened_at: float | None = None
         self._state = self.CLOSED
         _breaker_metrics().record_state_change(None, self._state)
+
+    def is_half_open(self) -> bool:
+        return self._state == self.HALF_OPEN
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
@@ -405,21 +409,32 @@ def log_redis_failure(
     logger.log(level, "%s: %s", message, exc, exc_info=exc if with_traceback else None)
 
 
-def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> int:
-    """Reject the call if the breaker is open, else return the swallowed-failure count to compare against."""
+@dataclass(frozen=True, slots=True)
+class _BreakerAdmission:
+    swallowed_before: int
+    is_probe: bool
+
+
+def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> _BreakerAdmission:
+    """Reject the call if the breaker is open, else record what its success may later prove."""
     if breaker.is_open():
         raise RedisCircuitBreakerOpenError(f"Redis circuit breaker is open — skipping {name}")
-    return _swallowed_redis_failures.get()
+    return _BreakerAdmission(swallowed_before=_swallowed_redis_failures.get(), is_probe=breaker.is_half_open())
 
 
-def _exit_circuit_breaker(breaker: RedisCircuitBreaker, swallowed_before: int) -> None:
-    """Record success only when nothing failed while the call ran.
+def _exit_circuit_breaker(breaker: RedisCircuitBreaker, admission: _BreakerAdmission) -> None:
+    """Record success only when nothing failed while the call ran and the call may vouch for Redis.
 
     Several Redis methods catch their own connection errors and return a default, so a
-    method that returned is not on its own proof of a healthy Redis.
+    method that returned is not on its own proof of a healthy Redis. While the breaker is
+    half open only the designated recovery probe may close it: a call admitted before the
+    breaker opened that finishes late says nothing about whether Redis recovered.
     """
-    if _swallowed_redis_failures.get() == swallowed_before:
-        breaker.record_success()
+    if _swallowed_redis_failures.get() != admission.swallowed_before:
+        return
+    if breaker.is_half_open() and not admission.is_probe:
+        return
+    breaker.record_success()
 
 
 async def _run_under_circuit_breaker(
@@ -432,14 +447,14 @@ async def _run_under_circuit_breaker(
     Shared by the method decorator and the Lua script executor so both feed the same
     health signal.
     """
-    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
+    admission: Final = _enter_circuit_breaker(breaker, name)
     try:
         result: Final = await call()
     except Exception as e:
         if _is_redis_health_failure(e):
             breaker.record_failure(is_timeout=_is_redis_timeout_failure(e))
         raise
-    _exit_circuit_breaker(breaker, swallowed_before)
+    _exit_circuit_breaker(breaker, admission)
     return result
 
 
@@ -449,14 +464,14 @@ def _run_under_circuit_breaker_sync(
     call: Callable[[], _RedisCallResult],
 ) -> _RedisCallResult:
     """Run one blocking Redis call under a circuit breaker, feeding the same health signal as the async path."""
-    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
+    admission: Final = _enter_circuit_breaker(breaker, name)
     try:
         result: Final = call()
     except Exception as e:
         if _is_redis_health_failure(e):
             breaker.record_failure(is_timeout=_is_redis_timeout_failure(e))
         raise
-    _exit_circuit_breaker(breaker, swallowed_before)
+    _exit_circuit_breaker(breaker, admission)
     return result
 
 
@@ -1395,12 +1410,12 @@ class RedisCache(BaseCache):
         key_value_dict = {}
         _key_list: Final = [key for key in key_list if key is not None]
         start_time: Final = time.time()
-        swallowed_before: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
+        admission: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
 
         try:
             _keys: Final = [self.check_and_fix_namespace(key=cache_key or "") for cache_key in _key_list]
             results: Final = self._run_redis_mget_operation(keys=_keys)
-            _exit_circuit_breaker(self._circuit_breaker, swallowed_before)
+            _exit_circuit_breaker(self._circuit_breaker, admission)
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             self.service_logger_obj.service_success_hook(

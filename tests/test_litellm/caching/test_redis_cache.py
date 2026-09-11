@@ -1103,3 +1103,52 @@ def test_recovery_probe_still_closes_the_breaker():
 
     assert breaker._state == breaker.CLOSED
     assert breaker.is_open() is False
+
+
+@pytest.mark.asyncio
+async def test_stale_success_during_the_recovery_probe_leaves_the_breaker_to_the_probe():
+    """A call admitted before the trip that finishes while HALF_OPEN must not close the breaker.
+
+    Only the one call designated as the recovery probe has actually reached Redis after the
+    outage, so closing on the straggler's success resumed full Redis traffic before the probe
+    had proven anything.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    stale_admitted = asyncio.Event()
+    stale_release = asyncio.Event()
+    probe_admitted = asyncio.Event()
+    probe_release = asyncio.Event()
+
+    async def stale_call() -> str:
+        stale_admitted.set()
+        await stale_release.wait()
+        return "stale"
+
+    async def probe_call() -> str:
+        probe_admitted.set()
+        await probe_release.wait()
+        return "probe"
+
+    stale = asyncio.ensure_future(_run_under_circuit_breaker(breaker, "op", stale_call))
+    await stale_admitted.wait()
+    for _ in range(3):
+        breaker.record_failure()
+    assert breaker._state == breaker.OPEN
+    breaker._opened_at = time.time() - 9999
+    probe = asyncio.ensure_future(_run_under_circuit_breaker(breaker, "op", probe_call))
+    await probe_admitted.wait()
+    assert breaker._state == breaker.HALF_OPEN
+
+    stale_release.set()
+    assert await stale == "stale"
+
+    assert breaker._state == breaker.HALF_OPEN, "the straggler must not close the breaker for the probe"
+    assert breaker.is_open() is True
+
+    probe_release.set()
+    assert await probe == "probe"
+
+    assert breaker._state == breaker.CLOSED
+    assert breaker.is_open() is False
