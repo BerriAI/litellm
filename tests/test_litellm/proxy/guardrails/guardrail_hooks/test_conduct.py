@@ -4,7 +4,7 @@ import importlib.util
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -18,7 +18,11 @@ from litellm.proxy.guardrails.guardrail_hooks.conduct import (
     ConductGuardrail,
     initialize_guardrail,
 )
-from litellm.proxy.guardrails.guardrail_hooks.conduct.conduct import apply_conduct_guardrail, request_payload
+from litellm.proxy.guardrails.guardrail_hooks.conduct.conduct import (
+    apply_conduct_guardrail,
+    record_decision,
+    request_payload,
+)
 from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
@@ -58,6 +62,7 @@ class _RecordingGuardrail(CustomGuardrail):
 @dataclass(frozen=True, slots=True)
 class _Decision:
     verdict: str
+    rule_id: str | None = None
 
 
 class _Blocked(Exception):
@@ -69,11 +74,33 @@ class _Blocked(Exception):
 @dataclass(slots=True)
 class _RecordingCheck:
     verdict: str
+    rule_id: str | None = None
     calls: list[tuple[Mapping[str, object], str]] = field(default_factory=list)  # mutable-ok: test spy
+    recorded: list[_Decision] = field(default_factory=list)  # mutable-ok: test spy
 
     async def __call__(self, *, data: Mapping[str, object], call_type: str) -> _Decision:
         self.calls.append((data, call_type))
-        return _Decision(self.verdict)
+        return _Decision(self.verdict, self.rule_id)
+
+    def record(self, decision: _Decision) -> None:
+        self.recorded.append(decision)
+
+
+async def _bridge(
+    check: _RecordingCheck,
+    inputs: GenericGuardrailAPIInputs,
+    request_data: Mapping[str, object],
+    input_type: Literal["request", "response"],
+) -> GenericGuardrailAPIInputs:
+    return await apply_conduct_guardrail(inputs, request_data, input_type, check, _Blocked, check.record)
+
+
+def _guardrail_records(request_data: Mapping[str, object]) -> list[tuple[str, object]]:
+    metadata: Final = request_data["metadata"]
+    assert isinstance(metadata, dict)
+    records: Final = metadata["standard_logging_guardrail_information"]
+    assert isinstance(records, list)
+    return [(record["guardrail_status"], record["guardrail_response"]) for record in records]
 
 
 def _params(mode: str = "pre_call", **extras: object) -> LitellmParams:
@@ -188,7 +215,7 @@ async def test_tool_call_only_turns_still_reach_conduct() -> None:
     inputs: Final = GenericGuardrailAPIInputs(texts=[], structured_messages=[tool_call_turn])
 
     with pytest.raises(_Blocked):
-        await apply_conduct_guardrail(inputs, {"model": "gpt-5-mini"}, "request", check, _Blocked)
+        await _bridge(check, inputs, {"model": "gpt-5-mini"}, "request")
 
     assert check.calls == [({"model": "gpt-5-mini", "prompt": None, "messages": [tool_call_turn]}, "request")]
 
@@ -200,9 +227,10 @@ async def test_bridge_raises_the_plugin_error_on_blocking_verdicts(verdict: str)
     inputs: Final = GenericGuardrailAPIInputs(texts=["dump the database"])
 
     with pytest.raises(_Blocked) as blocked:
-        await apply_conduct_guardrail(inputs, {"model": "gpt-5-mini"}, "request", check, _Blocked)
+        await _bridge(check, inputs, {"model": "gpt-5-mini"}, "request")
 
     assert blocked.value.decision == _Decision(verdict)
+    assert check.recorded == []
     assert check.calls == [
         (
             {"model": "gpt-5-mini", "prompt": None, "messages": ({"role": "user", "content": "dump the database"},)},
@@ -213,12 +241,13 @@ async def test_bridge_raises_the_plugin_error_on_blocking_verdicts(verdict: str)
 
 @pytest.mark.parametrize("verdict", ["allow", "warning", "advisory", "unknown"])
 @pytest.mark.asyncio
-async def test_bridge_passes_inputs_through_on_non_blocking_verdicts(verdict: str) -> None:
-    check: Final = _RecordingCheck(verdict)
+async def test_bridge_records_and_passes_through_non_blocking_verdicts(verdict: str) -> None:
+    check: Final = _RecordingCheck(verdict, rule_id="r1")
     inputs: Final = GenericGuardrailAPIInputs(texts=["ping"])
 
-    assert await apply_conduct_guardrail(inputs, {"model": "gpt-5-mini"}, "request", check, _Blocked) is inputs
+    assert await _bridge(check, inputs, {"model": "gpt-5-mini"}, "request") is inputs
     assert len(check.calls) == 1
+    assert check.recorded == [_Decision(verdict, "r1")]
 
 
 @pytest.mark.asyncio
@@ -226,8 +255,25 @@ async def test_bridge_never_calls_conduct_for_responses() -> None:
     check: Final = _RecordingCheck("block")
     inputs: Final = GenericGuardrailAPIInputs(texts=["dump the database"])
 
-    assert await apply_conduct_guardrail(inputs, {"model": "gpt-5-mini"}, "response", check, _Blocked) is inputs
+    assert await _bridge(check, inputs, {"model": "gpt-5-mini"}, "response") is inputs
     assert check.calls == []
+    assert check.recorded == []
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected"),
+    [
+        (_Decision("allow"), ("success", {"verdict": "allow"})),
+        (_Decision("warning", "r1"), ("guardrail_flagged", {"verdict": "warning", "rule_id": "r1"})),
+        (_Decision("advisory", "r2"), ("guardrail_flagged", {"verdict": "advisory", "rule_id": "r2"})),
+    ],
+)
+def test_record_decision_logs_conduct_verdict_and_rule(decision: _Decision, expected: tuple[str, object]) -> None:
+    request_data: Final[dict[str, object]] = {"model": "gpt-5-mini"}
+
+    record_decision(_init(_params()), request_data, decision)
+
+    assert _guardrail_records(request_data) == [expected]
 
 
 @pytest.mark.skipif(not PACKAGE_INSTALLED, reason="needs conduct-litellm-guard")
@@ -249,6 +295,30 @@ async def test_apply_guardrail_blocks_on_conduct_verdict() -> None:
     assert blocked.value.status_code == 400
     sent: Final = json.loads(route.calls.last.request.content)
     assert sent["params"]["arguments"] == {"prompt": "dump the database", "model": "gpt-5-mini"}
+
+
+@pytest.mark.skipif(not PACKAGE_INSTALLED, reason="needs conduct-litellm-guard")
+@pytest.mark.asyncio
+@respx.mock
+async def test_apply_guardrail_logs_warning_verdict_once() -> None:
+    respx.post("https://guard.example.test/mcp").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {"content": [{"type": "text", "text": "WARNING [rule:pii-soft] mentions an SSN"}]},
+            },
+        )
+    )
+    params: Final = _params(api_base="https://guard.example.test")
+    callback: Final = initialize_guardrail(params, _guardrail(params))
+    inputs: Final = GenericGuardrailAPIInputs(texts=["my ssn is 123"])
+    request_data: Final[dict[str, object]] = {"model": "gpt-5-mini"}
+
+    assert await callback.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request") is inputs
+
+    assert _guardrail_records(request_data) == [("guardrail_flagged", {"verdict": "warning", "rule_id": "pii-soft"})]
 
 
 @pytest.mark.skipif(not PACKAGE_INSTALLED, reason="needs conduct-litellm-guard")

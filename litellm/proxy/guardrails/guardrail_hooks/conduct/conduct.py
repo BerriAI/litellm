@@ -7,15 +7,18 @@ Source:  https://github.com/sseshachala/conductai/tree/main/packages/conduct-lit
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
+
+from pydantic import BaseModel, ConfigDict
 
 from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import GenericGuardrailAPIInputs
+    from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 MISSING_PACKAGE_MESSAGE: Final = (
     "conduct-litellm-guard is required for the Conduct guardrail. "
@@ -23,11 +26,15 @@ MISSING_PACKAGE_MESSAGE: Final = (
 )
 
 BLOCKING_VERDICTS: Final = frozenset({"block", "approval"})
+FLAGGED_VERDICTS: Final = frozenset({"warning", "advisory"})
 
 
 class ConductDecision(Protocol):
     @property
     def verdict(self) -> str: ...
+
+    @property
+    def rule_id(self) -> str | None: ...
 
 
 class ConductCheck(Protocol):
@@ -47,12 +54,36 @@ def request_payload(
     return MappingProxyType({**request_data, "prompt": None, "messages": messages})
 
 
+def decision_status(decision: ConductDecision) -> GuardrailStatus:
+    return "guardrail_flagged" if decision.verdict in FLAGGED_VERDICTS else "success"
+
+
+class ConductVerdict(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    verdict: str
+    rule_id: str | None = None
+
+
+def record_decision(
+    guardrail: CustomGuardrail,
+    request_data: dict[str, object],  # mutable-ok: the logging helper writes metadata into it
+    decision: ConductDecision,
+) -> None:
+    guardrail.add_standard_logging_guardrail_information_to_request_data(
+        guardrail_json_response=ConductVerdict(verdict=decision.verdict, rule_id=decision.rule_id).model_dump(),
+        request_data=request_data,
+        guardrail_status=decision_status(decision),
+    )
+
+
 async def apply_conduct_guardrail(
     inputs: GenericGuardrailAPIInputs,
     request_data: Mapping[str, object],
     input_type: Literal["request", "response"],
     check: ConductCheck,
     blocked: Callable[[ConductDecision], Exception],
+    record: Callable[[ConductDecision], None],
 ) -> GenericGuardrailAPIInputs:
     payload: Final = request_payload(inputs, request_data, input_type)
     if payload is None:
@@ -60,6 +91,7 @@ async def apply_conduct_guardrail(
     decision: Final = await check(data=payload, call_type=input_type)
     if decision.verdict in BLOCKING_VERDICTS:
         raise blocked(decision)
+    record(decision)
     return inputs
 
 
@@ -79,19 +111,30 @@ else:
         async def apply_guardrail(
             self,
             inputs: GenericGuardrailAPIInputs,
-            request_data: Mapping[str, object],
+            request_data: dict[str, object],  # mutable-ok: CustomGuardrail.apply_guardrail contract
             input_type: Literal["request", "response"],
             logging_obj: LiteLLMLoggingObj | None = None,
         ) -> GenericGuardrailAPIInputs:
-            return await apply_conduct_guardrail(inputs, request_data, input_type, self.check, ConductGuardBlocked)
+            return await apply_conduct_guardrail(
+                inputs,
+                request_data,
+                input_type,
+                self.check,
+                ConductGuardBlocked,
+                partial(record_decision, self, request_data),
+            )
 
 
 __all__ = (
     "BLOCKING_VERDICTS",
+    "FLAGGED_VERDICTS",
     "MISSING_PACKAGE_MESSAGE",
     "ConductCheck",
     "ConductDecision",
     "ConductGuardrail",
+    "ConductVerdict",
     "apply_conduct_guardrail",
+    "decision_status",
+    "record_decision",
     "request_payload",
 )
