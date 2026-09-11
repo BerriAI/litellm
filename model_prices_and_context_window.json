@@ -43206,7 +43206,7 @@
         "input_cost_per_token": 1.2e-06,
         "output_cost_per_token": 1.2e-06,
         "max_input_tokens": 131072,
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo": {
         "litellm_provider": "together_ai",
@@ -43218,7 +43218,7 @@
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 3e-07,
         "max_input_tokens": 32768,
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen3-235B-A22B-Instruct-2507-tput": {
         "deprecation_date": "2026-07-10",
@@ -43265,7 +43265,7 @@
         "max_input_tokens": 256000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
-        "source": "https://www.together.ai/models/qwen3-coder-480b-a35b-instruct",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43327,7 +43327,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 1.7e-06,
-        "source": "https://www.together.ai/models/deepseek-v3-1",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -43351,7 +43351,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.04e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43385,6 +43385,7 @@
         "litellm_provider": "together_ai",
         "mode": "chat",
         "output_cost_per_token": 5.9e-07,
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43407,6 +43408,7 @@
         "litellm_provider": "together_ai",
         "mode": "chat",
         "output_cost_per_token": 8.8e-07,
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43418,6 +43420,7 @@
         "litellm_provider": "together_ai",
         "mode": "chat",
         "output_cost_per_token": 1.8e-07,
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43434,7 +43437,7 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
         "max_input_tokens": 32768,
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/mistralai/Mistral-Small-24B-Instruct-2501": {
         "deprecation_date": "2026-04-02",
@@ -43446,7 +43449,7 @@
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 3e-07,
         "max_input_tokens": 32768,
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": {
         "deprecation_date": "2026-04-16",
@@ -43454,6 +43457,7 @@
         "litellm_provider": "together_ai",
         "mode": "chat",
         "output_cost_per_token": 6e-07,
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43480,7 +43484,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
-        "source": "https://www.together.ai/models/gpt-oss-120b",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -43493,7 +43497,7 @@
         "max_input_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
-        "source": "https://www.together.ai/models/gpt-oss-20b",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43513,7 +43517,7 @@
         "max_input_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1.1e-06,
-        "source": "https://www.together.ai/models/glm-4-5-air",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43529,7 +43533,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 2.2e-06,
-        "source": "https://www.together.ai/models/glm-4-6",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -43546,7 +43550,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 2e-06,
-        "source": "https://www.together.ai/models/glm-4-7",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -43594,7 +43598,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
-        "source": "https://www.together.ai/models/qwen3-next-80b-a3b-instruct",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43610,7 +43614,7 @@
         },
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
-        "source": "https://www.together.ai/models/qwen3-next-80b-a3b-thinking",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43624,7 +43628,7 @@
         "max_input_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3.6e-06,
-        "source": "https://www.together.ai/models/qwen3-5-397b-a17b",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43639,7 +43643,7 @@
         "max_tokens": 524288,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43664,7 +43668,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 2.5e-07,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -43679,7 +43683,7 @@
         "max_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_reasoning": true
     },
     "together_ai/Qwen/Qwen3.7-Max": {
@@ -43690,7 +43694,7 @@
         "max_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 7.5e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_prompt_caching": true
     },
     "together_ai/Qwen/Qwen3.7-Plus": {
@@ -43700,7 +43704,7 @@
         "max_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 1.28e-06,
-        "source": "https://docs.together.ai/docs/serverless-models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen3.8-2.4T-A95B": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -43710,7 +43714,7 @@
         "max_tokens": 1010000,
         "mode": "chat",
         "output_cost_per_token": 6e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_prompt_caching": true
     },
     "together_ai/arize-ai/qwen-2-1.5b-instruct": {
@@ -43720,7 +43724,7 @@
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 1e-07,
-        "source": "https://docs.together.ai/docs/serverless-models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731": {
         "cache_read_input_token_cost": 3e-08,
@@ -43730,7 +43734,7 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 2.8e-07,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43762,7 +43766,7 @@
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 3.96e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43786,7 +43790,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 9.7e-07,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -43821,7 +43825,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.5e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_prompt_caching": true
     },
     "together_ai/moonshotai/Kimi-K2.7-Code": {
@@ -43833,7 +43837,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43854,7 +43858,7 @@
             "high",
             "max"
         ],
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43872,7 +43876,7 @@
         "max_tokens": 512288,
         "mode": "chat",
         "output_cost_per_token": 3.6e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43898,7 +43902,7 @@
         "max_tokens": 524288,
         "mode": "chat",
         "output_cost_per_token": 4.05e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43913,7 +43917,7 @@
         "max_tokens": 524288,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_prompt_caching": true
     },
     "together_ai/zai-org/GLM-5.2": {
@@ -43925,7 +43929,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43942,7 +43946,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -43959,7 +43963,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-        "source": "https://docs.together.ai/docs/serverless-models",
+        "source": "https://api.together.ai/v1/models",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_prompt_caching": true,
@@ -60795,7 +60799,7 @@
         "max_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 4.7e-07,
-        "source": "https://docs.together.ai/docs/serverless-models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/moonshotai/Kimi-K2.6": {
         "input_cost_per_token": 1.2e-06,
@@ -60804,7 +60808,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/moonshotai/Kimi-K2.5-fp4": {
         "input_cost_per_token": 5e-07,
@@ -60812,7 +60816,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/MiniMaxAI/MiniMax-M2.7": {
         "input_cost_per_token": 3e-07,
@@ -60821,7 +60825,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 196608,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/zai-org/GLM-5": {
         "input_cost_per_token": 1e-06,
@@ -60829,7 +60833,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 202752,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/zai-org/GLM-5.1": {
         "input_cost_per_token": 1.4e-06,
@@ -60838,7 +60842,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 202752,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/deepseek-ai/DeepSeek-R1-0528": {
         "input_cost_per_token": 3e-06,
@@ -60846,7 +60850,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 163840,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen3-Coder-Next-FP8": {
         "input_cost_per_token": 5e-07,
@@ -60854,7 +60858,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen3-VL-32B-Instruct": {
         "input_cost_per_token": 5e-07,
@@ -60862,7 +60866,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen3-VL-8B-Instruct": {
         "input_cost_per_token": 1.8e-07,
@@ -60870,7 +60874,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/mistralai/Ministral-3-14B-Instruct-2512": {
         "input_cost_per_token": 2e-07,
@@ -60878,7 +60882,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 262144,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/nvidia/NVIDIA-Nemotron-Nano-9B-v2": {
         "input_cost_per_token": 6e-08,
@@ -60886,7 +60890,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/mistralai/Mistral-7B-Instruct-v0.3": {
         "input_cost_per_token": 2e-07,
@@ -60894,7 +60898,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 32768,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/QwQ-32B": {
         "input_cost_per_token": 1.2e-06,
@@ -60902,7 +60906,7 @@
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
         "mode": "chat",
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "cerebras/gemma-4-31b": {
         "input_cost_per_token": 9.9e-07,
@@ -65029,5 +65033,152 @@
         "supports_tool_choice": false,
         "supports_response_schema": true,
         "supports_vision": false
+    },
+    "together_ai/arcee-ai/trinity-mini": {
+        "input_cost_per_token": 4.5e-08,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/deepseek-ai/deepseek-coder-33b-instruct": {
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 8e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Llama-70B": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B": {
+        "input_cost_per_token": 1.8e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
+        "input_cost_per_token": 1.6e-06,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 1.6e-06,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/google/gemma-2-27b-it": {
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 8e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/meta-llama/Llama-3-8b-chat-hf": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/meta-llama/Llama-3.1-405B-Instruct": {
+        "input_cost_per_token": 3.5e-06,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 3.5e-06,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/meta-llama/Llama-3.2-1B-Instruct": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 6e-08,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/meta-llama/Llama-3.2-3B-Instruct": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 6e-08,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo": {
+        "input_cost_per_token": 8.8e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 8.8e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/meta-llama/Meta-Llama-3-8B-Instruct": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/nvidia/Llama-3.1-Nemotron-70B-Instruct-HF": {
+        "input_cost_per_token": 8.8e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 8.8e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Qwen/Qwen2-1.5B-Instruct": {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 2e-08,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Qwen/Qwen2-72B-Instruct": {
+        "input_cost_per_token": 9e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 9e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Qwen/Qwen2-VL-72B-Instruct": {
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Qwen/Qwen2.5-14B-Instruct": {
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 8e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Qwen/Qwen2.5-72B-Instruct": {
+        "input_cost_per_token": 1.2e-06,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Qwen/Qwen2.5-Coder-32B-Instruct": {
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 8e-07,
+        "source": "https://api.together.ai/v1/models"
+    },
+    "together_ai/Qwen/Qwen2.5-VL-72B-Instruct": {
+        "input_cost_per_token": 1.95e-06,
+        "litellm_provider": "together_ai",
+        "mode": "chat",
+        "output_cost_per_token": 8e-06,
+        "source": "https://api.together.ai/v1/models"
     }
 }
