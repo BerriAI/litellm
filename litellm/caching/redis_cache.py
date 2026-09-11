@@ -250,7 +250,7 @@ class RedisCircuitBreaker:
             self._set_state(self.OPEN)
 
     def record_success(self) -> None:
-        if not self.enabled:
+        if not self.enabled or self._state == self.OPEN:
             return
         if self._state == self.HALF_OPEN:
             verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
@@ -1337,6 +1337,7 @@ class RedisCache(BaseCache):
         except Exception:
             return ast.literal_eval(decoded)
 
+    @_redis_circuit_breaker_guard_sync
     def get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):
         try:
             key = self.check_and_fix_namespace(key=key)
@@ -1356,8 +1357,8 @@ class RedisCache(BaseCache):
             print_verbose(f"Got Redis Cache: key: {key}, cached_response {cached_response}")
             return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
-            # NON blocking - notify users Redis is throwing an exception
-            verbose_logger.error("litellm.caching.caching: get() - Got exception from REDIS: ", e)
+            verbose_logger.error("litellm.caching.caching: get() - Got exception from REDIS: %s", e)
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     def _run_redis_mget_operation(self, keys: list[str]) -> Sequence[bytes | str | None]:
         """
@@ -1394,9 +1395,9 @@ class RedisCache(BaseCache):
         key_value_dict = {}
         _key_list: Final = [key for key in key_list if key is not None]
         start_time: Final = time.time()
+        swallowed_before: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
 
         try:
-            swallowed_before: Final = _enter_circuit_breaker(self._circuit_breaker, "batch_get_cache")
             _keys: Final = [self.check_and_fix_namespace(key=cache_key or "") for cache_key in _key_list]
             results: Final = self._run_redis_mget_operation(keys=_keys)
             _exit_circuit_breaker(self._circuit_breaker, swallowed_before)
