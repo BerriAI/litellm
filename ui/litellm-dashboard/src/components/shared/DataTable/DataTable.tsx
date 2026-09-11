@@ -96,6 +96,15 @@ function derivePinning<TData, TValue>(columns: ColumnDef<TData, TValue>[]): Colu
   return { left: collect("left"), right: collect("right") };
 }
 
+// TanStack's default drops a column from global search when the first row's value is not a
+// string or number, which silently hides sparse columns; an explicit opt-in overrides that.
+function columnCanGlobalFilter<TData>(firstRow: TData | undefined, column: Column<TData, unknown>): boolean {
+  if (column.columnDef.enableGlobalFilter === true) return true;
+  if (firstRow === undefined || column.accessorFn === undefined) return false;
+  const firstValue: unknown = column.accessorFn(firstRow, 0);
+  return typeof firstValue === "string" || typeof firstValue === "number";
+}
+
 function buildRowModels<TData>(
   sortingMode: SortingMode,
   paginationMode: PaginationMode,
@@ -516,6 +525,7 @@ function useDataTableInstance<TData extends RowData, TValue>(
     onRowSelectionChange: rowSelectionState.onChange,
     onColumnVisibilityChange: setColumnVisibility,
     onColumnSizingChange: setColumnSizing,
+    getColumnCanGlobalFilter: (column) => columnCanGlobalFilter(data[0], column),
     getCoreRowModel: getCoreRowModel(),
     ...buildRowModels(sortingMode, paginationMode, filterMode, expansionGuard),
     ...(getRowId !== undefined ? { getRowId } : {}),

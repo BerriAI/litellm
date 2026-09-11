@@ -121,23 +121,23 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     return <div className="p-4">Organization not found</div>;
   }
 
+  const orgMemberFor = (record: Member) =>
+    record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
+
   const orgExtraColumns: MemberTableColumn[] = [
     {
       title: "Spend (USD)",
       key: "spend",
-      render: (_: unknown, record: Member) => {
-        const orgMember =
-          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
-        return <MoneyCell value={orgMember?.spend} decimals={4} />;
-      },
+      sortValue: (record: Member) => orgMemberFor(record)?.spend ?? null,
+      render: (record: Member) => <MoneyCell value={orgMemberFor(record)?.spend} decimals={4} />,
     },
     {
       title: "Created At",
       key: "created_at",
-      render: (_: unknown, record: Member) => {
-        const orgMember =
-          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
-        return <span>{orgMember?.created_at ? new Date(orgMember.created_at).toLocaleString() : "-"}</span>;
+      sortValue: (record: Member) => orgMemberFor(record)?.created_at ?? null,
+      render: (record: Member) => {
+        const createdAt = orgMemberFor(record)?.created_at;
+        return <span>{createdAt ? new Date(createdAt).toLocaleString() : "-"}</span>;
       },
     },
   ];
@@ -256,6 +256,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 role: m.user_role || "",
                 user_id: m.user_id,
                 user_email: m.user_email,
+                user_alias: m.user?.user_alias ?? null,
               }))}
               canEdit={canEditOrg}
               onEdit={(member) => {
