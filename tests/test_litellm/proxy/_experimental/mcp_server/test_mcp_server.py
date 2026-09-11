@@ -8867,7 +8867,7 @@ class TestAgent365ChallengeAtConnect:
                 litellm.callbacks, guardrail, require_self=False
             )
 
-    async def _connect(self, server: MCPServer, oauth2_headers: dict[str, str] | None) -> None:
+    async def _connect(self, server: MCPServer, oauth2_headers: dict[str, str] | None) -> HTTPException | None:
         from litellm.proxy._experimental.mcp_server import server as server_module
 
         with (
@@ -8878,36 +8878,40 @@ class TestAgent365ChallengeAtConnect:
                 server_module, "_get_allowed_mcp_servers", AsyncMock(return_value=[])
             ),
         ):
-            await server_module._raise_preemptive_401_for_unauthenticated_servers(
-                scope={"type": "http", "method": "POST", "path": "/mcp/tools", "headers": []},
-                mcp_servers=["tools"],
-                oauth2_headers=oauth2_headers,
-                mcp_server_auth_headers=None,
-                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
-                client_ip=None,
-            )
+            try:
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope={"type": "http", "method": "POST", "path": "/mcp/tools", "headers": []},
+                    mcp_servers=["tools"],
+                    oauth2_headers=oauth2_headers,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    client_ip=None,
+                )
+            except HTTPException as challenge:
+                return challenge
+            return None
 
     @pytest.mark.asyncio
     async def test_no_bearer_gets_the_discovery_challenge(self, agent_365_guardrail):
-        with pytest.raises(HTTPException) as exc:
-            await self._connect(self._server([self.GATEWAY_SCOPE]), None)
+        challenge = await self._connect(self._server([self.GATEWAY_SCOPE]), None)
 
-        assert exc.value.status_code == 401
-        www_authenticate = (exc.value.headers or {}).get("WWW-Authenticate", "")
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
         assert 'error="invalid_token"' in www_authenticate
         assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/tools"' in www_authenticate
 
     @pytest.mark.asyncio
     async def test_bearer_present_connects(self, agent_365_guardrail):
-        await self._connect(self._server([self.GATEWAY_SCOPE]), {"Authorization": "Bearer entra-user-token"})
+        bearer = {"Authorization": "Bearer entra-user-token"}
+        assert await self._connect(self._server([self.GATEWAY_SCOPE]), bearer) is None
 
     @pytest.mark.asyncio
     async def test_server_without_advertised_scopes_is_not_challenged(self, agent_365_guardrail):
-        await self._connect(self._server(None), None)
+        assert await self._connect(self._server(None), None) is None
 
     @pytest.mark.asyncio
     async def test_no_registered_guardrail_means_no_challenge(self):
-        await self._connect(self._server([self.GATEWAY_SCOPE]), None)
+        assert await self._connect(self._server([self.GATEWAY_SCOPE]), None) is None
 
 
 def _make_obo_server(alias: str) -> MCPServer:
