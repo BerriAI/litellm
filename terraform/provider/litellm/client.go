@@ -125,7 +125,6 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	// Create a new map with only the fields that can be updated
 	updateData := map[string]interface{}{
 		"key":              key.Key,
-		"team_id":          key.TeamID,
 		"key_alias":        key.KeyAlias,
 		"aliases":          key.Aliases,
 		"permissions":      key.Permissions,
@@ -142,6 +141,12 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	}
 	if key.ModelTPMLimit != nil {
 		updateData["model_tpm_limit"] = key.ModelTPMLimit
+	}
+
+	// The proxy rejects an empty team_id with a 500 ("Team object not found"),
+	// so only send it when set.
+	if key.TeamID != "" {
+		updateData["team_id"] = key.TeamID
 	}
 
 	// The proxy rejects an empty-string budget_duration with a 400, so only
