@@ -51,6 +51,11 @@ class A2AProviderConfigManager:
 
             return LangFlowA2AConfig()
 
+        if custom_llm_provider == "tinyfish":
+            from litellm.a2a_protocol.providers.tinyfish.config import TinyfishA2AConfig
+
+            return TinyfishA2AConfig()
+
         if custom_llm_provider == "watsonx_orchestrate":
             from litellm.a2a_protocol.providers.watsonx_orchestrate.config import (
                 WatsonxOrchestrateA2AConfig,

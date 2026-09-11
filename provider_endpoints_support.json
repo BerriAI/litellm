@@ -2492,7 +2492,8 @@
       "display_name": "TinyFish (`tinyfish`)",
       "url": "https://docs.tinyfish.ai/search-api",
       "endpoints": {
-        "search": true
+        "search": true,
+        "a2a": true
       }
     },
     "nimble": {

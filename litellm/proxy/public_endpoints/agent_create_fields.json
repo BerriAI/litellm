@@ -305,6 +305,37 @@
     "litellm_params_template": {
       "custom_llm_provider": "watsonx_orchestrate"
     }
+  },
+  {
+    "agent_type": "tinyfish",
+    "agent_type_display_name": "TinyFish",
+    "description": "Goal-based web automation via the TinyFish Agent API",
+    "logo_url": "/ui/assets/logos/a2a_agent.png",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "TinyFish API Key",
+        "placeholder": null,
+        "tooltip": "API key from agent.tinyfish.ai/api-keys (sent as X-API-Key). Falls back to the TINYFISH_API_KEY environment variable.",
+        "required": false,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "cost_per_step",
+        "label": "Cost per Step (USD)",
+        "placeholder": "0.016",
+        "tooltip": "Spend logged per run = num_of_steps x this rate (TinyFish lists $0.016/step). Leave empty to log $0 or use cost_per_query for a flat per-run rate.",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "tinyfish"
+    }
   }
 ]
 

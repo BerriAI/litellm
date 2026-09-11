@@ -14,6 +14,7 @@ export const detectAgentType = (agent: Agent): string => {
   if (customProvider === "langgraph") return "langgraph";
   if (customProvider === "azure_ai") return "azure_ai_foundry";
   if (customProvider === "bedrock") return "bedrock_agentcore";
+  if (customProvider === "tinyfish") return "tinyfish";
 
   // Check by model prefix
   if (model.startsWith("langflow/")) return "langflow";
