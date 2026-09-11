@@ -66,6 +66,7 @@ from litellm.constants import (
     DEFAULT_EMBEDDING_PARAM_VALUES,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+    DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
@@ -6998,33 +6999,20 @@ class TextCompletionStreamWrapper:
             raise StopAsyncIteration
 
 
-def mock_completion_streaming_obj(model_response, mock_response, model, n: int | None = None):
-    if isinstance(mock_response, litellm.MockException):
-        raise mock_response
-    if isinstance(mock_response, ModelResponseStream):
-        yield mock_response
-        return
-    for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
-        if n is None:
-            model_response.choices[0].delta = completion_obj
-        else:
-            _all_choices = []
-            for j in range(n):
-                _streaming_choice = litellm.utils.StreamingChoices(
-                    index=j,
-                    delta=litellm.utils.Delta(role="assistant", content=mock_response[i : i + 3]),
-                )
-                _all_choices.append(_streaming_choice)
-            model_response.choices = _all_choices
-        yield model_response
+def mock_stream_usage_chunk(model: str, prompt_tokens: int) -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[],  # mutable-ok: ModelResponseStream only treats a list as explicit choices, a tuple gets a default choice
+        model=model,
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+            total_tokens=prompt_tokens + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
+        ),
+    )
 
 
-async def async_mock_completion_streaming_obj(
-    model_response,
-    mock_response: str | MockException | ModelResponseStream,
-    model,
-    n: int | None = None,
+def mock_completion_streaming_obj(
+    model_response, mock_response, model, n: int | None = None, prompt_tokens: int | None = None
 ):
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
@@ -7045,6 +7033,38 @@ async def async_mock_completion_streaming_obj(
                 _all_choices.append(_streaming_choice)
             model_response.choices = _all_choices
         yield model_response
+    if prompt_tokens is not None:
+        yield mock_stream_usage_chunk(model=model, prompt_tokens=prompt_tokens)
+
+
+async def async_mock_completion_streaming_obj(
+    model_response,
+    mock_response: str | MockException | ModelResponseStream,
+    model,
+    n: int | None = None,
+    prompt_tokens: int | None = None,
+):
+    if isinstance(mock_response, litellm.MockException):
+        raise mock_response
+    if isinstance(mock_response, ModelResponseStream):
+        yield mock_response
+        return
+    for i in range(0, len(mock_response), 3):
+        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
+        if n is None:
+            model_response.choices[0].delta = completion_obj
+        else:
+            _all_choices = []
+            for j in range(n):
+                _streaming_choice = litellm.utils.StreamingChoices(
+                    index=j,
+                    delta=litellm.utils.Delta(role="assistant", content=mock_response[i : i + 3]),
+                )
+                _all_choices.append(_streaming_choice)
+            model_response.choices = _all_choices
+        yield model_response
+    if prompt_tokens is not None:
+        yield mock_stream_usage_chunk(model=model, prompt_tokens=prompt_tokens)
 
 
 ########## Reading Config File ############################
