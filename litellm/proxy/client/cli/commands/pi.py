@@ -194,7 +194,7 @@ def provider_block(
     return {  # mutable-ok: JSON serialization requires a mutable object
         "baseUrl": base_url.rstrip("/") + "/v1",
         "api": "openai-completions",
-        "compat": {"supportsStore": False, "supportsLongCacheRetention": False},
+        "compat": {"supportsStore": False, "supportsLongCacheRetention": False},  # mutable-ok: JSON field
         "apiKey": f"${LITELLM_PROXY_API_KEY_ENV}",
         "models": [_model_entry(model_id, limits) for model_id in model_ids],  # mutable-ok: JSON array
     }
