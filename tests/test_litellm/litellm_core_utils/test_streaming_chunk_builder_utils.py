@@ -1603,3 +1603,78 @@ def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_ad
     )
 
     assert usage.prompt_tokens == 77
+
+
+def test_streaming_usage_merger_updates_cache_creation_to_zero_on_later_update() -> None:
+    """Regression test for issue #40736:
+    When an earlier usage chunk reports positive cache_creation_input_tokens and a later chunk
+    explicitly reports cache_creation_input_tokens=0 alongside positive cache_read_input_tokens
+    or prompt_tokens, the explicit zero update must replace the earlier positive cache-write
+    count so downstream derived uncached tokens does not become negative.
+    """
+    c1 = ModelResponseStream(
+        model="claude-3-opus",
+        usage=Usage(
+            prompt_tokens=58354,
+            completion_tokens=1,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=58352,
+        ),
+    )
+    c2 = ModelResponseStream(
+        model="claude-3-opus",
+        usage=Usage(
+            prompt_tokens=58354,
+            completion_tokens=408,
+            cache_read_input_tokens=58352,
+            cache_creation_input_tokens=0,
+        ),
+    )
+
+    chunks = [c1, c2]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="claude-3-opus",
+        completion_output="done",
+    )
+
+    assert usage.prompt_tokens == 58354
+    assert usage.completion_tokens == 408
+    assert usage.cache_creation_input_tokens == 0
+    assert usage.cache_read_input_tokens == 58352
+    uncached_input = (
+        usage.prompt_tokens
+        - (usage.cache_read_input_tokens or 0)
+        - (usage.cache_creation_input_tokens or 0)
+    )
+    assert uncached_input == 2
+
+
+def test_streaming_usage_merger_preserves_cache_counts_when_subsequent_chunk_omits_them() -> None:
+    """Ensure that if a subsequent usage chunk omits cache token fields entirely,
+    the earlier accumulated cache counts are preserved.
+    """
+    c1 = ModelResponseStream(
+        model="claude-3-opus",
+        usage=Usage(
+            prompt_tokens=58354,
+            completion_tokens=1,
+            cache_creation_input_tokens=58352,
+        ),
+    )
+    c2 = ModelResponseStream(
+        model="claude-3-opus",
+        usage=Usage(
+            prompt_tokens=58354,
+            completion_tokens=408,
+        ),
+    )
+
+    chunks = [c1, c2]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="claude-3-opus",
+        completion_output="done",
+    )
+
+    assert usage.cache_creation_input_tokens == 58352
