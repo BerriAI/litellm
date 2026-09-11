@@ -7109,6 +7109,8 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
     fake_tool = MagicMock()
     fake_tool.name = "list_pets"
+    fake_tool.description = "test tool"
+    fake_tool.input_schema = {"type": "object"}
 
     start_time = datetime.now(timezone.utc)
     litellm_logging_obj, _ = function_setup(
@@ -7175,7 +7177,7 @@ async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_ca
     )
     schema = {"type": "object", "properties": {"limit": {"type": "integer"}}}
     mcp_module.global_mcp_tool_registry.register_tool(
-        name="petstore-list_pets", description="List the pets", input_schema=schema, handler=lambda: None
+        name="petstore-list_pets", description="List the pets", input_schema=schema, handler=lambda limit: "ok"
     )
     manager = mcp_module.global_mcp_server_manager
     manager._listed_tools_by_server_id.pop(petstore.server_id, None)
@@ -7185,14 +7187,6 @@ async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_ca
         with (
             patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
             patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
-            patch(
-                "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
-                new=AsyncMock(return_value=[]),
-            ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
-                return_value=True,
-            ),
         ):
             await mcp_module.execute_mcp_tool(
                 name="petstore-list_pets",
@@ -7210,6 +7204,54 @@ async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_ca
         "List the pets",
         schema,
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_hands_hooks_the_metadata_of_the_operation_it_runs_when_names_collide():
+    """An OpenAPI operation whose name starts with its own server prefix must not be reported to the
+    pre-call hooks with the metadata of the shorter operation, since that is not the one that runs."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    petstore = MCPServer(
+        server_id="petstore-id",
+        name="petstore",
+        server_name="petstore",
+        transport=MCPTransport.http,
+        url=None,
+        spec_path="https://example.com/petstore.yaml",
+    )
+    registry = mcp_module.global_mcp_tool_registry
+    registry.register_tool(name="petstore-get_pet", description="short", input_schema={}, handler=lambda: "short")
+    registry.register_tool(
+        name="petstore-petstore-get_pet",
+        description="long",
+        input_schema={"type": "object", "properties": {"petId": {"type": "integer"}}},
+        handler=lambda: "long",
+    )
+    manager = mcp_module.global_mcp_server_manager
+    pre_call_tool_check = AsyncMock(return_value={})
+
+    try:
+        with (
+            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
+        ):
+            result = await mcp_module.execute_mcp_tool(
+                name="petstore-petstore-get_pet",
+                arguments={},
+                allowed_mcp_servers=[petstore],
+                start_time=datetime.now(),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"),
+            )
+    finally:
+        registry.unregister_tools_with_prefix("petstore-")
+
+    handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
+    assert (handed_tool.description, handed_tool.inputSchema) == (
+        "long",
+        {"type": "object", "properties": {"petId": {"type": "integer"}}},
+    )
+    assert result.content[0].text == "long"
 
 
 @pytest.mark.asyncio

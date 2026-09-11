@@ -6504,37 +6504,6 @@ class TestMCPServerManager:
         assert by_prefixed_name is not None and by_prefixed_name.description == "v2"
         assert manager.get_listed_tool(server, "missing") is None
 
-    def test_get_listed_tool_reads_openapi_registry_without_a_prior_listing(self):
-        """OpenAPI tools live in the local registry from registration on, so their metadata must resolve
-        before any tools/list has run and must disappear with the registration."""
-        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
-
-        server = MCPServer(
-            server_id="petstore-id",
-            name="petstore",
-            server_name="petstore",
-            transport=MCPTransport.http,
-            url=None,
-            spec_path="https://example.com/petstore.yaml",
-        )
-        schema = {"type": "object", "properties": {"petId": {"type": "integer"}}}
-        manager = MCPServerManager()
-        global_mcp_tool_registry.register_tool(
-            name="petstore-get_pet", description="Fetch a pet", input_schema=schema, handler=lambda: None
-        )
-        try:
-            for spelling in ("get_pet", "petstore-get_pet"):
-                tool = manager.get_listed_tool(server, spelling)
-                assert tool is not None and (tool.name, tool.description, tool.inputSchema) == (
-                    "get_pet",
-                    "Fetch a pet",
-                    schema,
-                )
-        finally:
-            global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
-
-        assert manager.get_listed_tool(server, "petstore-get_pet") is None
-
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
         """

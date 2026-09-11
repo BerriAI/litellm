@@ -127,7 +127,6 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
-from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     MCPMissingUserEnvVarsError,
@@ -5140,14 +5139,6 @@ class MCPServerManager:
         return prefixed_tools
 
     def get_listed_tool(self, server: MCPServer, name: str) -> MCPTool | None:
-        if server.spec_path:
-            bare_name: Final = strip_known_server_prefix(name, server)
-            registered: Final = global_mcp_tool_registry.get_tool(
-                f"{get_server_prefix(server)}{MCP_TOOL_PREFIX_SEPARATOR}{bare_name}"
-            ) or global_mcp_tool_registry.get_tool(bare_name)
-            if registered is None:
-                return None
-            return MCPTool(name=bare_name, description=registered.description, inputSchema=registered.input_schema)
         listed: Final = self._listed_tools_by_server_id.get(server.server_id)
         if not listed:
             return None
