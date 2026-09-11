@@ -3119,6 +3119,7 @@ if MCP_AVAILABLE:
                 server=mcp_server,
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
+                tool=global_mcp_server_manager.get_listed_tool(mcp_server, original_tool_name),
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -3225,6 +3226,7 @@ if MCP_AVAILABLE:
                     server=prefix_server,
                     raw_headers=raw_headers,
                     litellm_logging_obj=litellm_logging_obj,
+                    tool=global_mcp_server_manager.get_listed_tool(prefix_server, original_tool_name),
                 )
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
