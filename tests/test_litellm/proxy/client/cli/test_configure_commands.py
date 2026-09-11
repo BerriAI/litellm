@@ -86,6 +86,7 @@ class TestConfigureClaudeWithAVirtualKey:
         assert "ANTHROPIC_DEFAULT_SONNET_MODEL" not in written["env"]
         assert state_path.exists()
         assert VALID_KEY not in result.output
+        assert written["env"]["ANTHROPIC_MODEL"] == "claude-auto"
         assert "Starting model: claude-auto" in result.output
         assert "1 of the proxy's 2 models" in result.output
         assert "lite unconfigure claude" in result.output
@@ -99,7 +100,7 @@ class TestConfigureClaudeWithAVirtualKey:
         assert result.exit_code == 0, result.output
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == VALID_KEY
-        assert "model" not in written
+        assert "model" not in written and "ANTHROPIC_MODEL" not in written["env"]
         assert "Starting model: not pinned" in result.output
 
     @responses.activate
@@ -159,18 +160,11 @@ class TestConfigureClaudeWithAVirtualKey:
         assert not settings_path.exists()
 
     @responses.activate
-    @pytest.mark.parametrize("entry", ["virtual-key", "login", "interactive"])
-    def test_refuses_while_lite_up_holds_a_backup_before_any_login_or_request(
-        self, runner, paths, monkeypatch, lite_up_backup, entry
-    ):
+    @pytest.mark.parametrize("entry", ["virtual-key", "no-key", "interactive"])
+    def test_refuses_while_lite_up_holds_a_backup_before_any_request(self, runner, paths, lite_up_backup, entry):
         _mock_models()
-
-        def login_must_not_run(ctx):
-            raise AssertionError("the local precondition must be checked before a login is attempted")
-
-        monkeypatch.setattr(configure_module, "ensure_fresh_login", login_must_not_run)
         if entry == "interactive":
-            ctx = click.Context(configure_group, obj={"base_url": PROXY, "api_key": None})
+            ctx = click.Context(configure_group, obj={"base_url": PROXY, "api_key": VALID_KEY})
             with pytest.raises(click.ClickException, match="lite down"):
                 interactive_configure(ctx, pick_targets=lambda: ("claude",), pick_model=lambda listed: None)
         else:
@@ -195,33 +189,27 @@ class TestConfigureClaudeWithAVirtualKey:
         assert json.loads(target.read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == VALID_KEY
 
 
-class TestConfigureClaudeWithTheLogin:
-    def _stored_login(self, monkeypatch):
-        monkeypatch.setattr(configure_module, "ensure_fresh_login", lambda ctx: None)
-        monkeypatch.setattr(configure_module, "get_stored_api_key", lambda expected_base_url, vault: VALID_KEY)
-
+class TestConfigureClaudeWithoutAKey:
     @responses.activate
-    def test_uses_the_login_through_the_helper_and_writes_no_secret(self, runner, paths, monkeypatch, lite_on_path):
+    def test_refuses_and_names_the_ways_to_pass_a_key_without_writing_or_logging_in(self, runner, paths):
+        # A `lite login` credential expires within a day; the old fallback wrote an apiKeyHelper that made
+        # Claude Code spawn `lite` (and its keychain probe) on every credential refresh.
         _mock_models()
-        self._stored_login(monkeypatch)
-        settings_path, _ = paths
+        settings_path, state_path = paths
         result = runner.invoke(
             configure_claude,
             ["--model", "claude-auto"],
-            obj={"base_url": PROXY, "api_key": VALID_KEY, "api_key_from_token_file": True},
+            obj={"base_url": PROXY, "api_key": "sk-login-jwt", "api_key_from_token_file": True},
         )
-        assert result.exit_code == 0, result.output
-        written = json.loads(settings_path.read_text())
-        assert written["apiKeyHelper"] == f"{lite_on_path} --base-url {PROXY} auth print-token"
-        assert "ANTHROPIC_AUTH_TOKEN" not in written["env"]
-        assert written["model"] == "claude-auto"
-        assert VALID_KEY not in settings_path.read_text()
-        assert "read through apiKeyHelper" in result.output
+        assert result.exit_code != 0
+        assert "--api-key" in result.output and "LITELLM_PROXY_API_KEY" in result.output
+        assert "apiKeyHelper" not in result.output
+        assert not settings_path.exists() and not state_path.exists()
+        assert len(responses.calls) == 0
 
     @responses.activate
-    def test_an_explicit_key_still_wins_over_a_stored_login(self, runner, paths, monkeypatch, lite_on_path):
+    def test_an_explicit_key_still_wins_over_a_stored_login(self, runner, paths):
         _mock_models()
-        self._stored_login(monkeypatch)
         settings_path, _ = paths
         result = runner.invoke(
             configure_claude,
@@ -302,11 +290,13 @@ class TestUnconfigureClaude:
         edited = json.loads(settings_path.read_text())
         edited["env"] = {key: f"{value}-edited" for key, value in edited["env"].items()}
         edited["model"] = "mine"
+        edited["statusLine"] = {"type": "command", "command": "~/.claude/my-statusline.sh"}
         settings_path.write_text(json.dumps(edited))
         result = runner.invoke(cli, ["unconfigure", "claude"])
         assert result.exit_code == 0, result.output
         assert "Nothing in" in result.output and "was still ours to restore" in result.output
         assert "Left as you changed them since:" in result.output and "model" in result.output
+        assert "statusLine" in result.output
 
     @responses.activate
     def test_names_the_server_a_withheld_credential_was_captured_with_and_keeps_the_receipt(self, runner, paths):

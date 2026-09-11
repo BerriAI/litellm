@@ -11,7 +11,7 @@ from click.testing import CliRunner
 
 from litellm.proxy.client.cli.commands import up as up_module
 from litellm.proxy.client.cli.commands.agents import AgentRunError
-from litellm.proxy.client.cli.commands.claude_settings import ApiKeyHelper, ClaudeSettingsError
+from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError, StaticToken
 from litellm.proxy.client.cli.commands.up import (
     BackupRecord,
     UpError,
@@ -20,7 +20,6 @@ from litellm.proxy.client.cli.commands.up import (
     load_json_or_empty,
     merge_claude_settings,
     read_backup,
-    resolve_api_key_helper,
     restore_claude_settings,
     up,
     write_backup,
@@ -40,52 +39,54 @@ def _patch_paths(monkeypatch, tmp_path):
 
 class TestMergeClaudeSettings:
     def test_preserves_unrelated_top_level_keys(self):
-        merged = merge_claude_settings({"theme": "dark"}, "http://localhost:4000", ApiKeyHelper("helper"))
+        merged = merge_claude_settings({"theme": "dark"}, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
         assert merged["theme"] == "dark"
 
     def test_preserves_unrelated_env_keys(self):
         settings = {"env": {"SOME_OTHER_VAR": "value"}}
-        merged = merge_claude_settings(settings, "http://localhost:4000", ApiKeyHelper("helper"))
+        merged = merge_claude_settings(settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
         assert merged["env"]["SOME_OTHER_VAR"] == "value"
 
-    def test_overrides_base_url_and_helper(self):
+    def test_overrides_base_url_and_strips_an_old_helper(self):
         settings = {
             "env": {"ANTHROPIC_BASE_URL": "https://old.example.com"},
             "apiKeyHelper": "old-helper",
         }
-        merged = merge_claude_settings(settings, "http://localhost:4000/", ApiKeyHelper("new-helper"))
+        merged = merge_claude_settings(settings, "http://localhost:4000/", StaticToken("sk-fresh"), status_line="statusline-cmd")
         assert merged["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
+        assert merged["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-fresh"
         assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert merged["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
-        assert merged["apiKeyHelper"] == "new-helper"
+        assert "apiKeyHelper" not in merged
 
     def test_preserves_existing_gateway_model_discovery(self):
         settings = {"env": {"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "0"}}
-        merged = merge_claude_settings(settings, "http://localhost:4000", ApiKeyHelper("helper"))
+        merged = merge_claude_settings(settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
         assert merged["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "0"
 
     def test_preserves_existing_tool_search(self):
         settings = {"env": {"ENABLE_TOOL_SEARCH": "false"}}
-        merged = merge_claude_settings(settings, "http://localhost:4000", ApiKeyHelper("helper"))
+        merged = merge_claude_settings(settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
         assert merged["env"]["ENABLE_TOOL_SEARCH"] == "false"
 
     def test_drops_stray_api_key(self):
         settings = {"env": {"ANTHROPIC_API_KEY": "leaked-key"}}
-        merged = merge_claude_settings(settings, "http://localhost:4000", ApiKeyHelper("helper"))
+        merged = merge_claude_settings(settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
         assert "ANTHROPIC_API_KEY" not in merged["env"]
 
     def test_works_from_empty_settings(self):
-        merged = merge_claude_settings({}, "http://localhost:4000", ApiKeyHelper("helper"))
+        merged = merge_claude_settings({}, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
         assert merged["env"] == {
             "ANTHROPIC_BASE_URL": "http://localhost:4000",
+            "ANTHROPIC_AUTH_TOKEN": "sk-fresh",
             "ENABLE_TOOL_SEARCH": "true",
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         }
-        assert merged["apiKeyHelper"] == "helper"
+        assert "apiKeyHelper" not in merged
 
     def test_does_not_mutate_input(self):
         settings = {"env": {"FOO": "bar"}}
-        merge_claude_settings(settings, "http://localhost:4000", ApiKeyHelper("helper"))
+        merge_claude_settings(settings, "http://localhost:4000", StaticToken("sk-fresh"), status_line="statusline-cmd")
         assert settings == {"env": {"FOO": "bar"}}
 
 
@@ -154,6 +155,25 @@ class TestBackupRoundTrip:
         assert restore_claude_settings() is None
         assert not settings_path.exists()
 
+    def test_restore_writes_owner_only_and_through_a_symlink(self, monkeypatch, tmp_path):
+        # The backup can hold a token the user had in the file before `up`; a plain open() would put it
+        # back under the umask, and would replace a dotfiles symlink with a regular file.
+        target = tmp_path / "dotfiles" / "settings.json"
+        target.parent.mkdir()
+        target.write_text("{}")
+        target.chmod(0o644)
+        settings_path = tmp_path / "settings.json"
+        settings_path.symlink_to(target)
+        monkeypatch.setattr(up_module, "CLAUDE_SETTINGS_PATH", settings_path)
+        monkeypatch.setattr(up_module, "BACKUP_PATH", tmp_path / "backup.json")
+        write_backup(BackupRecord(existed=True, content={"env": {"ANTHROPIC_AUTH_TOKEN": "sk-theirs"}}))
+
+        restore_claude_settings()
+
+        assert settings_path.is_symlink()
+        assert json.loads(target.read_text()) == {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-theirs"}}
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
     def test_recreates_claude_dir_if_it_was_deleted_while_up_was_running(self, monkeypatch, tmp_path):
         """If ~/.claude/ is removed while `lite up` holds it open, restoring must recreate the
         directory rather than crash with FileNotFoundError and strand the backup file, which
@@ -216,49 +236,6 @@ class TestBackupRoundTrip:
         assert not backup_path.exists()
 
 
-class TestResolveApiKeyHelper:
-    def test_returns_helper_command_bound_to_the_selected_proxy(self, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/lite")
-        helper = resolve_api_key_helper("http://localhost:4000")
-        assert helper == "/usr/local/bin/lite --base-url http://localhost:4000 auth print-token"
-
-    def test_quotes_a_base_url_containing_shell_metacharacters(self, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/lite")
-        helper = resolve_api_key_helper("http://example.com/path; rm -rf /")
-        assert helper == "/usr/local/bin/lite --base-url 'http://example.com/path; rm -rf /' auth print-token"
-
-    def test_raises_when_lite_not_on_path(self, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda name: None)
-        with pytest.raises(ClaudeSettingsError, match="Could not find `lite`"):
-            resolve_api_key_helper("http://localhost:4000")
-
-    def test_windows_quotes_for_cmd_exe_instead_of_posix_sh(self, monkeypatch):
-        """cmd.exe takes a single quote literally, so a POSIX-quoted backslashed path is unrunnable."""
-        lite_exe = "C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\lite.EXE"
-        monkeypatch.setattr(shutil, "which", lambda name: lite_exe)
-
-        helper = resolve_api_key_helper("https://gateway.example.com", platform="win32")
-
-        assert helper == f'"{lite_exe}" "--base-url" "https://gateway.example.com" "auth" "print-token"'
-
-    def test_windows_keeps_a_spaced_path_and_a_metacharacter_url_as_single_tokens(self, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda name: "C:\\Program Files\\LiteLLM\\lite.EXE")
-
-        helper = resolve_api_key_helper("https://gateway.example.com/?a=1&b=2", platform="win32")
-
-        assert helper == (
-            '"C:\\Program Files\\LiteLLM\\lite.EXE" "--base-url" "https://gateway.example.com/?a=1&b=2" '
-            '"auth" "print-token"'
-        )
-
-    def test_non_windows_platforms_keep_posix_quoting(self, monkeypatch):
-        monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/lite")
-
-        helper = resolve_api_key_helper("http://example.com/path; rm -rf /", platform="darwin")
-
-        assert helper == "/usr/local/bin/lite --base-url 'http://example.com/path; rm -rf /' auth print-token"
-
-
 def _make_ctx(base_url):
     return click.Context(click.Command("test"), obj={"base_url": base_url})
 
@@ -307,7 +284,8 @@ def _capture_login(monkeypatch, on_login=lambda: None):
     login_calls = []
 
     @click.pass_context
-    def fake_login(ctx, pkce=False):
+    def fake_login(ctx, config_claude=False, pkce=False):
+        assert config_claude is False, "`lite up` patches settings itself; the login it starts must not also configure"
         login_calls.append((ctx.obj["base_url"], pkce))
         on_login()
 
@@ -317,8 +295,8 @@ def _capture_login(monkeypatch, on_login=lambda: None):
 
 class TestEnsureFreshLogin:
     """A token that is fresh but was issued for a *different* proxy must not be trusted: without
-    this check, a user logged into proxy A who runs `up --base-url proxy-b` would silently get an
-    apiKeyHelper wired up around proxy A's real token, which print-token would then hand to proxy B."""
+    this check, a user logged into proxy A who runs `up --base-url proxy-b` would silently get proxy A's
+    real token written into settings pointed at proxy B."""
 
     def test_reuses_a_fresh_token_issued_for_the_same_proxy(self, monkeypatch):
         _FakeTokenStore(
@@ -500,11 +478,13 @@ class TestUpCommand:
         settings_path, backup_path = _patch_paths(monkeypatch, tmp_path)
         original = {"theme": "dark"}
         settings_path.write_text(json.dumps(original))
+        settings_path.chmod(0o644)
 
         captured = {}
 
         def fake_wait(self, timeout=None):
             captured["settings"] = json.loads(settings_path.read_text())
+            captured["settings_mode"] = stat.S_IMODE(settings_path.stat().st_mode)
             captured["backup_existed"] = backup_path.exists()
             return True
 
@@ -514,10 +494,6 @@ class TestUpCommand:
             patch(f"{UP_MODULE}.is_cli_token_fresh", return_value=True),
             patch(f"{UP_MODULE}.resolve_api_key", return_value="sk-fresh"),
             patch(f"{UP_MODULE}.verify_proxy_key"),
-            patch(
-                f"{UP_MODULE}.resolve_api_key_helper",
-                return_value="/usr/local/bin/lite auth print-token",
-            ),
             patch(f"{UP_MODULE}.signal.signal"),
             patch(f"{UP_MODULE}.atexit.register"),
             patch("threading.Event.wait", new=fake_wait),
@@ -529,7 +505,11 @@ class TestUpCommand:
         assert captured["settings"]["theme"] == "dark"
         assert captured["settings"]["env"]["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert captured["settings"]["env"]["ENABLE_TOOL_SEARCH"] == "true"
-        assert captured["settings"]["apiKeyHelper"] == "/usr/local/bin/lite auth print-token"
+        assert captured["settings"]["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-fresh"
+        # The file now carries the key, so the umask (and the file's earlier 0644) must not decide who reads it.
+        assert captured["settings_mode"] == 0o600
+        assert "apiKeyHelper" not in captured["settings"]
+        assert captured["settings"]["statusLine"]["command"].endswith("statusline.py")
         assert json.loads(settings_path.read_text()) == original
         assert not backup_path.exists()
 
@@ -598,7 +578,7 @@ class TestUpCanInvokeTheRealLoginCommand:
         @click.pass_context
         def driver(ctx):
             ctx.obj = {"base_url": "http://127.0.0.1:9"}
-            ctx.invoke(real_login, pkce=False)
+            ctx.invoke(real_login, config_claude=False, pkce=False)
 
         with patch(
             f"{AUTH_MODULE}._start_cli_sso_flow",
@@ -618,7 +598,7 @@ class TestUpCanInvokeTheRealLoginCommand:
         @click.pass_context
         def driver(ctx):
             ctx.obj = {"base_url": "http://127.0.0.1:9"}
-            ctx.invoke(real_login, pkce=False)
+            ctx.invoke(real_login, config_claude=False, pkce=False)
 
         with patch(f"{AUTH_MODULE}._start_cli_sso_flow", side_effect=RuntimeError("stop")):
             CliRunner().invoke(driver, [], standalone_mode=False, env={"CLAUDE_CONFIG_DIR": str(tmp_path)})
