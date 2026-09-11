@@ -1,5 +1,4 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
-#[cfg(test)]
 use data_url::mime::Mime;
 use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
 use reqwest::Url;
@@ -21,7 +20,6 @@ impl<'a> InlineDocument<'a> {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn mime_type(&self) -> &Mime {
         self.0.mime_type()
     }
