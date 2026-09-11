@@ -205,21 +205,35 @@ def _extract_anthropic_tool_exchange_spans(
     return spans, None
 
 
+def _message_has_cache_control(message: Mapping[str, object]) -> bool:
+    if message.get("cache_control") is not None:
+        return True
+    content: Final = message.get("content")
+    if isinstance(content, list):
+        return any(isinstance(part, Mapping) and part.get("cache_control") is not None for part in content)
+    return False
+
+
 def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
     """
     Return indices of messages that must never be compressed:
     - All system messages
     - The last user message
     - The last assistant message
+    - Any message carrying an Anthropic cache_control breakpoint
 
     The last user message is what the model is being asked to act on right now,
     so compressing it replaces the live instruction with a marker. Compression
-    guardrails share this policy; see the Headroom guardrail.
+    guardrails share this policy; see the Headroom guardrail. A cache_control
+    breakpoint pins the provider's prompt-cache prefix to that row's exact
+    bytes, so rewriting a marked row anywhere in history turns the next
+    request's cache read into a cache write.
     """
     system_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
     last_user: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
-    last_assistant = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")[-1:]
-    return system_indices + last_user + last_assistant
+    assistant_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")
+    cache_control_indices: Final = tuple(index for index, msg in enumerate(messages) if _message_has_cache_control(msg))
+    return tuple(dict.fromkeys(system_indices + last_user + assistant_indices[-1:] + cache_control_indices))
 
 
 def _combine_scores(
