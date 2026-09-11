@@ -30,23 +30,21 @@ class PolicyAttachmentMatch(TypedDict):
     matched_via: str
 
 
-def _attachment_specificity(attachment: PolicyAttachment) -> int:
+def _attachment_specificity(attachment: PolicyAttachment) -> tuple[int, int]:
     if attachment.is_global():
-        return 0
+        return (0, 0)
 
-    return max(
-        (
-            specificity
-            for values, specificity in (
-                (attachment.teams, 1),
-                (attachment.keys, 2),
-                (attachment.tags, 3),
-                (attachment.models, 4),
-            )
-            if values
-        ),
-        default=0,
+    dims: Final = tuple(
+        specificity
+        for values, specificity in (
+            (attachment.teams, 1),
+            (attachment.keys, 2),
+            (attachment.tags, 3),
+            (attachment.models, 4),
+        )
+        if values
     )
+    return (max(dims, default=0), len(dims))
 
 
 class AttachmentRegistry:
