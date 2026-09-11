@@ -270,7 +270,7 @@ func resourceLiteLLMMCPServerDelete(d *schema.ResourceData, m interface{}) error
 	defer resp.Body.Close()
 
 	// For delete operations, we expect a simple string response
-	if resp.StatusCode != 200 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("failed to delete MCP server: unexpected status code %d", resp.StatusCode)
 	}
 
