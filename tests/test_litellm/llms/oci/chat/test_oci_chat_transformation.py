@@ -1178,15 +1178,19 @@ class TestOCIReasoningEffort:
         return body["chatRequest"]
 
     def test_reasoning_effort_lowercase_uppercased(self):
+        # gpt-5 accepts reasoningEffort; every OCI-hosted Grok model rejects it
+        # (see TestReasoningEffortGating in test_oci_tool_and_reasoning_gating.py).
         chat_request = self._build_chat_request(
-            "xai.grok-4-fast-reasoning",
+            "openai.gpt-5",
             {"reasoning_effort": "low"},
         )
         assert chat_request.get("reasoningEffort") == "LOW"
 
     def test_reasoning_effort_disable_mapped_to_none(self):
+        # gpt-5 accepts reasoningEffort; every OCI-hosted Grok model rejects it
+        # (see TestReasoningEffortGating in test_oci_tool_and_reasoning_gating.py).
         chat_request = self._build_chat_request(
-            "xai.grok-4-fast-reasoning",
+            "openai.gpt-5",
             {"reasoning_effort": "disable"},
         )
         assert chat_request.get("reasoningEffort") == "NONE"
