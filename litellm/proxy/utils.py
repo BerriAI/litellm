@@ -877,9 +877,10 @@ _EMPTY_LIFT: Final = MappingProxyType({})
 def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
-    onto request_data first: the first-handoff instant for preprocessing
-    latency, recovered or estimated usage for token counts, and the standard
-    logging object for deployment attribution on failed-request spend logs."""
+    onto request_data first: the request start and first-handoff instants for
+    duration and preprocessing latency, the call type, recovered or estimated
+    usage for token counts, and the standard logging object for deployment
+    attribution on failed-request spend logs."""
     _logging_obj: Final = request_data.get("litellm_logging_obj")
     if _logging_obj is None:
         return _EMPTY_LIFT
@@ -891,7 +892,9 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
         dispatched=_first_handoff is not None,
     )
     _entries: Final = (
+        ("start_time", _model_call_details.get("start_time")),
         ("first_api_call_start_time", _first_handoff),
+        ("call_type", _model_call_details.get("call_type")),
         ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
