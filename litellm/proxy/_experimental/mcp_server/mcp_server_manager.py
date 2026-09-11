@@ -1681,6 +1681,7 @@ def _record_mcp_guardrail_evaluations(
 
 _DiscoveryItem = TypeVar("_DiscoveryItem", bound=BaseModel)
 _DiscoveryKey: TypeAlias = tuple[str, str | None]
+_DISCOVERY_CACHE_LIMIT: Final = 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -1695,6 +1696,7 @@ class _DiscoveryCache(Generic[_DiscoveryItem]):
         self._clock = clock
         self._entries: Mapping[_DiscoveryKey, _DiscoveryEntry[_DiscoveryItem]] = MappingProxyType({})
         self._pending: Mapping[_DiscoveryKey, asyncio.Task[list[_DiscoveryItem]]] = MappingProxyType({})
+        self._waiters: Mapping[asyncio.Task[list[_DiscoveryItem]], int] = MappingProxyType({})
 
     def invalidate(self, server_id: str) -> None:
         self._entries = MappingProxyType({key: entry for key, entry in self._entries.items() if key[0] != server_id})
@@ -1715,11 +1717,34 @@ class _DiscoveryCache(Generic[_DiscoveryItem]):
             return tuple(item.model_copy(deep=True) for item in entry.items)
         pending: Final = self._pending.get(key)
         if pending is not None:
-            return tuple(item.model_copy(deep=True) for item in await asyncio.shield(pending))
+            return await self._await_fetch(key, pending)
+        if len(self._pending) >= _DISCOVERY_CACHE_LIMIT:
+            return tuple(await fetch())
         task: Final = asyncio.create_task(self._fetch(key, fetch))
         self._pending = MappingProxyType({**self._pending, key: task})
         task.add_done_callback(self._observe_completion)
-        return tuple(item.model_copy(deep=True) for item in await asyncio.shield(task))
+        return await self._await_fetch(key, task)
+
+    async def _await_fetch(
+        self, key: _DiscoveryKey, task: asyncio.Task[list[_DiscoveryItem]]
+    ) -> tuple[_DiscoveryItem, ...]:
+        self._waiters = MappingProxyType({**self._waiters, task: self._waiters.get(task, 0) + 1})
+        try:
+            return tuple(item.model_copy(deep=True) for item in await asyncio.shield(task))
+        finally:
+            remaining: Final = self._waiters[task] - 1
+            if remaining:
+                self._waiters = MappingProxyType({**self._waiters, task: remaining})
+            else:
+                self._waiters = MappingProxyType(
+                    {pending: count for pending, count in self._waiters.items() if pending is not task}
+                )
+                if self._pending.get(key) is task:
+                    self._pending = MappingProxyType(
+                        {entry_key: pending for entry_key, pending in self._pending.items() if entry_key != key}
+                    )
+                if not task.done():
+                    task.cancel()
 
     async def _fetch(
         self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[list[_DiscoveryItem]]]
@@ -1735,7 +1760,7 @@ class _DiscoveryCache(Generic[_DiscoveryItem]):
                     {
                         entry_key: entry
                         for entry_key, entry in (
-                            *live_entries[-1023:],
+                            *live_entries[-(_DISCOVERY_CACHE_LIMIT - 1) :],
                             (
                                 key,
                                 _DiscoveryEntry(now + self._ttl, tuple(item.model_copy(deep=True) for item in items)),
@@ -4484,6 +4509,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None,
         stdio_env: dict[str, str] | None,
         subject_token: str | None,
+        credential_fingerprint: str | None = None,
     ) -> _DiscoveryKey:
         per_user: Final = (
             server.requires_per_user_auth
@@ -4499,7 +4525,9 @@ class MCPServerManager:
             else None
         )
         material: Final = json.dumps(
-            (identity, mcp_auth_header, extra_headers, stdio_env, subject_token), sort_keys=True, separators=(",", ":")
+            (identity, mcp_auth_header, extra_headers, stdio_env, subject_token, credential_fingerprint),
+            sort_keys=True,
+            separators=(",", ":"),
         )
         return server.server_id, hashlib.sha256(material.encode()).hexdigest()
 
@@ -4524,18 +4552,20 @@ class MCPServerManager:
             )
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
+            client: Final = await self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=headers,
+                stdio_env=stdio_env,
+                subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
+            )
+            credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token
+                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
             )
 
             async def fetch() -> list[Prompt]:
-                client: Final = await self._create_mcp_client(
-                    server=server,
-                    mcp_auth_header=mcp_auth_header,
-                    extra_headers=headers,
-                    stdio_env=stdio_env,
-                    subject_token=subject_token,
-                )
                 return await client.list_prompts(raise_on_error=True)
 
             items: Final = await self._prompt_discovery_cache.get(key, fetch)
@@ -4565,18 +4595,20 @@ class MCPServerManager:
             )
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
+            client: Final = await self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=headers,
+                stdio_env=stdio_env,
+                subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
+            )
+            credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token
+                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
             )
 
             async def fetch() -> list[Resource]:
-                client: Final = await self._create_mcp_client(
-                    server=server,
-                    mcp_auth_header=mcp_auth_header,
-                    extra_headers=headers,
-                    stdio_env=stdio_env,
-                    subject_token=subject_token,
-                )
                 return await client.list_resources(raise_on_error=True)
 
             items: Final = await self._resource_discovery_cache.get(key, fetch)
@@ -4606,18 +4638,20 @@ class MCPServerManager:
             )
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
+            client: Final = await self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=headers,
+                stdio_env=stdio_env,
+                subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
+            )
+            credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token
+                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
             )
 
             async def fetch() -> list[ResourceTemplate]:
-                client: Final = await self._create_mcp_client(
-                    server=server,
-                    mcp_auth_header=mcp_auth_header,
-                    extra_headers=headers,
-                    stdio_env=stdio_env,
-                    subject_token=subject_token,
-                )
                 return await client.list_resource_templates(raise_on_error=True)
 
             items: Final = await self._template_discovery_cache.get(key, fetch)
@@ -6112,6 +6146,7 @@ class MCPServerManager:
         failure is logged, never raised, because the DB write already succeeded and the TTL remains
         the backstop.
         """
+        self._invalidate_discovery_lists(server_id)
         try:
             await self._per_user_oauth_token_store.invalidate(user_id, server_id)
         except Exception as exc:  # noqa: BLE001 - cache drop is best-effort; TTL is the backstop

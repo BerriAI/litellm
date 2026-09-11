@@ -1912,3 +1912,25 @@ def test_client_import_before_proxy_credentials_succeeds_in_fresh_process():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "MCPServerManager"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resolved", (False, True))
+async def test_discovery_auth_fingerprint_tracks_effective_credentials(resolved: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
+
+    def client(token: str) -> MCPClient:
+        return MCPClient(
+            server_url="https://example.com/mcp",
+            auth_type=MCPAuth.api_key,
+            auth_value=None if resolved else token,
+            resolved_auth=StaticHeaderAuth(token) if resolved else None,
+        )
+
+    original: Final = await client("private-original-credential").discovery_auth_fingerprint()
+    repeated: Final = await client("private-original-credential").discovery_auth_fingerprint()
+    replaced: Final = await client("private-replaced-credential").discovery_auth_fingerprint()
+    assert original == repeated
+    assert original != replaced
+    assert len(original) == 64
+    assert "private-original-credential" not in original
