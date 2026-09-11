@@ -84,6 +84,64 @@ def test_tool_affinity_ignores_tools_after_cache_breakpoint():
     )
 
 
+def test_tool_affinity_key_differs_for_uncached_tools_with_no_breakpoint():
+    """No tool carries a cache breakpoint, but the tools still precede whatever the messages-side
+    breakpoint caches on the provider, so distinct tool lists must not collide on the same key."""
+    messages = _messages(word_count=10)
+    tools_a = cast(list[ChatCompletionToolParam], [{"type": "function", "function": {"name": "alpha", "parameters": {}}}])
+    tools_b = cast(list[ChatCompletionToolParam], [{"type": "function", "function": {"name": "beta", "parameters": {}}}])
+
+    assert PromptCachingCache.extract_cacheable_tools(tools_a) == tools_a
+    assert PromptCachingCache.get_prompt_caching_cache_key(messages, tools_a) != PromptCachingCache.get_prompt_caching_cache_key(
+        messages, tools_b
+    )
+
+
+def test_prepend_system_prompt_does_not_duplicate_an_already_logged_system_message():
+    """Standard logging's append_system_prompt_messages already prepends a string system prompt
+    onto `messages` before async_log_success_event runs, so prepend_system_prompt must not add it
+    a second time or the write-path affinity key would never match the read-path key."""
+    system = "You are a helpful assistant"
+    messages = cast(List[AllMessageValues], [{"role": "system", "content": system}, {"role": "user", "content": "hi"}])
+
+    assert PromptCachingCache.prepend_system_prompt(messages, system) == messages
+
+
+@pytest.mark.asyncio
+async def test_string_system_parameter_does_not_double_up_the_affinity_key():
+    """Regression: kwargs["system"] as a string is already baked into `messages` by standard
+    logging before async_log_success_event runs. Re-prepending it there produced a different
+    (duplicated) affinity key than async_filter_deployments computes from the raw request
+    messages, so a pin written on success was never read back."""
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+    system = "cached system prompt"
+    standard_logging_object = {
+        "call_type": "acompletion",
+        "model": "anthropic/claude-opus-4-6",
+        "messages": [{"role": "system", "content": system}, *messages],
+        "model_id": "dep-2",
+    }
+
+    await check.async_log_success_event(
+        kwargs={"standard_logging_object": standard_logging_object, "system": system},
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"system": system},
+    )
+
+    assert filtered == [deployments[1]]
+
+
 @pytest.mark.asyncio
 async def test_system_parameter_is_part_of_prompt_cache_affinity():
     cache = DualCache()

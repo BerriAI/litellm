@@ -152,8 +152,10 @@ class PromptCachingCache:
             ),
             None,
         )
-        # Match the provider prefix exactly instead of pinning on uncached trailing tools
-        return tools[: cacheable_tool_index + 1] if cacheable_tool_index is not None else tools[:0]
+        # A breakpoint truncates trailing, uncached tools out of the key. With no breakpoint,
+        # every tool still precedes whatever the real provider prefix caches on, so the full
+        # list has to stay in the key or distinct tool sets would collide on the same key.
+        return tools[: cacheable_tool_index + 1] if cacheable_tool_index is not None else tools[:]
 
     @staticmethod
     def prepend_system_prompt(
@@ -161,6 +163,11 @@ class PromptCachingCache:
         system: object | None,
     ) -> list[AllMessageValues]:
         if system is None:
+            return messages
+        # Standard logging already prepends a string system prompt onto `messages` before this
+        # runs, so re-prepending here would double it up and produce a different affinity key
+        # than the one computed from the raw request messages.
+        if messages and messages[0].get("role") == "system" and messages[0].get("content") == system:
             return messages
         return cast(  # cast-ok: system content is validated by the provider payload
             list[AllMessageValues],
