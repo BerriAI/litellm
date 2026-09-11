@@ -1910,7 +1910,7 @@ class MCPServerManager:
         elif server.server_id in self.config_mcp_servers:
             self.config_mcp_servers[server.server_id] = server
         else:
-            return None
+            return server
         self._remove_oauth_discovery_slot(server.server_id)
         return server
 
@@ -2002,6 +2002,12 @@ class MCPServerManager:
         if slot.task is not None:
             if not slot.task.done() or _oauth_discovery_now() < slot.retry_not_before:
                 return slot.task, slot.generation
+            if (
+                not slot.task.cancelled()
+                and slot.task.exception() is None
+                and isinstance(slot.task.result(), _OAuthDiscoveryResolved)
+            ):
+                return slot.task, slot.generation
         task: Final = asyncio.create_task(
             self._run_oauth_metadata_resolution(self._registered_server(server), slot.generation)
         )
@@ -2031,7 +2037,7 @@ class MCPServerManager:
             if should_defer != has_slot:
                 self._set_oauth_discovery_deferred(server.server_id, should_defer)
 
-    async def ensure_oauth_metadata_discovered(self, server: MCPServer) -> MCPServer:
+    async def ensure_oauth_metadata_discovered(self, server: MCPServer, *, _retry_stale: bool = True) -> MCPServer:
         """Join the bounded discovery task and return the resolved server.
 
         Concurrent callers share one task per server. A failed attempt remains
@@ -2058,13 +2064,13 @@ class MCPServerManager:
             outcome: Final = await asyncio.shield(task)
         except asyncio.CancelledError:
             if task.cancelled() and not self._oauth_discovery_slot_is_current(server.server_id, generation):
-                return await self.ensure_oauth_metadata_discovered(server)
+                return await self._rejoin_oauth_metadata_discovery(server, retry_stale=_retry_stale)
             raise
         match outcome:
             case _OAuthDiscoveryResolved(resolved_server):
                 return resolved_server
             case _OAuthDiscoveryStale():
-                return await self.ensure_oauth_metadata_discovered(server)
+                return await self._rejoin_oauth_metadata_discovery(server, retry_stale=_retry_stale)
             case _OAuthDiscoveryFailed(timed_out=timed_out):
                 current: Final = self._registered_server(server)
                 if current.is_client_forwarded_token:
@@ -2075,6 +2081,14 @@ class MCPServerManager:
                     status_code=503,
                     detail=f"OAuth metadata discovery {reason} for MCP server {server_ref!r}",
                 )
+
+    async def _rejoin_oauth_metadata_discovery(self, server: MCPServer, *, retry_stale: bool) -> MCPServer:
+        if retry_stale:
+            return await self.ensure_oauth_metadata_discovered(server, _retry_stale=False)
+        current: Final = self._registered_server(server)
+        if not _oauth_endpoints_unresolved(current) or current.is_client_forwarded_token:
+            return current
+        raise HTTPException(status_code=503, detail="OAuth metadata discovery changed repeatedly; retry shortly")
 
     def _remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient) -> None:
         raw: Final[str | None] = getattr(client, "_last_initialize_instructions", None)

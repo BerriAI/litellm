@@ -12676,3 +12676,85 @@ async def test_debug_reports_legacy_signing_and_non_http_transport(transport: Li
             assert "Credential=AKIDEXAMPLE/" in request.headers["Authorization"]
     finally:
         request_ctx.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_temporary_server_discovery_reuses_resolved_metadata_without_publishing() -> None:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="temporary-oauth-discovery", name="temporary", url="https://idp.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.true_passthrough,
+    )
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    metadata: Final = MCPOAuthMetadata(
+        authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+        registration_url="https://idp.example.com/register",
+    )
+    with patch.object(manager, "_discover_oauth_metadata_for_server", AsyncMock(return_value=metadata)) as discovery:
+        resolved: Final = await manager.ensure_oauth_metadata_discovered(server)
+        repeated: Final = await manager.ensure_oauth_metadata_discovered(server)
+    assert resolved.authorization_url == metadata.authorization_url
+    assert resolved.token_url == metadata.token_url
+    assert resolved.registration_url == metadata.registration_url
+    assert repeated is resolved
+    assert server.server_id not in manager.registry
+    assert server.server_id not in manager.config_mcp_servers
+    discovery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type", [MCPAuth.oauth2, MCPAuth.true_passthrough])
+async def test_repeated_stale_oauth_discovery_is_bounded(auth_type: MCPAuth) -> None:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="repeated-stale", name="stale", url="https://idp.example.com/mcp",
+        transport=MCPTransport.http, auth_type=auth_type, oauth2_flow="authorization_code",
+    )
+    manager.registry[server.server_id] = server
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    metadata: Final = MCPOAuthMetadata(
+        authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+    )
+    with (
+        patch.object(manager, "_discover_oauth_metadata_for_server", AsyncMock(return_value=metadata)) as discovery,
+        patch.object(manager, "_publish_resolved_oauth_server", return_value=None),
+    ):
+        if auth_type == MCPAuth.true_passthrough:
+            assert await manager.ensure_oauth_metadata_discovered(server) is server
+        else:
+            with pytest.raises(HTTPException) as exc:
+                await manager.ensure_oauth_metadata_discovered(server)
+            assert exc.value.status_code == 503
+            assert "changed repeatedly" in str(exc.value.detail)
+    assert discovery.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_stale_discovery_falls_back_to_resolved_registered_server() -> None:
+    manager: Final = MCPServerManager()
+    original: Final = MCPServer(
+        server_id="resolved-replacement", name="replacement", url="https://old.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+    )
+    replacement: Final = original.model_copy(update={
+        "url": "https://new.example.com/mcp", "authorization_url": "https://new.example.com/authorize",
+        "token_url": "https://new.example.com/token",
+    })
+    manager.registry[original.server_id] = replacement
+    assert await manager._rejoin_oauth_metadata_discovery(original, retry_stale=False) is replacement
+
+
+def test_stale_discovery_cannot_overwrite_new_registered_server() -> None:
+    manager: Final = MCPServerManager()
+    original: Final = MCPServer(
+        server_id="stale-publication", name="publication", url="https://old.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+    )
+    manager._set_oauth_discovery_deferred(original.server_id, True)
+    original_slot: Final = manager._oauth_discovery_slot(original.server_id)
+    assert original_slot is not None
+    replacement: Final = original.model_copy(update={"url": "https://new.example.com/mcp"})
+    manager.registry[original.server_id] = replacement
+    manager._set_oauth_discovery_deferred(original.server_id, True)
+    assert manager._publish_resolved_oauth_server(original, original_slot.generation) is None
+    assert manager.registry[original.server_id] is replacement
