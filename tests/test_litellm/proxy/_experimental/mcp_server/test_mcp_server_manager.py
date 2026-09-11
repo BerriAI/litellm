@@ -12858,7 +12858,7 @@ async def test_openapi_health_reports_size_limit_as_unknown_and_caches_failure(r
     result = await manager.health_check_server(server.server_id)
     cached = await manager.health_check_server(server.server_id)
     assert result.status == "unknown"
-    assert result.health_check_error == "OpenAPI specification exceeds the health-check size limit"
+    assert result.health_check_error == "OpenAPI specification probe refused: Response exceeds the configured size limit"
     assert cached.health_check_error == result.health_check_error
     assert cached.last_health_check == result.last_health_check
     assert route.call_count == 1

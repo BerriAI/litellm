@@ -8,10 +8,7 @@ import json
 import os
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from io import BytesIO
 from pathlib import PurePosixPath
-from types import MappingProxyType
 from typing import Any, Final, TypedDict
 from urllib.parse import quote
 
@@ -166,60 +163,13 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-class OpenAPISpecProbeLimitError(ValueError):
-    pass
-
-
-@dataclass(frozen=True)
-class _BoundedOpenAPIFetcher:
-    client: httpx.AsyncClient
-    max_bytes: int
-
-    async def get(
-        self,
-        url: str,
-        *,
-        headers: dict[str, str] | None = None,
-        follow_redirects: bool = False,
-        redirects_remaining: int = 10,
-    ) -> httpx.Response:
-        async with self.client.stream(
-            "GET",
-            url,
-            headers=MappingProxyType({**(headers or MappingProxyType({})), "Accept-Encoding": "identity"}),
-            follow_redirects=False,
-        ) as response:
-            if response.is_redirect and follow_redirects:
-                if redirects_remaining == 0:
-                    raise ValueError("Too many specification redirects")
-                await response.aclose()
-                return await self.get(
-                    str(response.url.join(response.headers["location"])),
-                    headers=headers,
-                    follow_redirects=True,
-                    redirects_remaining=redirects_remaining - 1,
-                )
-            if response.is_redirect or response.is_error:
-                return httpx.Response(response.status_code, headers=response.headers, request=response.request)
-            if response.headers.get("content-encoding", "identity").lower() != "identity":
-                raise OpenAPISpecProbeLimitError("OpenAPI specification probe requires an uncompressed response")
-            if int(response.headers.get("content-length", "0")) > self.max_bytes:
-                raise OpenAPISpecProbeLimitError("OpenAPI specification exceeds the health-check size limit")
-            with BytesIO() as body:
-                async for chunk in response.aiter_bytes(chunk_size=65536):
-                    if body.tell() + len(chunk) > self.max_bytes:
-                        raise OpenAPISpecProbeLimitError("OpenAPI specification exceeds the health-check size limit")
-                    body.write(chunk)
-                return httpx.Response(
-                    response.status_code, headers=response.headers, content=body.getvalue(), request=response.request
-                )
-
-
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        r: Final[httpx.Response] = await async_safe_get(
-            client if max_bytes is None else _BoundedOpenAPIFetcher(client.client, max_bytes), filepath
+        r: Final[httpx.Response] = (
+            await async_safe_get(client, filepath)
+            if max_bytes is None
+            else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
         )
         r.raise_for_status()
         return r.json()
