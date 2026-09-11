@@ -1073,3 +1073,23 @@ async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absen
     await jobs["prometheus_fallback_stats_job"]()
 
     assert send_fallback_stats.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_event_warns_but_does_not_raise_for_docs_example_master_key(monkeypatch):
+    """With LITELLM_MASTER_KEY=sk-1234 the lifespan logs a loud warning and keeps booting."""
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-1234")
+
+    with patch.object(ps.verbose_proxy_logger, "warning") as mock_warning:
+        try:
+            async with proxy_startup_event(app=None):
+                pass
+        except ValueError as e:
+            if "sk-1234" in str(e):
+                pytest.fail("proxy_startup_event refused to boot on the docs example key")
+        except Exception:
+            pass
+
+    assert any("sk-1234" in str(call.args[0]) for call in mock_warning.call_args_list), (
+        "startup should log the insecure master key warning"
+    )
