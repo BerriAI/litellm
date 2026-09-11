@@ -32,7 +32,7 @@ from litellm.litellm_core_utils.token_counter import (
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
-from litellm.types.llms.openai import ChatCompletionReasoningItem
+from litellm.types.llms.openai import ChatCompletionReasoningItem, ChatCompletionThinkingBlock
 from tests.large_text import text
 from tests.test_litellm.litellm_core_utils.event_loop_lag import (
     assert_loop_stayed_free,
@@ -1300,6 +1300,51 @@ def test_token_counter_with_reasoning_content(
 
     assert token_counter(model=model, messages=messages) == token_counter(model=model, messages=equivalent_messages)
     assert reasoning == original
+
+
+@pytest.mark.parametrize(
+    ("block", "texts"),
+    [
+        ({"type": "thinking"}, ()),
+        ({"type": "thinking", "thinking": ""}, ()),
+        ({"type": "reasoning", "summary": []}, ()),
+        ({"type": "reasoning", "summary": [{"type": "summary_text"}]}, ()),
+        ({"type": "reasoning", "summary": [{"type": "summary_text", "text": ""}]}, ()),
+        (
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": ""},
+                    {"type": "summary_text", "text": "Thought"},
+                ],
+            },
+            ("Thought",),
+        ),
+    ],
+    ids=["missing-thinking", "empty-thinking", "empty-summary", "missing-text", "empty-text", "mixed-texts"],
+)
+def test_empty_reasoning_text_does_not_count_tokenizer_special_tokens(
+    block: ChatCompletionThinkingBlock | ChatCompletionReasoningItem, texts: tuple[str, ...]
+) -> None:
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.processors import TemplateProcessing
+
+    tokenizer: Final = Tokenizer(WordLevel({"[UNK]": 0, "[BOS]": 1, "[EOS]": 2, "Ready": 3, "Thought": 4}, unk_token="[UNK]"))
+    tokenizer.post_processor = TemplateProcessing(single="[BOS] $A [EOS]", special_tokens=[("[BOS]", 1), ("[EOS]", 2)])
+    custom_tokenizer: Final = {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    messages: Final = [{"role": "assistant", "content": [block, {"type": "text", "text": "Ready"}]}]
+    equivalent_messages: Final = [
+        {
+            "role": "assistant",
+            "content": [*({"type": "text", "text": value} for value in texts), {"type": "text", "text": "Ready"}],
+        }
+    ]
+
+    assert tokenizer.encode("").ids == [1, 2]
+    assert token_counter(custom_tokenizer=custom_tokenizer, messages=messages) == token_counter(
+        custom_tokenizer=custom_tokenizer, messages=equivalent_messages
+    )
 
 
 def test_reasoning_content_preserves_prompt_cache_eligibility() -> None:

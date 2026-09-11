@@ -839,6 +839,10 @@ def _count_anthropic_content(
     return tokens
 
 
+def _count_nonempty_text_tokens(text: str, count_function: TokenCounterFunction) -> int:
+    return count_function(text) if text else 0
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -892,9 +896,12 @@ def _count_content_list(
             elif c["type"] == "thinking":
                 # Claude extended thinking content block
                 # Count the thinking text and skip signature (opaque signature blob)
-                num_tokens += count_function(str(c.get("thinking", "")))
+                num_tokens += _count_nonempty_text_tokens(str(c.get("thinking", "")), count_function)
             elif c["type"] == "reasoning":
-                num_tokens += sum(count_function(summary.get("text", "")) for summary in c.get("summary", ()))
+                num_tokens += sum(
+                    _count_nonempty_text_tokens(summary.get("text", ""), count_function)
+                    for summary in c.get("summary", ())
+                )
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
                 # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
