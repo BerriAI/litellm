@@ -18,7 +18,7 @@ jobs:
   # Stable and RC tags are gated on the Redis chaos load test; dev, nightly, alpha and beta
   # tags are cut too often to spend a multi-minute chaos run on each one, and the weekly
   # schedule already covers the default branch.
-  prepare:
+  classify-if-stable-release:
     name: Validate inputs and decide whether this tag is gated
     runs-on: ubuntu-latest
     outputs:
@@ -53,8 +53,8 @@ jobs:
 
   redis-chaos-gate:
     name: Redis Chaos E2E
-    needs: prepare
-    if: needs.prepare.outputs.gated == 'true'
+    needs: classify-if-stable-release
+    if: needs.classify-if-stable-release.outputs.gated == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/test-e2e-redis-chaos.yml
@@ -63,8 +63,8 @@ jobs:
 
   release:
     name: Create Release
-    needs: [prepare, redis-chaos-gate]
-    if: always() && needs.prepare.result == 'success' && (needs.redis-chaos-gate.result == 'success' || needs.redis-chaos-gate.result == 'skipped')
+    needs: [classify-if-stable-release, redis-chaos-gate]
+    if: always() && needs.classify-if-stable-release.result == 'success' && (needs.redis-chaos-gate.result == 'success' || needs.redis-chaos-gate.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
