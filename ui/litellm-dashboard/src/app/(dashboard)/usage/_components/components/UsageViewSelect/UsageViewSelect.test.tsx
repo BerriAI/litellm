@@ -71,15 +71,18 @@ describe("UsageViewSelect", () => {
     },
   );
 
-  it.each(["Organization Usage", "Agent Usage (A2A)", "Project Usage"])("should hide %s from an internal user", async (optionName) => {
-    const user = userEvent.setup();
-    const { container } = render(
-      <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />,
-    );
+  it.each(["Organization Usage", "Agent Usage (A2A)", "Project Usage"])(
+    "should hide %s from an internal user",
+    async (optionName) => {
+      const user = userEvent.setup();
+      const { container } = render(
+        <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />,
+      );
 
-    await openMenu(user);
-    expect(offers(container, optionName)).toBe(false);
-  });
+      await openMenu(user);
+      expect(offers(container, optionName)).toBe(false);
+    },
+  );
 
   // An org admin's session role is "Internal User" — org-admin-ness lives in the
   // membership table — so the two rows above cannot tell them apart from a plain

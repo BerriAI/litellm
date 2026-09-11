@@ -66,6 +66,14 @@ const groupByProjectId = (rows: ProjectDailySpendRow[]): ProjectDailySpendRow[][
   return [...groups.values()];
 };
 
+const EMPTY_PROJECT_GROUP_TOTALS = {
+  spend: 0,
+  requests: 0,
+  successful_requests: 0,
+  failed_requests: 0,
+  tokens: 0,
+};
+
 const summarizeProjectGroup = (rows: ProjectDailySpendRow[]): ProjectSpendRow => {
   const [{ project_id, project_alias }] = rows;
   const totals = rows.reduce(
@@ -76,7 +84,7 @@ const summarizeProjectGroup = (rows: ProjectDailySpendRow[]): ProjectSpendRow =>
       failed_requests: acc.failed_requests + row.failed_requests,
       tokens: acc.tokens + row.total_tokens,
     }),
-    { spend: 0, requests: 0, successful_requests: 0, failed_requests: 0, tokens: 0 },
+    EMPTY_PROJECT_GROUP_TOTALS,
   );
   return { project_id, project_alias: project_alias || project_id, ...totals };
 };

@@ -20,13 +20,15 @@ const row = (overrides: Partial<ProjectDailySpendRow> = {}): ProjectDailySpendRo
 
 describe("summarizeProjectUsage", () => {
   it("returns all-zero totals for no rows", () => {
-    expect(summarizeProjectUsage([])).toEqual({
+    const zeroTotals = {
       total_spend: 0,
       total_api_requests: 0,
       total_successful_requests: 0,
       total_failed_requests: 0,
       total_tokens: 0,
-    });
+    };
+
+    expect(summarizeProjectUsage([])).toEqual(zeroTotals);
   });
 
   it("sums spend, requests, and tokens across every row regardless of project or date", () => {
@@ -40,14 +42,15 @@ describe("summarizeProjectUsage", () => {
       total_tokens: 40,
     };
     const rows = [row({ spend: 1.5 }), row(projectBetaRow)];
-
-    expect(summarizeProjectUsage(rows)).toEqual({
+    const expectedTotals = {
       total_spend: 3.75,
       total_api_requests: 7,
       total_successful_requests: 6,
       total_failed_requests: 1,
       total_tokens: 55,
-    });
+    };
+
+    expect(summarizeProjectUsage(rows)).toEqual(expectedTotals);
   });
 });
 

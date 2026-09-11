@@ -4,6 +4,16 @@ import { createQueryKeys } from "../common/queryKeysFactory";
 
 const uiSettingsKeys = createQueryKeys("uiSettings");
 
+export interface UISettingsFieldSchema {
+  description?: string;
+  properties?: Record<string, { description?: string; type?: string }>;
+}
+
+export interface UISettingsData {
+  field_schema: UISettingsFieldSchema;
+  values: Record<string, unknown>;
+}
+
 /**
  * UI settings, cached for an hour by default because they rarely change.
  *
@@ -14,11 +24,12 @@ const uiSettingsKeys = createQueryKeys("uiSettings");
  * so a caller that needs to notice a change also has to poll.
  */
 export const useUISettings = (options?: { staleTime?: number; refetchInterval?: number }) => {
-  return useQuery<Record<string, any>>({
+  const queryOptions = {
     queryKey: uiSettingsKeys.list({}),
     queryFn: async () => await getUiSettings(),
     staleTime: options?.staleTime ?? 60 * 60 * 1000,
     gcTime: 60 * 60 * 1000, // 1 hour - keep in cache for 1 hour
     refetchInterval: options?.refetchInterval,
-  });
+  };
+  return useQuery<UISettingsData>(queryOptions);
 };

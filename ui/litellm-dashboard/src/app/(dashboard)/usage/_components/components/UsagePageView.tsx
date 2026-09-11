@@ -124,9 +124,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
-  const stillHasAccessToSelectedView =
-    (selectedUsageView !== "organization" || canViewOrganizationUsage) &&
-    (selectedUsageView !== "project" || canViewProjectUsage);
+  const hasOrganizationAccessIfSelected = selectedUsageView !== "organization" || canViewOrganizationUsage;
+  const hasProjectAccessIfSelected = selectedUsageView !== "project" || canViewProjectUsage;
+  const stillHasAccessToSelectedView = hasOrganizationAccessIfSelected && hasProjectAccessIfSelected;
   const usageView: UsageOption = stillHasAccessToSelectedView ? selectedUsageView : "global";
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
@@ -238,10 +238,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const aggregatedFailed = selectForRange(aggregatedFailure, currentAggregatedRangeKey) === true;
 
   // Paginated fallback — only enabled when aggregated endpoint fails
+  const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
+  const hasPaginatedFallbackRequestWindow = aggregatedFailed && hasRequestWindow;
   const paginatedResult = usePaginatedDailyActivity({
     fetchFn: userDailyActivityCall,
     args: [accessToken, startTime, endTime, effectiveUserId],
-    enabled: aggregatedFailed && !!accessToken && !!startTime && !!endTime,
+    enabled: hasPaginatedFallbackRequestWindow,
   });
 
   // Derive userSpendData from whichever source is active
