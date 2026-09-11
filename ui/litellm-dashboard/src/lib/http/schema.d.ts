@@ -26007,6 +26007,11 @@ export interface components {
              * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
              */
             use_spend_logs_partitioning?: boolean | null;
+            /**
+             * User Api Key Cache Max Size
+             * @description max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth lookups keep hitting the DB
+             */
+            user_api_key_cache_max_size?: number | null;
             /** User Header Mappings */
             user_header_mappings?: components["schemas"]["UserHeaderMapping"][] | null;
             /**

@@ -7313,6 +7313,88 @@ async def test_update_general_settings_apply_user_budget_to_team_keys_yaml_wins(
         assert ps.general_settings["apply_user_budget_to_team_keys"] is True
 
 
+def _fill_user_api_key_cache(cache: DualCache, count: int) -> None:
+    for index in range(count):
+        cache.set_cache(key=f"key-{index}", value={"token": f"key-{index}"}, local_only=True)
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_user_api_key_cache_max_size_resizes_the_running_cache(monkeypatch):
+    """The Admin UI writes the capacity to the DB config, so the running cache has
+    to pick it up on reload; otherwise the knob only works after a restart."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 300})
+
+    assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_clearing_user_api_key_cache_max_size_restores_the_default(monkeypatch):
+    """Blanking the field in the dashboard deletes the key, so the cache must fall
+    back to the default capacity rather than keep the last configured size."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(5000)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 5000})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"store_model_in_db": True})
+
+    assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
+
+    _fill_user_api_key_cache(cache, 201)
+    assert cache.get_cache(key="key-0", local_only=True) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_value", [0, -5, "lots"])
+async def test_update_general_settings_ignores_an_invalid_user_api_key_cache_max_size(db_value, monkeypatch):
+    """A non-positive capacity would make the eviction loop pop an empty heap on the
+    next write, so a bad DB value must leave the running cache untouched."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(300)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig()._update_general_settings(db_general_settings={"user_api_key_cache_max_size": db_value})
+
+    assert "user_api_key_cache_max_size" not in proxy_server_module.general_settings
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_user_api_key_cache_max_size_yaml_wins(monkeypatch):
+    """A DB value must not silently override an explicit YAML capacity on reload."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._yaml_general_settings_keys = {"user_api_key_cache_max_size"}
+    cache = UserApiKeyCache()
+    cache.update_in_memory_max_size(300)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"user_api_key_cache_max_size": 300})
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await proxy_config._update_general_settings(db_general_settings={"user_api_key_cache_max_size": 10})
+
+    assert proxy_server_module.general_settings["user_api_key_cache_max_size"] == 300
+
+    _fill_user_api_key_cache(cache, 250)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "db_value,expected",
@@ -10344,6 +10426,27 @@ def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_get_config_list_includes_user_api_key_cache_max_size(monkeypatch):
+    """The Admin UI General Settings table renders whatever /config/list returns,
+    so the cache capacity has to be exposed there as an Integer to be editable."""
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", mock_prisma)
+    app.dependency_overrides[proxy_server_module.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        client = TestClient(app)
+        resp = client.get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert fields["user_api_key_cache_max_size"]["field_type"] == "Integer"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_get_config_list_includes_budget_exceeded_throttle_percentage(monkeypatch):
     """The throttle fraction is a litellm_settings scalar surfaced on the General
     Settings table as a Float field so it sits with the other global limits; it
@@ -12944,6 +13047,48 @@ async def test_load_config_router_authorizes_fallback_targets_against_the_callin
     router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     assert router.fallback_access_check is router_fallback_access_check
+
+
+@pytest.mark.asyncio
+async def test_load_config_user_api_key_cache_max_size_keeps_more_than_200_entries(tmp_path, monkeypatch):
+    """The auth cache used to be pinned at InMemoryCache's 200 entry default, so a
+    deployment with more keys than that evicted constantly and every request
+    fell through to the DB. The YAML knob has to raise the cap on the live cache."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"general_settings": {"user_api_key_cache_max_size": "1000"}}))
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    _fill_user_api_key_cache(cache, 999)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [0, -1, "unbounded"])
+async def test_load_config_rejects_a_non_positive_user_api_key_cache_max_size(tmp_path, bad_value, monkeypatch):
+    """InMemoryCache treats 0 as 'cache nothing' and a negative cap makes eviction
+    pop an empty heap, so the proxy must refuse to boot with such a value instead
+    of silently disabling auth caching."""
+    from pydantic import ValidationError
+
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"general_settings": {"user_api_key_cache_max_size": bad_value}}))
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", cache)
+    with pytest.raises(ValidationError):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    _fill_user_api_key_cache(cache, 150)
+    assert cache.get_cache(key="key-0", local_only=True) == {"token": "key-0"}
 
 
 def test_docs_redoc_openapi_are_reachable_by_default():
