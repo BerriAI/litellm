@@ -1,9 +1,9 @@
 import base64
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from itertools import groupby
+from itertools import accumulate, chain, groupby, tee
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeAlias, TypedDict, Union, cast
 
 from typing_extensions import ReadOnly, Required
 
@@ -67,6 +67,11 @@ class _ThinkingChoice(TypedDict, total=False):
 
 class _ThinkingChunk(TypedDict):
     choices: Sequence[_ThinkingChoice]
+
+
+class _ThinkingStreamFragment(NamedTuple):
+    block: _ThinkingBlockFragment
+    is_snapshot: bool
 
 
 class _ContentChoice(TypedDict, total=False):
@@ -662,69 +667,56 @@ class ChunkProcessor:
     def get_combined_thinking_content(
         self, chunks: Sequence["_ThinkingChunk"]
     ) -> list[Union["ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock"]] | None:
+        fragments, boundary_fragments = tee(self._iter_thinking_fragments(chunks))
+        # Count completed blocks before each fragment, keeping signatures with their preceding text.
+        closed_blocks: Final = accumulate(
+            (
+                int(fragment.block.get("type") == "redacted_thinking" or bool(fragment.block.get("signature")))
+                for fragment in boundary_fragments
+            ),
+            initial=0,
+        )
+        grouped: Final = groupby(zip(closed_blocks, fragments, strict=False), key=lambda entry: entry[0])
+        groups: Final = (tuple(fragment for _, fragment in group) for _, group in grouped)
+        blocks: Final = tuple(block for group in groups if (block := self._assemble_thinking_block(group)) is not None)
+        return list(blocks) if blocks else None  # mutable-ok: Message.thinking_blocks requires a list
+
+    @staticmethod
+    def _iter_thinking_fragments(chunks: Sequence["_ThinkingChunk"]) -> Iterator[_ThinkingStreamFragment]:
+        for choice in chain.from_iterable(chunk["choices"] for chunk in chunks):
+            if (delta := choice.get("delta")) is None or not isinstance(blocks := delta.get("thinking_blocks"), list):
+                continue
+            for block in blocks:
+                yield _ThinkingStreamFragment(
+                    block,
+                    isinstance(provider_fields := delta.get("provider_specific_fields"), Mapping)
+                    and provider_fields.get("thinking_blocks") == blocks,
+                )
+
+    @staticmethod
+    def _assemble_thinking_block(
+        fragments: Sequence[_ThinkingStreamFragment],
+    ) -> Union["ChatCompletionThinkingBlock", "ChatCompletionRedactedThinkingBlock", None]:
         from litellm.types.llms.openai import (
             ChatCompletionRedactedThinkingBlock,
             ChatCompletionThinkingBlock,
         )
 
-        thinking_blocks: Final[list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = []
-        current_thinking_text_parts: list[str] = []
-        current_signature: str | None = None
-
-        def _flush_thinking_block() -> None:
-            nonlocal current_thinking_text_parts, current_signature
-            if current_signature:
-                thinking_blocks.append(
-                    ChatCompletionThinkingBlock(
-                        type="thinking",
-                        thinking="".join(current_thinking_text_parts),
-                        signature=current_signature,
-                    )
-                )
-            current_thinking_text_parts = []
-            current_signature = None
-
-        for chunk in chunks:
-            choices = chunk["choices"]
-            for choice in choices:
-                delta = choice.get("delta", {})
-                thinking = delta.get("thinking_blocks", None)
-                if thinking and isinstance(thinking, list):
-                    for thinking_block in thinking:
-                        thinking_type = thinking_block.get("type", None)
-                        if thinking_type and thinking_type == "redacted_thinking":
-                            _flush_thinking_block()
-                            redacted_data = thinking_block.get("data", None)
-                            if redacted_data:
-                                thinking_blocks.append(
-                                    ChatCompletionRedactedThinkingBlock(
-                                        type="redacted_thinking",
-                                        data=redacted_data,
-                                    )
-                                )
-                        else:
-                            thinking_text, signature, provider_fields = (
-                                thinking_block.get("thinking"),
-                                thinking_block.get("signature"),
-                                delta.get("provider_specific_fields"),
-                            )
-                            if (
-                                signature
-                                and isinstance(provider_fields, Mapping)
-                                and provider_fields.get("thinking_blocks") == thinking
-                            ):
-                                current_thinking_text_parts.clear()
-                            if thinking_text:
-                                current_thinking_text_parts.append(thinking_text)
-                            if signature:
-                                current_signature = signature
-                                _flush_thinking_block()
-
-        _flush_thinking_block()
-
-        if len(thinking_blocks) > 0:
-            return thinking_blocks
-        return None
+        last: Final = fragments[-1]
+        if last.block.get("type") == "redacted_thinking":
+            return (
+                ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data=data)
+                if (data := last.block.get("data"))
+                else None
+            )
+        if not (signature := last.block.get("signature")):
+            return None
+        text: Final = (
+            last.block.get("thinking") or ""
+            if last.is_snapshot
+            else "".join(fragment.block.get("thinking") or "" for fragment in fragments)
+        )
+        return ChatCompletionThinkingBlock(type="thinking", thinking=text, signature=signature)
 
     def get_combined_reasoning_content(self, chunks: Sequence["_ContentChunk"]) -> ChatCompletionAssistantContentValue:
         return self.get_combined_content(chunks, delta_key="reasoning_content")
