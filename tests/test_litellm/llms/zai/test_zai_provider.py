@@ -175,17 +175,25 @@ def test_thinking_and_reasoning_effort_move_into_extra_body(local_model_cost_map
     assert result["extra_body"] == {"thinking": {"type": "disabled"}, "reasoning_effort": "low"}
 
 
-def test_existing_extra_body_is_kept_and_not_mutated(local_model_cost_map):
+def test_caller_optional_params_and_extra_body_are_not_mutated(local_model_cost_map):
     from litellm.llms.zai.chat.transformation import ZAIChatConfig
 
     caller_extra_body = {"already_here": True}
+    caller_optional_params = {"stream": False, "extra_body": caller_extra_body}
     result = ZAIChatConfig()._map_openai_params(
-        non_default_params={"thinking": {"type": "disabled"}},
-        optional_params={"extra_body": caller_extra_body},
+        non_default_params={"max_tokens": 100, "thinking": {"type": "disabled"}},
+        optional_params=caller_optional_params,
         model="glm-4.7",
         drop_params=False,
     )
-    assert result["extra_body"] == {"already_here": True, "thinking": {"type": "disabled"}}
+    assert result == {
+        "stream": False,
+        "max_tokens": 100,
+        "extra_body": {"already_here": True, "thinking": {"type": "disabled"}},
+    }
+    assert result is not caller_optional_params
+    assert caller_optional_params == {"stream": False, "extra_body": {"already_here": True}}
+    assert caller_optional_params["extra_body"] is caller_extra_body
     assert caller_extra_body == {"already_here": True}
 
 
