@@ -194,11 +194,11 @@ class LoginThrottle:
         return max(local, _as_count(await self._outcome(redis_cache.async_get_cache(key))))
 
     async def _remaining_window(self, key: str) -> int:
-        """Seconds until this counter expires, repairing a counter left without an expiry.
+        """Seconds until this counter expires.
 
-        Redis commits the increment before setting the TTL, so a failure in between can
-        leave a counter that never expires. Nothing increments the key again once the
-        limit is reached, so without the repair the key would stay refused indefinitely.
+        Counters are only ever written together with their expiry, so a counter without one
+        was stripped out of band (PERSIST, a restore). It is given the full window again,
+        since nothing increments a key once the limit is reached.
         """
         redis_cache: Final = self.redis_cache
         if redis_cache is None:
@@ -206,7 +206,7 @@ class LoginThrottle:
         ttl: Final = await self._outcome(redis_cache.async_get_ttl(key))
         if isinstance(ttl, int) and ttl > 0:
             return min(ttl, self.window_seconds)
-        await self._outcome(redis_cache.async_increment(key, 0, ttl=self.window_seconds))
+        await self._outcome(redis_cache.async_increment_with_floor(key, 0, self.window_seconds))
         return self.window_seconds
 
     def _refused(self, retry_after: int, param: str) -> ProxyException:
@@ -260,8 +260,9 @@ class LoginThrottle:
         redis_cache: Final = self.redis_cache
         if redis_cache is None:
             return local
-        shared: Final = _as_count(await self._outcome(redis_cache.async_increment(key, 1, ttl=self.window_seconds)))
-        await self._remaining_window(key)
+        shared: Final = _as_count(
+            await self._outcome(redis_cache.async_increment_with_floor(key, 1, self.window_seconds))
+        )
         return max(local, shared)
 
     async def record_failure(self, username: str) -> FailureCounts:
