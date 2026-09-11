@@ -6,6 +6,7 @@ import asyncio
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
 
 from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCP_DEBUG_REQUEST_HEADER,
@@ -280,7 +281,7 @@ class TestDescribeUpstreamHttpFailure:
         request = httpx.Request(
             "POST",
             "https://upstream.example/apis/mcp",
-            headers={"Authorization": "Bearer secret-token-abcdef0123456789", "Content-Type": "application/json"},
+            headers={"Authorization": "Bearer secret-token-abcdef0123456789", "Content-Type": "application/json" if body.startswith(b"{") else "application/x-www-form-urlencoded"},
             content=body,
         )
         response = (
@@ -327,3 +328,139 @@ class TestDescribeUpstreamHttpFailure:
 
     def test_returns_none_without_http_response(self):
         assert describe_upstream_http_failure(ConnectionError("refused")) is None
+
+
+@pytest.mark.parametrize("body", [
+    b'{"password":"first second","token":"demo-secret"}',
+    b'{"nested":[{"access_token":"first,second"}]}',
+    b'client%5Fsecret=first+second&token=demo-secret',
+])
+def test_failure_log_fully_redacts_structured_secrets(body):
+    request = httpx.Request("POST", "https://upstream/mcp?credential=query-secret",
+        headers={"X-Custom-Credential": "custom-secret"}, content=body)
+    response = httpx.Response(500, request=request, content=body)
+    detail = describe_upstream_http_failure(httpx.HTTPStatusError("failure", request=request, response=response))
+    assert detail is not None
+    for secret in ("first", "second", "demo-secret", "custom-secret", "query-secret"):
+        assert secret not in detail
+
+
+def test_failure_log_omits_unstructured_body():
+    request = httpx.Request("POST", "https://upstream/mcp", content=b"arbitrary-secret")
+    response = httpx.Response(500, request=request, content=b"<html>arbitrary-secret</html>")
+    detail = describe_upstream_http_failure(httpx.HTTPStatusError("failure", request=request, response=response))
+    assert detail is not None
+    assert "arbitrary-secret" not in detail
+    assert "omitted" in detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["error", "large", "timeout", "read_failure", "success", "cancel"])
+async def test_error_capture_is_bounded_and_preserves_success_and_cancellation(mode):
+    from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
+
+    class Stream(httpx.AsyncByteStream):
+        def __init__(self):
+            self.reads = 0
+
+        async def __aiter__(self):
+            self.reads += 1
+            if mode == "timeout":
+                await asyncio.sleep(10)
+            if mode == "read_failure":
+                raise httpx.ReadError("private-read-error")
+            if mode == "cancel":
+                raise asyncio.CancelledError
+            yield b'{"error":"missing_scope","password":"first second"}' if mode != "large" else b"x" * 20000
+
+    stream = Stream()
+    request = httpx.Request("POST", "https://upstream/mcp")
+    response = httpx.Response(200 if mode == "success" else 500, request=request, stream=stream)
+    if mode == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await capture_upstream_error_response(response)
+        return
+    await capture_upstream_error_response(response)
+    if mode == "success":
+        assert stream.reads == 0
+        assert await response.aread() == b'{"error":"missing_scope","password":"first second"}'
+        return
+    detail = describe_upstream_http_failure(httpx.HTTPStatusError("failure", request=request, response=response))
+    assert detail is not None
+    assert "first" not in detail and "second" not in detail and "private-read-error" not in detail
+    expected = {"error": "missing_scope", "large": "capture limit", "timeout": "read failed", "read_failure": "read failed"}
+    assert expected[mode] in detail
+    if mode == "error":
+        assert await response.aread() == b'{"error":"missing_scope","password":"first second"}'
+
+
+@pytest.mark.parametrize("body", [b"", b'"scalar"', b'{"hint":"line1\\nline2"}', b'{"hint":"' + b'x' * 600 + b'"}'])
+def test_failure_preview_handles_empty_scalar_control_and_long_bodies(body):
+    request = httpx.Request("POST", "https://user:secret@upstream/mcp?key=private#private", content=body)
+    response = httpx.Response(500, request=request, content=body)
+    detail = describe_upstream_http_failure(httpx.HTTPStatusError("failure", request=request, response=response))
+    assert detail is not None
+    assert "private" not in detail and "user:secret" not in detail and "\n" not in detail
+    if not body:
+        assert "(empty)" in detail
+    elif body.startswith(b'"'):
+        assert "omitted" in detail
+    elif len(body) > 512:
+        assert "truncated" in detail and len(detail) < 1300
+    else:
+        assert "line1\\nline2" in detail
+
+
+@pytest.mark.asyncio
+async def test_error_capture_preserves_httpx_auth_retry():
+    from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
+
+    class RetryAuth(httpx.Auth):
+        def auth_flow(self, request):
+            response = yield request
+            if response.status_code == 401:
+                request.headers["Authorization"] = "Bearer refreshed"
+                yield request
+
+    def upstream(request):
+        if request.headers.get("Authorization"):
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(401, json={"error":"expired_token"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream), auth=RetryAuth(),
+            event_hooks={"response":[capture_upstream_error_response]}) as client:
+        response = await client.get("https://upstream/mcp")
+    assert response.status_code == 200 and response.json() == {"ok":True}
+    assert response.history[0].json() == {"error":"expired_token"}
+
+
+def test_failure_diagnostics_without_request_and_with_streamed_request():
+    response = httpx.Response(503)
+    exc = httpx.HTTPStatusError("failed", request=httpx.Request("GET", "https://upstream"), response=response)
+    assert describe_upstream_http_failure(exc) == "HTTP 503 | request unavailable"
+    request = httpx.Request("POST", "https://upstream", content=iter((b"private-body",)))
+    response = httpx.Response(503, request=request)
+    described = describe_upstream_http_failure(httpx.HTTPStatusError("failed", request=request, response=response))
+    assert described is not None and "streamed, not captured" in described and "private-body" not in described
+
+
+
+def test_deep_error_body_is_bounded_without_exposing_nested_values():
+    import json
+    body = b'{"nested":' * 18 + b'{"password":"hidden-value"}' + b'}' * 18
+    request = httpx.Request("POST", "https://upstream/mcp", content=body)
+    response = httpx.Response(500, request=request, content=body)
+    detail = describe_upstream_http_failure(httpx.HTTPStatusError("failure", request=request, response=response))
+    assert detail is not None and "depth limit" in detail and "hidden-value" not in detail
+    assert json.loads(detail.split("response body: ")[1])["nested"]
+
+
+@pytest.mark.parametrize("body", [b'client%5Fsecret=first+second&client_id=visible', b'client_secret=first%26second&client_id=visible'])
+def test_encoded_form_credentials_are_decoded_before_redaction(body):
+    request = httpx.Request("POST", "https://upstream/token", content=body,
+        headers={"Content-Type":"application/x-www-form-urlencoded"})
+    response = httpx.Response(400, request=request, content=body,
+        headers={"Content-Type":"application/x-www-form-urlencoded"})
+    detail = describe_upstream_http_failure(httpx.HTTPStatusError("failure", request=request, response=response))
+    assert detail is not None and "client_id=visible" in detail
+    assert "first" not in detail and "second" not in detail

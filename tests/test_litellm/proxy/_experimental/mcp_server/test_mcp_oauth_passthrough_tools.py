@@ -459,3 +459,19 @@ async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
     assert "POST https://upstream/apis/mcp -> HTTP 500" in caplog.text
     assert '"method":"initialize"' in caplog.text
     assert "upstream-token-0123456789" not in caplog.text
+
+
+
+@pytest.mark.asyncio
+async def test_client_creation_failure_logs_sanitized_exchange(monkeypatch, caplog):
+    manager = MCPServerManager()
+    server = MCPServer(server_id="sample", name="sample", url="https://upstream/mcp", transport=MCPTransport.http, auth_type=MCPAuth.none)
+    request = httpx.Request("POST", "https://upstream/mcp?credential=query-secret")
+    response = httpx.Response(500, request=request, json={"error":"missing_scope"})
+    error = httpx.HTTPStatusError("query-secret", request=request, response=response)
+    monkeypatch.setattr(manager, "_create_mcp_client", AsyncMock(side_effect=error))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with pytest.raises(MCPServerListError):
+            await manager._get_tools_from_server(server)
+    assert "POST https://upstream/mcp -> HTTP 500" in caplog.text
+    assert "missing_scope" in caplog.text and "query-secret" not in caplog.text
