@@ -887,13 +887,6 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         return OLD_LITELLM_METADATA_FIELD
 
     def redacts_messages_itself(self) -> bool:
-        """
-        Whether this callback redacts messages and responses in its own payload.
-
-        When True, `redact_standard_logging_payload_from_model_call_details` leaves them in place under
-        `turn_off_message_logging` so the callback can keep safe structure (roles, tool names and ids) while
-        redacting the content itself. Everything else that flag governs is still stripped here.
-        """
         return False
 
     def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:

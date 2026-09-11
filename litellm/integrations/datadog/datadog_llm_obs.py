@@ -201,12 +201,10 @@ def _redact_message(message: Message) -> Message:
 
 
 def _redact_messages(messages: Sequence[Message]) -> tuple[Message, ...]:
-    """Each message's shape with content, tool arguments and tool results replaced; tool names, ids and counts survive."""
     return tuple(_redact_message(message) for message in messages)
 
 
 def _tool_output_tokens(messages: Sequence[Message], model: str) -> float | None:
-    """Tokens across the tool results the request carried, or None when it carried none."""
     results: Final = tuple(
         result.get("result", "") for message in messages for result in message.get("tool_results", ())
     )

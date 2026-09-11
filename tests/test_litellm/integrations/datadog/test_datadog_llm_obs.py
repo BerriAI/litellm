@@ -550,7 +550,6 @@ TOOL_CONVERSATION: Final[list[dict[str, Any]]] = [
 
 
 def _redacted_span_as_the_proxy_builds_it(payload: dict[str, Any]) -> dict[str, Any]:
-    """The success path runs the shared callback hook first, then hands the result to the span builder."""
     logger_under_test = _redacting_logger(turn_off_message_logging=True)
     return _span_json(
         logger_under_test, logger_under_test.redact_standard_logging_payload_from_model_call_details(payload)
@@ -558,7 +557,6 @@ def _redacted_span_as_the_proxy_builds_it(payload: dict[str, Any]) -> dict[str, 
 
 
 def test_redaction_keeps_the_conversation_shape_without_its_content() -> None:
-    """Roles, message count and tool structure survive so the trace stays legible; contents and values do not."""
     result = _redacted_span_as_the_proxy_builds_it(
         build_payload(
             messages=TOOL_CONVERSATION,
@@ -593,7 +591,6 @@ def test_redaction_keeps_the_conversation_shape_without_its_content() -> None:
 
 
 def test_redaction_counts_tool_result_tokens_before_replacing_them() -> None:
-    """The count uses the request model's tokenizer on the result text, which a redacted span no longer carries."""
     payload = build_payload(messages=TOOL_CONVERSATION)
     payload["standard_logging_object"]["model"] = "claude-sonnet-5"
 
@@ -606,7 +603,6 @@ def test_redaction_counts_tool_result_tokens_before_replacing_them() -> None:
 
 
 def test_tool_output_tokens_sum_every_result_in_the_request(logger: DataDogLLMObsLogger) -> None:
-    """The metric is a per-request total, and it is reported whether or not the span is redacted."""
     payload = build(
         logger,
         messages=[
@@ -621,7 +617,6 @@ def test_tool_output_tokens_sum_every_result_in_the_request(logger: DataDogLLMOb
 
 
 def test_a_request_without_tool_results_reports_no_tool_output_tokens(logger: DataDogLLMObsLogger) -> None:
-    """Absence is not a zero: a zero would drag the average down for requests that never ran a tool."""
     payload = build(logger, messages=[{"role": "user", "content": "hi"}])
 
     assert "tool_output_tokens" not in payload["metrics"]
@@ -629,14 +624,12 @@ def test_a_request_without_tool_results_reports_no_tool_output_tokens(logger: Da
 
 
 def test_a_tool_that_returned_nothing_still_counts_as_zero_tool_output_tokens(logger: DataDogLLMObsLogger) -> None:
-    """A tool that ran and produced no text is a data point, unlike a request that never ran one."""
     payload = build(logger, messages=[{"role": "tool", "tool_call_id": "call_1", "content": ""}])
 
     assert payload["metrics"]["tool_output_tokens"] == 0.0
 
 
 def test_redaction_keeps_anthropic_tool_blocks_as_structure_only() -> None:
-    """The Anthropic dialect carries calls and results inside content blocks, and those must redact the same way."""
     result = _redacted_span_as_the_proxy_builds_it(
         build_payload(
             messages=[
@@ -674,7 +667,6 @@ def test_redaction_keeps_anthropic_tool_blocks_as_structure_only() -> None:
 
 
 def test_redaction_blanks_tool_identifiers_that_are_not_strings() -> None:
-    """A caller can put anything in a tool name or id, and a redacted span must not carry it through."""
     result = _redacted_span_as_the_proxy_builds_it(
         build_payload(
             messages=[
@@ -696,7 +688,6 @@ def test_redaction_blanks_tool_identifiers_that_are_not_strings() -> None:
 
 
 def test_the_shared_hook_still_strips_what_redaction_governs_besides_messages() -> None:
-    """Leaving messages to this callback must not also leave the classifier audit or excluded fields behind."""
     payload = build_payload(messages=TOOL_CONVERSATION)
     payload["standard_logging_object"]["classifier_input"] = {"system": "SECRET-7545"}
     logger_under_test = _redacting_logger(turn_off_message_logging=True)
