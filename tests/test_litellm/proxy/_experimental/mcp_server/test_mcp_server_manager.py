@@ -4575,12 +4575,12 @@ class TestMCPServerManager:
         await asyncio.wait_for(started.wait(), timeout=1)
         if cancel:
             task.cancel()
-        status, error = await task
-        assert status == ("unknown" if cancel else "unhealthy")
-        assert error == (
-            "OpenAPI specification check was cancelled"
-            if cancel else "OpenAPI specification check timed out after 0.1 seconds"
-        )
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            status, error = await task
+            assert status == "unhealthy"
+            assert error == "OpenAPI specification check timed out after 0.1 seconds"
         assert cancelled.is_set()
 
     @pytest.mark.asyncio
@@ -12861,4 +12861,43 @@ async def test_openapi_health_reports_size_limit_as_unknown_and_caches_failure(r
     assert result.health_check_error == "OpenAPI specification probe refused: Response exceeds the configured size limit"
     assert cached.health_check_error == result.health_check_error
     assert cached.last_health_check == result.last_health_check
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_waiting", [False, True])
+async def test_openapi_health_cancellation_does_not_poison_cache(respx_mock, monkeypatch, already_waiting):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="cancelled-cache", name="cancelled-cache", transport=MCPTransport.http,
+        spec_path="https://93.184.216.34/cancelled-cache.json", auth_type=MCPAuth.none,
+    )
+    manager.registry = {server.server_id: server}
+    started = asyncio.Event()
+    attempts = []
+
+    async def serve(request):
+        attempts.append(request.url)
+        if not started.is_set():
+            started.set()
+            await asyncio.Event().wait()
+        return httpx.Response(200, json={"paths": {}})
+
+    route = respx_mock.get(server.spec_path).mock(side_effect=serve)
+    leader = asyncio.create_task(manager.health_check_server(server.server_id))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    follower = asyncio.create_task(manager.health_check_server(server.server_id)) if already_waiting else None
+    await asyncio.sleep(0)
+    leader.cancel()
+    cancelled = await leader
+    assert cancelled.status == "unknown"
+    assert cancelled.health_check_error == "OpenAPI specification check was cancelled"
+    recovered = await follower if follower is not None else await manager.health_check_server(server.server_id)
+    assert recovered.status == "healthy"
+    assert recovered.health_check_error is None
+    cached = await manager.health_check_server(server.server_id)
+    assert cached.last_health_check == recovered.last_health_check
+    assert cached.status == "healthy"
+    assert len(attempts) == 2
     assert route.call_count == 1
