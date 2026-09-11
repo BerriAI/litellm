@@ -127,9 +127,7 @@ def test_initialize_prefers_typed_unreachable_fallback(
         _FakeGuard,
         raising=True,
     )
-    monkeypatch.setattr(
-        litellm, "logging_callback_manager", SimpleNamespace(add_litellm_callback=lambda cb: None)
-    )
+    monkeypatch.setattr(litellm, "logging_callback_manager", SimpleNamespace(add_litellm_callback=lambda cb: None))
 
     litellm_params = SimpleNamespace(
         api_base=None,
@@ -168,9 +166,7 @@ def test_initialize_applies_timeout_default_when_field_is_none(
         "litellm.proxy.guardrails.guardrail_hooks.conduct.ConductGuardrail",
         _FakeGuard,
     )
-    monkeypatch.setattr(
-        litellm, "logging_callback_manager", SimpleNamespace(add_litellm_callback=lambda cb: None)
-    )
+    monkeypatch.setattr(litellm, "logging_callback_manager", SimpleNamespace(add_litellm_callback=lambda cb: None))
 
     litellm_params = SimpleNamespace(
         api_base=None,

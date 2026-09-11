@@ -43,10 +43,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     # explicit ``None`` (or ``0``) also falls through to the intended
     # 8-second budget (cursor[bot] finding).
     timeout = getattr(litellm_params, "timeout", None) or _DEFAULT_TIMEOUT_SECONDS
-    unreachable_fallback = (
-        getattr(litellm_params, "unreachable_fallback", None)
-        or _DEFAULT_UNREACHABLE_FALLBACK
-    )
+    unreachable_fallback = getattr(litellm_params, "unreachable_fallback", None) or _DEFAULT_UNREACHABLE_FALLBACK
 
     _conduct_callback: Final = ConductGuardrail(
         api_url=getattr(litellm_params, "api_base", None),
