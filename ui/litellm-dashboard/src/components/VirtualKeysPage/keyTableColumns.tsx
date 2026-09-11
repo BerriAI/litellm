@@ -9,17 +9,17 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DateCell,
+  ENTITY_CELL_TITLE_CLASSES,
   IdCell,
   IdentityCell,
   ModelsCell,
   SpendBudgetCell,
   StatusBadge,
+  UserPopoverCell,
   type StatusTone,
 } from "@/components/shared/table_cells";
-import { orgDetailHref, teamDetailHref, userDetailHref } from "@/utils/entityLinks";
-import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
+import { orgDetailHref, teamDetailHref } from "@/utils/entityLinks";
 
-import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 
@@ -28,8 +28,6 @@ interface KeyStatus {
   label: string;
   tooltip?: string;
 }
-
-const ENTITY_CELL_TITLE_CLASSES = "font-mono text-xs font-normal";
 
 const SPEND_BUDGET_SORT_FIELDS: DataTableSortField[] = [
   { id: "spend", label: "Spend" },
@@ -64,60 +62,6 @@ const getKeyStatus = (key: KeyResponse): KeyStatus => {
     label: "Active",
     tooltip: "This key is not blocked and has not expired.",
   };
-};
-
-const UserPopoverCell = ({
-  userAlias,
-  userEmail,
-  userId,
-  width,
-}: {
-  userAlias: string | null;
-  userEmail: string | null;
-  userId: string | null;
-  width: number;
-}) => {
-  const displayValue = userAlias || userEmail || userId;
-  const isDefaultAdmin = userId === DEFAULT_PROXY_ADMIN_USER_ID;
-
-  const popoverContent = (
-    <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
-      {[
-        { label: "User Alias", value: userAlias },
-        { label: "User Email", value: userEmail },
-        { label: "User ID", value: userId },
-      ].map(({ label, value }) => (
-        <div key={label} className="flex flex-col min-w-0">
-          <span className="text-muted-foreground">{label}</span>
-          {value ? (
-            <IdCell value={value} variant="plain" copyable className="max-w-full" />
-          ) : (
-            <span className="font-mono">-</span>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-
-  const trigger =
-    isDefaultAdmin && !userAlias && !userEmail ? (
-      <DefaultProxyAdminTag userId={userId} />
-    ) : (
-      <IdentityCell
-        title={displayValue || "-"}
-        titleClassName={ENTITY_CELL_TITLE_CLASSES}
-        href={userId ? userDetailHref(userId) : undefined}
-      />
-    );
-
-  return (
-    <HoverCard>
-      <HoverCardTrigger render={<span className="block" style={{ maxWidth: width, overflow: "hidden" }} />}>
-        {trigger}
-      </HoverCardTrigger>
-      <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-    </HoverCard>
-  );
 };
 
 const InfoHeader = ({ label, tooltip }: { label: string; tooltip: string }) => (

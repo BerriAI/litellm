@@ -10,6 +10,8 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
 }));
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("../key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: vi.fn((model: string) => model),
 }));
@@ -382,6 +384,66 @@ describe("TeamVirtualKeysTable", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Key Info View")).toBeInTheDocument();
+    });
+  });
+
+  describe("entity links out of the key rows", () => {
+    const renderRow = async (key: KeyResponse, organization: Organization | null = null) => {
+      mockUseKeys.mockReturnValue({
+        data: { keys: [key], total_count: 1, current_page: 1, total_pages: 1 } as KeysResponse,
+        isPending: false,
+        isFetching: false,
+        refetch: vi.fn(),
+      } as any);
+      renderWithProviders(<TeamVirtualKeysTable {...defaultProps} organization={organization} />);
+      return (await screen.findByText(key.key_alias as string)).closest("tr") as HTMLElement;
+    };
+
+    it("points the Organization ID cell at the org's detail page", async () => {
+      const row = await renderRow(createMockKey({ organization_id: null }), mockOrganization);
+      expect(within(row).getByRole("link", { name: "org-123" })).toHaveAttribute(
+        "href",
+        "/ui/organizations?org=org-123",
+      );
+    });
+
+    it("points the User Email and User ID cells at the owning user's detail page", async () => {
+      const row = await renderRow(
+        createMockKey({ user_id: "user-1", user: { user_id: "user-1", user_email: "alice@example.com" } }),
+      );
+      expect(within(row).getByRole("link", { name: "alice@example.com" })).toHaveAttribute(
+        "href",
+        "/ui/users?user=user-1",
+      );
+      expect(within(row).getByRole("link", { name: "user-1" })).toHaveAttribute("href", "/ui/users?user=user-1");
+    });
+
+    it("points the Created By cell at the creator's detail page", async () => {
+      const row = await renderRow(
+        createMockKey({
+          created_by: "creator-1",
+          created_by_user: { user_id: "creator-1", user_email: "creator@example.com", user_alias: "The Creator" },
+        }),
+      );
+      expect(within(row).getByRole("link", { name: "The Creator" })).toHaveAttribute(
+        "href",
+        "/ui/users?user=creator-1",
+      );
+    });
+
+    it("leaves the default_user_id placeholder unlinked in the User ID and Created By cells", async () => {
+      const placeholder = { user_id: "default_user_id", user_email: "admin@example.com", user_alias: "Proxy Admin" };
+      const row = await renderRow(
+        createMockKey({
+          user_id: placeholder.user_id,
+          user: placeholder,
+          created_by: placeholder.user_id,
+          created_by_user: placeholder,
+        }),
+      );
+      expect(within(row).getByText("Default Proxy Admin")).toBeInTheDocument();
+      expect(within(row).getByText("Proxy Admin")).toBeInTheDocument();
+      expect(within(row).queryByRole("link", { name: "Proxy Admin" })).not.toBeInTheDocument();
     });
   });
 });
