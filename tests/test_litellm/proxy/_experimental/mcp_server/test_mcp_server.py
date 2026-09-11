@@ -8962,7 +8962,9 @@ class TestAgent365ChallengeAtConnect:
                 litellm.callbacks, guardrail, require_self=False
             )
 
-    async def _connect(self, server: MCPServer, oauth2_headers: dict[str, str] | None) -> HTTPException | None:
+    async def _connect(
+        self, server: MCPServer, oauth2_headers: dict[str, str] | None, path: str = "/mcp/tools"
+    ) -> HTTPException | None:
         from litellm.proxy._experimental.mcp_server import server as server_module
 
         with (
@@ -8975,7 +8977,14 @@ class TestAgent365ChallengeAtConnect:
         ):
             try:
                 await server_module._raise_preemptive_401_for_unauthenticated_servers(
-                    scope={"type": "http", "method": "POST", "path": "/mcp/tools", "headers": []},
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": path,
+                        "scheme": "https",
+                        "server": ("gw.example.com", 443),
+                        "headers": [],
+                    },
                     mcp_servers=["tools"],
                     oauth2_headers=oauth2_headers,
                     mcp_server_auth_headers=None,
@@ -8993,7 +9002,23 @@ class TestAgent365ChallengeAtConnect:
         assert challenge is not None and challenge.status_code == 401
         www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
         assert 'error="invalid_token"' in www_authenticate
-        assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/tools"' in www_authenticate
+        assert (
+            'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/mcp/tools"'
+            in www_authenticate
+        )
+
+    @pytest.mark.asyncio
+    async def test_legacy_route_challenge_points_at_its_own_metadata(self, agent_365_guardrail):
+        """RFC 9728 3.3: the metadata's ``resource`` must equal the URL the client connected to, so a
+        ``/{server}/mcp`` connect is sent to the ``/{server}/mcp`` document, not the ``/mcp/{server}`` one."""
+        challenge = await self._connect(self._server([self.GATEWAY_SCOPE]), None, path="/tools/mcp")
+
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
+        assert (
+            'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/tools/mcp"'
+            in www_authenticate
+        )
 
     @pytest.mark.asyncio
     async def test_entra_assertion_present_connects(self, agent_365_guardrail):
@@ -9011,7 +9036,10 @@ class TestAgent365ChallengeAtConnect:
         assert challenge is not None and challenge.status_code == 401
         www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
         assert 'error="invalid_token"' in www_authenticate
-        assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/tools"' in www_authenticate
+        assert (
+            'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/mcp/tools"'
+            in www_authenticate
+        )
 
     @pytest.mark.asyncio
     async def test_scopeless_server_is_still_challenged(self, agent_365_guardrail):
@@ -9096,7 +9124,11 @@ class TestOboPreflightScopedToAllowedServers:
         _, preflight = await self._run(requested, allowed=[requested], user_api_key_auth=key)
 
         preflight.assert_awaited_once_with(
-            server=requested, oauth2_headers=self.SUBJECT_HEADERS, user_api_key_auth=key, raw_headers=None
+            server=requested,
+            oauth2_headers=self.SUBJECT_HEADERS,
+            user_api_key_auth=key,
+            raw_headers=None,
+            resource_metadata_url="/.well-known/oauth-protected-resource/mcp/obo_tools",
         )
 
 

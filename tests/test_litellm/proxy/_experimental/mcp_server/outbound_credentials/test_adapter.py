@@ -584,6 +584,22 @@ def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
     assert "error_description=" in www
 
 
+def test_raise_token_exchange_challenge_explicit_resource_metadata_url_wins():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(
+            _server(alias="obo-srv"),
+            root_path="/",
+            resource_metadata_url="https://gw.example.com/.well-known/oauth-protected-resource/obo-srv/mcp",
+        )
+    www = exc_info.value.headers["WWW-Authenticate"]
+    assert 'resource_metadata="https://gw.example.com/.well-known/oauth-protected-resource/obo-srv/mcp"' in www
+    assert "/mcp/obo-srv" not in www
+
+
 def test_raise_token_exchange_challenge_includes_server_root_path(monkeypatch):
     from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
         raise_token_exchange_challenge,
