@@ -9,10 +9,10 @@ import tracemalloc
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from types import FrameType
-from typing import Any, Final, NamedTuple, Protocol, TypeAlias, TypedDict
+from typing import Any, Final, NamedTuple, Protocol, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger

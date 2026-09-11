@@ -4042,6 +4042,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/debug/asyncio-tasks/stacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Active Task Stacks */
+        get: operations["get_active_task_stacks_debug_asyncio_tasks_stacks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/debug/memory/details": {
         parameters: {
             query?: never;
@@ -39628,6 +39645,35 @@ export interface components {
             /** Status */
             status?: ("pending" | "running" | "paused" | "completed" | "failed") | null;
         };
+        /** _Frame */
+        _Frame: {
+            /** File */
+            file: string;
+            /** Function */
+            function: string;
+            /** Line */
+            line: number;
+        };
+        /** _TaskStackDump */
+        _TaskStackDump: {
+            /** Groups */
+            groups: components["schemas"]["_TaskStackGroup"][];
+            /** Total Active Tasks */
+            total_active_tasks: number;
+            /** Worker Pid */
+            worker_pid: number;
+        };
+        /** _TaskStackGroup */
+        _TaskStackGroup: {
+            /** Coroutine */
+            coroutine: string;
+            /** Count */
+            count: number;
+            /** Stack */
+            stack: components["schemas"]["_Frame"][];
+            /** Task Names */
+            task_names: string[];
+        };
         /** ModelInfo */
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
@@ -45865,6 +45911,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_active_task_stacks_debug_asyncio_tasks_stacks_get: {
+        parameters: {
+            query?: {
+                max_frames?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["_TaskStackDump"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
