@@ -153,7 +153,7 @@ class PromptCachingCache:
             None,
         )
         # Match the provider prefix exactly instead of pinning on uncached trailing tools
-        return tools[: cacheable_tool_index + 1] if cacheable_tool_index is not None else []
+        return tools[: cacheable_tool_index + 1] if cacheable_tool_index is not None else tools[:0]
 
     @staticmethod
     def prepend_system_prompt(
@@ -162,9 +162,9 @@ class PromptCachingCache:
     ) -> list[AllMessageValues]:
         if system is None:
             return messages
-        return cast(
+        return cast(  # cast-ok: system content is validated by the provider payload
             list[AllMessageValues],
-            [{"role": "system", "content": system}, *messages],
+            [{"role": "system", "content": system}, *messages],  # mutable-ok: cast target requires a concrete list
         )
 
     @staticmethod
@@ -172,7 +172,9 @@ class PromptCachingCache:
         messages: list[AllMessageValues] | None,
         tools: list[ChatCompletionToolParam] | None = None,
     ) -> int:
-        cacheable_prefix: Final = PromptCachingCache.extract_cacheable_prefix(messages) if messages is not None else []
+        cacheable_prefix: Final = (
+            PromptCachingCache.extract_cacheable_prefix(messages) if messages is not None else []  # mutable-ok: TTL helper requires a concrete list
+        )
         return PromptCachingCache.get_prompt_caching_ttl_from_prefix(cacheable_prefix, tools)
 
     @staticmethod
@@ -180,7 +182,7 @@ class PromptCachingCache:
         cacheable_prefix: list[AllMessageValues],
         tools: list[ChatCompletionToolParam] | None,
     ) -> int:
-        cacheable_tools: Final = PromptCachingCache.extract_cacheable_tools(tools or [])
+        cacheable_tools: Final = PromptCachingCache.extract_cacheable_tools(tools or [])  # mutable-ok: tool API requires a concrete list
         cache_control_values: Final = tuple(
             cache_control
             for message in cacheable_prefix
@@ -259,7 +261,10 @@ class PromptCachingCache:
         self.cache.set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
-            ttl=PromptCachingCache.get_prompt_caching_ttl_from_prefix(cacheable_prefix or [], tools),
+            ttl=PromptCachingCache.get_prompt_caching_ttl_from_prefix(
+                cacheable_prefix or [],  # mutable-ok: TTL helper requires a concrete list
+                tools,
+            ),
         )
         return
 
@@ -282,7 +287,10 @@ class PromptCachingCache:
         await self.cache.async_set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
-            ttl=PromptCachingCache.get_prompt_caching_ttl_from_prefix(cacheable_prefix or [], tools),
+            ttl=PromptCachingCache.get_prompt_caching_ttl_from_prefix(
+                cacheable_prefix or [],  # mutable-ok: TTL helper requires a concrete list
+                tools,
+            ),
         )
         return
 

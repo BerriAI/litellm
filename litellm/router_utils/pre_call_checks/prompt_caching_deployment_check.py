@@ -102,7 +102,9 @@ class PromptCachingDeploymentCheck(CustomLogger):
             model_id_dict: Final = await prompt_cache.async_get_model_id(
                 messages=affinity_messages,
                 tools=(
-                    cast(list[AllToolParamValues] | None, request_kwargs.get("tools"))
+                    cast(  # cast-ok: request kwargs are untyped
+                        list[AllToolParamValues] | None, request_kwargs.get("tools")
+                    )  # cast-ok: request kwargs are untyped
                     if request_kwargs is not None
                     else None
                 ),
@@ -149,7 +151,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
             return
 
         logged_messages: Final = PromptCachingCache.prepend_system_prompt(
-            cast(list[AllMessageValues], messages),
+            cast(list[AllMessageValues], messages),  # cast-ok: standard logging payload is partially typed
             kwargs.get("system"),
         )
 
@@ -164,7 +166,9 @@ class PromptCachingDeploymentCheck(CustomLogger):
             await cache.async_add_model_id(
                 model_id=model_id,
                 messages=logged_messages,
-                tools=cast(list[AllToolParamValues] | None, kwargs.get("tools")),
+                tools=cast(  # cast-ok: callback kwargs are untyped
+                    list[AllToolParamValues] | None, kwargs.get("tools")
+                ),
             )
 
         return
