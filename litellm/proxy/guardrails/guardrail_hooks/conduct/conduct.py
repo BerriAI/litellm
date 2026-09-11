@@ -24,14 +24,15 @@ _IMPORT_ERROR_MESSAGE = (
 )
 
 
-# ── Base plugin import — deferred to init-time ─────────────────────────
-# Reason: the guardrail-hook auto-discovery loop treats a module-level
-# ``raise ImportError`` as "hook unavailable" and silently drops the
-# registration. A user who installed LiteLLM but forgot the
-# ``conduct-litellm-guard`` dependency would see their config load with
-# no guardrail active and no error message (cursor[bot] finding on
-# BerriAI/litellm#38143). Import here without raising; surface the
-# missing dep at ``__init__`` time when it is actionable.
+# ── Base plugin import — deferred to init-time via raise_if_missing_package ──
+# Raising ImportError at module load caused the guardrail-hook auto-loader to
+# treat a missing ``conduct-litellm-guard`` as "hook unavailable" and silently
+# drop the registration. Users saw configs load with no guardrail active and
+# no error message. Instead we fall back to ``CustomGuardrail`` at module load
+# so the class hierarchy stays intact; ``initialize_guardrail`` (in
+# ``__init__.py``) calls :func:`raise_if_missing_package` before construction
+# so the friendly error surfaces when actionable.
+# (cursor[bot] finding on BerriAI/litellm#38143.)
 
 try:
     from conduct_litellm_guard import ConductGuard as _BaseConductGuard
@@ -41,44 +42,35 @@ try:
     from conduct_litellm_guard.guardrail import GuardDecision
 
     _IMPORT_ERROR: ImportError | None = None
-except ImportError as _e:
-    _BaseConductGuard = None  # type: ignore[assignment,misc]
-    ConductGuardrailBlocked = None  # type: ignore[assignment,misc]
-    GuardDecision = None  # type: ignore[assignment,misc]
-    _IMPORT_ERROR = _e
+except ImportError as _import_err:
+    _BaseConductGuard = CustomGuardrail
+    ConductGuardrailBlocked = None
+    GuardDecision = None
+    _IMPORT_ERROR = _import_err
 
 
-# When the base package isn't installed we still need a real class so
-# LiteLLM's registry lookup succeeds; the friendly error surfaces on
-# construction.
-_ParentClass = _BaseConductGuard if _BaseConductGuard is not None else CustomGuardrail
-
-
-class ConductGuardrail(_ParentClass):  # type: ignore[valid-type,misc]
+class ConductGuardrail(_BaseConductGuard):
     """LiteLLM adapter over ``conduct_litellm_guard.ConductGuard``.
 
-    Subclass exists so we can:
-    - Advertise supported event hooks honestly to LiteLLM (see
-      ``get_supported_event_hooks``).
-    - Raise a friendly error at construction time when the base package
-      isn't installed (rather than at module import — see comment
-      above).
+    Inherits its ``__init__`` from the base runtime when the standalone
+    package is installed; otherwise inherits from ``CustomGuardrail``
+    and ``initialize_guardrail`` short-circuits with a friendly error
+    before this class is ever constructed.
+
+    Only two additions on this side:
+    - ``SUPPORTED_EVENT_HOOKS`` / ``get_supported_event_hooks`` so
+      LiteLLM validates configs against modes we actually implement.
     """
 
     # Advertised event hooks. The plugin currently runs at pre_call
     # (input rail) — a policy block short-circuits before the model
     # sees the prompt, which is the semantic LiteLLM users expect for
-    # a "guardrail". ``during_call`` / ``post_call`` support lands with
-    # 0.3.x once the underlying Conduct response gate is wired through
-    # ``guard_check_response`` (tracked in the plugin repo). Advertising
-    # only pre_call today prevents silent bypass of ``during_call``
+    # a "guardrail". ``during_call`` / ``post_call`` support lands
+    # with plugin 0.3.x once the underlying Conduct response gate is
+    # wired through ``guard_check_response``. Advertising only
+    # pre_call today prevents silent bypass of ``during_call``
     # configurations — see veria-ai finding on BerriAI/litellm#38143.
     SUPPORTED_EVENT_HOOKS: ClassVar[tuple[GuardrailEventHooks, ...]] = (GuardrailEventHooks.pre_call,)
-
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        if _IMPORT_ERROR is not None or _BaseConductGuard is None:
-            raise ImportError(_IMPORT_ERROR_MESSAGE) from _IMPORT_ERROR
-        super().__init__(*args, **kwargs)
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -88,4 +80,19 @@ class ConductGuardrail(_ParentClass):  # type: ignore[valid-type,misc]
         return list(cls.SUPPORTED_EVENT_HOOKS)
 
 
-__all__ = ["ConductGuardrail", "ConductGuardrailBlocked", "GuardDecision"]
+def raise_if_missing_package() -> None:
+    """Called by ``initialize_guardrail`` before constructing the class.
+
+    Surfaces the friendly ``pip install`` error at the actionable moment
+    (config load) rather than silently dropping the hook at module load.
+    """
+    if _IMPORT_ERROR is not None:
+        raise ImportError(_IMPORT_ERROR_MESSAGE) from _IMPORT_ERROR
+
+
+__all__ = [
+    "ConductGuardrail",
+    "ConductGuardrailBlocked",
+    "GuardDecision",
+    "raise_if_missing_package",
+]
