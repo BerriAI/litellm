@@ -28,12 +28,15 @@ describe("TopKeyView", () => {
     teams: null,
     premiumUser: true,
     showTags: false,
+    topKeysLimit: 5,
+    setTopKeysLimit: vi.fn(),
   };
 
   const mockKeysWithTags = [
     {
       api_key: "key-1",
       key_alias: "Production Key",
+      user_email: null,
       tags: [
         { tag: "production", usage: 0.005 } as TagUsage, // <$0.01
         { tag: "high-volume", usage: 125.5 } as TagUsage, // High spend
@@ -44,6 +47,7 @@ describe("TopKeyView", () => {
     {
       api_key: "key-2",
       key_alias: "Staging Key",
+      user_email: null,
       tags: [
         { tag: "staging", usage: 45.75 } as TagUsage, // Medium spend
         { tag: "testing", usage: 0.008 } as TagUsage, // <$0.01
@@ -54,6 +58,7 @@ describe("TopKeyView", () => {
     {
       api_key: "key-3",
       key_alias: "Development Key",
+      user_email: null,
       tags: [
         { tag: "dev", usage: 0.002 } as TagUsage, // <$0.01
         { tag: "experimental", usage: 0.001 } as TagUsage, // <$0.01
@@ -65,11 +70,15 @@ describe("TopKeyView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseAuthorized.mockReturnValue({
+      isLoading: false,
+      isAuthorized: true,
       token: "mock-token",
       accessToken: mockProps.accessToken,
       userId: mockProps.userID,
       userEmail: "test@example.com",
       userRole: mockProps.userRole,
+      userRoleLabel: mockProps.userRole,
+      isViewOnly: false,
       premiumUser: mockProps.premiumUser,
       disabledPersonalKeyCreation: false,
       showSSOBanner: false,
@@ -181,13 +190,14 @@ describe("TopKeyView", () => {
         {
           api_key: "key-no-tags",
           key_alias: "No Tags Key",
+          user_email: null,
           tags: [],
           spend: 10.0,
         },
       ];
 
       renderWithProviders(<TopKeyView {...mockProps} topKeys={keysWithoutTags} showTags={true} />);
-      expect(screen.getByText("-")).toBeInTheDocument();
+      expect(screen.getAllByText("-")).toHaveLength(2);
     });
 
     it("should handle keys with undefined tags", () => {
@@ -195,13 +205,14 @@ describe("TopKeyView", () => {
         {
           api_key: "key-undefined-tags",
           key_alias: "Undefined Tags Key",
+          user_email: null,
           tags: undefined,
           spend: 5.0,
         },
       ];
 
       renderWithProviders(<TopKeyView {...mockProps} topKeys={keysWithUndefinedTags} showTags={true} />);
-      expect(screen.getByText("-")).toBeInTheDocument();
+      expect(screen.getAllByText("-")).toHaveLength(2);
     });
 
     it("should handle keys with null tags", () => {
@@ -209,13 +220,14 @@ describe("TopKeyView", () => {
         {
           api_key: "key-null-tags",
           key_alias: "Null Tags Key",
+          user_email: null,
           tags: null,
           spend: 3.0,
         },
       ];
 
       renderWithProviders(<TopKeyView {...mockProps} topKeys={keysWithNullTags} showTags={true} />);
-      expect(screen.getByText("-")).toBeInTheDocument();
+      expect(screen.getAllByText("-")).toHaveLength(2);
     });
   });
 
@@ -225,6 +237,7 @@ describe("TopKeyView", () => {
         {
           api_key: "key-long-tags",
           key_alias: "Long Tags Key",
+          user_email: null,
           tags: [{ tag: "very-long-tag-name", usage: 10.0 } as TagUsage, { tag: "short", usage: 5.0 } as TagUsage],
           spend: 15.0,
         },
@@ -245,12 +258,14 @@ describe("TopKeyView", () => {
         {
           api_key: "key-mixed-1",
           key_alias: "Mixed Key 1",
+          user_email: null,
           tags: [{ tag: "expensive", usage: 999.99 } as TagUsage, { tag: "cheap", usage: 0.001 } as TagUsage],
           spend: 1000.0,
         },
         {
           api_key: "key-mixed-2",
           key_alias: "Mixed Key 2",
+          user_email: null,
           tags: [{ tag: "moderate", usage: 50.0 } as TagUsage, { tag: "tiny", usage: 0.005 } as TagUsage],
           spend: 50.01,
         },
@@ -292,6 +307,7 @@ describe("TopKeyView", () => {
         {
           api_key: "test-key-123",
           key_alias: "Test Key",
+          user_email: null,
           tags: [],
           spend: 25.5,
         },

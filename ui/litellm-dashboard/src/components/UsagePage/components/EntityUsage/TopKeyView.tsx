@@ -15,8 +15,16 @@ import { TagUsage } from "../../types";
 
 const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
 
+export interface TopKeyItem {
+  api_key: string;
+  key_alias: string;
+  user_email: string | null;
+  tags?: TagUsage[] | null;
+  spend: number;
+}
+
 interface TopKeyViewProps {
-  topKeys: any[];
+  topKeys: TopKeyItem[];
   teams: any[] | null;
   showTags?: boolean;
   topKeysLimit: number;
@@ -43,7 +51,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     });
   };
 
-  const handleKeyClick = async (item: any) => {
+  const handleKeyClick = async (item: TopKeyItem) => {
     if (!accessToken) return;
 
     try {
@@ -93,6 +101,11 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
     {
       header: "Key Alias",
       accessorKey: "key_alias",
+      cell: (info: any) => info.getValue() || "-",
+    },
+    {
+      header: "User",
+      accessorKey: "user_email",
       cell: (info: any) => info.getValue() || "-",
     },
   ];

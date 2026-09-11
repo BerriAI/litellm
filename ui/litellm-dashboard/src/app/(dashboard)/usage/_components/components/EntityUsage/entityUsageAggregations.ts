@@ -1,4 +1,5 @@
 import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
+import type { TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { BreakdownMetrics, DailyData, KeyMetricWithMetadata, TagUsage } from "@/components/UsagePage/types";
 
 export type ExtendedDailyData = DailyData & {
@@ -85,7 +86,7 @@ export const getTopAgents = (results: ExtendedDailyData[], topAgentsLimit: numbe
     .slice(0, topAgentsLimit);
 };
 
-export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number) => {
+export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number): TopKeyItem[] => {
   const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
   results.forEach((day) => {
     const { breakdown } = day;
@@ -140,7 +141,8 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
     .map(([api_key, metrics]) => ({
       api_key,
       key_alias: keyActivityLabel(metrics.metadata),
-      tags: metrics.metadata.tags || "-",
+      user_email: metrics.metadata.user_email ?? null,
+      tags: metrics.metadata.tags || [],
       spend: metrics.metrics.spend,
     }))
     .sort((a, b) => b.spend - a.spend)
