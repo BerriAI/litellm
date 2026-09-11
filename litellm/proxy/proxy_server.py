@@ -6446,11 +6446,11 @@ class ProxyConfig:
                 raw_litellm_params = {  # mutable-ok: resolved copy for router upsert
                     k: (get_secret(v) if isinstance(v, str) and v.startswith("os.environ/") else v)
                     for k, v in copy.deepcopy(
-                        model.get("litellm_params") or dict()
+                        model.get("litellm_params") or {}  # mutable-ok: config fallback
                     ).items()  # mutable-ok: safe fallback
                 }
 
-                model_info_dict = copy.deepcopy(model.get("model_info") or dict())  # mutable-ok: isolated info dict
+                model_info_dict = copy.deepcopy(model.get("model_info") or {})  # mutable-ok: config fallback
                 model_id = model_info_dict.get("id", None)
                 if model_id is None:
                     model_id = llm_router.generate_model_id(
