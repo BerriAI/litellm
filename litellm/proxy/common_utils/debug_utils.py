@@ -147,8 +147,11 @@ async def memory_usage_in_mem_cache(
             llm_router.cache.in_memory_cache.ttl_dict
         )
 
-    num_items_in_user_api_key_cache: Final = len(user_api_key_cache.in_memory_cache.cache_dict) + len(
-        user_api_key_cache.in_memory_cache.ttl_dict
+    num_items_in_user_api_key_cache: Final = (
+        len(user_api_key_cache.in_memory_cache.cache_dict)
+        + len(user_api_key_cache.in_memory_cache.ttl_dict)
+        + len(user_api_key_cache.key_object_cache.in_memory_cache.cache_dict)
+        + len(user_api_key_cache.key_object_cache.in_memory_cache.ttl_dict)
     )
 
     num_items_in_proxy_logging_obj_cache: Final = len(
@@ -189,6 +192,8 @@ async def memory_usage_in_mem_cache_items(
     return {
         "user_api_key_cache": user_api_key_cache.in_memory_cache.cache_dict,
         "user_api_key_ttl": user_api_key_cache.in_memory_cache.ttl_dict,
+        "user_key_object_cache": user_api_key_cache.key_object_cache.in_memory_cache.cache_dict,
+        "user_key_object_ttl": user_api_key_cache.key_object_cache.in_memory_cache.ttl_dict,
         "llm_router_cache": llm_router_in_memory_cache_dict,
         "llm_router_ttl": llm_router_in_memory_ttl_dict,
         "proxy_logging_obj_cache": proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict,
@@ -294,7 +299,9 @@ async def get_memory_summary(
 
     try:
         # User API key cache
-        user_cache_items: Final = len(user_api_key_cache.in_memory_cache.cache_dict)
+        user_cache_items: Final = len(user_api_key_cache.in_memory_cache.cache_dict) + len(
+            user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
+        )
         total_cache_items += user_cache_items
         caches["user_api_keys"] = {
             "count": user_cache_items,
@@ -429,10 +436,16 @@ def _get_cache_memory_stats(
     cache_stats: Final[dict[str, object]] = {}
     try:
         # User API key cache
-        user_cache_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.cache_dict)
-        user_ttl_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.ttl_dict)
+        key_object_in_memory_cache: Final = user_api_key_cache.key_object_cache.in_memory_cache
+        user_cache_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.cache_dict) + sys.getsizeof(
+            key_object_in_memory_cache.cache_dict
+        )
+        user_ttl_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.ttl_dict) + sys.getsizeof(
+            key_object_in_memory_cache.ttl_dict
+        )
         cache_stats["user_api_key_cache"] = {
-            "num_items": len(user_api_key_cache.in_memory_cache.cache_dict),
+            "num_items": len(user_api_key_cache.in_memory_cache.cache_dict)
+            + len(key_object_in_memory_cache.cache_dict),
             "cache_dict_size_bytes": user_cache_size,
             "ttl_dict_size_bytes": user_ttl_size,
             "total_size_mb": round((user_cache_size + user_ttl_size) / (1024 * 1024), 2),
