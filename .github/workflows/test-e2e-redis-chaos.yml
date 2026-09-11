@@ -91,6 +91,7 @@ jobs:
 
       - name: Run the Redis chaos load test
         env:
+          E2E_REDIS_CHAOS: "1"
           LITELLM_PROXY_URL: http://localhost:4000
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: "6379"
