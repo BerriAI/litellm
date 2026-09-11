@@ -1304,15 +1304,14 @@ class CustomGuardrail(CustomLogger):
         returns the (possibly modified) request payload. Neither is a provider verdict, and
         logging them verbatim ships the user's prompt to every logging sink (OTEL spans,
         Datadog, spend logs), so both collapse to ``"allow"`` / ``"mask"`` by comparing
-        against ``original_inputs``, a copy taken before the hook ran. A non-mapping result
-        (e.g. a rewritten prompt string) replaces the request wholesale, so it is ``"mask"``.
+        against ``original_inputs``, a copy taken before the hook ran. A string result is the
+        hook's own rejection message (the proxy turns it into a 400), not user input, so it is
+        logged as is.
         """
         if response is None:
             return {}
-        if original_inputs is None:
+        if original_inputs is None or not isinstance(response, Mapping):
             return response
-        if not isinstance(response, Mapping):
-            return "mask"
         return "mask" if self._inputs_were_modified(original_inputs, response) else "allow"
 
     @staticmethod

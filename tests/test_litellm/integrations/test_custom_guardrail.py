@@ -2916,8 +2916,8 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         assert self._logged_response(data) == "mask"
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_returning_string_logs_mask_without_raising(self):
-        class RewritingGuardrail(CustomGuardrail):
+    async def test_pre_call_hook_returning_rejection_string_logs_that_string(self):
+        class RejectingGuardrail(CustomGuardrail):
             @log_guardrail_information
             async def async_pre_call_hook(
                 self,
@@ -2926,15 +2926,15 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
                 data: dict[str, object],
                 call_type: str,
             ) -> str:
-                return "REWRITTEN_PROMPT"
+                return "Blocked by policy"
 
         data = self._request()
-        result = await RewritingGuardrail(guardrail_name="g").async_pre_call_hook(
+        result = await RejectingGuardrail(guardrail_name="g").async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
         )
 
-        assert result == "REWRITTEN_PROMPT"
-        assert self._logged_response(data) == "mask"
+        assert result == "Blocked by policy"
+        assert self._logged_response(data) == "Blocked by policy"
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_removing_legacy_functions_in_place_logs_mask(self):
