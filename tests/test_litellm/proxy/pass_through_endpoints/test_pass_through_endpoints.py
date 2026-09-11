@@ -4938,6 +4938,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch
 
     propagated = get_current_span(TraceContextTextMapPropagator().extract(captured["headers"]))
     assert propagated.get_span_context().trace_id == span.get_span_context().trace_id
+    assert captured["headers"]["authorization"] == "Bearer client"
 
 
 class ClosingUpstreamWebSocket:
