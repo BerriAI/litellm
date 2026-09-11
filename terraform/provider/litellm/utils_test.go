@@ -113,7 +113,7 @@ func TestHandleMCPAPIResponseAcceptsFullSuccessRange(t *testing.T) {
 	}
 }
 
-func TestHandleMCPAPIResponseAcceptsEmptyBodyOn2xx(t *testing.T) {
+func TestHandleMCPAPIResponseRejectsEmptyBodyOn2xx(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rec.WriteHeader(http.StatusNoContent)
 	resp := rec.Result()
@@ -122,7 +122,7 @@ func TestHandleMCPAPIResponseAcceptsEmptyBodyOn2xx(t *testing.T) {
 	var mcpResp MCPServerResponse
 	err := handleMCPAPIResponse(resp, &mcpResp, client)
 
-	if err != nil {
-		t.Fatalf("handleMCPAPIResponse returned unexpected error for empty-body 204: %v", err)
+	if err == nil {
+		t.Fatal("handleMCPAPIResponse returned no error for empty-body 204; every MCP caller (create/read/update) writes the parsed result straight into Terraform state with no fallback, so a silently-accepted empty body would blank out or empty-ID the resource")
 	}
 }

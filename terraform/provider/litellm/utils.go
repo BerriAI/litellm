@@ -147,10 +147,6 @@ func handleMCPAPIResponse(resp *http.Response, result interface{}, client *Clien
 			resp.Status, client.redactSensitiveData(string(bodyBytes)))
 	}
 
-	if len(bodyBytes) == 0 || string(bodyBytes) == "null" {
-		return nil
-	}
-
 	if err := json.Unmarshal(bodyBytes, result); err != nil {
 		return fmt.Errorf("failed to parse response: %v", err)
 	}
