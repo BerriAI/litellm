@@ -4232,10 +4232,13 @@ def _check_model_access_helper(
     ## check if model in allowed model names
     from collections import defaultdict
 
+    team_alias_target: Final = team_model_aliases.get(model) if team_model_aliases else None
+    effective_model: Final = team_alias_target if team_alias_target is not None else model
+
     access_groups: dict[str, list[str]] = defaultdict(list)
 
     if llm_router:
-        access_groups = llm_router.get_model_access_groups(model_name=model, team_id=team_id)
+        access_groups = llm_router.get_model_access_groups(model_name=effective_model, team_id=team_id)
 
     models = _resolve_all_team_model_sentinel_for_auth_check(
         models=models,
@@ -4251,16 +4254,7 @@ def _check_model_access_helper(
     # Filter out models that are access_groups
     filtered_models: Final = [m for m in models if m not in access_groups]
 
-    team_alias_target: Final = team_model_aliases.get(model) if team_model_aliases else None
-    if team_alias_target is not None and _check_model_access_helper(
-        model=team_alias_target,
-        llm_router=llm_router,
-        models=models,
-        team_id=team_id,
-    ):
-        return True
-
-    if _model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=filtered_models):
+    if _model_matches_any_wildcard_pattern_in_list(model=effective_model, allowed_model_list=filtered_models):
         return True
 
     all_model_access: bool = False
@@ -4271,7 +4265,7 @@ def _check_model_access_helper(
     if SpecialModelNames.all_proxy_models.value in filtered_models:
         all_model_access = True
 
-    if model is not None and model not in filtered_models and all_model_access is False:
+    if effective_model is not None and effective_model not in filtered_models and all_model_access is False:
         return False
     return True
 
@@ -4318,12 +4312,16 @@ def _can_object_call_model(
 
     from litellm.router_strategy.complexity_router.context_compaction import native_compaction_parent
 
-    compaction_parent: Final = native_compaction_parent(model)
-    potential_models: Final = [model, compaction_parent] if compaction_parent is not None else [model]
-    if model in litellm.model_alias_map:
-        potential_models.append(litellm.model_alias_map[model])
-    elif llm_router and model in llm_router.model_group_alias:
-        _model: Final = llm_router._get_model_from_alias(model)
+    team_alias_target: Final = team_model_aliases.get(model) if team_model_aliases else None
+    resolved_model: Final = team_alias_target if team_alias_target is not None else model
+    compaction_parent: Final = native_compaction_parent(resolved_model)
+    potential_models: Final = (
+        [resolved_model, compaction_parent] if compaction_parent is not None else [resolved_model]
+    )
+    if resolved_model in litellm.model_alias_map:
+        potential_models.append(litellm.model_alias_map[resolved_model])
+    elif llm_router and resolved_model in llm_router.model_group_alias:
+        _model: Final = llm_router._get_model_from_alias(resolved_model)
         if _model:
             potential_models.append(_model)
 
@@ -4333,7 +4331,6 @@ def _can_object_call_model(
             model=m,
             llm_router=llm_router,
             models=models,
-            team_model_aliases=team_model_aliases,
             team_id=team_id,
         ):
             return True
