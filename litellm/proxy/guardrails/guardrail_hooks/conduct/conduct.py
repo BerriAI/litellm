@@ -39,11 +39,10 @@ def request_payload(
     request_data: Mapping[str, object],
     input_type: Literal["request", "response"],
 ) -> Mapping[str, object] | None:
-    texts: Final = inputs.get("texts") or ()
-    if input_type != "request" or not texts:
+    if input_type != "request":
         return None
     messages: Final = inputs.get("structured_messages") or tuple(
-        ChatCompletionUserMessage(role="user", content=text) for text in texts
+        ChatCompletionUserMessage(role="user", content=text) for text in inputs.get("texts") or ()
     )
     return MappingProxyType({**request_data, "prompt": None, "messages": messages})
 

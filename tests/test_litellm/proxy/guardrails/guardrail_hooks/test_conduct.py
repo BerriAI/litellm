@@ -19,11 +19,10 @@ from litellm.proxy.guardrails.guardrail_hooks.conduct import (
     initialize_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_hooks.conduct.conduct import apply_conduct_guardrail, request_payload
-from litellm.proxy.guardrails.guardrail_registry import (
-    guardrail_class_registry,
-    guardrail_initializer_registry,
-)
+from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
+from litellm.types.llms.openai import ChatCompletionAssistantMessage
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 PACKAGE_INSTALLED: Final = importlib.util.find_spec("conduct_litellm_guard") is not None
@@ -98,11 +97,6 @@ def _isolate_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
 
 
-def test_discovered_by_guardrail_registry() -> None:
-    assert guardrail_initializer_registry["conduct"] is initialize_guardrail
-    assert guardrail_class_registry["conduct"] is ConductGuardrail
-
-
 def test_maps_typed_fields_and_extras_onto_plugin_kwargs() -> None:
     callback: Final = _init(
         _params(
@@ -148,10 +142,8 @@ def test_rejects_modes_the_plugin_does_not_implement(mode: str, monkeypatch: pyt
 
 @pytest.mark.skipif(PACKAGE_INSTALLED, reason="exercises the missing-package fallback")
 def test_missing_package_fails_at_config_load_with_install_hint() -> None:
-    litellm_params: Final = _params()
-
     with pytest.raises(ImportError, match="pip install"):
-        initialize_guardrail(litellm_params, _guardrail(litellm_params))
+        InMemoryGuardrailHandler().initialize_guardrail(_guardrail(_params()))
 
     assert litellm.callbacks == []
 
@@ -181,16 +173,24 @@ def test_request_payload_keeps_roles_when_translation_provides_them() -> None:
     assert payload == {"prompt": None, "messages": structured}
 
 
-@pytest.mark.parametrize(
-    ("inputs", "input_type"),
-    [
-        (GenericGuardrailAPIInputs(texts=["pong"]), "response"),
-        (GenericGuardrailAPIInputs(texts=[]), "request"),
-        (GenericGuardrailAPIInputs(), "request"),
-    ],
-)
-def test_request_payload_skips_responses_and_empty_requests(inputs: GenericGuardrailAPIInputs, input_type: str) -> None:
-    assert request_payload(inputs, {"model": "gpt-5-mini"}, input_type) is None  # pyright: ignore[reportArgumentType]  # parametrized literal
+def test_request_payload_skips_model_responses() -> None:
+    assert request_payload(GenericGuardrailAPIInputs(texts=["pong"]), {"model": "gpt-5-mini"}, "response") is None
+
+
+@pytest.mark.asyncio
+async def test_tool_call_only_turns_still_reach_conduct() -> None:
+    check: Final = _RecordingCheck("block")
+    tool_call_turn: Final = ChatCompletionAssistantMessage(
+        role="assistant",
+        content=None,
+        tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "sql", "arguments": "{}"}}],
+    )
+    inputs: Final = GenericGuardrailAPIInputs(texts=[], structured_messages=[tool_call_turn])
+
+    with pytest.raises(_Blocked):
+        await apply_conduct_guardrail(inputs, {"model": "gpt-5-mini"}, "request", check, _Blocked)
+
+    assert check.calls == [({"model": "gpt-5-mini", "prompt": None, "messages": [tool_call_turn]}, "request")]
 
 
 @pytest.mark.parametrize("verdict", ["block", "approval"])
@@ -252,14 +252,21 @@ async def test_apply_guardrail_blocks_on_conduct_verdict() -> None:
 
 
 @pytest.mark.skipif(not PACKAGE_INSTALLED, reason="needs conduct-litellm-guard")
-def test_plugin_class_enforces_supported_modes() -> None:
-    assert ConductGuardrail.get_supported_event_hooks() == [GuardrailEventHooks.pre_call]
+def test_config_loads_conduct_and_rejects_modes_the_plugin_lacks() -> None:
+    handler: Final = InMemoryGuardrailHandler()
 
-    accepted: Final = _params()
-    callback: Final = initialize_guardrail(accepted, _guardrail(accepted))
-    assert callback.supported_event_hooks == [GuardrailEventHooks.pre_call]
-    assert litellm.callbacks == [callback]
+    loaded: Final = handler.initialize_guardrail(_guardrail(_params()))
+    assert loaded is not None
+    assert loaded["litellm_params"].guardrail == "conduct"
+    assert [type(callback) for callback in litellm.callbacks] == [ConductGuardrail]
 
-    rejected: Final = _params(mode="during_call")
     with pytest.raises(ValueError, match="not in the supported event hooks"):
-        initialize_guardrail(rejected, _guardrail(rejected))
+        handler.initialize_guardrail(_guardrail(_params(mode="during_call")))
+
+
+@pytest.mark.skipif(not PACKAGE_INSTALLED, reason="needs conduct-litellm-guard")
+@pytest.mark.asyncio
+async def test_ui_only_offers_pre_call_for_conduct() -> None:
+    settings: Final = await get_guardrail_ui_settings()
+
+    assert settings.supported_modes_by_provider["conduct"] == ["pre_call"]
