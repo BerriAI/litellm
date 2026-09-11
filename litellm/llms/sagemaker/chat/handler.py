@@ -36,6 +36,7 @@ class SagemakerChatHandler(BaseAWSLLM):
         aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
         aws_external_id: Final = optional_params.pop("aws_external_id", None)
+        aws_session_tags: Final = optional_params.pop("aws_session_tags", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -63,6 +64,7 @@ class SagemakerChatHandler(BaseAWSLLM):
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
         return credentials, aws_region_name
 

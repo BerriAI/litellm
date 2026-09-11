@@ -5,7 +5,7 @@ use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use pyo3::prelude::*;
 use serde_json::Value;
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::ocr_error_to_pyerr;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 fn prepare_ocr(
@@ -56,18 +56,18 @@ bridge_route! {
     required = {
         model: String,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        document: Value,
+        document: serde_json::Value,
     },
     optional = {
         api_key: Option<String>,
         api_base: Option<String>,
         custom_llm_provider: Option<String>,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        extra_headers: Option<Value>,
+        extra_headers: Option<serde_json::Value>,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        optional_params: Option<Value>,
+        optional_params: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_ocr,
-    errors = core_error_to_pyerr,
+    errors = ocr_error_to_pyerr,
 }

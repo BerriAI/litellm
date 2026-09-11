@@ -182,6 +182,8 @@ const lastSearchParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>, name: string) =
 
 const lastKeyParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => lastSearchParam(onUrlUpdate, "key");
 
+const lastHistoryMode = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].options.history;
+
 beforeEach(() => {
   vi.clearAllMocks();
 
@@ -377,6 +379,7 @@ it("clicking the key cell deep-links via ?key=", async () => {
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token);
   });
+  expect(lastHistoryMode(onUrlUpdate)).toBe("push");
 });
 
 it("renders KeyInfoView when the URL has ?key= for a key on the current page, without refetching it", async () => {
@@ -417,6 +420,7 @@ it("repoints ?key= to the rotated hash once the regenerate dialog is dismissed",
   await waitFor(() => {
     expect(lastKeyParam(onUrlUpdate)).toBe("rotated-hash-456");
   });
+  expect(lastHistoryMode(onUrlUpdate)).toBe("replace");
 });
 
 it("fetches the key by id when the URL has ?key= for a key not in the loaded page", async () => {
@@ -466,6 +470,92 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
 
   await waitFor(() => {
     expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
+  });
+});
+
+describe("entity links out of the key rows", () => {
+  const keyRow = async () => (await screen.findByText("Test Key Alias")).closest("tr") as HTMLElement;
+
+  const enableColumn = async (user: ReturnType<typeof userEvent.setup>, title: string) => {
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(await screen.findByText(title));
+    await user.keyboard("{Escape}");
+  };
+
+  const enableCreatedByColumn = (user: ReturnType<typeof userEvent.setup>) => enableColumn(user, "Created By");
+
+  it("points the User and Team cells at their detail pages", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    const row = await keyRow();
+    expect(within(row).getByRole("link", { name: "user@example.com" })).toHaveAttribute(
+      "href",
+      "/ui/users?user=user-1",
+    );
+    expect(within(row).getByRole("link", { name: "Test Team" })).toHaveAttribute("href", "/ui/teams?team=team-1");
+  });
+
+  it("points the Organization cell at the org's detail page", async () => {
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, org_id: "org-1" }]));
+    const user = userEvent.setup();
+    renderWithProviders(<VirtualKeysTable />);
+    await enableColumn(user, "Organization");
+
+    const row = await keyRow();
+    expect(within(row).getByRole("link", { name: "Test Organization" })).toHaveAttribute(
+      "href",
+      "/ui/organizations?org=org-1",
+    );
+  });
+
+  it("points the Created By cell at the creator's detail page", async () => {
+    mockUseKeys.mockReturnValue(
+      keysResult([
+        {
+          ...mockKey,
+          created_by: "creator-1",
+          created_by_user: { user_id: "creator-1", user_email: "creator@example.com", user_alias: "The Creator" },
+        },
+      ]),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<VirtualKeysTable />);
+    await enableCreatedByColumn(user);
+
+    const row = await keyRow();
+    expect(within(row).getByRole("link", { name: "The Creator" })).toHaveAttribute("href", "/ui/users?user=creator-1");
+  });
+
+  it("leaves the default_user_id placeholder unlinked even once it resolves to a named user", async () => {
+    const placeholder = { user_id: "default_user_id", user_email: "admin@example.com", user_alias: "Proxy Admin" };
+    mockUseKeys.mockReturnValue(
+      keysResult([
+        {
+          ...mockKey,
+          user_id: placeholder.user_id,
+          user_email: placeholder.user_email,
+          user: placeholder,
+          created_by: placeholder.user_id,
+          created_by_user: placeholder,
+        },
+      ]),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<VirtualKeysTable />);
+    await enableCreatedByColumn(user);
+
+    const row = await keyRow();
+    expect(within(row).getAllByText("Proxy Admin")).toHaveLength(2);
+    expect(within(row).queryByRole("link", { name: "Proxy Admin" })).not.toBeInTheDocument();
+  });
+
+  it("leaves the litellm-dashboard session team unlinked", async () => {
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, team_id: "litellm-dashboard" }]));
+    renderWithProviders(<VirtualKeysTable />);
+
+    const row = await keyRow();
+    expect(within(row).getByText("litellm-dashboard")).toBeInTheDocument();
+    expect(within(row).queryByRole("link", { name: "litellm-dashboard" })).not.toBeInTheDocument();
   });
 });
 
@@ -537,6 +627,19 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
       const lastCall = mockUseKeys.mock.calls[mockUseKeys.mock.calls.length - 1];
       expect((lastCall[2] ?? {}).userID).toBeUndefined();
     });
+  });
+
+  it("sends the search box as the combined alias-or-ID search rather than the key-alias filter", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    fireEvent.change(screen.getByPlaceholderText(/Search by key alias or ID/), { target: { value: mockKey.token } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: mockKey.token }));
+    });
+    const lastOptions = mockUseKeys.mock.calls.at(-1)?.[2];
+    expect(lastOptions?.selectedKeyAlias).toBeUndefined();
+    expect(lastOptions?.keyHash).toBeUndefined();
   });
 });
 
@@ -659,7 +762,7 @@ describe("table state lives in the URL so it survives leaving and returning to t
       expect(mockUseKeys).toHaveBeenLastCalledWith(
         3,
         25,
-        expect.objectContaining({ selectedKeyAlias: "prod", sortBy: "spend", sortOrder: "asc" }),
+        expect.objectContaining({ search: "prod", sortBy: "spend", sortOrder: "asc" }),
       );
     });
     expect(screen.getByPlaceholderText(/Search by key alias/)).toHaveValue("prod");
@@ -732,7 +835,7 @@ describe("table state lives in the URL so it survives leaving and returning to t
     fireEvent.change(screen.getByPlaceholderText(/Search by key alias/), { target: { value: "prod" } });
 
     await waitFor(() => {
-      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ selectedKeyAlias: "prod" }));
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: "prod" }));
     });
     await waitFor(() => {
       expect(lastSearchParam(onUrlUpdate, "page")).toBeNull();

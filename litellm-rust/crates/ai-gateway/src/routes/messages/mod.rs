@@ -21,6 +21,12 @@ pub fn router() -> Router<AppState> {
     Router::new().route(MESSAGES_ROUTE_PATH, post(handle))
 }
 
+#[tracing::instrument(
+    name = "messages_gateway_route",
+    target = "litellm::function_trace",
+    level = "trace",
+    skip_all
+)]
 async fn handle(
     _auth: RequireMasterKey,
     State(state): State<AppState>,
@@ -108,7 +114,8 @@ impl IntoResponse for MessagesRouteError {
             | Error::Connect(_)
             | Error::InvalidResponse(_)
             | Error::InvalidType { .. }
-            | Error::MissingField(_) => (
+            | Error::MissingField(_)
+            | Error::MissingApiKey { .. } => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider request failed".to_string(),
             ),

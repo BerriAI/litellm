@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "terraform/litellm/aws/**"
+      - "terraform/litellm/gcp/**"
       - ".github/workflows/test-terraform-modules.yml"
   pull_request:
     branches:
@@ -13,6 +14,7 @@ on:
       - "litellm_**"
     paths:
       - "terraform/litellm/aws/**"
+      - "terraform/litellm/gcp/**"
       - ".github/workflows/test-terraform-modules.yml"
 
 permissions:
@@ -23,13 +25,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  aws-module:
-    name: fmt, validate, test (aws)
+  module:
+    name: fmt, validate, test (${{ matrix.module }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [aws, gcp]
     defaults:
       run:
-        working-directory: terraform/litellm/aws
+        working-directory: terraform/litellm/${{ matrix.module }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -49,6 +55,7 @@ jobs:
       - name: validate
         run: terraform validate
 
-      # Plan-only, mock_provider-backed: no AWS credentials, no API calls.
+      # Plan-only, mock_provider-backed: no cloud credentials, no API calls.
       - name: test
         run: terraform test
+

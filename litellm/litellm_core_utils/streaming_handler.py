@@ -1473,17 +1473,14 @@ class CustomStreamWrapper:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "cached_response":
             cached_chunk: Final = cast(ModelResponseStream, chunk)
-            chunk_finish_reason: Final = cached_chunk.choices[0].finish_reason
+            cached_choice: Final = cached_chunk.choices[0] if cached_chunk.choices else None
+            chunk_finish_reason: Final = cached_choice.finish_reason if cached_choice is not None else None
             response_obj = {
-                "text": cached_chunk.choices[0].delta.content,
+                "text": cached_choice.delta.content if cached_choice is not None else None,
                 "is_finished": chunk_finish_reason is not None,
                 "finish_reason": chunk_finish_reason,
                 "original_chunk": cached_chunk,
-                "tool_calls": (
-                    cached_chunk.choices[0].delta.tool_calls
-                    if hasattr(cached_chunk.choices[0].delta, "tool_calls")
-                    else None
-                ),
+                "tool_calls": (getattr(cached_choice.delta, "tool_calls", None) if cached_choice is not None else None),
             }
 
             completion_obj["content"] = response_obj["text"]
@@ -2337,6 +2334,9 @@ class CustomStreamWrapper:
         else:
             self.sent_last_chunk = True
             processed_chunk: Final = self.finish_reason_handler()
+            if self.stream_options is None:
+                usage: Final = calculate_total_usage(chunks=self.chunks)
+                processed_chunk._hidden_params["usage"] = usage  # pyright: ignore[reportPrivateUsage]  # sync parity
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log

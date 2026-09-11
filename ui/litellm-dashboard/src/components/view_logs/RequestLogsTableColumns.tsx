@@ -7,9 +7,10 @@ import { CellTooltip, DateCell, IdCell, MoneyCell, StatusBadge } from "@/compone
 import { getSpendString } from "@/utils/dataUtils";
 
 import { getProviderLogoAndName } from "../provider_info_helpers";
+import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from "./batchLogUtils";
 import type { LogEntry } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
-import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
+import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 export interface RequestLogsTableColumnsDeps {
   onKeyHashClick: (keyHash: string) => void;
@@ -63,9 +64,14 @@ export const getRequestLogsTableColumns = ({
       const sessionAgentCount = log.session_agent_count ?? (isAgent ? sessionCount : 0);
       const sessionMcpCount = log.mcp_tool_call_count ?? (isMcp ? sessionCount : 0);
 
-      if (isMcp) return <McpBadge />;
-      if (isAgent && sessionCount <= 1) return <AgentBadge />;
-      if (sessionCount <= 1) return <LlmBadge />;
+      if (isBatchCallType(log.call_type)) {
+        return <BatchBadge />;
+      }
+      if (sessionCount <= 1) {
+        if (isMcp) return <McpBadge />;
+        if (isAgent) return <AgentBadge />;
+        return <LlmBadge />;
+      }
 
       const sessionTypeBadge = (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-info/10 text-info border border-info/20 rounded-full text-[11px] font-medium whitespace-nowrap">
@@ -104,6 +110,17 @@ export const getRequestLogsTableColumns = ({
     cell: ({ row }) => {
       const status = readMetaString(row.original.metadata, "status") ?? "Success";
       const isSuccess = status.toLowerCase() !== "failure";
+      const batchCounts = isSuccess ? getBatchRequestCounts(row.original.metadata) : undefined;
+      if (batchCounts && batchCounts.failed > 0) {
+        const total = batchCounts.successful + batchCounts.failed;
+        return (
+          <StatusBadge
+            tone="warning"
+            label={`${batchCounts.successful}/${total} succeeded`}
+            tooltip={`${batchCounts.failed} of ${total} batch requests failed`}
+          />
+        );
+      }
       return <StatusBadge tone={isSuccess ? "success" : "error"} label={isSuccess ? "Success" : "Failure"} />;
     },
   },
@@ -120,7 +137,19 @@ export const getRequestLogsTableColumns = ({
     accessorKey: "request_id",
     header: "Request ID",
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.request_id} variant="plain" />,
+    cell: ({ row }) => {
+      const log = row.original;
+      const batchId = isBatchCallType(log.call_type) ? getBatchIdFromRequestId(log.request_id) : undefined;
+      if (batchId) {
+        return (
+          <div className="flex flex-col">
+            <IdCell value={batchId} variant="plain" copyable tooltip={`Batch ${batchId} (row: ${log.request_id})`} />
+            <span className="text-[10px] text-muted-foreground">batch cost</span>
+          </div>
+        );
+      }
+      return <IdCell value={log.request_id} variant="plain" />;
+    },
   },
   {
     id: "spend",
@@ -224,10 +253,13 @@ export const getRequestLogsTableColumns = ({
     cell: ({ row }) => {
       const log = row.original;
       const provider = log.custom_llm_provider;
-      const modelName = log.model ?? "";
+      const sessionModels = log.session_models ?? [];
+      const modelNames = sessionModels.length > 0 ? sessionModels : [log.model ?? ""];
+      const modelLabel = log.session_models_truncated ? `${modelNames.join(", ")}, ...` : modelNames.join(", ");
+      const isSingleModel = modelNames.length === 1;
       return (
         <div className="flex items-center space-x-2">
-          {provider && (
+          {provider && isSingleModel && (
             <img
               src={getLogoUrl(log, provider)}
               alt=""
@@ -237,7 +269,14 @@ export const getRequestLogsTableColumns = ({
               }}
             />
           )}
-          <CellTooltip content={modelName} trigger={<span className="max-w-[15ch] truncate block">{modelName}</span>} />
+          <CellTooltip
+            content={modelLabel}
+            trigger={
+              <span className={isSingleModel ? "max-w-[15ch] truncate block" : "min-w-0 truncate block"}>
+                {modelLabel}
+              </span>
+            }
+          />
         </div>
       );
     },
@@ -251,13 +290,20 @@ export const getRequestLogsTableColumns = ({
     meta: { numeric: true },
     cell: ({ row }) => {
       const log = row.original;
+      const showSessionTotal = (log.session_total_count || 1) > 1 && log.session_total_tokens != null;
+      const total = showSessionTotal ? log.session_total_tokens : log.total_tokens;
+      const prompt = showSessionTotal ? log.session_total_prompt_tokens : log.prompt_tokens;
+      const completion = showSessionTotal ? log.session_total_completion_tokens : log.completion_tokens;
       return (
-        <span className="text-sm">
-          {String(log.total_tokens || "0")}
-          <span className="text-muted-foreground text-xs ml-1">
-            ({String(log.prompt_tokens || "0")}+{String(log.completion_tokens || "0")})
+        <div className="flex flex-col items-end">
+          <span className="text-sm">
+            {String(total || "0")}
+            <span className="text-muted-foreground text-xs ml-1">
+              ({String(prompt || "0")}+{String(completion || "0")})
+            </span>
           </span>
-        </span>
+          {showSessionTotal && <span className="text-[10px] text-muted-foreground">session total</span>}
+        </div>
       );
     },
   },

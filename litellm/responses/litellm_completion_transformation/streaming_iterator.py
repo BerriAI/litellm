@@ -437,14 +437,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             response_created_event_data["temperature"] = self.responses_api_request["temperature"]
         if "text" in self.responses_api_request:
             response_created_event_data["text"] = self.responses_api_request["text"]
-        if "tool_choice" in self.responses_api_request:
-            # Transform tool_choice from dict format (e.g., {"type": "auto"}) to string format
-            response_created_event_data["tool_choice"] = (
-                LiteLLMCompletionResponsesConfig._transform_tool_choice(self.responses_api_request["tool_choice"])
-                or "auto"
+        response_created_event_data["tool_choice"] = (
+            LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+                self.responses_api_request.get("tool_choice")
             )
-        else:
-            response_created_event_data["tool_choice"] = "auto"
+        )
         if "tools" in self.responses_api_request:
             response_created_event_data["tools"] = self.responses_api_request["tools"]
         else:
@@ -562,6 +559,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         hidden_params: Final = getattr(chunk, "_hidden_params", None)
         if hidden_params is not None:
             chunk_dict["_hidden_params"] = dict(hidden_params) if isinstance(hidden_params, dict) else hidden_params
+        if (
+            chunk_dict.get("usage") is None
+            and isinstance(hidden_params, dict)
+            and hidden_params.get("usage") is not None
+        ):
+            chunk_dict["usage"] = hidden_params["usage"]
         return chunk_dict
 
     def create_reasoning_summary_text_done_event(

@@ -24,6 +24,7 @@ the base when behavior is genuinely different, and say so explicitly in the PR.
 ## Crates (see AGENTS.md)
 
 `litellm-core` **is** the LiteLLM SDK in Rust: it makes the LLM call.
+`litellm-config` is the config-loading boundary and returns resolved core types.
 `litellm-ai-gateway` is an HTTP/WebSocket server in front of it, and
 `litellm-python-bridge` exposes it to the Python SDK. `litellm-python-interop`
 holds domain-neutral PyO3 primitives shared by Python-facing Rust code. A crate
@@ -174,10 +175,14 @@ for changes under `litellm-rust/`.
 ```bash
 cd litellm-rust
 cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p litellm-core --all-targets --features bedrock-auth -- -D warnings
 # the ai-gateway binary + server code is behind the `server` feature
-cargo clippy -p litellm-ai-gateway --all-targets --features server -- -D warnings
-cargo clippy -p litellm-core -p litellm-python-interop -p litellm-python-bridge --all-targets -- -D warnings
+cargo clippy -p litellm-ai-gateway --all-targets --all-features -- -D warnings
 cargo test --workspace
+cargo test -p litellm-core --features bedrock-auth
+# the `auth`, `routes`, `state` and `realtime` tests only exist under `server`
+cargo test -p litellm-ai-gateway --features server
 ```
 
 When a Rust path is exposed through Python, add Python parity tests that compare
