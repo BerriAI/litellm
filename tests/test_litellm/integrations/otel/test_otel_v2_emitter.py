@@ -505,7 +505,8 @@ def test_long_conversation_does_not_evict_core_attributes(turns):
 
     assert a["llm.input_messages.0.message.content"] == "turn 0"
     assert a["llm.output_messages.0.message.content"] == "reply 0"
-    assert f"llm.input_messages.{turns - 1}.message.role" not in a
+    assert a[f"llm.input_messages.{turns - 1}.message.content"] == f"turn {turns - 1}"
+    assert f"llm.input_messages.{turns // 2}.message.role" not in a
     assert len(json.loads(a["input.value"])) == turns
     assert len(json.loads(a["output.value"])) == 1
     assert len(json.loads(a[GenAI.INPUT_MESSAGES])) == turns
@@ -518,6 +519,31 @@ def test_short_conversation_keeps_every_message_indexed():
         assert a[f"llm.input_messages.{idx}.message.content"] == f"turn {idx}"
     for idx in range(2):
         assert a[f"llm.output_messages.{idx}.message.content"] == f"reply {idx}"
+
+
+def test_indexed_prompt_keeps_opener_and_latest_turns_under_a_value_length_limit(monkeypatch):
+    """The per-index keys are the only untruncated copy once the SDK clips string values.
+
+    Operators bound attribute sizes with ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT``,
+    which cuts the ``input.value`` blob short. The system prompt and the live turn
+    then have to survive as their own short keys, whatever the conversation length.
+    """
+    monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "256")
+    payload = _conversation_payload(60)
+    payload["messages"][0] = {"role": "system", "content": "be terse"}
+    payload["messages"][-1] = {"role": "user", "content": "LATEST-TURN"}
+    a = _conversation_span(["genai", "openinference"], payload).attributes
+
+    assert len(a["input.value"]) == 256
+    assert a["llm.input_messages.0.message.role"] == "system"
+    assert a["llm.input_messages.0.message.content"] == "be terse"
+    assert a["llm.input_messages.59.message.role"] == "user"
+    assert a["llm.input_messages.59.message.content"] == "LATEST-TURN"
+    assert a["llm.output_messages.0.message.content"] == "reply 0"
+    assert [int(key.split(".")[2]) for key in a if key.endswith("message.content") and key.startswith("llm.input_")] == [
+        0,
+        *range(54, 60),
+    ]
 
 
 def test_message_cap_is_shared_across_input_and_output():
@@ -588,4 +614,5 @@ def test_fully_populated_span_with_every_vocabulary_stays_within_the_attribute_l
     assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
     assert a[LiteLLM.TOOLS_DECLARED] == 127
     assert a["llm.input_messages.0.message.content"] == "turn 0"
+    assert a["llm.input_messages.199.message.content"] == "turn 199"
     assert a["llm.output_messages.0.message.content"] == "reply 0"
