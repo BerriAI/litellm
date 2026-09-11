@@ -148,6 +148,7 @@ class SupportedGuardrailIntegrations(Enum):
     AGENT_365 = "agent_365"
     LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
+    AIRIA = "airia"
 
 
 class Role(Enum):
