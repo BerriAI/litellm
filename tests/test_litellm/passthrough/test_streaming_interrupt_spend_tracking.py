@@ -34,6 +34,11 @@ class _ImmediateExecutor:
         fn(*args, **kwargs)
 
 
+def _collected_chunks(provider_config: MagicMock) -> List[bytes]:
+    collector = provider_config.create_stream_collector.return_value
+    return [call.args[0] for call in collector.add.call_args_list]
+
+
 @pytest.mark.asyncio
 async def test_asyncpassthroughstreamingresponse_flushes_on_normal_completion():
     from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -71,8 +76,8 @@ async def test_asyncpassthroughstreamingresponse_flushes_on_normal_completion():
     call_kwargs = (
         mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     )
-    assert call_kwargs["raw_bytes"] == chunks
-    assert call_kwargs["provider_config"] is provider_config
+    assert call_kwargs["collector"] is provider_config.create_stream_collector.return_value
+    assert _collected_chunks(provider_config) == chunks
 
 
 @pytest.mark.asyncio
@@ -112,7 +117,8 @@ async def test_asyncpassthroughstreamingresponse_flushes_on_client_disconnect():
     call_kwargs = (
         mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     )
-    assert call_kwargs["raw_bytes"] == [chunks[0]]
+    assert call_kwargs["collector"] is provider_config.create_stream_collector.return_value
+    assert _collected_chunks(provider_config) == [chunks[0]]
 
 
 @pytest.mark.asyncio
@@ -200,7 +206,8 @@ async def test_asyncpassthroughstreamingresponse_flushes_on_upstream_exception_w
     call_kwargs = (
         mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     )
-    assert call_kwargs["raw_bytes"] == partial_chunks
+    assert call_kwargs["collector"] is provider_config.create_stream_collector.return_value
+    assert _collected_chunks(provider_config) == partial_chunks
 
 
 def test_passthroughstreamingresponse_flushes_on_normal_completion():
@@ -273,4 +280,61 @@ def test_passthroughstreamingresponse_flushes_on_early_close():
     assert first == chunks[0]
     mock_logging_obj.flush_passthrough_collected_chunks.assert_called_once()
     call_kwargs = mock_logging_obj.flush_passthrough_collected_chunks.call_args.kwargs
-    assert call_kwargs["raw_bytes"] == [chunks[0]]
+    assert call_kwargs["collector"] is provider_config.create_stream_collector.return_value
+    assert _collected_chunks(provider_config) == [chunks[0]]
+
+
+def _failing_collector_provider_config() -> MagicMock:
+    provider_config = MagicMock()
+    provider_config.create_stream_collector.return_value.add.side_effect = ValueError("bad frame")
+    return provider_config
+
+
+@pytest.mark.asyncio
+async def test_asyncpassthroughstreamingresponse_relays_the_stream_when_spend_parsing_fails():
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+
+    chunks = [b"chunk-1", b"chunk-2", b"chunk-3"]
+    mock_response = _make_streaming_response(chunks)
+
+    async def response_coro():
+        return mock_response
+
+    mock_logging_obj = _make_logging_obj()
+
+    received = [
+        chunk
+        async for chunk in AsyncPassthroughStreamingResponse(
+            response=response_coro(),
+            litellm_logging_obj=mock_logging_obj,
+            provider_config=_failing_collector_provider_config(),
+        )
+    ]
+    await asyncio.sleep(0)
+
+    assert received == chunks
+    mock_logging_obj.async_flush_passthrough_collected_chunks.assert_not_called()
+
+
+def test_passthroughstreamingresponse_relays_the_stream_when_spend_parsing_fails():
+    from litellm.passthrough.main import PassthroughStreamingResponse
+
+    chunks = [b"a", b"b", b"c"]
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = httpx.Headers({"content-type": "application/octet-stream"})
+    mock_response.iter_bytes = lambda: iter(chunks)
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.flush_passthrough_collected_chunks = MagicMock()
+
+    received = list(
+        PassthroughStreamingResponse(
+            response=mock_response,
+            litellm_logging_obj=mock_logging_obj,
+            provider_config=_failing_collector_provider_config(),
+        )
+    )
+
+    assert received == chunks
+    mock_logging_obj.flush_passthrough_collected_chunks.assert_not_called()
