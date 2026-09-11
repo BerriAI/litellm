@@ -868,6 +868,8 @@ class RouterRateLimitErrorBasic(RouterNoDeploymentsAvailableError):
 
 
 class RouterRateLimitError(RouterNoDeploymentsAvailableError):
+    cooldown_time: float
+
     def __init__(
         self,
         model: str,
