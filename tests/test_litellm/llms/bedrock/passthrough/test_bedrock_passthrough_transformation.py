@@ -7,10 +7,8 @@ from datetime import datetime
 from unittest.mock import patch
 
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.bedrock.passthrough.transformation import (
-    BedrockEventStreamCollector,
-    BedrockPassthroughConfig,
-)
+from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
+from litellm.llms.bedrock.passthrough.transformation import BedrockPassthroughConfig
 from litellm.types.utils import ModelResponse
 
 CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -576,19 +574,17 @@ def _converse_stream_logging_obj() -> Logging:
     return _stream_logging_obj(CONVERSE_STREAM_ENDPOINT)
 
 
-def _stream_collector(endpoint: str) -> BedrockEventStreamCollector:
-    collector = BedrockPassthroughConfig().create_stream_collector(
+def _stream_collector(endpoint: str) -> PassthroughStreamCollector:
+    return BedrockPassthroughConfig().create_stream_collector(
         model=CONVERSE_MODEL, custom_llm_provider="bedrock", endpoint=endpoint
     )
-    assert isinstance(collector, BedrockEventStreamCollector)
-    return collector
 
 
-def _converse_stream_collector() -> BedrockEventStreamCollector:
+def _converse_stream_collector() -> PassthroughStreamCollector:
     return _stream_collector(CONVERSE_STREAM_ENDPOINT)
 
 
-def _feed(collector: BedrockEventStreamCollector, stream: bytes, chunk_size: int = 16384) -> None:
+def _feed(collector: PassthroughStreamCollector, stream: bytes, chunk_size: int = 16384) -> None:
     for offset in range(0, len(stream), chunk_size):
         collector.add(stream[offset : offset + chunk_size])
 
