@@ -17,6 +17,7 @@ from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
@@ -198,6 +199,7 @@ class GenerateContentHelper:
             optional_params=dict(generate_content_config_dict),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                "vertex_location": VertexBase.explicit_vertex_ai_location(litellm_params.model_dump()),
             },
             custom_llm_provider=custom_llm_provider,
         )
