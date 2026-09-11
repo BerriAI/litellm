@@ -202,7 +202,7 @@ def _drop_tool_choice_for_missing_function(selected_params: dict) -> None:
     tools: Final = selected_params.get("tools")
     if not tools:
         return
-    available: Final = {getattr(tool, "name", None) for tool in tools}
+    available: Final = frozenset(getattr(tool, "name", None) for tool in tools)
     if tc.get("name") in available:
         return
     verbose_logger.warning(
