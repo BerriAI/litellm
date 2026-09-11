@@ -16,7 +16,7 @@ _DEFAULT_TIMEOUT_SECONDS = 8.0
 _DEFAULT_UNREACHABLE_FALLBACK = "fail_closed"
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> ConductGuardrail:
     """Initialize the Conduct guardrail from LiteLLM's config block.
 
     Maps LiteLLM's typed guardrail fields onto the Conduct constructor:

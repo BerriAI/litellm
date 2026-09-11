@@ -13,7 +13,7 @@ Docs:    https://conductai.ai/guard
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
@@ -75,7 +75,7 @@ class ConductGuardrail(_ParentClass):  # type: ignore[valid-type,misc]
     # configurations — see veria-ai finding on BerriAI/litellm#38143.
     SUPPORTED_EVENT_HOOKS: ClassVar[tuple[GuardrailEventHooks, ...]] = (GuardrailEventHooks.pre_call,)
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
         if _IMPORT_ERROR is not None or _BaseConductGuard is None:
             raise ImportError(_IMPORT_ERROR_MESSAGE) from _IMPORT_ERROR
         super().__init__(*args, **kwargs)
