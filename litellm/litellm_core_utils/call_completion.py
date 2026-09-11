@@ -182,12 +182,13 @@ class PythonCompletion:
 
 class CallCompletion:
     def __init__(self, implementation: Completion) -> None:
-        self._python_implementation = implementation
-        self._implementation = implementation
+        self._python_implementation: Completion | None = implementation
+        self._implementation: Completion | None = implementation
         self._attached = False
 
     @property
     def python_implementation(self) -> Completion:
+        assert self._python_implementation is not None
         return self._python_implementation
 
     def attach(self, implementation: Completion) -> bool:
@@ -197,13 +198,19 @@ class CallCompletion:
         self._attached = True
         return True
 
+    def release(self) -> None:
+        self._python_implementation = None
+        self._implementation = None
+
     def success(
         self,
         result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None:
-        self._implementation.success(result, start_time, end_time)
+        implementation = self._implementation
+        assert implementation is not None
+        implementation.success(result, start_time, end_time)
 
     def failure(
         self,
@@ -212,7 +219,9 @@ class CallCompletion:
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None:
-        self._implementation.failure(exception, traceback_exception, start_time, end_time)
+        implementation = self._implementation
+        assert implementation is not None
+        implementation.failure(exception, traceback_exception, start_time, end_time)
 
     async def async_failure(
         self,
@@ -221,7 +230,9 @@ class CallCompletion:
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> None:
-        await self._implementation.async_failure(
+        implementation = self._implementation
+        assert implementation is not None
+        await implementation.async_failure(
             exception,
             traceback_exception,
             start_time,
