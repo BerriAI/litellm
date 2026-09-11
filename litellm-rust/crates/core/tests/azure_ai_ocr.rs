@@ -45,6 +45,28 @@ async fn facade_executes_azure_mistral_with_prepared_auth() {
     );
 }
 
+#[tokio::test]
+async fn facade_acquires_supplied_entra_token_for_final_request() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let mut request = wire_request(
+        "azure_ai/model",
+        &base,
+        json!({"azure_ad_token":"rust-owned-token"}),
+    );
+    request.connection.api_key = None;
+
+    perform_ocr(request).await.unwrap();
+    server.await.unwrap();
+
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer rust-owned-token\r\n")
+    );
+}
+
 struct ReplaceBodyDocument;
 
 impl OcrHooks for ReplaceBodyDocument {

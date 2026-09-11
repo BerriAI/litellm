@@ -194,10 +194,10 @@ def azure_ocr_kwargs(api_base: str) -> dict[str, object]:
         "api_base": api_base,
         "custom_llm_provider": "azure_ai",
         "extra_headers": {
-            "Authorization": "Bearer prepared-azure-token",
             "x-test-outcome": "success",
             "x-test-route": "azure_ocr",
         },
+        "optional_params": {"azure_ad_token": "prepared-azure-token"},
     }
 
 
