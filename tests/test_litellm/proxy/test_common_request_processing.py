@@ -8259,6 +8259,83 @@ class TestStreamingResponseHeadersFollowFallback:
         assert result.headers["x-callback-header"] == "kept"
 
 
+class _MessagesFallbackStream:
+    def __init__(self) -> None:
+        self.fallback_headers_adopted = False
+        self._hidden_params: dict[str, object] = {
+            "additional_headers": {
+                "x-litellm-complexity-router-tier": "REASONING",
+                "x-litellm-complexity-router-reasoning-effort": "xhigh",
+            }
+        }
+        self._chunks = iter(
+            (
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"OK"}}\n\n',
+            )
+        )
+
+    def __aiter__(self) -> "_MessagesFallbackStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        self._hidden_params = {
+            "model_id": "fallback-deployment",
+            "additional_headers": {"x-fallback-only": "yes"},
+        }
+        self.fallback_headers_adopted = True
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_messages_http_headers_refresh_after_lazy_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.caching.caching import DualCache
+
+    stream = _MessagesFallbackStream()
+    logging_obj = MagicMock()
+    logging_obj.litellm_call_id = "messages-fallback-headers"
+    logging_obj._defer_async_logging = False
+    logging_obj._on_deferred_stream_complete = None
+    logging_obj.cost_breakdown = None
+    logging_obj.litellm_params = {}
+    processor = ProxyBaseLLMRequestProcessing(
+        data={"model": "auto-router", "stream": True, "litellm_logging_obj": logging_obj}
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    async def call() -> _MessagesFallbackStream:
+        return stream
+
+    async def fake_route_request(**_kwargs: object) -> object:
+        return call()
+
+    monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+    response = await processor.base_process_llm_request(
+        request=Request(scope={"type": "http", "headers": []}),
+        fastapi_response=Response(),
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+        route_type="anthropic_messages",
+        proxy_logging_obj=proxy_logging_obj,
+        general_settings={},
+        proxy_config=MagicMock(spec=ProxyConfig),
+        is_streaming_request=True,
+        skip_pre_call_logic=True,
+    )
+
+    assert isinstance(response, StreamingResponse)
+    assert stream.fallback_headers_adopted is True
+    assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+    assert response.headers["x-fallback-only"] == "yes"
+    assert "x-litellm-complexity-router-tier" not in response.headers
+    assert "x-litellm-complexity-router-reasoning-effort" not in response.headers
+
+
 class TestPassthroughHeadersAcceptImmutableMappings:
     """LIT-6767: the streaming branch now hands the passthrough helpers an immutable mapping."""
 
