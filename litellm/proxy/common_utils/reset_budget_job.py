@@ -394,14 +394,14 @@ class ResetBudgetJob:
         if not cascade.budget_ids:
             return
 
-        enduser_ids: Final = tuple(row.user_id for row in cascade.endusers)
         async with budget_cascade_unit_of_work(self.prisma_client.db.batch_) as uow:
             uow.team_memberships.queue_spend_zero(where=_budget_link_where(cascade.budget_ids))
             uow.keys.queue_spend_zero(where=_budget_link_where(cascade.budget_ids, _LINKED_KEYS_WHERE))
             uow.organizations.queue_spend_zero(where=_budget_link_where(cascade.budget_ids, _SPENT_ROWS_WHERE))
             uow.tags.queue_spend_zero(where=_budget_link_where(cascade.budget_ids, _SPENT_ROWS_WHERE))
-            if enduser_ids:
-                uow.endusers.queue_spend_zero(where={"user_id": {"in": list(enduser_ids)}})
+            uow.endusers.queue_spend_zero(where=_budget_link_where(cascade.budget_ids, _SPENT_ROWS_WHERE))
+            if litellm.max_end_user_budget_id in cascade.budget_ids:
+                uow.endusers.queue_spend_zero(where={"budget_id": None, **_SPENT_ROWS_WHERE})
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
