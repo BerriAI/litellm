@@ -4251,7 +4251,13 @@ def _check_model_access_helper(
     # Filter out models that are access_groups
     filtered_models: Final = [m for m in models if m not in access_groups]
 
-    if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
+    team_alias_target: Final = team_model_aliases.get(model) if team_model_aliases else None
+    if team_alias_target is not None and _check_model_access_helper(
+        model=team_alias_target,
+        llm_router=llm_router,
+        models=models,
+        team_id=team_id,
+    ):
         return True
 
     if _model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=filtered_models):
@@ -4419,24 +4425,6 @@ async def _check_agent_caller_model_access(
     if caller_user is None:
         return
     await can_user_call_model(model=model, llm_router=llm_router, user_object=caller_user)
-
-
-def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None = None) -> bool:
-    """
-    Returns True if `model` being accessed is an alias of a team model
-
-    - `model=gpt-4o`
-    - `team_model_aliases={"gpt-4o": "gpt-4o-team-1"}`
-        - returns True
-
-    - `model=gp-4o`
-    - `team_model_aliases={"o-3": "o3-preview"}`
-        - returns False
-    """
-    if team_model_aliases:
-        if model in team_model_aliases:
-            return True
-    return False
 
 
 def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]:
