@@ -79,7 +79,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import agent_365_authorization_servers
+from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import (
+    agent_365_authorization_servers,
+    agent_365_subject_token_present,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
@@ -4136,13 +4139,13 @@ if MCP_AVAILABLE:
             # so the client discovers the IdP, SSOs, and retries with a subject token, which LiteLLM
             # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
             # header lost, so the discovery flow needs this pre-emptive challenge. Servers gated by an
-            # Agent 365 guardrail (OBO to the evaluate API) get the same challenge.
-            if (
-                server
-                and not oauth2_headers
-                and (
-                    server.auth_type == MCPAuth.oauth2_token_exchange
-                    or agent_365_authorization_servers(server, user_api_key_auth)
+            # Agent 365 guardrail (OBO to the evaluate API) get the same challenge, also when the only
+            # bearer is the LiteLLM key itself, which admits the caller but is not an exchangeable subject.
+            if server and (
+                (server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers)
+                or (
+                    not agent_365_subject_token_present(oauth2_headers)
+                    and agent_365_authorization_servers(server, user_api_key_auth)
                 )
             ):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
