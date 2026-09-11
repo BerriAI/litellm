@@ -100,9 +100,8 @@ _INCREMENT_WITH_FLOOR_LUA: Final = (
 
 _INCREMENT_WITH_TTL_LUA: Final = (
     "local value = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1]) "
-    "local ttl = tonumber(ARGV[2]) "
-    "if ttl > 0 and (ARGV[3] == '1' or redis.call('TTL', KEYS[1]) == -1) then "
-    "redis.call('EXPIRE', KEYS[1], ttl) end "
+    "if ARGV[2] ~= '' and (ARGV[3] == '1' or redis.call('TTL', KEYS[1]) == -1) then "
+    "redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2])) end "
     "return value"
 )
 
@@ -1256,8 +1255,9 @@ class RedisCache(BaseCache):
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         key = self.check_and_fix_namespace(key=key)
         try:
+            ttl_arg: Final = "" if _used_ttl is None else str(_used_ttl)
             raw_value: Final = await _redis_client.eval(
-                _INCREMENT_WITH_TTL_LUA, 1, key, value, _used_ttl or 0, "1" if refresh_ttl else "0"
+                _INCREMENT_WITH_TTL_LUA, 1, key, value, ttl_arg, "1" if refresh_ttl else "0"
             )
             result: Final = _LUA_FLOAT.validate_python(raw_value)
 

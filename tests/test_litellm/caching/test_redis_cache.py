@@ -1253,7 +1253,7 @@ async def test_redis_cache_async_increment_arms_ttl_in_the_same_command(
     assert spy.commands == ["eval"]
     script, numkeys, key, amount, ttl, refresh = spy.eval_calls[0]
     assert "INCRBYFLOAT" in script and "EXPIRE" in script and "TTL" in script
-    assert (numkeys, key, amount, ttl, refresh) == (1, expected_key, 0.25, 30, "0")
+    assert (numkeys, key, amount, ttl, refresh) == (1, expected_key, 0.25, "30", "0")
 
 
 @pytest.mark.asyncio
@@ -1266,4 +1266,22 @@ async def test_redis_cache_async_increment_refresh_ttl_sends_refresh_flag(monkey
 
     assert result == 2.5
     assert spy.commands == ["eval"]
-    assert spy.eval_calls[0][3:] == (0.5, 60, "1")
+    assert spy.eval_calls[0][3:] == (0.5, "60", "1")
+
+
+@pytest.mark.parametrize(
+    ("ttl", "default_ttl", "expected_ttl_arg"), [(None, None, ""), (0, None, "0"), (None, 15, "15")]
+)
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_forwards_ttl_exactly(
+    ttl, default_ttl, expected_ttl_arg, monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    spy = _SpyRedisCommands(eval_result=b"0.75")
+    redis_cache = _SpyRedisCache(spy)
+    redis_cache.default_ttl = default_ttl
+
+    result = await redis_cache.async_increment(key="spend:key:abc", value=0.75, ttl=ttl)
+
+    assert result == 0.75
+    assert spy.eval_calls[0][4] == expected_ttl_arg
