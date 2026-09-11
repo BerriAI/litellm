@@ -7059,6 +7059,39 @@ async def test_bedrock_converse_user_video_url_becomes_video_block_async():
     assert blocks[1]["video"]["format"] == "mp4"
 
 
+async def test_bedrock_converse_user_video_url_str_form_becomes_video_block_async():
+    """A bare string video_url must survive the async (acompletion) path too."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+    )
+
+    clip_b64 = _video_clip_b64()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this video."},
+                {
+                    "type": "video_url",
+                    "video_url": f"data:video/mp4;base64,{clip_b64}",
+                },
+            ],
+        }
+    ]
+
+    translated = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="amazon.nova-pro-v1:0",
+            llm_provider="bedrock",
+        )
+    )
+
+    blocks = translated[0]["content"]
+    assert [next(iter(block)) for block in blocks] == ["text", "video"]
+    assert blocks[1]["video"]["format"] == "mp4"
+
+
 def test_bedrock_converse_image_url_still_becomes_image_block():
     """The video_url branch must not hijack ordinary image parts."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
