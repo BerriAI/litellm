@@ -1,5 +1,22 @@
 from litellm.litellm_core_utils.secret_redaction import redact_string
-from litellm.proxy.auth.master_key_policy import insecure_master_key_warning
+from litellm.proxy.auth.master_key_policy import insecure_master_key_reason, insecure_master_key_warning
+
+
+def test_insecure_master_key_reason_for_example_key():
+    assert insecure_master_key_reason("sk-1234", alternative_auth_enabled=False) == "example_key"
+
+
+def test_insecure_master_key_reason_for_missing_key():
+    assert insecure_master_key_reason(None, alternative_auth_enabled=False) == "missing"
+    assert insecure_master_key_reason("", alternative_auth_enabled=False) == "missing"
+
+
+def test_insecure_master_key_reason_none_for_strong_key():
+    assert insecure_master_key_reason("sk-strong-random-key", alternative_auth_enabled=False) is None
+
+
+def test_insecure_master_key_reason_none_with_alternative_auth():
+    assert insecure_master_key_reason(None, alternative_auth_enabled=True) is None
 
 
 def test_insecure_master_key_warning_returned_for_example_key():
