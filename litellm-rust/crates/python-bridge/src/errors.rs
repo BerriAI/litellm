@@ -1,6 +1,7 @@
 use litellm_core::error::Error;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use std::fmt::{Display, Formatter};
 
 pyo3::create_exception!(
     _native,
@@ -26,6 +27,21 @@ pub(crate) enum BridgeError {
     },
     Internal(String),
     Host(PyErr),
+}
+
+impl Display for BridgeError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidArgument(message) | Self::Declined(message) | Self::Internal(message) => {
+                formatter.write_str(message)
+            }
+            Self::Upstream { status, message } => match status {
+                Some(status) => write!(formatter, "{status}: {message}"),
+                None => formatter.write_str(message),
+            },
+            Self::Host(error) => Display::fmt(error, formatter),
+        }
+    }
 }
 
 impl From<BridgeError> for PyErr {

@@ -134,6 +134,10 @@ fn prepare_ocr(
     })
 }
 
+fn identity_bridge_error(error: BridgeError) -> BridgeError {
+    error
+}
+
 bridge_route! {
     sync = ocr,
     asynchronous = aocr,
@@ -159,7 +163,7 @@ bridge_route! {
         call_completion: Option<Py<PyAny>>,
     },
     prepare = prepare_ocr,
-    errors = std::convert::identity,
+    errors = identity_bridge_error,
 }
 
 #[cfg(test)]
