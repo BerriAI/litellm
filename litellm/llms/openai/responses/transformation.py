@@ -110,6 +110,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def supports_native_file_search(self) -> bool:
         return True
 
+    def supports_encrypted_agent_messages(self) -> bool:
+        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE)
+
     @staticmethod
     def _is_gpt_5_model(model: str) -> bool:
         """Return True only for actual OpenAI GPT-5 models.

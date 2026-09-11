@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Final
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
@@ -170,17 +171,11 @@ def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[
     payload, but the failure path does not, so a callback that batches both has to redact
     the ones it is handed.
     """
-    redacted: Final = copy.deepcopy(dict(payload))  # mutable-ok: redacted in place below
-    _redact_standard_logging_object({"standard_logging_object": redacted})  # mutable-ok: the callee's shape
-    return redacted
+    return _redact_standard_logging_object(payload)
 
 
-def _redact_standard_logging_object(model_call_details: dict):
-    """Redact messages and response inside standard_logging_object if present."""
-    standard_logging_object: Final = model_call_details.get("standard_logging_object")
-    if standard_logging_object is None:
-        return
-
+def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, object]:
+    standard_logging_object: Final = copy.deepcopy(without_classifier_audit(payload))
     redacted_str: Final = REDACTED_BY_LITELLM
 
     if standard_logging_object.get("messages") is not None:
@@ -203,6 +198,7 @@ def _redact_standard_logging_object(model_call_details: dict):
         else:
             # For other formats (empty dict, None, etc.), use simple text format
             standard_logging_object["response"] = {"text": redacted_str}
+    return standard_logging_object
 
 
 def _redact_tool_calls_dict(message: Mapping[str, object]) -> None:
@@ -254,10 +250,16 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     copy via redact_streaming_responses_for_custom_logger instead.
     """
     # Redact model_call_details
+    params: Final = model_call_details.get("litellm_params")
+    request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
+    if isinstance(params, dict) and isinstance(request, Mapping):
+        model_call_details["litellm_params"] = {**params, "proxy_server_request": without_classifier_audit(request)}
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
-    _redact_standard_logging_object(model_call_details)
+    standard_logging_object: Final = model_call_details.get("standard_logging_object")
+    if isinstance(standard_logging_object, Mapping):
+        model_call_details["standard_logging_object"] = _redact_standard_logging_object(standard_logging_object)
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response

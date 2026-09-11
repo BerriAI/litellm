@@ -1,8 +1,14 @@
 "use client";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import CopyButton from "@/components/shared/CopyButton";
-import { DateCell, IdCell, MoneyCell } from "@/components/shared/table_cells";
+import {
+  DateCell,
+  ENTITY_CELL_TITLE_CLASSES,
+  IdCell,
+  IdentityCell,
+  MoneyCell,
+  UserPopoverCell,
+} from "@/components/shared/table_cells";
 import {
   DataTable,
   DataTableFilterDrawer,
@@ -11,8 +17,9 @@ import {
   DataTableToolbar,
 } from "@/components/shared/DataTable";
 import { Badge } from "@/components/ui/badge";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Input } from "@/components/ui/input";
+import { orgDetailHref, userDetailHref } from "@/utils/entityLinks";
+import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
@@ -168,7 +175,15 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: "Organization ID",
         size: 140,
         enableSorting: false,
-        cell: (info) => (info.getValue() ? info.renderValue() : "-"),
+        cell: (info) => {
+          const orgId = info.getValue() as string | null;
+          if (!orgId) return "-";
+          return (
+            <SimpleTooltip content={orgId}>
+              <IdentityCell title={orgId} titleClassName={ENTITY_CELL_TITLE_CLASSES} href={orgDetailHref(orgId)} />
+            </SimpleTooltip>
+          );
+        },
       },
       {
         id: "user_email",
@@ -179,9 +194,14 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         cell: (info) => {
           const user = info.getValue() as { user_email?: string } | undefined;
           const value = user?.user_email;
+          const userId = info.row.original.user_id;
           return (
             <SimpleTooltip content={value}>
-              <span className="block max-w-full truncate font-mono text-xs">{value ?? "-"}</span>
+              <IdentityCell
+                title={value ?? "-"}
+                titleClassName={ENTITY_CELL_TITLE_CLASSES}
+                href={value && userId ? userDetailHref(userId) : undefined}
+              />
             </SimpleTooltip>
           );
         },
@@ -194,10 +214,16 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         enableSorting: false,
         cell: (info) => {
           const userId = info.getValue() as string | null;
-          const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
+          if (userId === DEFAULT_PROXY_ADMIN_USER_ID) {
+            return <DefaultProxyAdminTag userId={userId} />;
+          }
           return (
-            <SimpleTooltip content={displayValue}>
-              <span className="block max-w-full truncate font-mono text-xs">{displayValue ?? "-"}</span>
+            <SimpleTooltip content={userId}>
+              <IdentityCell
+                title={userId ?? "-"}
+                titleClassName={ENTITY_CELL_TITLE_CLASSES}
+                href={userId ? userDetailHref(userId) : undefined}
+              />
             </SimpleTooltip>
           );
         },
@@ -221,53 +247,13 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const userId = info.getValue() as string | null;
           if (!userId) return "-";
           const { created_by_user } = info.row.original;
-          const userAlias = created_by_user?.user_alias ?? null;
-          const userEmail = created_by_user?.user_email ?? null;
-          const isDefaultAdmin = userId === "default_user_id";
-          const displayValue = userAlias || userEmail || userId;
-
-          const popoverContent = (
-            <div className="flex min-w-[200px] max-w-[300px] flex-col gap-2 text-xs">
-              {[
-                { label: "User Alias", value: userAlias },
-                { label: "User Email", value: userEmail },
-                { label: "User ID", value: userId },
-              ].map(({ label, value }) => (
-                <div key={label} className="flex flex-col min-w-0">
-                  <span className="text-muted-foreground">{label}</span>
-                  {value ? (
-                    <span className="flex items-center gap-1">
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs">{value}</span>
-                      <CopyButton value={value} label={`Copy ${label}`} />
-                    </span>
-                  ) : (
-                    <span className="font-mono">-</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          );
-
-          if (isDefaultAdmin && !userAlias && !userEmail) {
-            return (
-              <HoverCard>
-                <HoverCardTrigger render={<span className="cursor-default" />}>
-                  <DefaultProxyAdminTag userId={userId} />
-                </HoverCardTrigger>
-                <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-              </HoverCard>
-            );
-          }
-
           return (
-            <HoverCard>
-              <HoverCardTrigger
-                render={<span className="block max-w-full cursor-default truncate font-mono text-xs" />}
-              >
-                {displayValue}
-              </HoverCardTrigger>
-              <HoverCardContent align="start">{popoverContent}</HoverCardContent>
-            </HoverCard>
+            <UserPopoverCell
+              userAlias={created_by_user?.user_alias ?? null}
+              userEmail={created_by_user?.user_email ?? null}
+              userId={userId}
+              width={130}
+            />
           );
         },
       },
