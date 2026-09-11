@@ -230,6 +230,33 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
     selected_params["responseFormat"] = {"type": "JSON_OBJECT" if fmt == "JSON" else fmt}
 
 
+def _model_supports_reasoning_effort(model: str) -> bool:
+    """Return True when the OCI-hosted model accepts ``reasoningEffort``.
+
+    Verified against the service (us-chicago-1, 2026-09): every served xAI
+    Grok model rejects the parameter with ``400 "Model ... does not support
+    parameter reasoningEffort"`` (including the ``*-reasoning`` variants), and
+    OpenAI's non-reasoning commercial models (``gpt-4o``, ``gpt-4.1``) reject it
+    with ``Unrecognized request argument supplied: reasoning_effort``. OpenAI
+    reasoning models (gpt-5 family, o-series, driven by the catalog's
+    ``supports_reasoning`` flag) and the ``gpt-oss-*`` open weights accept it,
+    and Meta / Google models ignore it harmlessly. Cohere is handled by its own
+    param map. See BerriAI/litellm#31449.
+    """
+    if not model:
+        return True
+    name: Final = model[4:] if model.lower().startswith("oci/") else model
+    lowered: Final = name.lower()
+    vendor: Final = lowered.split(".")[0]
+    if vendor == "xai":
+        return False
+    if vendor == "openai":
+        if lowered.startswith("openai.gpt-oss"):
+            return True
+        return bool(supports_reasoning(model=name, custom_llm_provider="oci"))
+    return True
+
+
 def get_vendor_from_model(model: str) -> OCIVendors:
     """Return the OCI vendor enum for a model name.
 
@@ -323,7 +350,10 @@ class OCIChatConfig(BaseConfig):
         # honoured and advertising it would be misleading. Callers that gate on
         # this list strip n=1 (a no-op, matching what map_openai_params does);
         # callers that bypass it have n=1 dropped there. Both paths converge.
-        return [key for key, value in param_map.items() if value]
+        supported: Final = [key for key, value in param_map.items() if value]
+        if "reasoning_effort" in supported and not _model_supports_reasoning_effort(model):
+            supported.remove("reasoning_effort")
+        return supported
 
     def map_openai_params(
         self,
@@ -340,6 +370,20 @@ class OCIChatConfig(BaseConfig):
 
         for key, value in {**non_default_params, **optional_params}.items():
             alias = param_map.get(key)
+            if key == "reasoning_effort" and alias and not _model_supports_reasoning_effort(model):
+                # The GENERIC map forwards reasoning_effort for every non-Cohere
+                # model, but xAI Grok and OpenAI's non-reasoning models 400 on
+                # it. Follow the standard unsupported-param contract so
+                # drop_params (and additional_drop_params) work as documented.
+                if drop_params or litellm.drop_params:
+                    continue
+                raise OCIError(
+                    status_code=400,
+                    message=(
+                        f"param `reasoning_effort` is not supported on OCI model `{model}` "
+                        "(the model rejects reasoningEffort); set drop_params=True to omit it"
+                    ),
+                )
             if alias is False:
                 # max_retries is a litellm-level control param (litellm applies
                 # retries itself); it is never a generation param OCI accepts, so
@@ -507,6 +551,12 @@ class OCIChatConfig(BaseConfig):
                     selected_params["tools"],
                     vendor,
                 )
+            if not selected_params["tools"]:
+                # Every tool was skipped (no function tools): send a plain chat
+                # request rather than an empty tools array + toolChoice.
+                selected_params.pop("tools")
+                for key in ("toolChoice", "tool_choice"):
+                    selected_params.pop(key, None)
 
         # Normalise tool_choice to OCI's flat uppercase dict form
         # ({"type": "AUTO"|"NONE"|"REQUIRED"} or {"type": "FUNCTION", "name": "<fn>"}).
