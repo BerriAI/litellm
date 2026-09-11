@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -59,11 +60,11 @@ class ZAIChatConfig(OpenAIGPTConfig):
 
     def _map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = frozenset(self.get_supported_openai_params(model))
         reasoning_params: Final = MappingProxyType(
             {k: v for k, v in non_default_params.items() if k in ZAI_REASONING_PARAMS and k in supported_openai_params}
@@ -77,8 +78,10 @@ class ZAIChatConfig(OpenAIGPTConfig):
         )
         if not reasoning_params:
             return {**optional_params, **passthrough_params}  # mutable-ok: base class returns a dict
+        existing: Final = optional_params.get("extra_body")
+        existing_body: Final = existing if isinstance(existing, Mapping) else MappingProxyType({})
         extra_body: Final = {  # mutable-ok: the OpenAI SDK json-encodes extra_body from a plain dict
-            **(optional_params.get("extra_body") or MappingProxyType({})),
+            **existing_body,
             **reasoning_params,
         }
         return {  # mutable-ok: base class returns a dict
