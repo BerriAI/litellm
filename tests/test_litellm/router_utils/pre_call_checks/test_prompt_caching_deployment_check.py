@@ -119,6 +119,18 @@ def test_prompt_caching_affinity_ttl_matches_cache_control(ttl: str | None, expe
     assert PromptCachingCache.get_prompt_caching_ttl(messages) == expected_affinity_ttl
 
 
+def test_message_level_cache_control_on_string_content_sets_affinity_ttl():
+    """cache_control can sit as a sibling of a string `content` field rather than inside a
+    content-block list, e.g. {"role": "system", "content": "...", "cache_control": {...}}.
+    get_prompt_caching_ttl must still pick it up."""
+    messages = cast(
+        List[AllMessageValues],
+        [{"role": "system", "content": "cached", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+    )
+
+    assert PromptCachingCache.get_prompt_caching_ttl(messages) == 3600
+
+
 def test_mixed_cache_ttls_use_the_shortest_affinity_ttl():
     messages = cast(
         List[AllMessageValues],
