@@ -12011,6 +12011,117 @@ async def test_execute_virtual_key_regeneration_allows_within_limit_duration(mon
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
 
 
+def _regenerate_patches():
+    return (
+        patch(  # test-quality-ok: no HTTP boundary; same patches as test_execute_virtual_key_regeneration_* above
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: no HTTP boundary; same patches as test_execute_virtual_key_regeneration_* above
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: no HTTP boundary; same patches as test_execute_virtual_key_regeneration_* above
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: no HTTP boundary; same patches as test_execute_virtual_key_regeneration_* above
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_runs_custom_key_update_hook(monkeypatch):
+    """Regenerate must consult custom_key_update with the changed fields as an UpdateKeyRequest (LIT-7517)."""
+    from litellm.proxy._types import RegenerateKeyRequest, UpdateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    seen_requests = []
+
+    async def reject_long_durations(data: UpdateKeyRequest) -> dict:
+        seen_requests.append(data)
+        if "duration" in data.model_fields_set and data.duration == "3000d":
+            return {"decision": False, "message": "duration exceeds team policy"}
+        return {"decision": True}
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_update", reject_long_durations)
+    existing_key = _make_regenerate_existing_key()
+    user_api_key_dict = _make_regenerate_user_api_key_dict()
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    with contextlib.ExitStack() as stack:
+        for p in _regenerate_patches():
+            stack.enter_context(p)
+        with pytest.raises(HTTPException) as exc_info:
+            await _execute_virtual_key_regeneration(
+                prisma_client=mock_prisma_client,
+                key_in_db=existing_key,
+                hashed_api_key="abc123",
+                key="abc123",
+                data=RegenerateKeyRequest(duration="3000d", max_budget=5.0, grace_period="1h"),
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+            )
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "duration exceeds team policy"
+        assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+
+        rejected_request = seen_requests[0]
+        assert isinstance(rejected_request, UpdateKeyRequest)
+        assert rejected_request.key == "abc123"
+        assert rejected_request.model_fields_set == {"key", "duration", "max_budget"}
+
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(duration="7d"),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+    assert len(seen_requests) == 2
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_without_body_skips_custom_key_update_hook(monkeypatch):
+    """A plain rotate (no body) changes nothing about the key, so the update policy is not consulted."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    hook = AsyncMock(return_value={"decision": False})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_update", hook)
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    with contextlib.ExitStack() as stack:
+        for p in _regenerate_patches():
+            stack.enter_context(p)
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=None,
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+    hook.assert_not_awaited()
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+
+
 @pytest.mark.asyncio
 async def test_regenerate_evicts_jwt_key_mapping_cache_so_next_jwt_call_gets_new_token():
     """

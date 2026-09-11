@@ -294,6 +294,33 @@ def _custom_key_update_hook(
     return hooks.user_custom_key_update
 
 
+async def _enforce_custom_key_update_policy(
+    hook: Callable[..., Awaitable[Mapping[str, object]]] | None,
+    update_key_request: UpdateKeyRequest,
+) -> None:
+    if hook is None:
+        return
+    if not inspect.iscoroutinefunction(hook):
+        raise ValueError("user_custom_key_update must be a coroutine")
+    result: Final = await hook(update_key_request)
+    if not result.get("decision", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=result.get("message", "Authentication Failed - Custom Auth Rule"),
+        )
+
+
+def _regenerate_request_as_update_request(key: str, data: RegenerateKeyRequest) -> UpdateKeyRequest:
+    changed_fields: Final = MappingProxyType(
+        {
+            field: value
+            for field, value in data.model_dump(exclude_unset=True).items()
+            if field in UpdateKeyRequest.model_fields and field != "key"
+        }
+    )
+    return UpdateKeyRequest(key=key, **changed_fields)
+
+
 class _LegacyDumpable(Protocol):
     def dict(self) -> Mapping[str, object]: ...
 
@@ -5069,6 +5096,7 @@ async def _execute_virtual_key_regeneration(
     proxy_logging_obj: ProxyLogging,
 ) -> GenerateKeyResponse:
     """Generate new token, update DB, invalidate cache, and return response."""
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import hash_token
 
     # Mirror the /key/update ownership rebind guard. See helper docstring.
@@ -5116,6 +5144,10 @@ async def _execute_virtual_key_regeneration(
 
     non_default_values = {}
     if data is not None:
+        await _enforce_custom_key_update_policy(
+            hook=_custom_key_update_hook(proxy_server),
+            update_key_request=_regenerate_request_as_update_request(key=hashed_api_key, data=data),
+        )
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
         non_default_values = await prepare_key_update_data(data=data, existing_key_row=key_in_db)
