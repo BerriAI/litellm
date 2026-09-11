@@ -136,9 +136,11 @@ def test_cleanup_failure_is_visible() -> None:
 
 def test_expired_admin_credentials_do_not_abort_remaining_cleanups() -> None:
     with _idp_server(admin_status=401) as (idp, _):
+        cleanup: Final = ExitStack()
+        cleanup.callback(idp.delete_group, "group")
+        cleanup.callback(idp.delete_user, "user")
         with pytest.warns(RuntimeWarning, match="cleanup could not authenticate") as warnings:
-            idp.delete_user("user")
-            idp.delete_group("group")
+            cleanup.close()
         assert len(warnings) == 2
 
 
