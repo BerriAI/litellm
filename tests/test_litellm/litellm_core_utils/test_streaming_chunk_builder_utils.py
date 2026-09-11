@@ -218,11 +218,8 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
         ),
     ]
 
-    thinking_chunks = [
-        chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")
-    ]
     processor = ChunkProcessor(chunks=chunks)
-    result = processor.get_combined_thinking_content(thinking_chunks)
+    result = processor.get_combined_thinking_content(chunks)
 
     assert result is not None
     assert len(result) == 3
@@ -258,6 +255,30 @@ def test_stream_chunk_builder_distinguishes_thinking_snapshots_from_repeated_del
     assert response.choices[0].message.thinking_blocks == [
         {"type": "thinking", "thinking": "echo" if snapshot else "echoecho", "signature": "test-signature"}
     ]
+
+
+def test_incomplete_thinking_stream_preserves_summary_without_signed_blocks() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-incomplete-thinking",
+        model="claude-opus-5",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason="length",
+                delta=Delta(
+                    reasoning_content="Unfinished reasoning",
+                    thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="Unfinished reasoning")],
+                ),
+            )
+        ],
+    )
+
+    response: Final = stream_chunk_builder(chunks=[chunk])
+
+    assert response is not None
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.reasoning_content == "Unfinished reasoning"
+    assert response.choices[0].message.thinking_blocks is None
 
 
 def test_cache_read_input_tokens_retained():
