@@ -1,3 +1,5 @@
+import pytest
+
 import litellm
 from litellm.llms.cerebras.chat import CerebrasConfig
 
@@ -62,7 +64,7 @@ def test_map_openai_params_preserves_max_retries_zero_falsy() -> None:
     )
 
 
-def test_qwen_3_8_27b_cost_and_tokens(monkeypatch) -> None:
+def test_qwen_3_8_27b_cost_and_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     model = "cerebras/qwen-3.8-27b"

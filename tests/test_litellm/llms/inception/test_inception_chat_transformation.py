@@ -7,6 +7,7 @@ import os
 from unittest import mock
 
 import httpx
+import pytest
 
 import litellm
 from litellm.llms.inception.chat.transformation import InceptionChatConfig
@@ -307,7 +308,7 @@ def test_inception_completion_targets_inception_endpoint():
     assert response.choices[0].message.content == "hi"
 
 
-def test_inception_mercury_2_5_cost_and_tokens(monkeypatch):
+def test_inception_mercury_2_5_cost_and_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     model = "inception/mercury-2.5"
