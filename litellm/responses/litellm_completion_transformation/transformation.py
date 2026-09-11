@@ -454,9 +454,7 @@ class LiteLLMCompletionResponsesConfig:
         )
 
         if system_contents:
-            messages.append(
-                LiteLLMCompletionResponsesConfig._merge_system_contents(system_contents)
-            )
+            messages.append(LiteLLMCompletionResponsesConfig._merge_system_contents(system_contents))
 
         messages.extend(message for message in input_messages if message.get("role") != "system")
 
