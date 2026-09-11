@@ -12786,3 +12786,79 @@ async def test_debug_reports_legacy_signing_and_non_http_transport(transport: Li
             assert "Credential=AKIDEXAMPLE/" in request.headers["Authorization"]
     finally:
         request_ctx.reset(token)
+
+@pytest.mark.asyncio
+async def test_openapi_health_coalesces_concurrent_checks_and_reuses_results(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="coalesced",
+        name="coalesced",
+        transport=MCPTransport.http,
+        spec_path="https://93.184.216.34/coalesced.json",
+        auth_type=MCPAuth.none,
+    )
+    manager.registry = {server.server_id: server}
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def serve(request):
+        started.set()
+        await release.wait()
+        return httpx.Response(200, json={"paths": {}})
+
+    route = respx_mock.get(server.spec_path).mock(side_effect=serve)
+    tasks = [asyncio.create_task(manager.health_check_server(server.server_id)) for _ in range(4)]
+    await asyncio.wait_for(started.wait(), timeout=1)
+    release.set()
+    results = await asyncio.gather(*tasks)
+    cached = await manager.health_check_server(server.server_id)
+    assert [result.status for result in results] == ["healthy"] * 4
+    assert cached.status == "healthy"
+    assert {result.last_health_check for result in [*results, cached]} == {results[0].last_health_check}
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_openapi_health_cache_expires_at_thirty_seconds(respx_mock, monkeypatch):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _OpenAPIHealthProbe
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    clock = iter([0.0, 29.0, 30.0, 30.0])
+    probe = _OpenAPIHealthProbe("https://93.184.216.34/expiry.json", clock=clock.__next__)
+    route = respx_mock.get(probe.spec_path).mock(
+        side_effect=[
+            httpx.Response(200, json={"paths": {}}),
+            httpx.Response(503),
+        ]
+    )
+    first = await probe.check()
+    assert first[0] == "healthy"
+    assert await probe.check() == first
+    refreshed = await probe.check()
+    assert refreshed[0] == "unhealthy"
+    assert refreshed[1] == "OpenAPI specification request failed (HTTP 503)"
+    assert refreshed[2] >= first[2]
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openapi_health_reports_size_limit_as_unknown_and_caches_failure(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="oversized",
+        name="oversized",
+        transport=MCPTransport.http,
+        spec_path="https://93.184.216.34/large.json",
+        auth_type=MCPAuth.none,
+    )
+    manager.registry = {server.server_id: server}
+    route = respx_mock.get(server.spec_path).respond(200, headers={"content-length": str(12 * 1024 * 1024)})
+    result = await manager.health_check_server(server.server_id)
+    cached = await manager.health_check_server(server.server_id)
+    assert result.status == "unknown"
+    assert result.health_check_error == "OpenAPI specification exceeds the health-check size limit"
+    assert cached.health_check_error == result.health_check_error
+    assert cached.last_health_check == result.last_health_check
+    assert route.call_count == 1
