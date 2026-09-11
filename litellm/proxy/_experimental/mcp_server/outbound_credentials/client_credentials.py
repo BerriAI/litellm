@@ -38,11 +38,6 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, Valid
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.mcp_debug import (
-    describe_upstream_http_failure,
-    describe_upstream_response,
-    safe_upstream_url,
-)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InMemoryTokenCacheBackend,
     OAuthToken,
@@ -106,6 +101,11 @@ async def post_client_credentials_grant(
     """
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415  # defer heavy handler import to call time
         get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # handler factory params are coarsely typed
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_debug import (  # noqa: PLC0415  # diagnostics import credential enums through this package
+        describe_upstream_http_failure,
+        describe_upstream_response,
+        safe_upstream_url,
     )
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415  # deferred with the handler import
 
