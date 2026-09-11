@@ -39,6 +39,8 @@ const CACHE_FILTER_ITEMS = [
 ] as const;
 const PAGE_SIZE = 50;
 
+const SEARCH_INPUT_REASONS: ReadonlySet<string> = new Set(["input-change", "input-clear", "clear-press"]);
+
 const asString = (value: unknown): string => (typeof value === "string" ? value : "");
 const emptyToUndefined = (value: string): string | undefined => (value === "" ? undefined : value);
 
@@ -254,7 +256,10 @@ function ErrorCodeFilterField({ value, onChange }: { value: string; onChange: (v
     const trimmed = query.trim();
     const lowered = trimmed.toLowerCase();
     const matches = ERROR_CODE_OPTIONS.filter((option) => option.label.toLowerCase().includes(lowered));
-    if (trimmed === "" || ERROR_CODE_OPTIONS.some((option) => option.value === trimmed)) return matches;
+    const isKnownCode = ERROR_CODE_OPTIONS.some(
+      (option) => option.value === trimmed || option.label.toLowerCase() === lowered,
+    );
+    if (trimmed === "" || isKnownCode) return matches;
     return [...matches, { label: `Use custom code: ${trimmed}`, value: trimmed }];
   }, [query]);
 
@@ -275,12 +280,20 @@ function ErrorCodeFilterField({ value, onChange }: { value: string; onChange: (v
         items={items}
         value={selected}
         onValueChange={(item: SearchSelectOption | null) => onChange(emptyToUndefined(item?.value ?? ""))}
-        onInputValueChange={setQuery}
+        onInputValueChange={(next, eventDetails) => setQuery(SEARCH_INPUT_REASONS.has(eventDetails.reason) ? next : "")}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setQuery("");
+        }}
         isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
         itemToStringLabel={(item: SearchSelectOption) => item.label}
         filter={null}
       >
-        <ComboboxInput placeholder="Select or type an error code" showClear={value !== ""} className="w-full" />
+        <ComboboxInput
+          onFocus={(event) => event.currentTarget.select()}
+          placeholder="Select or type an error code"
+          showClear={value !== ""}
+          className="w-full"
+        />
         <ComboboxContent>
           <ComboboxEmpty>No error codes found</ComboboxEmpty>
           <ComboboxList data-testid="error-code-filter-list">

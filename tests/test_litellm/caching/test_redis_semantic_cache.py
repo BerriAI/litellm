@@ -1,3 +1,4 @@
+from importlib import import_module
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1453,7 +1454,7 @@ def test_cache_forwards_semantic_cache_embedding_timeout():
     from litellm.caching.caching import Cache
     from litellm.types.caching import LiteLLMCacheType
 
-    with patch("litellm.caching.caching.RedisSemanticCache") as backend:
+    with patch.object(import_module("litellm.caching.caching"), "RedisSemanticCache") as backend:
         Cache(
             type=LiteLLMCacheType.REDIS_SEMANTIC,
             similarity_threshold=0.8,

@@ -14,8 +14,8 @@ import hashlib
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable
-from typing import Any, Final, Literal, NoReturn, TypeVar, cast
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
 import jwt
@@ -24,6 +24,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException, status
 from jwt.api_jwk import PyJWK
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
@@ -52,6 +53,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
@@ -91,6 +93,47 @@ STALE_WRITTEN_AT_CACHE_KEY_PREFIX: Final = "litellm_stale_written_at_"
 UNREACHABLE_CACHE_KEY_PREFIX: Final = "litellm_jwks_unreachable_"
 
 _CachedValueT = TypeVar("_CachedValueT", bound=JWKKeyValue | str)
+
+
+class _JWTAuthSettings(Protocol):
+    """The JWT auth settings block this handler reads back through ``getattr``, when one is configured."""
+
+    @property
+    def issuers(self) -> Sequence[JWTIssuerConfig] | None: ...
+
+    @property
+    def public_key_ttl(self) -> float: ...
+
+    @property
+    def public_key_stale_ttl(self) -> float: ...
+
+
+class _OIDCDiscoveryBody(TypedDict, total=False):
+    """Decoded OIDC discovery document, read for the JWKS endpoint it advertises."""
+
+    jwks_uri: ReadOnly[str]
+
+
+class _OIDCDiscoveryResponse(Protocol):
+    """The discovery endpoint's HTTP response, read for the decoded document it carries."""
+
+    def json(self) -> _OIDCDiscoveryBody: ...
+
+
+class _UserInfoResponse(Protocol):
+    """The OIDC UserInfo endpoint's HTTP response, read for the identity document it carries."""
+
+    def json(self) -> dict[str, object]: ...
+
+
+def _discovery_document(response: _OIDCDiscoveryResponse) -> _OIDCDiscoveryBody:
+    """Decode an OIDC discovery response body."""
+    return response.json()
+
+
+def _userinfo_document(response: _UserInfoResponse) -> dict[str, object]:
+    """Decode an OIDC UserInfo response body into its JSON object form."""
+    return response.json()
 
 
 def jwks_unavailable_exception(error: JWKSUnreachableError) -> ProxyException:
@@ -794,7 +837,7 @@ class JWTHandler:
                 f"JWT Auth: OIDC discovery endpoint {url} returned status {response.status_code}: {response.text}"
             )
         try:
-            discovery: Final = response.json()
+            discovery: Final = _discovery_document(response)
         except Exception as e:
             raise Exception(f"JWT Auth: Failed to parse OIDC discovery document at {url}: {e}")
 
@@ -806,13 +849,13 @@ class JWTHandler:
         return jwks_uri
 
     def _get_public_key_cache_ttl(self) -> float:
-        litellm_jwtauth: Final = getattr(self, "litellm_jwtauth", None)
+        litellm_jwtauth: Final[_JWTAuthSettings | None] = getattr(self, "litellm_jwtauth", None)
         if litellm_jwtauth is None:
             return 600
         return litellm_jwtauth.public_key_ttl
 
     def _get_public_key_stale_ttl(self) -> float:
-        litellm_jwtauth: Final = getattr(self, "litellm_jwtauth", None)
+        litellm_jwtauth: Final[_JWTAuthSettings | None] = getattr(self, "litellm_jwtauth", None)
         if litellm_jwtauth is None:
             return DEFAULT_JWKS_STALE_TTL
         return litellm_jwtauth.public_key_stale_ttl
@@ -938,7 +981,7 @@ class JWTHandler:
             if response.status_code != 200:
                 raise Exception(f"OIDC UserInfo endpoint returned status {response.status_code}: {response.text}")
 
-            userinfo: Final = response.json()
+            userinfo: Final = _userinfo_document(response)
             verbose_proxy_logger.debug("Received OIDC UserInfo: %s", userinfo)
 
             # Cache the userinfo response
@@ -996,7 +1039,7 @@ class JWTHandler:
         }
 
     def _get_configured_issuer(self, token: str) -> JWTIssuerConfig | None:
-        litellm_jwtauth: Final = getattr(self, "litellm_jwtauth", None)
+        litellm_jwtauth: Final[_JWTAuthSettings | None] = getattr(self, "litellm_jwtauth", None)
         if litellm_jwtauth is None:
             return None
 
@@ -1553,7 +1596,7 @@ class JWTAuthManager:
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
-                            team_model_aliases=None,
+                            team_model_aliases=team_model_aliases(team_object),
                         )
                     ):
                         is_allowed = allowed_routes_check(
@@ -2090,7 +2133,7 @@ class JWTAuthManager:
                         model=requested_model,
                         team_object=team_object,
                         llm_router=llm_router,
-                        team_model_aliases=None,
+                        team_model_aliases=team_model_aliases(team_object),
                     )
                 except ProxyException:
                     continue

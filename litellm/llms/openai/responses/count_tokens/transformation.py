@@ -4,7 +4,100 @@ OpenAI Responses API token counting transformation logic.
 This module handles the transformation of requests to OpenAI's /v1/responses/input_tokens endpoint.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Literal
+
+from typing_extensions import ReadOnly, TypedDict
+
+
+class ResponsesInputTextPart(TypedDict):
+    type: ReadOnly[Literal["input_text"]]
+    text: ReadOnly[str]
+
+
+class ResponsesInputImagePart(TypedDict):
+    type: ReadOnly[Literal["input_image"]]
+    image_url: ReadOnly[str]
+    detail: ReadOnly[str]
+
+
+class ResponsesInputFilePart(TypedDict):
+    type: ReadOnly[Literal["input_file"]]
+    filename: ReadOnly[str]
+    file_data: ReadOnly[str]
+
+
+ResponsesInputPart = ResponsesInputTextPart | ResponsesInputImagePart | ResponsesInputFilePart
+
+ResponsesContentRole = Literal["user", "assistant"]
+
+
+def _chat_image_block_to_responses_part(image_url: object) -> ResponsesInputImagePart | None:
+    url: Final = image_url.get("url") if isinstance(image_url, Mapping) else image_url
+    if not isinstance(url, str) or not url:
+        return None
+    detail: Final = image_url.get("detail") if isinstance(image_url, Mapping) else None
+    part: Final[ResponsesInputImagePart] = {
+        "type": "input_image",
+        "image_url": url,
+        "detail": detail if isinstance(detail, str) and detail else "auto",
+    }
+    return part
+
+
+def _chat_file_block_to_responses_part(file_value: object) -> ResponsesInputFilePart | None:
+    """Only an inline file round trips: OpenAI rejects `file_data` without the `filename` beside it."""
+    if not isinstance(file_value, Mapping):
+        return None
+    filename: Final = file_value.get("filename")
+    file_data: Final = file_value.get("file_data")
+    if not isinstance(filename, str) or not filename or not isinstance(file_data, str) or not file_data:
+        return None
+    part: Final[ResponsesInputFilePart] = {
+        "type": "input_file",
+        "filename": filename,
+        "file_data": file_data,
+    }
+    return part
+
+
+def _chat_block_to_responses_part(block: object, role: ResponsesContentRole) -> ResponsesInputPart | None:
+    if isinstance(block, str):
+        bare: Final[ResponsesInputTextPart] = {"type": "input_text", "text": block}
+        return bare
+    if not isinstance(block, Mapping):
+        return None
+    match block.get("type"):
+        case "text":
+            text_value: Final = block.get("text")
+            text: Final[ResponsesInputTextPart] = {
+                "type": "input_text",
+                "text": text_value if isinstance(text_value, str) else "",
+            }
+            return text
+        case "image_url" if role == "user":
+            return _chat_image_block_to_responses_part(block.get("image_url"))
+        case "file" if role == "user":
+            return _chat_file_block_to_responses_part(block.get("file"))
+        case _:
+            return None
+
+
+def chat_content_blocks_to_responses_content(
+    content: Sequence[object],
+    role: ResponsesContentRole,
+) -> str | tuple[ResponsesInputPart, ...]:
+    """Text-only content collapses to a joined string, which every role accepts and counts identically.
+
+    Only a user turn may carry an image or file part: the Responses API rejects any part but
+    output_text and refusal inside an assistant turn.
+    """
+    parts: Final = tuple(
+        part for part in (_chat_block_to_responses_part(block, role) for block in content) if part is not None
+    )
+    if any(part["type"] != "input_text" for part in parts):
+        return parts
+    return "\n".join(part["text"] for part in parts if part["type"] == "input_text")
 
 
 class OpenAICountTokensConfig:
@@ -24,16 +117,16 @@ class OpenAICountTokensConfig:
     def transform_request_to_count_tokens(
         self,
         model: str,
-        input: str | list[Any],
+        input: str | Sequence[object],
         tools: list[dict[str, Any]] | None = None,
         instructions: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Transform request to OpenAI Responses API token counting format.
 
         The Responses API uses `input` (not `messages`) and `instructions` (not `system`).
         """
-        request: Final[dict[str, Any]] = {
+        request: Final[dict[str, object]] = {
             "model": model,
             "input": input,
         }
@@ -52,7 +145,7 @@ class OpenAICountTokensConfig:
             "Authorization": f"Bearer {api_key}",
         }
 
-    def validate_request(self, model: str, input: str | list[Any]) -> None:
+    def validate_request(self, model: str, input: str | Sequence[object]) -> None:
         if not model:
             raise ValueError("model parameter is required")
 
@@ -62,18 +155,18 @@ class OpenAICountTokensConfig:
     @staticmethod
     def _transform_tools_for_responses_api(
         tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """
         Transform OpenAI chat tools format to Responses API tools format.
 
         Chat format:  {"type": "function", "function": {"name": "...", "parameters": {...}}}
         Responses format: {"type": "function", "name": "...", "parameters": {...}}
         """
-        transformed: Final = []
+        transformed: Final[list[dict[str, object]]] = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                item: dict[str, Any] = {
+                item: dict[str, object] = {
                     "type": "function",
                     "name": func.get("name", ""),
                     "description": func.get("description", ""),
@@ -98,7 +191,7 @@ class OpenAICountTokensConfig:
             (input_items, instructions) tuple where instructions is extracted
             from system/developer messages.
         """
-        input_items: Final[list[dict[str, Any]]] = []
+        input_items: Final[list[dict[str, object]]] = []
         instructions_parts: Final[list[str]] = []
 
         for msg in messages:
@@ -120,18 +213,13 @@ class OpenAICountTokensConfig:
                     instructions_parts.append("\n".join(text_parts))
             elif role == "user":
                 if isinstance(content, list):
-                    # Extract text from content blocks for Responses API
-                    text_parts = []
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            text_parts.append(block.get("text", ""))
-                        elif isinstance(block, str):
-                            text_parts.append(block)
-                    content = "\n".join(text_parts)
+                    content = chat_content_blocks_to_responses_content(content, "user")
                 input_items.append({"role": "user", "content": content})
             elif role == "assistant":
                 # Map tool_calls to Responses API function_call items
                 tool_calls = msg.get("tool_calls")
+                if isinstance(content, list):
+                    content = chat_content_blocks_to_responses_content(content, "assistant")
                 if content:
                     input_items.append({"role": "assistant", "content": content})
                 if tool_calls:

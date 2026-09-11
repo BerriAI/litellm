@@ -1,6 +1,7 @@
 
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -17,6 +18,7 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     ModelInfo,
@@ -127,6 +129,22 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     assert cost > 0, "Cost should be calculated using response model"
 
 
+def test_jina_rerank_bills_total_tokens_at_input_rate_only(_local_model_cost_map):
+    response: Final = RerankResponse(
+        id="rerank-1",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": {"total_tokens": 1000}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="jina_ai/jina-reranker-v2-base-multilingual",
+        call_type="rerank",
+    )
+
+    assert cost == pytest.approx(1000 * 5e-08)
+
+
 def test_cost_calculator_with_response_cost_in_additional_headers():
     class MockResponse(BaseModel):
         _hidden_params = {
@@ -144,6 +162,51 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     )
 
     assert result == 1000
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("vertex_ai/lyria-002", 0.06),
+        ("vertex_ai/lyria-3-clip-preview", 0.04),
+        ("vertex_ai/lyria-3-pro-preview", 0.08),
+    ],
+)
+@pytest.mark.parametrize("runtime_state", ("complete", "missing", "routing_only", "custom_zero", "custom_price"))
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+def test_vertex_lyria_speech_cost(
+    model: str,
+    expected_cost: float,
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_state: str,
+    call_type: str,
+) -> None:
+    model_info: Final = litellm.model_cost[model]
+    if runtime_state == "missing":
+        monkeypatch.delitem(litellm.model_cost, model)
+    elif runtime_state == "routing_only":
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {key: value for key, value in model_info.items() if key != "output_cost_per_image"},
+        )
+    elif runtime_state in ("custom_zero", "custom_price"):
+        multiplier: Final = 0 if runtime_state == "custom_zero" else 2
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {**model_info, "output_cost_per_image": model_info["output_cost_per_image"] * multiplier},
+        )
+
+    cost: Final = completion_cost(
+        model=model,
+        prompt="A bright synth track",
+        call_type=call_type,
+    )
+
+    expected: Final = 0 if runtime_state == "custom_zero" else expected_cost * (2 if runtime_state == "custom_price" else 1)
+    assert cost == pytest.approx(expected)
 
 
 def test_baseten_model_api_pricing_entries(_local_model_cost_map):
@@ -175,6 +238,11 @@ def test_wandb_model_api_pricing_entries(_local_model_cost_map):
     expected_pricing = {
         "wandb/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
         "wandb/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+        "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": (1e-07, 1e-07),
+        "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": (1e-07, 1e-07),
+        "wandb/deepseek-ai/DeepSeek-R1-0528": (1.35e-06, 5.4e-06),
+        "wandb/deepseek-ai/DeepSeek-V3-0324": (1.14e-06, 2.75e-06),
+        "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": (1.7e-07, 6.6e-07),
     }
 
     for model_name, (input_cost, output_cost) in expected_pricing.items():
@@ -3685,6 +3753,112 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown(_local_model_cost_ma
     assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
 
 
+def test_completion_cost_logs_the_rates_it_billed_at(monkeypatch):
+    """A caller reporting the cost lines beside their per-token rates reads both off this one call.
+    completion_cost infers the provider, and xai's inclusive tier thresholds put a request sitting
+    exactly on 200k at the tier rate, which a lookup made without that inferred provider would miss.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "xai/tiered-model",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "input_cost_per_token_above_200k_tokens": 6e-6,
+            "output_cost_per_token_above_200k_tokens": 3e-5,
+            "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+            "litellm_provider": "xai",
+            "mode": "chat",
+        },
+    )
+    logging_obj = Logging(
+        model="xai/tiered-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="billed-rates",
+        function_id="f",
+    )
+    usage = Usage(
+        prompt_tokens=200_000,
+        completion_tokens=1_000,
+        total_tokens=201_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+    )
+
+    litellm.completion_cost(
+        completion_response=ModelResponse(model="xai/tiered-model", usage=usage),
+        model="xai/tiered-model",
+        custom_llm_provider=None,
+        litellm_logging_obj=logging_obj,
+    )
+
+    rates = logging_obj.billed_token_rates
+    assert rates is not None
+    assert rates.input_cost_per_token == pytest.approx(6e-6)
+    assert rates.cache_read_input_token_cost == pytest.approx(6e-7)
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(
+        100_000 * rates.cache_read_input_token_cost
+    )
+    assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(1_000 * rates.output_cost_per_token)
+
+
+def test_completion_cost_logs_cache_and_reasoning_breakdown_for_custom_pricing():
+    """
+    A custom-priced deployment bills cache tokens at its custom cache rates, but the
+    breakdown stored for the spend logs carried no cache or reasoning lines for it.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import CompletionTokensDetailsWrapper, CostPerToken
+
+    logging_obj = Logging(
+        model="openai/onprem-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="custom-pricing-breakdown",
+        function_id="f",
+    )
+    response = ModelResponse(
+        model="openai/onprem-model",
+        usage=Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            total_tokens=1500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800, cache_creation_tokens=100),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=200),
+        ),
+    )
+
+    total = completion_cost(
+        completion_response=response,
+        model="openai/onprem-model",
+        custom_llm_provider="openai",
+        custom_cost_per_token=CostPerToken(
+            input_cost_per_token=1e-6,
+            output_cost_per_token=2e-6,
+            cache_read_input_token_cost=1e-7,
+            cache_creation_input_token_cost=1.25e-6,
+        ),
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(800 * 1e-7)
+    assert logging_obj.cost_breakdown["cache_creation_cost"] == pytest.approx(100 * 1.25e-6)
+    assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(200 * 2e-6)
+    assert total == pytest.approx(100 * 1e-6 + 800 * 1e-7 + 100 * 1.25e-6 + 500 * 2e-6)
+
+
 def test_cost_per_token_per_second_pricing(monkeypatch):
     """
     Models priced by duration (input/output_cost_per_second) with no per-token rates
@@ -3977,6 +4151,74 @@ def test_completion_cost_prices_anthropic_shaped_cache_read_tokens(_local_model_
     assert cost == pytest.approx(3 * 4e-6 + 4014 * 4e-7 + 5 * 2e-5, rel=1e-9)
 
 
+def _together_chat_response(model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-together-cache",
+        choices=[{"finish_reason": "stop", "index": 0, "message": {"content": "acknowledged", "role": "assistant"}}],
+        created=1756164000,
+        model=model,
+        object="chat.completion",
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+        ),
+    )
+
+
+def test_completion_cost_prices_together_cached_tokens_at_cache_read_rate(_local_model_cost_map):
+    """Regression: Together reports prompt_tokens_details.cached_tokens but no together_ai
+    registry entry carried cache_read_input_token_cost, so cache-hit tokens were priced at
+    0.0 and spend on cache-heavy workloads was understated."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="deepseek-ai/DeepSeek-V4-Flash-0731", prompt_tokens=7864, completion_tokens=16, cached_tokens=7863
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(1 * 1.4e-07 + 7863 * 3e-08 + 16 * 2.8e-07, rel=1e-9)
+
+
+def test_completion_cost_together_mapped_model_skips_size_bucket(_local_model_cost_map):
+    """Regression: any together model whose name matches (\\d+b) was rewritten to a
+    together-ai-* size bucket before the registry lookup, so mapped models like
+    Muse-Glimmer-30B never used their per-model rates, cache fields included."""
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="meta-models/Muse-Glimmer-30B", prompt_tokens=63, completion_tokens=16, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx(63 * 3.5e-07 + 16 * 1.5e-06, rel=1e-9)
+
+
+def test_completion_cost_together_unmapped_model_still_uses_size_bucket(_local_model_cost_map):
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="qwen/Qwen2-72B-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 9e-07, rel=1e-9)
+
+
+def test_completion_cost_together_metadata_only_model_still_uses_size_bucket(_local_model_cost_map):
+    assert "input_cost_per_token" not in litellm.model_cost["together_ai/togethercomputer/CodeLlama-34b-Instruct"]
+
+    cost = completion_cost(
+        completion_response=_together_chat_response(
+            model="togethercomputer/CodeLlama-34b-Instruct", prompt_tokens=23, completion_tokens=15, cached_tokens=0
+        ),
+        custom_llm_provider="together_ai",
+    )
+
+    assert cost == pytest.approx((23 + 15) * 8e-07, rel=1e-9)
 def test_select_model_name_strips_unregistered_alias_prefix(_local_model_cost_map):
     """A router-facing model_name alias containing "/" whose leading segment is NOT a
     registered provider must not be double-prefixed into a non-existent cost key.
@@ -4036,6 +4278,53 @@ def test_select_model_name_strips_duplicated_region_segment(_local_model_cost_ma
     )
 
     assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
+def _bedrock_response_with_private_model(model: str, region_name: str) -> litellm.ModelResponse:
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model=model,
+    )
+    response._hidden_params = {"provider_response_model": model, "region_name": region_name}
+    return response
+
+
+def test_select_model_name_applies_region_to_private_provider_response_model(_local_model_cost_map):
+    """A Bedrock stream carries its requested model as the private provider model and must keep the
+    request's region in the cost key, exactly as the same request does without streaming."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    selected = _select_model_name_for_cost_calc(
+        model=None,
+        completion_response=_bedrock_response_with_private_model("anthropic.claude-v2:1", "us-east-1"),
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/us-east-1/anthropic.claude-v2:1"
+
+
+def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
+    """An explicit base_model keeps pricing on that model's own key even when the request carries a
+    region with different regional rates, so the private provider model never widens region pricing."""
+
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    selected = _select_model_name_for_cost_calc(
+        model="my-bedrock-deployment",
+        completion_response=_bedrock_response_with_private_model("moonshotai.kimi-k2.5", "ap-northeast-1"),
+        base_model="moonshotai.kimi-k2.5",
+        custom_llm_provider="bedrock",
+    )
+
+    assert selected == "bedrock/moonshotai.kimi-k2.5"
 
 
 def test_completion_cost_nonzero_for_slash_alias_model_name(_local_model_cost_map):
@@ -4282,3 +4571,200 @@ def test_realtime_explicitly_free_session_model_still_bills_zero(
     )
 
     assert cost == 0.0
+
+
+def test_completion_cost_prefers_private_provider_response_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/selected-cost-model",
+        {
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000004,
+            "litellm_provider": "openai",
+        },
+    )
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="requested-route",
+    )
+    response._hidden_params = {
+        "custom_llm_provider": "openai",
+        "provider_response_model": "selected-cost-model",
+    }
+    response.usage = litellm.Usage(prompt_tokens=100, completion_tokens=50)
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        custom_llm_provider="openai",
+    )
+
+    assert response.model == "requested-route"
+    assert cost == pytest.approx(100 * 0.000002 + 50 * 0.000004)
+
+
+@pytest.mark.parametrize(
+    ("base_model", "custom_pricing", "expected"),
+    [
+        ("openai/base-model", False, "openai/base-model"),
+        (None, True, "openai/requested-route"),
+    ],
+)
+def test_explicit_pricing_precedes_private_provider_response_model(
+    base_model: str | None,
+    custom_pricing: bool,
+    expected: str,
+) -> None:
+    from litellm.cost_calculator import _select_model_name_for_cost_calc
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        model="requested-route",
+    )
+    response._hidden_params = {"provider_response_model": "selected-cost-model"}
+
+    selected = _select_model_name_for_cost_calc(
+        model="requested-route",
+        completion_response=response,
+        base_model=base_model,
+        custom_pricing=custom_pricing,
+        custom_llm_provider="openai",
+    )
+
+    assert selected == expected
+
+
+def test_cost_per_token_mistral_voxtral_tts_bills_per_input_character(_local_model_cost_map):
+    prompt_usd, completion_usd = cost_per_token(
+        model="voxtral-mini-tts-2603",
+        custom_llm_provider="mistral",
+        call_type="speech",
+        prompt_characters=1000,
+    )
+
+    assert prompt_usd == pytest.approx(1000 * 1.6e-05)
+    assert completion_usd == 0.0
+
+
+def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_model_cost_map):
+    """gpt-6-astra batch pricing is 50% off the standard $10 input and $50 output rates per 1M tokens."""
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage, model="gpt-6-astra", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(1000 * 5e-6)
+    assert completion_cost == pytest.approx(500 * 2.5e-5)
+
+
+def test_handle_realtime_stream_cost_calculation_bills_nested_reasoning_tokens_once(
+    _local_model_cost_map: None,
+) -> None:
+    """Realtime response.done nests reasoning_tokens inside text_tokens, so they are billed once."""
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-2.1-mini"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "total_tokens": 260,
+                    "input_tokens": 237,
+                    "output_tokens": 23,
+                    "input_token_details": {
+                        "text_tokens": 43,
+                        "audio_tokens": 0,
+                        "image_tokens": 194,
+                        "cached_tokens": 0,
+                        "cached_tokens_details": {"text_tokens": 0, "audio_tokens": 0, "image_tokens": 0},
+                    },
+                    "output_token_details": {"text_tokens": 23, "audio_tokens": 0, "reasoning_tokens": 18},
+                }
+            },
+        },
+    ]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    total_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="azure",
+        litellm_model_name="azure/gpt-realtime-2.1-mini",
+    )
+
+    info = litellm.get_model_info(model="azure/gpt-realtime-2.1-mini", custom_llm_provider="azure")
+    expected = (
+        43 * info["input_cost_per_token"]
+        + 194 * info["input_cost_per_image_token"]
+        + 23 * info["output_cost_per_token"]
+    )
+    assert total_cost == pytest.approx(expected)
+    assert total_cost == pytest.approx(0.0002362)
+
+
+def test_collect_and_combine_realtime_usage_stores_partitioned_text_tokens() -> None:
+    """The combined usage that lands in spend logs keeps reasoning out of text_tokens for every turn."""
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-2.1-mini"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "total_tokens": 307,
+                    "input_tokens": 237,
+                    "output_tokens": 70,
+                    "input_token_details": {
+                        "text_tokens": 43,
+                        "audio_tokens": 0,
+                        "image_tokens": 194,
+                        "cached_tokens": 0,
+                    },
+                    "output_token_details": {"text_tokens": 70, "audio_tokens": 0, "reasoning_tokens": 52},
+                }
+            },
+        },
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "total_tokens": 363,
+                    "input_tokens": 300,
+                    "output_tokens": 63,
+                    "input_token_details": {
+                        "text_tokens": 106,
+                        "audio_tokens": 0,
+                        "image_tokens": 194,
+                        "cached_tokens": 0,
+                    },
+                    "output_token_details": {"text_tokens": 63, "audio_tokens": 0, "reasoning_tokens": 43},
+                }
+            },
+        },
+    ]
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(results=results)
+
+    assert combined.completion_tokens == 133
+    assert combined.completion_tokens_details is not None
+    assert combined.completion_tokens_details.reasoning_tokens == 95
+    assert combined.completion_tokens_details.text_tokens == 38
+    assert combined.completion_tokens_details.audio_tokens == 0

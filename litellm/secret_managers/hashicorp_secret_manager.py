@@ -1,7 +1,9 @@
 import os
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +17,72 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
+
+
+class _VaultAuthData(TypedDict):
+    """The ``auth`` block Vault returns from a login endpoint."""
+
+    client_token: ReadOnly[str]
+    lease_duration: ReadOnly[int]
+
+
+class _VaultLoginResponse(TypedDict):
+    """Body of a Vault ``/v1/auth/.../login`` response."""
+
+    auth: ReadOnly[_VaultAuthData]
+
+
+class _VaultSecretTarget(TypedDict):
+    """Resolved coordinates of one Vault KV v2 secret."""
+
+    url: ReadOnly[str]
+    data_key: ReadOnly[str]
+    secret_name: ReadOnly[str]
+
+
+class _VaultSecretDataBlock(TypedDict, total=False):
+    """The inner ``data`` block of a Vault KV v2 read body."""
+
+    data: ReadOnly[Mapping[str, object]]
+
+
+class _VaultSecretReadResponse(TypedDict, total=False):
+    """Body of a Vault KV v2 secret read, narrowed to the nesting this module walks."""
+
+    data: ReadOnly[_VaultSecretDataBlock]
+
+
+class _VaultLoginResponseSource(Protocol):
+    """A Vault login call's HTTP response, read for the auth block it carries."""
+
+    def json(self) -> _VaultLoginResponse: ...
+
+
+class _VaultSecretReadSource(Protocol):
+    """A Vault KV v2 read response, read for the nested secret data it carries."""
+
+    def json(self) -> _VaultSecretReadResponse: ...
+
+
+class _JsonObjectSource(Protocol):
+    """A Vault response whose body is a JSON object nothing further is assumed about."""
+
+    def json(self) -> dict[str, object]: ...
+
+
+def _vault_login_body(response: _VaultLoginResponseSource) -> _VaultLoginResponse:
+    """Decode the body of a Vault login response."""
+    return response.json()
+
+
+def _vault_secret_read_body(response: _VaultSecretReadSource) -> _VaultSecretReadResponse:
+    """Decode the body of a Vault KV v2 secret read response."""
+    return response.json()
+
+
+def _json_object_body(response: _JsonObjectSource) -> dict[str, object]:
+    """Decode a Vault response body as a plain JSON object."""
+    return response.json()
 
 
 class HashicorpSecretManager(BaseSecretManager):
@@ -130,7 +198,8 @@ class HashicorpSecretManager(BaseSecretManager):
             )
             resp.raise_for_status()
 
-            auth_data: Final = resp.json()["auth"]
+            login_response: Final = _vault_login_body(resp)
+            auth_data: Final = login_response["auth"]
             token: Final = auth_data["client_token"]
             _lease_duration: Final = auth_data["lease_duration"]
 
@@ -191,8 +260,10 @@ class HashicorpSecretManager(BaseSecretManager):
                 json=self._get_tls_cert_auth_body(),
             )
             resp.raise_for_status()
-            token: Final = resp.json()["auth"]["client_token"]
-            _lease_duration: Final = resp.json()["auth"]["lease_duration"]
+            token_response: Final = _vault_login_body(resp)
+            token: Final = token_response["auth"]["client_token"]
+            lease_response: Final = _vault_login_body(resp)
+            _lease_duration: Final = lease_response["auth"]["lease_duration"]
             verbose_logger.debug("Successfully obtained Vault token via TLS cert auth.")
             self.cache.set_cache(key="hcp_vault_token", value=token, ttl=_lease_duration)
             return token
@@ -205,9 +276,9 @@ class HashicorpSecretManager(BaseSecretManager):
     def get_url(
         self,
         secret_name: str,
-        namespace: str | None = None,
-        mount_name: str | None = None,
-        path_prefix: str | None = None,
+        namespace: object = None,
+        mount_name: object = None,
+        path_prefix: object = None,
     ) -> str:
         """
         Constructs the Vault URL for KV v2 secrets.
@@ -238,7 +309,7 @@ class HashicorpSecretManager(BaseSecretManager):
         _url += secret_name
         return _url
 
-    def _sanitize_plain_value(self, value: str | int | None) -> str | None:
+    def _sanitize_plain_value(self, value: object) -> str | None:
         if value is None:
             return None
         value_str: Final = str(value).strip()
@@ -246,23 +317,23 @@ class HashicorpSecretManager(BaseSecretManager):
             return None
         return value_str
 
-    def _sanitize_path_component(self, value: str | int | None) -> str | None:
+    def _sanitize_path_component(self, value: object) -> str | None:
         sanitized_value = self._sanitize_plain_value(value)
         if sanitized_value is None:
             return None
         sanitized_value = sanitized_value.strip("/")
         return sanitized_value or None
 
-    def _extract_secret_manager_settings(self, optional_params: dict | None) -> dict[str, Any]:
+    def _extract_secret_manager_settings(self, optional_params: dict | None) -> dict[str, object]:
         if not isinstance(optional_params, dict):
             return {}
 
         candidate: Final = optional_params.get("secret_manager_settings")
-        source: Final = candidate if isinstance(candidate, dict) else optional_params
+        source: Final[Mapping[str, object]] = candidate if isinstance(candidate, dict) else optional_params
         allowed_keys: Final = {"namespace", "mount", "path_prefix", "data"}
         return {k: source[k] for k in allowed_keys if k in source}
 
-    def _build_secret_target(self, secret_name: str, optional_params: dict | None) -> dict[str, Any]:
+    def _build_secret_target(self, secret_name: str, optional_params: dict | None) -> _VaultSecretTarget:
         settings: Final = self._extract_secret_manager_settings(optional_params)
 
         namespace: Final = settings.get("namespace", self.vault_namespace)
@@ -331,7 +402,7 @@ class HashicorpSecretManager(BaseSecretManager):
             response.raise_for_status()
 
             # For KV v2, the secret is in response.json()["data"]["data"]
-            json_resp: Final = response.json()
+            json_resp: Final = _json_object_body(response)
             _value: Final = self._get_secret_value_from_json_response(json_resp)
             self.cache.set_cache(secret_name, _value)
             return _value
@@ -362,7 +433,7 @@ class HashicorpSecretManager(BaseSecretManager):
             response.raise_for_status()
 
             # For KV v2, the secret is in response.json()["data"]["data"]
-            json_resp: Final = response.json()
+            json_resp: Final = _json_object_body(response)
             _value: Final = self._get_secret_value_from_json_response(json_resp)
             self.cache.set_cache(secret_name, _value)
             return _value
@@ -379,7 +450,7 @@ class HashicorpSecretManager(BaseSecretManager):
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
         tags: dict | list | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Writes a secret to Vault KV v2 using an async HTTPX client.
 
@@ -413,7 +484,7 @@ class HashicorpSecretManager(BaseSecretManager):
                 json=data,
             )
             response.raise_for_status()
-            return response.json()
+            return _json_object_body(response)
         except Exception as e:
             verbose_logger.exception("Error writing secret to Hashicorp Vault: %s", e)
             return {"status": "error", "message": str(e)}
@@ -500,7 +571,7 @@ class HashicorpSecretManager(BaseSecretManager):
                     headers=self._get_request_headers(),
                 )
                 response.raise_for_status()
-                json_resp: Final = response.json()
+                json_resp: Final = _vault_secret_read_body(response)
                 # Use data_key from target to get the correct value
                 data_key: Final = new_target["data_key"]
                 new_secret_value_from_vault: Final = json_resp.get("data", {}).get("data", {}).get(data_key, None)

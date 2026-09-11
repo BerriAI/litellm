@@ -151,7 +151,7 @@ const DECLARED_APP_CREDENTIAL_KEYS = ["client_id", "client_secret"] as const;
 // would destroy admin input), but it must stay OUT of the declared-app set: whether an app exists is
 // a distinct question that gates the "app may not match upstream" warning, and a server using dynamic
 // client registration can set a resource indicator while having no app at all.
-export const ADMIN_CONFIG_CREDENTIAL_KEYS = ["upstream_resource"] as const;
+export const ADMIN_CONFIG_CREDENTIAL_KEYS = ["upstream_resource", "upstream_token_header"] as const;
 
 // Minted token material the oauth2 authorize path writes beside the app keys; stripped from restored
 // snapshots and from any credentials that transit to the temp-session preview so a stale token never

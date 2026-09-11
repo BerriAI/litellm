@@ -169,6 +169,42 @@ class TestTransformRequest:
             }
         }
 
+    @pytest.mark.parametrize("response_format", ["srt", "vtt"])
+    def test_subtitle_response_format_requests_word_timestamps(self, config, response_format):
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"response_format": response_format},
+            litellm_params={},
+        )
+        transcription_config = request_data.data["generation_config"]["transcription_config"]
+        assert json.loads(json.dumps(transcription_config)) == {
+            "mode": {
+                "type": "verbatim",
+                "timestamp_granularities": ["word"],
+                "diarization_mode": "speaker",
+            }
+        }
+
+    @pytest.mark.parametrize("response_format", ["json", "text", "verbose_json"])
+    def test_non_subtitle_response_format_sends_no_mode(self, config, response_format):
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"response_format": response_format},
+            litellm_params={},
+        )
+        assert "generation_config" not in request_data.data
+
+    def test_non_string_response_format_sends_no_mode(self, config):
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={"response_format": {"type": "json_object"}},
+            litellm_params={},
+        )
+        assert "generation_config" not in request_data.data
+
     def test_segment_granularity_sends_no_mode(self, config):
         request_data = config.transform_audio_transcription_request(
             model="gemini-3.5-transcribe",
@@ -212,6 +248,54 @@ class TestTransformResponse:
         response = config.transform_audio_transcription_response(make_response(payload))
         assert response["words"] == [{"word": "Hello"}]
         assert response.get("duration") is None
+
+
+class TestSubtitleSynthesisThroughHandler:
+    def _transform(self, config, response_format):
+        from unittest.mock import Mock
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        from litellm.types.utils import TranscriptionResponse
+
+        return BaseLLMHTTPHandler()._transform_audio_transcription_response(
+            provider_config=config,
+            model="gemini-3.5-transcribe",
+            response=make_response(COMPLETED_RESPONSE),
+            model_response=TranscriptionResponse(),
+            logging_obj=Mock(),
+            optional_params={"response_format": response_format},
+            api_key=None,
+        )
+
+    def test_supports_subtitle_synthesis(self, config):
+        assert config.supports_subtitle_synthesis is True
+
+    def test_srt_synthesizes_subtitle_document_and_drops_words(self, config):
+        response = self._transform(config, "srt")
+        assert response.text == (
+            "1\n00:00:00,100 --> 00:00:00,400\nHello\n\n2\n00:00:00,500 --> 00:00:00,900\nworld.\n"
+        )
+        assert "words" not in response
+        assert response["task"] == "transcribe"
+        assert response["duration"] == 0.9
+        assert response.usage.total_tokens == 200
+
+    def test_vtt_synthesizes_subtitle_document_and_drops_words(self, config):
+        response = self._transform(config, "vtt")
+        assert response.text == (
+            "WEBVTT\n\n00:00:00.100 --> 00:00:00.400\nHello\n\n00:00:00.500 --> 00:00:00.900\nworld.\n"
+        )
+        assert "words" not in response
+        assert response.usage.total_tokens == 200
+
+    @pytest.mark.parametrize("response_format", ["json", "verbose_json"])
+    def test_non_subtitle_formats_keep_plain_text_and_words(self, config, response_format):
+        response = self._transform(config, response_format)
+        assert response.text == "Hello world."
+        assert response["words"] == [
+            {"word": "Hello", "start": 0.1, "end": 0.4, "speaker": "spk:0"},
+            {"word": "world.", "start": 0.5, "end": 0.9, "speaker": "spk:1"},
+        ]
 
 
 class TestCostRegression:

@@ -15,6 +15,7 @@ interface IdCellProps {
   variant?: IdCellVariant;
   onClick?: (value: string) => void;
   copyable?: boolean;
+  copyLabel?: string;
   truncate?: boolean;
   fallback?: string;
   tooltip?: React.ReactNode;
@@ -39,6 +40,7 @@ export function IdCell({
   variant = "pill",
   onClick,
   copyable = false,
+  copyLabel = "Copy ID",
   truncate = true,
   fallback = "-",
   tooltip,
@@ -80,7 +82,7 @@ export function IdCell({
       {withTooltip}
       <button
         type="button"
-        aria-label="Copy ID"
+        aria-label={copyLabel}
         className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
         onClick={(event) => {
           event.stopPropagation();

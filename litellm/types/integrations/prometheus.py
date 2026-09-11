@@ -154,6 +154,22 @@ LATENCY_BUCKETS: Final = (
     float("inf"),
 )
 
+UNKNOWN_INPUT_SEQUENCE_LENGTH: Final = "unknown"
+INPUT_SEQUENCE_LENGTH_BUCKETS: Final = (
+    (1_000, "0-1k"),
+    (4_000, "1k-4k"),
+    (16_000, "4k-16k"),
+    (64_000, "16k-64k"),
+    (float("inf"), "64k+"),
+)
+
+
+def get_input_sequence_length_bucket(prompt_tokens: object) -> str:
+    if not isinstance(prompt_tokens, int) or isinstance(prompt_tokens, bool) or prompt_tokens < 0:
+        return UNKNOWN_INPUT_SEQUENCE_LENGTH
+    return next(label for upper, label in INPUT_SEQUENCE_LENGTH_BUCKETS if prompt_tokens < upper)
+
+
 # Batch jobs can run for minutes to hours; buckets span 1 min → 24 h.
 BATCH_DURATION_BUCKETS: Final = (
     60.0,
@@ -205,6 +221,7 @@ class UserAPIKeyLabelNames(Enum):
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
     SERVICE_TIER = "service_tier"
+    INPUT_SEQUENCE_LENGTH = "input_sequence_length"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -270,6 +287,10 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_deployment_rpm_limit",
     "litellm_remaining_api_key_requests_for_model",
     "litellm_remaining_api_key_tokens_for_model",
+    "litellm_api_key_rate_limit_allowed_metric",
+    "litellm_api_key_rate_limit_used_metric",
+    "litellm_team_rate_limit_allowed_metric",
+    "litellm_team_rate_limit_used_metric",
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
@@ -775,6 +796,22 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
+    litellm_api_key_rate_limit_allowed_metric: ClassVar[tuple[str, ...]] = (
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+    )
+
+    litellm_api_key_rate_limit_used_metric = litellm_api_key_rate_limit_allowed_metric
+
+    litellm_team_rate_limit_allowed_metric: ClassVar[tuple[str, ...]] = (
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+    )
+
+    litellm_team_rate_limit_used_metric = litellm_team_rate_limit_allowed_metric
+
     litellm_llm_api_failed_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -835,6 +872,13 @@ class PrometheusMetricLabels:
             "litellm_output_tokens_metric",
             "litellm_video_duration_seconds_metric",
             "litellm_images_generated_metric",
+        }
+    )
+    _input_sequence_length_metrics: ClassVar[frozenset[str]] = frozenset(
+        {
+            "litellm_llm_api_latency_metric",
+            "litellm_llm_api_time_to_first_token_metric",
+            "litellm_request_total_latency_metric",
         }
     )
     # Managed batch metrics
@@ -935,14 +979,23 @@ class PrometheusMetricLabels:
                     custom_labels.append(label)
 
         if label_name in PrometheusMetricLabels._org_label_metrics:
-            for label in [
+            for label in (
                 UserAPIKeyLabelNames.ORG_ID.value,
                 UserAPIKeyLabelNames.ORG_ALIAS.value,
-            ]:
+            ):
                 if label not in default_labels and label not in custom_labels:
                     custom_labels.append(label)
 
-        return default_labels + custom_labels
+        input_sequence_length_labels: Final = (
+            (UserAPIKeyLabelNames.INPUT_SEQUENCE_LENGTH.value,)
+            if (
+                label_name in PrometheusMetricLabels._input_sequence_length_metrics
+                and litellm.prometheus_emit_input_sequence_length_label is True
+                and UserAPIKeyLabelNames.INPUT_SEQUENCE_LENGTH.value not in custom_labels
+            )
+            else ()
+        )
+        return [*default_labels, *custom_labels, *input_sequence_length_labels]
 
 
 _USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
@@ -995,6 +1048,7 @@ class UserAPIKeyLabelValues:
     mcp_tool_name: str | None = None
     mcp_server_name: str | None = None
     service_tier: str | None = None
+    input_sequence_length: str | None = None
 
     # Added for test compatibility.
     def __init__(self, **kwargs: Any) -> None:

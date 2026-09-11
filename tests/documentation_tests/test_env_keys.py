@@ -33,6 +33,13 @@ EXCLUDED_ROLLOUT_FLAGS = {
     "LITELLM_RUST",
 }
 
+# Internal infrastructure tuning parameters for streaming/queue management
+# These are advanced settings with sensible defaults that most users should not modify
+EXCLUDED_INTERNAL_TUNING_VARS = {
+    "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS",
+    "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE",
+}
+
 EXCLUDED_TERMINAL_VARS = {
     "TERM",
     "TERM_PROGRAM",
