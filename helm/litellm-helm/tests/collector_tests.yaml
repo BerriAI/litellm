@@ -1,0 +1,272 @@
+suite: test collector sidecar
+templates:
+  - deployment.yaml
+  - hpa.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: should run the proxy alone with no collector env by default
+    template: deployment.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_ENABLED
+            value: "true"
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: collector-socket
+          any: true
+
+  - it: should add the sidecar on the same image and point both containers at the unix socket
+    template: deployment.yaml
+    set:
+      image.tag: test
+      db.connectionPool.enabled: true
+      collector.enabled: true
+      collector.resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: litellm-collector
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: ghcr.io/berriai/litellm:test
+      - equal:
+          path: spec.template.spec.containers[1].command
+          value: [python, -m, litellm.proxy.collector]
+      - equal:
+          path: spec.template.spec.containers[1].resources.requests.cpu
+          value: 500m
+      - equal:
+          path: spec.template.spec.containers[1].resources.limits.memory
+          value: 2Gi
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_ADDRESS
+            value: unix:///var/run/litellm/collector.sock
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_BUFFER_SIZE
+            value: "1000"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+            value: fallback
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: collector
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_JOB_ROLE
+            value: collector
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_COLLECTOR_ADDRESS
+            value: unix:///var/run/litellm/collector.sock
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: CONFIG_FILE_PATH
+            value: /etc/litellm/config.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATABASE_HOST
+            value: RELEASE-NAME-postgresql
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-litellm-dbcredentials
+                key: password
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "20"
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: collector-socket
+            mountPath: /var/run/litellm
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: collector-socket
+            mountPath: /var/run/litellm
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: litellm-config
+            mountPath: /etc/litellm/config.yaml
+            subPath: config.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: collector-socket
+            emptyDir:
+              sizeLimit: 1Mi
+
+  - it: should skip the socket volume and pass the policy through on tcp transport
+    template: deployment.yaml
+    set:
+      collector.enabled: true
+      collector.address: tcp://127.0.0.1:4100
+      collector.onUnavailable: drop
+      collector.bufferSize: 50
+      envVars:
+        CONFIG_FILE_PATH: /custom/config.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: CONFIG_FILE_PATH
+            value: /etc/litellm/config.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: CONFIG_FILE_PATH
+            value: /custom/config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_ADDRESS
+            value: tcp://127.0.0.1:4100
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+            value: drop
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_COLLECTOR_BUFFER_SIZE
+            value: "50"
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: collector-socket
+          any: true
+
+  - it: should keep metrics and billing env on the proxy container only
+    template: deployment.yaml
+    set:
+      collector.enabled: true
+      metricsServer.enabled: true
+      metricsServer.port: 9090
+      billingMetrics.enabled: true
+      billingMetrics.endpoint: https://metering.example.com
+      billingMetrics.secretName: billing-mtls
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROMETHEUS_METRICS_PORT
+            value: "9090"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+            value: https://metering.example.com
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: PROMETHEUS_METRICS_PORT
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: billing-metrics-mtls
+          any: true
+
+  - it: should give the sidecar the same scratch mounts as the proxy on a read-only root
+    template: deployment.yaml
+    set:
+      collector.enabled: true
+      securityContext.readOnlyRootFilesystem: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: npm
+            mountPath: /.npm
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: cache
+            mountPath: /.cache
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: tmp
+            mountPath: /tmp
+
+  - it: should keep the pod-wide cpu metric unless asked to scale on the proxy container
+    template: hpa.yaml
+    set:
+      autoscaling.enabled: true
+      collector.enabled: true
+    asserts:
+      - equal: { path: "spec.metrics[0].type", value: Resource }
+      - equal: { path: "spec.metrics[0].resource.name", value: cpu }
+
+  - it: should scale on the proxy container's cpu only when opted in
+    template: hpa.yaml
+    set:
+      autoscaling.enabled: true
+      collector.enabled: true
+      collector.scaleOnProxyContainerCpu: true
+    asserts:
+      - equal: { path: "spec.metrics[0].type", value: ContainerResource }
+      - equal: { path: "spec.metrics[0].containerResource.name", value: cpu }
+      - equal: { path: "spec.metrics[0].containerResource.container", value: litellm }
+      - equal: { path: "spec.metrics[0].containerResource.target.averageUtilization", value: 60 }
+      - isNull: { path: "spec.metrics[0].resource" }
+
+  - it: should not switch to the container metric while the sidecar is off
+    template: hpa.yaml
+    set:
+      autoscaling.enabled: true
+      collector.scaleOnProxyContainerCpu: true
+    asserts:
+      - equal: { path: "spec.metrics[0].type", value: Resource }

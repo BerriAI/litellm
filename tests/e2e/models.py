@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal
+from typing import Final, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_validator
+from e2e_http import PartialBody
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_serializer, model_validator
 
 # ---------- keys ----------
 
@@ -49,11 +50,13 @@ class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
     priority: str | None = None
     batch_enqueued_token_limit: int | None = None
+    tag: str | None = None
 
 
 class ObjectPermission(BaseModel):
     mcp_servers: list[str] | None = None
     mcp_access_groups: list[str] | None = None
+    mcp_toolsets: list[str] | None = None
 
 
 class KeyGenerateBody(BaseModel):
@@ -76,11 +79,20 @@ class KeyGenerateBody(BaseModel):
     allowed_passthrough_routes: list[str] | None = None
     metadata: KeyMetadata | None = None
     object_permission: ObjectPermission | None = None
-    router_settings: "RouterSettingsOverride | None" = None
+    router_settings: RouterSettingsOverride | None = None
 
 
 class KeyGenerateResponse(BaseModel):
     key: str
+    token: str | None = None
+    key_alias: str | None = None
+    models: list[str] = []
+    max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    team_id: str | None = None
+    metadata: KeyMetadata | None = None
 
 
 class KeyRegenerateBody(BaseModel):
@@ -122,6 +134,7 @@ class KeyInfo(BaseModel):
     blocked: bool | None = None
     spend: float | None = None
     max_budget: float | None = None
+    budget_duration: str | None = None
     budget_reset_at: str | None = None
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
@@ -291,6 +304,7 @@ class RouterSettingsOverride(BaseModel):
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    model_group_retry_policy: dict[str, dict[str, int]] | None = None
     enable_tag_filtering: bool | None = None
 
 
@@ -505,6 +519,15 @@ class CountTokensResponse(BaseModel):
 # ---------- mcp servers ----------
 
 
+class McpInfo(BaseModel):
+    """The `mcp_info` display block stored on an MCP server; only the fields the
+    lifecycle test writes and reads back."""
+
+    server_name: str | None = None
+    description: str | None = None
+    logo_url: str | None = None
+
+
 class McpServerCreateBody(BaseModel):
     """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
     `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
@@ -519,6 +542,18 @@ class McpServerCreateBody(BaseModel):
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    server_name: str | None = None
+    description: str | None = None
+    mcp_info: McpInfo | None = None
+
+
+class McpServerUpdateBody(PartialBody):
+    """PUT /v1/mcp/server: a field left unset keeps its stored value, a field set
+    to None is cleared."""
+
+    server_id: str
+    alias: str | None = None
+    description: str | None = None
 
 
 class McpServerInfo(BaseModel):
@@ -530,6 +565,54 @@ class McpServerInfo(BaseModel):
     auth_type: str | None = None
     oauth2_flow: str | None = None
     allow_all_keys: bool | None = None
+
+
+class McpServerRow(McpServerInfo):
+    """A stored MCP server as the create, get, and list routes return it: the
+    fields the lifecycle test asserts survive the round trip."""
+
+    server_name: str | None = None
+    transport: str | None = None
+    description: str | None = None
+    mcp_info: McpInfo | None = None
+
+
+class McpServerListResponse(RootModel[list[McpServerRow]]):
+    """GET /v1/mcp/server answers with a bare array of servers."""
+
+
+class ToolsetTool(BaseModel):
+    server_id: str
+    tool_name: str
+
+
+class ToolsetCreateBody(BaseModel):
+    toolset_name: str
+    description: str | None = None
+    tools: list[ToolsetTool]
+
+
+class ToolsetUpdateBody(PartialBody):
+    """PUT /v1/mcp/toolset: a field left unset keeps its stored value, a field set
+    to None is cleared."""
+
+    toolset_id: str
+    description: str | None = None
+    tools: list[ToolsetTool] | None = None
+
+
+class ToolsetRow(BaseModel):
+    """A stored toolset as POST /v1/mcp/toolset, GET /v1/mcp/toolset/{toolset_id},
+    and each row of GET /v1/mcp/toolset return it."""
+
+    toolset_id: str
+    toolset_name: str
+    description: str | None = None
+    tools: list[ToolsetTool] = Field(default_factory=list)
+
+
+class ToolsetListResponse(RootModel[list[ToolsetRow]]):
+    """GET /v1/mcp/toolset answers with a bare array of toolsets."""
 
 
 class EmbedBody(BaseModel):
@@ -573,6 +656,28 @@ class OcrResponse(BaseModel):
 # ---------- spend logs ----------
 
 
+class GuardrailEntityMatch(BaseModel):
+    entity_type: str
+    score: float
+    start: int
+    end: int
+
+
+class GuardrailRunRecord(BaseModel):
+    guardrail_name: str | None = None
+    guardrail_mode: str | None = None
+    guardrail_status: str | None = None
+    guardrail_provider: str | None = None
+    masked_entity_count: dict[str, int] | None = None
+    guardrail_response: object | None = None
+
+
+class SpendLogMetadata(BaseModel):
+    user_api_key_alias: str | None = None
+    applied_guardrails: list[str] | None = None
+    guardrail_information: list[GuardrailRunRecord] | None = None
+
+
 class SpendLogRow(BaseModel):
     request_id: str | None = None
     api_key: str | None = None
@@ -589,6 +694,7 @@ class SpendLogRow(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     request_tags: list[str] | None = None
+    metadata: SpendLogMetadata | None = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -918,12 +1024,34 @@ class CredentialCreateResponse(BaseModel):
 # ---------- key / team / user / organization management ----------
 
 
+class Cleared(BaseModel):
+    """An explicit JSON null in a merge-patch body. The transport drops `None` fields
+    before sending (`exclude_none`), so `None` means "leave the stored value alone"; a
+    field set to `CLEAR` reaches the wire as `null`, which tells the proxy to clear it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    @model_serializer
+    def _as_null(self) -> None:
+        return None
+
+
+CLEAR: Final = Cleared()
+
+
 class KeyUpdateBody(BaseModel):
+    """POST /key/update is a merge patch: a field left `None` is dropped from the body and
+    keeps its stored value, `CLEAR` sends an explicit null that clears it (`budget_duration`
+    clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
+
     key: str
     models: list[str] | None = None
     key_alias: str | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    max_budget: float | Cleared | None = None
+    budget_duration: str | Cleared | None = None
+    metadata: KeyMetadata | None = None
 
 
 class KeyBlockBody(BaseModel):

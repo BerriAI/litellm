@@ -27,6 +27,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
+import SkillSelector from "../skills/SkillSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
@@ -1551,6 +1552,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                                 value={control.value as AgentSelectorValue | undefined}
                                 accessToken={accessToken}
                                 placeholder="Select agents or access groups (optional)"
+                              />
+                            )}
+                          </MountedFormField>
+                        </CollapsibleContent>
+                      </Collapsible>
+
+                      <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                        <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
+                          <b>Skill Settings</b>
+                          <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="px-4 pb-3">
+                          <MountedFormField
+                            label={
+                              <span>
+                                Allowed Skills{" "}
+                                <SimpleTooltip content="Enabled skills are visible to every key. Grant disabled (private) Claude Code plugins to this key here">
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                                </SimpleTooltip>
+                              </span>
+                            }
+                            name="allowed_skills"
+                            help="Select private skills this key can access in the Claude Code marketplace"
+                          >
+                            {(control) => (
+                              <SkillSelector
+                                onChange={control.onChange}
+                                value={control.value as string[] | undefined}
+                                accessToken={accessToken}
+                                placeholder="Select skills (optional)"
                               />
                             )}
                           </MountedFormField>

@@ -7,7 +7,7 @@ import secrets
 import time
 import traceback
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
@@ -41,6 +41,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
@@ -209,6 +210,7 @@ services = (
         "arize",
         "galileo",
         "newrelic",
+        "pointfive",
         "sqs",
     ]
     | str
@@ -296,6 +298,7 @@ async def health_services_endpoint(
             "arize",
             "galileo",
             "newrelic",
+            "pointfive",
             "sqs",
         ]:
             raise HTTPException(
@@ -320,7 +323,7 @@ async def health_services_endpoint(
             service == "openmeter"
             or service == "braintrust"
             or service == "generic_api"
-            or (service_in_success_callbacks and service != "langfuse")
+            or (service_in_success_callbacks and service not in ("langfuse", "pointfive"))
         ):
             _ = await litellm.acompletion(
                 model="openai/litellm-mock-response-model",
@@ -412,6 +415,27 @@ async def health_services_endpoint(
                 ),
             }
 
+        elif service == "pointfive":
+            if not _is_proxy_admin(user_api_key_dict):
+                non_admin_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": "Only proxy admins can trigger the PointFive liveness ping."
+                }
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=non_admin_detail)
+            from litellm.integrations.pointfive import PointFiveLogger
+
+            try:
+                pointfive_logger: Final = PointFiveLogger(start_periodic_flush=False)
+            except ValueError as missing_key:
+                # No key configured is the answer the operator asked for, not a server error.
+                no_key: Final[_ServiceTestSuccessResponse] = {"status": "unhealthy", "message": str(missing_key)}
+                return no_key
+            response = await pointfive_logger.async_health_check()
+            pointfive_health: Final[_ServiceTestSuccessResponse] = {
+                "status": response["status"],
+                "message": (response["error_message"] if response["status"] == "unhealthy" else "PointFive is healthy")
+                or "PointFive is healthy",
+            }
+            return pointfive_health
         if service == "webhook":
             user_info: Final = CallInfo(
                 token=user_api_key_dict.token or "",
@@ -724,13 +748,42 @@ def _aggregate_health_check_results(
     return model_results
 
 
+class _AggregatedHealthResult(TypedDict):
+    """One entry of ``_aggregate_health_check_results``: a model's counts for this cycle."""
+
+    model_name: ReadOnly[str]
+    model_id: ReadOnly[str | None]
+    healthy_count: ReadOnly[int]
+    unhealthy_count: ReadOnly[int]
+    error_message: ReadOnly[str | None]
+
+
+def _new_health_status(result: _AggregatedHealthResult) -> str:
+    return "healthy" if result["healthy_count"] > 0 else "unhealthy"
+
+
+def _should_persist_health_check_result(
+    result: _AggregatedHealthResult, latest_checks_map: Mapping[str, LatestHealthCheckRow]
+) -> bool:
+    """
+    True when this result has to be written: no previous row, the status changed, or the
+    previous row is older than one hour (periodic refresh while the status is stable).
+    """
+    lookup_key: Final = result["model_id"] if result["model_id"] else result["model_name"]
+    last_check: Final = latest_checks_map.get(lookup_key)
+    if last_check is None or last_check.status != _new_health_status(result):
+        return True
+    time_since_last_check: Final = (datetime.now(timezone.utc) - last_check.checked_at).total_seconds()
+    return time_since_last_check >= 3600  # 1 hour threshold
+
+
 async def _save_health_check_results_if_changed(
     prisma_client,
     model_results: dict,
     latest_checks_map: dict,
     start_time: float,
     checked_by: str | None = None,
-):
+) -> bool:
     """
     Save health check results to database, but only if status changed or >1 hour since last save.
 
@@ -741,47 +794,39 @@ async def _save_health_check_results_if_changed(
     - Status changes: Immediate write (no delay)
     - Result: ~92% reduction in DB writes for stable systems, while maintaining real-time updates on changes
 
+    The writes are awaited rather than detached so the caller learns whether this cycle's
+    persistence completed.
+
     Args:
         prisma_client: Database client
         model_results: Dictionary of aggregated health check results per model
         latest_checks_map: Dictionary mapping model_id/model_name to latest health check
         start_time: Start time of health check for calculating response time
         checked_by: Identifier for who/what performed the check
+
+    Returns:
+        True when every row that needed writing was written (including when nothing needed
+        writing); False when any write failed.
     """
-    for result in model_results.values():
-        new_status = "healthy" if result["healthy_count"] > 0 else "unhealthy"
-
-        # Check if we should save this result
-        should_save = True
-        lookup_key = result["model_id"] if result["model_id"] else result["model_name"]
-        if lookup_key in latest_checks_map:
-            last_check = latest_checks_map[lookup_key]
-            # Only save if status changed or if it's been a while since last check
-            if last_check.status == new_status:
-                # Check if last check was recent (within 1 hour)
-                if last_check.checked_at:
-                    from datetime import datetime, timezone
-
-                    time_since_last_check = (datetime.now(timezone.utc) - last_check.checked_at).total_seconds()
-                    # Only skip if status unchanged AND checked recently (within 1 hour)
-                    # This ensures we still get periodic updates even if status is stable
-                    if time_since_last_check < 3600:  # 1 hour threshold
-                        should_save = False
-
-        if should_save:
-            asyncio.create_task(
-                prisma_client.save_health_check_result(
-                    model_name=result["model_name"],
-                    model_id=result["model_id"],
-                    status=new_status,
-                    healthy_count=result["healthy_count"],
-                    unhealthy_count=result["unhealthy_count"],
-                    error_message=result["error_message"],
-                    response_time_ms=(time.time() - start_time) * 1000,
-                    details=None,
-                    checked_by=checked_by,
-                )
-            )
+    to_write: Final = tuple(
+        result for result in model_results.values() if _should_persist_health_check_result(result, latest_checks_map)
+    )
+    writes: Final = tuple(
+        prisma_client.save_health_check_result(
+            model_name=result["model_name"],
+            model_id=result["model_id"],
+            status=_new_health_status(result),
+            healthy_count=result["healthy_count"],
+            unhealthy_count=result["unhealthy_count"],
+            error_message=result["error_message"],
+            response_time_ms=(time.time() - start_time) * 1000,
+            details=None,
+            checked_by=checked_by,
+        )
+        for result in to_write
+    )
+    rows: Final = await asyncio.gather(*writes)
+    return all(row is not None for row in rows)
 
 
 async def _save_background_health_checks_to_db(
@@ -791,7 +836,7 @@ async def _save_background_health_checks_to_db(
     unhealthy_endpoints: list,
     start_time: float,
     checked_by: str | None = None,
-):
+) -> bool:
     """
     Save background health check results to database for each model.
 
@@ -800,9 +845,13 @@ async def _save_background_health_checks_to_db(
 
     OPTIMIZATION: Only saves to database if the status has changed from the last saved check.
     This dramatically reduces database writes when health status remains stable.
+
+    Returns:
+        True when this cycle's persistence completed; False when it was skipped or any step
+        failed. Never raises: a database failure must not break the health check loop.
     """
     if prisma_client is None:
-        return
+        return False
 
     try:
         # Step 1: Build mapping from model parameter to model info
@@ -825,7 +874,7 @@ async def _save_background_health_checks_to_db(
                 latest_checks_map[key] = check
 
         # Step 4: Save aggregated results, but only if status changed
-        await _save_health_check_results_if_changed(
+        return await _save_health_check_results_if_changed(
             prisma_client,
             model_results,
             latest_checks_map,
@@ -835,6 +884,7 @@ async def _save_background_health_checks_to_db(
     except Exception as db_error:
         verbose_proxy_logger.warning("Failed to save background health checks to database: %s", db_error)
         # Continue execution - don't let database save failure break health checks
+        return False
 
 
 _PROXY_ADMIN_ROLES: Final = frozenset(
@@ -1582,6 +1632,13 @@ async def _show_no_redis_warning() -> bool:
     return await count_live_proxy_workers(prisma_client) != 1
 
 
+def _show_env_credential_login_warning() -> bool:
+    from litellm.proxy.auth.login_utils import is_env_credential_login_enabled
+    from litellm.proxy.proxy_server import general_settings
+
+    return is_env_credential_login_enabled(general_settings)
+
+
 async def _get_health_readiness_details(
     response: Response | None = None,
 ) -> dict[str, Any]:
@@ -1623,6 +1680,7 @@ async def _get_health_readiness_details(
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
         show_no_redis_warning: Final = await _show_no_redis_warning()
+        show_env_credential_login_warning: Final = _show_env_credential_login_warning()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -1650,6 +1708,7 @@ async def _get_health_readiness_details(
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
+                "show_env_credential_login_warning": show_env_credential_login_warning,
             }
         else:
             return {
@@ -1662,6 +1721,7 @@ async def _get_health_readiness_details(
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
+                "show_env_credential_login_warning": show_env_credential_login_warning,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")

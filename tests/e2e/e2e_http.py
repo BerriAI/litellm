@@ -49,6 +49,11 @@ class AnthropicHeaders(AuthHeaders):
     anthropic_version: str = Field(default="2023-06-01", alias="anthropic-version")
 
 
+class PartialBody(BaseModel):
+    """A body for a partial-update route (absent = keep, null = clear): a field left
+    unset is omitted from the wire, and a field set to None is sent as JSON null."""
+
+
 class NoBody(BaseModel):
     """Empty body/query for routes that take none."""
 
@@ -266,6 +271,12 @@ def assert_auth_denied(result: StreamingResponse, context: str) -> None:
         f"{context}: expected 401/403, got {result.status_code}: {result.body[:300]}"
     )
 
+def wire_body(json: BaseModel) -> dict[str, object]:
+    if isinstance(json, PartialBody):
+        return json.model_dump(by_alias=True, exclude_unset=True)
+    return json.model_dump(by_alias=True, exclude_none=True)
+
+
 def _flat(model: BaseModel) -> dict[str, str]:
     dumped: dict[str, object] = model.model_dump(by_alias=True, exclude_none=True)
     return {key: str(value) for key, value in dumped.items()}
@@ -322,9 +333,26 @@ def request_with_retry[T: RetryableResponse](
     return issue()
 
 
-def _classify[R: BaseModel](
-    resp: requests.Response, response_type: type[R]
-) -> Result[R]:
+class ClassifiableResponse(Protocol):
+    """What classifying an outcome reads off a response. requests.Response satisfies
+    it, and so does a fake, so the classification rules are testable on their own."""
+
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def ok(self) -> bool: ...
+
+    @property
+    def text(self) -> str: ...
+
+    @property
+    def content(self) -> bytes: ...
+
+    def json(self) -> object: ...
+
+
+def classify[R: BaseModel](resp: ClassifiableResponse, response_type: type[R]) -> Result[R]:
     if resp.status_code == 401:
         return UnauthorizedError(body=resp.text)
     if resp.status_code == 429:
@@ -332,7 +360,8 @@ def _classify[R: BaseModel](
     if not resp.ok:
         return UnknownApiError(status_code=resp.status_code, body=resp.text)
     try:
-        return Success(status_code=resp.status_code, data=response_type.model_validate(resp.json()))
+        payload: Final[object] = resp.json() if resp.content else {}
+        return Success(status_code=resp.status_code, data=response_type.model_validate(payload))
     except Exception as exc:  # noqa: BLE001 - any parse/validation failure is a value
         return ValidationError(message=str(exc))
 
@@ -350,13 +379,13 @@ def post[R: BaseModel](
             lambda: requests.post(
                 str(url),
                 headers=_headers(headers),
-                json=json.model_dump(by_alias=True, exclude_none=True),
+                json=wire_body(json),
                 timeout=timeout,
             )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify(resp, response_type)
 
 
 def get[R: BaseModel](
@@ -378,7 +407,7 @@ def get[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify(resp, response_type)
 
 
 def get_external[R: BaseModel](
@@ -398,7 +427,7 @@ def get_external[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify(resp, response_type)
 
 
 def post_form_external[R: BaseModel](
@@ -421,7 +450,7 @@ def post_form_external[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify(resp, response_type)
 
 
 def post_json_external(
@@ -471,14 +500,14 @@ def delete[R: BaseModel](
             lambda: requests.delete(
                 str(url),
                 headers=_headers(headers),
-                json=json.model_dump(by_alias=True, exclude_none=True),
+                json=wire_body(json),
                 params=_params(params),
                 timeout=timeout,
             )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify(resp, response_type)
 
 
 def patch[R: BaseModel](
@@ -494,13 +523,13 @@ def patch[R: BaseModel](
             lambda: requests.patch(
                 str(url),
                 headers=_headers(headers),
-                json=json.model_dump(by_alias=True, exclude_none=True),
+                json=wire_body(json),
                 timeout=timeout,
             )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify(resp, response_type)
 
 
 def put[R: BaseModel](
@@ -516,13 +545,13 @@ def put[R: BaseModel](
             lambda: requests.put(
                 str(url),
                 headers=_headers(headers),
-                json=json.model_dump(by_alias=True, exclude_none=True),
+                json=wire_body(json),
                 timeout=timeout,
             )
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify(resp, response_type)
 
 
 def probe(
@@ -626,7 +655,7 @@ def send(
                 str(url),
                 headers=_headers(headers),
                 params=_params(params),
-                json=json.model_dump(by_alias=True, exclude_none=True),
+                json=wire_body(json),
                 stream=stream,
                 timeout=timeout,
             )
@@ -676,7 +705,7 @@ def upload[R: BaseModel](
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
-    return _classify(resp, response_type)
+    return classify(resp, response_type)
 
 
 def stream_binary(
@@ -694,7 +723,7 @@ def stream_binary(
         resp = requests.post(
             str(url),
             headers=_headers(headers),
-            json=json.model_dump(by_alias=True, exclude_none=True),
+            json=wire_body(json),
             stream=True,
             timeout=timeout,
         )
