@@ -1204,11 +1204,6 @@ def _dispatch_success_logging(
     is_completion_with_fallbacks: bool,
     is_litellm_internal_call: bool,
 ) -> None:
-    # LOG SUCCESS - handle streaming success logging in the _next_ object
-    # Internal sub-calls (e.g. emulated file-search steps) share the
-    # parent's logging obj; skip async logging here so only the outer call bills once.
-    # NOTE: streaming requests return early (before this point) via
-    # CustomStreamWrapper, so this block is non-streaming only.
     if not is_litellm_internal_call:
         if getattr(logging_obj, "_defer_async_logging", False):
 

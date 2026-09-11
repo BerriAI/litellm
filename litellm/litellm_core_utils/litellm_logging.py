@@ -5394,14 +5394,14 @@ class StandardLoggingPayloadSetup:
         user_metadata: Final = MappingProxyType(
             {
                 key: value
-                for key, value in (tuple(metadata.items()) if isinstance(metadata, dict) else ())
+                for key, value in (dict(metadata) if isinstance(metadata, dict) else {}).items()
                 if key not in _UNSERIALIZABLE_METADATA_KEYS
             }
         )
         model_metadata: Final = MappingProxyType(
             {
                 key: value
-                for key, value in (tuple(litellm_metadata.items()) if isinstance(litellm_metadata, dict) else ())
+                for key, value in (dict(litellm_metadata) if isinstance(litellm_metadata, dict) else {}).items()
                 if key not in user_metadata
             }
         )
@@ -5663,7 +5663,7 @@ class StandardLoggingPayloadSetup:
                     additional_logging_headers[key] = additiona_headers[_key]
 
         # Preserve all remaining headers verbatim (e.g. llm_provider-x-request-id)
-        for k, v in tuple(additiona_headers.items()):
+        for k, v in dict(additiona_headers).items():
             if k.lower() not in typed_keys:
                 additional_logging_headers[k] = v
 
