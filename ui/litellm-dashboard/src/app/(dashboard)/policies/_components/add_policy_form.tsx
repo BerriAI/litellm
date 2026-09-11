@@ -75,14 +75,17 @@ const toFormValues = (policy: Policy): PolicyFormValues => ({
 const buildPolicyRequest = (
   values: PolicyFormValues,
   isEditing: boolean,
-): PolicyCreateRequest | PolicyUpdateRequest => ({
-  policy_name: values.policy_name,
-  description: values.description || undefined,
-  inherit: values.inherit || (isEditing ? "" : undefined),
-  guardrails_add: values.guardrails_add,
-  guardrails_remove: values.guardrails_remove,
-  condition: values.model_condition ? { model: values.model_condition } : isEditing ? {} : undefined,
-});
+): PolicyCreateRequest | PolicyUpdateRequest => {
+  const clearedCondition = isEditing ? {} : undefined;
+  return {
+    policy_name: values.policy_name,
+    description: values.description || undefined,
+    inherit: values.inherit || (isEditing ? "" : undefined),
+    guardrails_add: values.guardrails_add,
+    guardrails_remove: values.guardrails_remove,
+    condition: values.model_condition ? { model: values.model_condition } : clearedCondition,
+  };
+};
 
 const parentGuardrails = (policy: Policy, existingPolicies: Policy[]): string[] => {
   const inherited = policy.inherit
