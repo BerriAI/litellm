@@ -1,6 +1,7 @@
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_model_in_db: true
+  use_redis_transaction_buffer: true
 
 litellm_settings:
   callbacks: ["prometheus"]
