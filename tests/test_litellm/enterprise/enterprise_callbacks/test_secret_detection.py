@@ -120,6 +120,9 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         ("export DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt DB_HOST=db.internal", "Zx4Kp9Lm2Qr7Ns3Vt"),
         ("DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt; systemctl restart app", "Zx4Kp9Lm2Qr7Ns3Vt"),
         ("DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt | tee creds.txt", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt > setup.log", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("docker run -e DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt --name app postgres", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("password=correcthorsebattery please", "correcthorsebattery"),
     ],
     ids=[
         "env-password",
@@ -153,6 +156,9 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         "second-assignment-after-the-value",
         "semicolon-after-the-value",
         "pipe-after-the-value",
+        "redirect-after-the-value",
+        "docker-flag-after-the-value",
+        "prose-after-a-shell-assignment",
     ],
 )
 def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, secret):
@@ -168,6 +174,16 @@ def test_scan_message_redacts_only_the_first_token_of_a_shell_assignment():
     assert (
         guardrail.redact_text(content)
         == "docker run -e REDIS_PASSWORD=[REDACTED] \\\n  -e REDIS_PORT=6379 redis && echo done"
+    )
+
+
+@pytest.mark.parametrize("operator", [";", "&&", "|"])
+def test_scan_message_keeps_a_shell_operator_glued_to_the_value(operator):
+    guardrail = _guardrail()
+
+    assert (
+        guardrail.redact_text(f"DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt{operator} systemctl restart app")
+        == f"DB_PASSWORD=[REDACTED]{operator} systemctl restart app"
     )
 
 
@@ -244,6 +260,7 @@ def test_scan_message_redacts_every_credential_on_one_line():
         "password_hint: your usual one followed by Ticket-LIT7049-Suffix",
         "Translate this recipe note into French:\nsecret_sauce: Worcestershire sauce",
         "api_key = Massachusetts (the state, not a key)",
+        "secret_sauce:Worcestershire sauce",
     ],
     ids=[
         "prose-password",
@@ -300,6 +317,7 @@ def test_scan_message_redacts_every_credential_on_one_line():
         "sentence-holding-a-later-mixed-case-token",
         "capitalized-word-starting-a-phrase",
         "capitalized-word-before-a-parenthetical",
+        "yaml-scalar-without-a-space-after-the-colon",
     ],
 )
 def test_scan_message_keeps_benign_values(content):

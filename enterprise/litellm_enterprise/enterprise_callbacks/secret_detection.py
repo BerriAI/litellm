@@ -451,9 +451,9 @@ _CONFIG_SECTION: Final = "litellm-prompt"
 
 _ASSIGNMENT_LINE: Final = re.compile(r"[^\s\[#;:=][^:=]*[:=]")
 
-_SHELL_OPERATORS: Final = ";&|"
+_SHELL_ASSIGNMENT: Final = re.compile(r"(?P<key>[^\s\[#;:=](?:[^:=]*[^\s:=])?)=(?P<value>\S+)")
 
-_SHELL_TRAILER: Final = re.compile(rf"\\|[{_SHELL_OPERATORS}]+|#.*|\S+=\S*")
+_SHELL_OPERATORS: Final = ";&|"
 
 _SCAN_SUFFIX: Final = ".py"
 
@@ -491,6 +491,9 @@ def _classify_line(state: tuple[bool, str | None], numbered: tuple[int, str]) ->
     stripped: Final = line.strip()
     if not stripped or stripped[0] in "#;":
         return open_option, None
+    shell_assignment: Final = _SHELL_ASSIGNMENT.match(stripped)
+    if shell_assignment is not None:
+        return True, f"{shell_assignment['key']}_{number}={shell_assignment['value']}"
     assignment: Final = _ASSIGNMENT_LINE.match(stripped)
     if assignment is not None:
         return True, f"{assignment.group()[:-1].strip()}_{number}{stripped[assignment.end() - 1 :]}"
@@ -505,14 +508,10 @@ def _parseable_lines(text: str) -> Iterator[str]:
 
 
 def _lone_value(line: str) -> str | None:
-    tokens: Final = line.split(maxsplit=2)
-    if not tokens or '"' in tokens[0]:
+    tokens: Final = line.split()
+    if not tokens or '"' in tokens[0] or (len(tokens) > 1 and not tokens[1].startswith("#")):
         return None
-    value: Final = tokens[0].rstrip(_SHELL_OPERATORS)
-    trailer: Final = tokens[1] if len(tokens) > 1 else ""
-    if value != tokens[0] or not trailer or _SHELL_TRAILER.fullmatch(trailer) is not None:
-        return value
-    return None
+    return tokens[0].rstrip(_SHELL_OPERATORS)
 
 
 def _quoted_assignments(text: str) -> tuple[str, ...]:
