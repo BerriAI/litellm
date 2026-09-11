@@ -5,7 +5,6 @@ Tests for the OCR `req_format` option in the SDK request path.
 import pytest
 
 import litellm
-from litellm.ocr.main import _rust_ocr_supported
 from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.rust_bridge.ocr import LiteLLMOcrRequest
 
@@ -29,11 +28,11 @@ def _request(
 
 @pytest.mark.parametrize("optional_params", [{}, {"req_format": "litellm"}])
 def test_rust_ocr_serves_default_format(optional_params):
-    assert _rust_ocr_supported(_request(optional_params)) is True
+    assert rust_ocr_bridge.supported(_request(optional_params)) is True
 
 
 def test_rust_ocr_serves_native_format_for_document_intelligence():
-    assert _rust_ocr_supported(_request({"req_format": "native"})) is True
+    assert rust_ocr_bridge.supported(_request({"req_format": "native"})) is True
 
 
 def test_rust_ocr_response_retains_provider_native_response():
@@ -55,7 +54,7 @@ def test_rust_ocr_response_retains_provider_native_response():
 
 @pytest.mark.parametrize("model", ["cohere/cohere-parse", "azure_ai/cohere-parse"])
 def test_rust_ocr_skipped_for_unsupported_models(model):
-    assert _rust_ocr_supported(_request({}, model)) is False
+    assert rust_ocr_bridge.supported(_request({}, model)) is False
 
 
 @pytest.mark.asyncio
