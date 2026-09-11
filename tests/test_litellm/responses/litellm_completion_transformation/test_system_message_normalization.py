@@ -40,10 +40,7 @@ def test_reproduce_issue_40693_non_leading_system_message() -> None:
     assert messages[1]["role"] == "user"
 
     # 2. No non-leading system messages
-    assert all(
-        (m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) != "system"
-        for m in messages[1:]
-    )
+    assert all((m.get("role") if isinstance(m, dict) else getattr(m, "role", None)) != "system" for m in messages[1:])
 
     # 3. Content from both instructions and subsequent system message are preserved
     system_content = messages[0]["content"]
@@ -168,3 +165,79 @@ def test_transform_responses_api_request_to_chat_completion_request_normalizes_s
     assert "Follow instructions" in messages[0]["content"]
     assert messages[1]["role"] == "user"
     assert messages[1]["content"] == "Hello"
+
+
+def test_system_message_with_list_of_strings_and_empty_content() -> None:
+    """
+    Ensures list of strings and empty strings are handled properly in content extraction.
+    """
+    input_items = [
+        {"role": "system", "content": ["Line 1", "", "Line 2"]},
+        {"role": "system", "content": ""},
+        {"role": "system", "content": None},
+        {"role": "user", "content": "Query"},
+    ]
+    messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=input_items,
+        responses_api_request={},
+    )
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[0]["content"] == "Line 1\n\nLine 2"
+    assert messages[1]["role"] == "user"
+
+
+def test_system_message_object_with_attributes() -> None:
+    """
+    Ensures messages that are objects with .role and .content attributes (not dicts) are handled.
+    """
+
+    class ObjMessage:
+        def __init__(self, role: str, content: Any) -> None:
+            self.role = role
+            self.content = content
+
+    input_items = [
+        ObjMessage(role="user", content="Hello from user"),
+        ObjMessage(role="system", content="System instruction from obj"),
+    ]
+    normalized = LiteLLMCompletionResponsesConfig._normalize_system_messages(input_items)  # type: ignore[arg-type]
+    assert len(normalized) == 2
+    assert normalized[0].role == "system"  # type: ignore[union-attr]
+    assert normalized[0].content == "System instruction from obj"  # type: ignore[union-attr]
+    assert normalized[1].role == "user"  # type: ignore[union-attr]
+
+
+def test_multiple_system_message_objects_merged() -> None:
+    """
+    Ensures multiple object-based system messages are extracted and merged into a single system message.
+    """
+
+    class ObjMessage:
+        def __init__(self, role: str, content: Any) -> None:
+            self.role = role
+            self.content = content
+
+    input_items = [
+        ObjMessage(role="system", content="System part A"),
+        ObjMessage(role="user", content="User prompt"),
+        ObjMessage(role="system", content="System part B"),
+    ]
+    normalized = LiteLLMCompletionResponsesConfig._normalize_system_messages(input_items)  # type: ignore[arg-type]
+    assert len(normalized) == 2
+    assert normalized[0]["role"] == "system"
+    assert normalized[0]["content"] == "System part A\n\nSystem part B"
+    assert normalized[1].role == "user"  # type: ignore[union-attr]
+
+
+def test_extract_system_content_edge_cases() -> None:
+    """
+    Directly tests _extract_system_content edge cases including non-string/non-list content.
+    """
+    assert LiteLLMCompletionResponsesConfig._extract_system_content({"content": None}) == ()
+    assert LiteLLMCompletionResponsesConfig._extract_system_content({"content": 12345}) == ()
+    assert LiteLLMCompletionResponsesConfig._extract_system_content({"content": "hello"}) == ("hello",)
+    assert LiteLLMCompletionResponsesConfig._extract_system_content({"content": ["a", "b"]}) == ("a", "b")
+    assert LiteLLMCompletionResponsesConfig._extract_system_content(
+        {"content": [{"text": "t1"}, {"other": "none"}]}
+    ) == ("t1",)

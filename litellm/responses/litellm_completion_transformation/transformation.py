@@ -450,15 +450,38 @@ class LiteLLMCompletionResponsesConfig:
         return LiteLLMCompletionResponsesConfig._normalize_system_messages(messages)
 
     @staticmethod
+    def _extract_system_content(message: object) -> tuple[str, ...]:
+        raw: Final = (
+            message.get("content")
+            if isinstance(message, dict)
+            else (message.content if hasattr(message, "content") else None)
+        )
+        if isinstance(raw, str):
+            return (raw,) if raw else ()
+        if isinstance(raw, list):
+
+            def _iter_blocks() -> Iterator[str]:
+                for block in raw:
+                    if isinstance(block, str) and block:
+                        yield block
+                    elif isinstance(block, dict):
+                        text: Final = block.get("text")
+                        if isinstance(text, str) and text:
+                            yield text
+
+            return tuple(_iter_blocks())
+        return ()
+
+    @staticmethod
     def _normalize_system_messages(
-        messages: list[
+        messages: list[  # mutable-ok: input chat completion messages list
             AllMessageValues
             | GenericChatCompletionMessage
             | ChatCompletionMessageToolCall
             | ChatCompletionResponseMessage
             | Message
         ],
-    ) -> list[
+    ) -> list[  # mutable-ok: output chat completion messages list
         AllMessageValues
         | GenericChatCompletionMessage
         | ChatCompletionMessageToolCall
@@ -475,58 +498,26 @@ class LiteLLMCompletionResponsesConfig:
         def _is_system(msg: object) -> bool:
             if isinstance(msg, dict):
                 return msg.get("role") == "system"
-            elif hasattr(msg, "role"):
-                return msg.role == "system"
-            return False
+            return bool(hasattr(msg, "role") and msg.role == "system")
 
-        system_messages: list[
-            AllMessageValues
-            | GenericChatCompletionMessage
-            | ChatCompletionMessageToolCall
-            | ChatCompletionResponseMessage
-            | Message
-        ] = [m for m in messages if _is_system(m)]
-        if not system_messages:
+        system_indices: Final = tuple(i for i, m in enumerate(messages) if _is_system(m))
+        if not system_indices or (len(system_indices) == 1 and system_indices[0] == 0):
             return messages
 
-        non_system_messages: list[
-            AllMessageValues
-            | GenericChatCompletionMessage
-            | ChatCompletionMessageToolCall
-            | ChatCompletionResponseMessage
-            | Message
-        ] = [m for m in messages if not _is_system(m)]
+        non_system: Final = tuple(m for i, m in enumerate(messages) if i not in system_indices)
+        if len(system_indices) == 1:
+            return [messages[system_indices[0]], *non_system]  # mutable-ok: chat completion messages list
 
-        if len(system_messages) == 1:
-            if messages and _is_system(messages[0]):
-                return messages
-            return [system_messages[0]] + non_system_messages
-
-        merged_content_parts: list[str] = []
-        for sm in system_messages:
-            raw_content: object = None
-            if isinstance(sm, dict):
-                raw_content = sm.get("content")
-            elif hasattr(sm, "content"):
-                raw_content = sm.content
-
-            if isinstance(raw_content, str):
-                if raw_content:
-                    merged_content_parts.append(raw_content)
-            elif isinstance(raw_content, list):
-                for block in raw_content:
-                    if isinstance(block, str) and block:
-                        merged_content_parts.append(block)
-                    elif isinstance(block, dict):
-                        text = block.get("text")
-                        if isinstance(text, str) and text:
-                            merged_content_parts.append(text)
-
-        merged_system_message = ChatCompletionSystemMessage(
-            role="system",
-            content="\n\n".join(merged_content_parts),
+        merged_parts: Final = tuple(
+            part
+            for idx in system_indices
+            for part in LiteLLMCompletionResponsesConfig._extract_system_content(messages[idx])
         )
-        return [merged_system_message] + non_system_messages
+        merged_system: Final = ChatCompletionSystemMessage(
+            role="system",
+            content="\n\n".join(merged_parts),
+        )
+        return [merged_system, *non_system]  # mutable-ok: chat completion messages list
 
     @staticmethod
     async def async_responses_api_session_handler(
