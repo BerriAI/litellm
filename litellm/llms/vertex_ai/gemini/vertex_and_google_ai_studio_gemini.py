@@ -842,7 +842,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "includeThoughts": False,
             }
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"reasoning_effort={reasoning_effort!r} is not valid for this model. "
+                    "Accepted values: 'minimal', 'low', 'medium', 'high', 'none', 'disable'."
+                ),
+                status_code=400,
+            )
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_level(
@@ -890,7 +896,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             else:
                 return {"thinkingLevel": "low", "includeThoughts": False}
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"reasoning_effort={reasoning_effort!r} is not valid for this model. "
+                    "Accepted values: 'minimal', 'low', 'medium', 'high', 'none', 'disable'."
+                ),
+                status_code=400,
+            )
 
     @staticmethod
     def _is_thinking_budget_zero(thinking_budget: int | None) -> bool:
