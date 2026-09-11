@@ -2,6 +2,9 @@
 code can never ship on a server-fault status and gateway-side faults never carry provider prose."""
 
 import json
+from typing import Final, Literal
+
+import pytest
 
 from litellm.proxy._experimental.mcp_server.faults.render_oauth import (
     dcr_fault_detail,
@@ -12,6 +15,7 @@ from litellm.proxy._experimental.mcp_server.faults.types import (
     GatewayRejected,
     UpstreamProtocolFault,
     UpstreamReportedFault,
+    UpstreamRegistrationRefused,
 )
 
 
@@ -94,3 +98,17 @@ def test_dcr_upstream_reported_fault_maps_to_5xx():
     status_code, detail = dcr_fault_detail(UpstreamReportedFault(code="server_error"))
     assert status_code == 502
     assert "internal error" in detail
+
+
+@pytest.mark.parametrize("upstream_status", [401, 403])
+def test_registration_refusal_gives_configuration_guidance(upstream_status: Literal[401, 403]) -> None:
+    fault: Final = UpstreamRegistrationRefused(status_code=upstream_status)
+    status, detail = dcr_fault_detail(fault)
+    assert status == 403
+    assert f"HTTP {upstream_status}" in detail
+    assert "may require a pre-registered OAuth client" in detail
+    assert "client_id" in detail and "client_secret" in detail
+    response: Final = render_token_fault(fault)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {"error": "unauthorized_client", "error_description": detail}
+    assert response.headers["cache-control"] == "no-store"

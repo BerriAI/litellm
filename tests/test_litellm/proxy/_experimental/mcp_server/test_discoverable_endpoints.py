@@ -11141,3 +11141,48 @@ async def test_enforced_login_warms_verified_token_readable_without_database_loo
     assert token.identity_binding_proof == proof
     assert token.refresh_token is None
     read.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_status", [401, 403])
+@pytest.mark.parametrize("auth_type", [MCPAuth.true_passthrough, MCPAuth.oauth_delegate])
+@pytest.mark.parametrize("dcr_bridge", [False, True])
+@pytest.mark.parametrize("flow", ["register", "mint"])
+async def test_dcr_refusal_is_actionable_without_upstream_body(
+    upstream_status: int, auth_type: MCPAuth, dcr_bridge: bool, flow: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    from typing import Final
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        mint_ephemeral_dcr_client,
+        register_client_with_server,
+    )
+
+    server: Final = _bridge_server(
+        auth_type=auth_type, dcr_bridge=dcr_bridge, server_id=f"refused-{auth_type}-{dcr_bridge}-{flow}-{upstream_status}",
+        client_id=None,
+    )
+    import respx
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    with respx.mock as upstream:
+        registration: Final = upstream.post(server.registration_url).mock(
+            return_value=httpx.Response(upstream_status, text="Forbidden private upstream details")
+        )
+        operation: Final = (
+            mint_ephemeral_dcr_client(_bridge_mock_request(), server)
+            if flow == "mint"
+            else register_client_with_server(
+                request=_bridge_mock_request(), mcp_server=server, client_name="Test client",
+                grant_types=None, response_types=None, token_endpoint_auth_method=None,
+                client_redirect_uris=["http://localhost:9999/callback"],
+            )
+        )
+        with pytest.raises(HTTPException) as exc:
+            await operation
+        assert registration.call_count == 1
+    assert exc.value.status_code == 403
+    assert f"HTTP {upstream_status}" in str(exc.value.detail)
+    assert "pre-registered OAuth client" in str(exc.value.detail)
+    assert "private upstream details" not in str(exc.value.detail)
