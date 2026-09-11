@@ -306,6 +306,23 @@ def test_get_ssl_configuration():
             assert result == mock_ssl_context
 
 
+def test_get_ssl_configuration_http2_uses_separate_context():
+    from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
+
+    _ssl_context_cache.clear()
+
+    default_context = get_ssl_configuration()
+    http2_context = get_ssl_configuration(http2=True)
+
+    assert default_context is not http2_context
+    assert get_ssl_configuration() is default_context
+    assert get_ssl_configuration(http2=True) is http2_context
+
+    custom_context = ssl.create_default_context()
+    assert get_ssl_configuration(custom_context) is custom_context
+    assert get_ssl_configuration(custom_context, http2=True) is custom_context
+
+
 def test_get_ssl_configuration_integration():
     """Integration test that _get_ssl_context() returns a working SSL context"""
     # Call the static method without mocking

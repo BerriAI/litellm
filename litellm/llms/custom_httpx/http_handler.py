@@ -235,9 +235,9 @@ def _prepare_request_data_and_content(
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
-# Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve)
+# Key: tuple of (cafile, ssl_security_level, ssl_ecdh_curve, http2)
 # Value: ssl.SSLContext
-_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None], ssl.SSLContext]] = {}
+_ssl_context_cache: Final[dict[tuple[str | None, str | None, str | None, bool], ssl.SSLContext]] = {}
 
 
 def _create_ssl_context(
@@ -330,6 +330,7 @@ def get_ssl_verify(
 
 def get_ssl_configuration(
     ssl_verify: VerifyTypes | None = None,
+    http2: bool = False,
 ) -> bool | str | ssl.SSLContext:
     """
     Unified SSL configuration function that handles ssl_context and ssl_verify logic.
@@ -345,6 +346,7 @@ def get_ssl_configuration(
 
     SSL contexts are cached to avoid creating duplicate contexts with the same configuration,
     which reduces memory allocation and improves performance.
+    http2 clients get their own cached context because httpcore sets ALPN protocols on it.
 
     Args:
         ssl_verify: SSL verification setting. Can be:
@@ -378,7 +380,7 @@ def get_ssl_configuration(
 
     if ssl_verify is not False:
         # Create cache key from configuration parameters
-        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve)
+        cache_key: Final = (cafile, ssl_security_level, ssl_ecdh_curve, http2)
 
         # Check if we have a cached SSL context for this configuration
         if cache_key not in _ssl_context_cache:
@@ -609,7 +611,7 @@ class AsyncHTTPHandler:
         http2: bool = False,
     ) -> httpx.AsyncClient:
         # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration(ssl_verify)
+        ssl_config: Final = get_ssl_configuration(ssl_verify, http2=http2)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
@@ -1273,7 +1275,7 @@ class HTTPHandler:
 
     def create_client(self) -> httpx.Client:
         # Get unified SSL configuration
-        ssl_config: Final = get_ssl_configuration(self.ssl_verify)
+        ssl_config: Final = get_ssl_configuration(self.ssl_verify, http2=self.http2)
 
         # An SSL certificate used by the requested host to authenticate the client.
         # /path/to/client.pem
