@@ -8906,8 +8906,11 @@ class TestAgent365ChallengeAtConnect:
         assert await self._connect(self._server([self.GATEWAY_SCOPE]), bearer) is None
 
     @pytest.mark.asyncio
-    async def test_server_without_advertised_scopes_is_not_challenged(self, agent_365_guardrail):
-        assert await self._connect(self._server(None), None) is None
+    async def test_scopeless_server_is_still_challenged(self, agent_365_guardrail):
+        challenge = await self._connect(self._server(None), None)
+
+        assert challenge is not None and challenge.status_code == 401
+        assert 'error="invalid_token"' in (challenge.headers or {}).get("WWW-Authenticate", "")
 
     @pytest.mark.asyncio
     async def test_no_registered_guardrail_means_no_challenge(self):
