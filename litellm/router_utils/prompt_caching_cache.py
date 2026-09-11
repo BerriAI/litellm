@@ -10,7 +10,7 @@ from typing_extensions import TypedDict
 
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionCachedContent, ChatCompletionToolParam
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -147,8 +147,8 @@ class PromptCachingCache:
             (
                 index
                 for index in range(len(tools) - 1, -1, -1)
-                if isinstance(tools[index].get("cache_control"), dict)
-                and tools[index]["cache_control"].get("type") == "ephemeral"
+                if isinstance(cache_control := tools[index].get("cache_control"), dict)
+                and cache_control.get("type") == "ephemeral"
             ),
             None,
         )
@@ -180,6 +180,22 @@ class PromptCachingCache:
         return PromptCachingCache.get_prompt_caching_ttl_from_prefix(cacheable_prefix, tools)
 
     @staticmethod
+    def _ephemeral_cache_controls(
+        message: AllMessageValues,
+    ) -> tuple[ChatCompletionCachedContent | dict[str, object], ...]:
+        content: Final = message.get("content")
+        content_cache_controls: Final = (
+            tuple(content_block.get("cache_control") for content_block in content if isinstance(content_block, dict))
+            if isinstance(content, list)
+            else ()
+        )
+        return tuple(
+            cache_control
+            for cache_control in (message.get("cache_control"), *content_cache_controls)
+            if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral"
+        )
+
+    @staticmethod
     def get_prompt_caching_ttl_from_prefix(
         cacheable_prefix: list[AllMessageValues],
         tools: list[ChatCompletionToolParam] | None,
@@ -190,16 +206,12 @@ class PromptCachingCache:
         cache_control_values: Final = tuple(
             cache_control
             for message in cacheable_prefix
-            for cache_control in (
-                message.get("cache_control"),
-                *(
-                    content_block.get("cache_control")
-                    for content_block in (message.get("content") if isinstance(message.get("content"), list) else ())
-                    if isinstance(content_block, dict)
-                ),
-            )
-            if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral"
-        ) + tuple(tool.get("cache_control") for tool in cacheable_tools if isinstance(tool.get("cache_control"), dict))
+            for cache_control in PromptCachingCache._ephemeral_cache_controls(message)
+        ) + tuple(
+            cache_control
+            for tool in cacheable_tools
+            if isinstance(cache_control := tool.get("cache_control"), dict) and cache_control.get("type") == "ephemeral"
+        )
         # Prefer the shortest provider lifetime so affinity never outlives a cached segment
         return 3600 if cache_control_values and all(value.get("ttl") == "1h" for value in cache_control_values) else 300
 
