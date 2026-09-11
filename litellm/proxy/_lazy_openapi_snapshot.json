@@ -3234,6 +3234,17 @@
                 }
               ],
               "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
             }
           },
           "title": "KeyMetadata",
