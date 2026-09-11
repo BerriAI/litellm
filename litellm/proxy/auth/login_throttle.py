@@ -199,12 +199,18 @@ class LoginThrottle:
         return await self._outcome(work(redis_cache))
 
     async def _failures(self, store: DualCache, key: str) -> int:
-        """The shared count while Redis answers, so every worker sees one budget; this worker's
-        own count only while it does not, so an outage degrades to per-worker accounting."""
-        shared: Final = await self._shared(lambda redis_cache: redis_cache.async_get_cache(key))
-        if shared is not _UNAVAILABLE:
-            return _as_count(shared)
-        return _as_count(await self._outcome(store.async_get_cache(key=key)))
+        """The shared count plus this worker's own.
+
+        A failure is written to exactly one of the two: Redis, or this worker's store when Redis
+        refused it. So the local store is empty while Redis is healthy, and once Redis answers
+        again the guesses it missed still count. Read through ``async_batch_get_counts`` because
+        ``async_get_cache`` turns a failed GET into ``None``, which would pass as an empty counter.
+        """
+        local: Final = _as_count(await self._outcome(store.async_get_cache(key=key)))
+        shared: Final = await self._shared(lambda redis_cache: redis_cache.async_batch_get_counts([key]))
+        if not isinstance(shared, tuple):
+            return local
+        return _as_count(shared[0]) + local
 
     async def _remaining_window(self, key: str) -> int:
         """Seconds until this counter expires.
@@ -269,9 +275,11 @@ class LoginThrottle:
         shared: Final = await self._shared(
             lambda redis_cache: redis_cache.async_increment_with_floor(key, 1, self.window_seconds)
         )
-        if shared is not _UNAVAILABLE:
-            return _as_count(shared)
-        return _as_count(await self._outcome(store.async_increment_cache(key=key, value=1, ttl=self.window_seconds)))
+        if shared is _UNAVAILABLE:
+            return _as_count(
+                await self._outcome(store.async_increment_cache(key=key, value=1, ttl=self.window_seconds))
+            )
+        return _as_count(shared) + _as_count(await self._outcome(store.async_get_cache(key=key)))
 
     async def record_failure(self, username: str) -> FailureCounts:
         """Count one rejected credential guess against this username and against this source."""
