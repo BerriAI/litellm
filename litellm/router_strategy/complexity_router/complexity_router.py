@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     request_contains_image_content,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -1993,8 +1994,7 @@ class ComplexityRouter(CustomLogger):
 
         Args:
             prompt: The current user ask text (already extracted as the real human ask, not tool results)
-            system_prompt: The caller's system prompt (task constraints), always included so later
-                turns never lose it
+            system_prompt: Caller task constraints, omitted from classification for Claude Code requests
             request_kwargs: Request metadata for spend attribution
             messages: Full message history for extracting prior turns and the trajectory signal
         """
@@ -2027,9 +2027,18 @@ class ComplexityRouter(CustomLogger):
         )
 
         encrypted_task: Final = _encrypted_classifier_task(request_kwargs, marker_pairs)
+        caller_system_prompt: Final = (
+            None
+            if any(
+                is_claude_code_user_agent(user_agent)
+                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
+                if isinstance(user_agent := metadata.get("user_agent"), str)
+            )
+            else system_prompt
+        )
         user_payload: Final = self._build_classifier_user_payload(
             prompt="The delegated task in the following agent_message." if encrypted_task is not None else prompt,
-            system_prompt=system_prompt,
+            system_prompt=caller_system_prompt,
             prior_turns=prior_turns,
             messages=messages,
             has_prior_conversation=has_prior_conversation,

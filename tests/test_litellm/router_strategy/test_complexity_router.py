@@ -2677,6 +2677,26 @@ class TestEncryptedTaskClassifier:
         assert "originating_request_masked" not in call["proxy_server_request"]["body"]
 
     @pytest.mark.asyncio
+    async def test_claude_code_encrypted_task_omits_caller_instructions(self):
+        router, dependency = _native_classifier_router()
+        task: Final = _encrypted_agent_task()
+        request: Final = {
+            "input": [task],
+            "instructions": "CLAUDE_CODE_SYSTEM",
+            "litellm_metadata": {"user_agent": "claude-cli/2.1.233"},
+        }
+        original: Final = deepcopy(request)
+
+        result: Final = await router.async_pre_routing_hook(model="encrypted-router", request_kwargs=request)
+
+        assert result.routing_decision["cause"] == "llm_classifier"
+        assert request == original
+        call: Final = dependency.aresponses.call_args.kwargs
+        assert call["instructions"] == classification_system_prompt(router.config.classifier_context_window_size)
+        assert "CLAUDE_CODE_SYSTEM" not in json.dumps(call["input"][:-1])
+        assert call["input"][-1] == task
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "items",
         [
@@ -7993,6 +8013,113 @@ _CODEX_ENVELOPES: Final = (
 
 class TestContextAwareClassifier:
     """Test the new classifier context window and trajectory signals."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_metadata,forwards_system",
+        [
+            ({"metadata": {"user_agent": "claude-cli/2.1.233"}}, False),
+            ({"litellm_metadata": {"user_agent": "claude-code/2.1.233"}}, False),
+            ({"metadata": {"user_agent": "curl/8.7.1"}}, True),
+            ({"litellm_metadata": {}}, True),
+            (
+                {"metadata": {"user_agent": "claude-cli/2.1.233"}, "litellm_metadata": {"user_agent": "curl/8.7.1"}},
+                False,
+            ),
+            ({"metadata": {"user_agent": "Claude-Code/2.1.233"}}, True),
+        ],
+    )
+    async def test_claude_code_classifier_omits_harness_system_prompt(
+        self,
+        llm_classifier_config: dict[str, object],
+        request_metadata: dict[str, object],
+        forwards_system: bool,
+    ) -> None:
+        dependency: Final = MagicMock(acompletion=AsyncMock(return_value=_llm_response('{"tier": "COMPLEX"}')))
+        router: Final = ComplexityRouter(
+            "test-complexity-router",
+            dependency,
+            {
+                **llm_classifier_config,
+                "classifier_context_include_assistant_turns": True,
+            },
+        )
+        messages: Final = [
+            {"role": "user", "content": "Design the retry state machine"},
+            {"role": "assistant", "content": "The design needs a lease and fencing token"},
+            {"role": "user", "content": "Now prove it cannot livelock"},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "ENVIRONMENT_CATALOG\nAGENT_CATALOG\nSKILL_CATALOG"}],
+            },
+        ]
+        top_level_system: Final = [{"type": "text", "text": "TOP_LEVEL_HARNESS_SYSTEM"}]
+        claude_kwargs: Final = {
+            "metadata": {"user_agent": "claude-cli/2.1.233"},
+            "system": top_level_system,
+            "proxy_server_request": {"body": {"system": top_level_system}},
+        }
+        compared_kwargs: Final = {
+            **request_metadata,
+            "system": top_level_system,
+            "proxy_server_request": {"body": {"system": top_level_system}},
+        }
+        original_messages: Final = deepcopy(messages)
+        original_kwargs: Final = deepcopy((claude_kwargs, compared_kwargs))
+        results: Final = (
+            await router.async_pre_routing_hook("test-complexity-router", claude_kwargs, messages),
+            await router.async_pre_routing_hook("test-complexity-router", compared_kwargs, messages),
+        )
+
+        assert all(result is not None and result.routing_decision["cause"] == "llm_classifier" for result in results)
+        assert all(result is not None and result.messages == original_messages for result in results)
+        assert messages == original_messages
+        assert (claude_kwargs, compared_kwargs) == original_kwargs
+        calls: Final = tuple(call.kwargs["messages"] for call in dependency.acompletion.await_args_list)
+        assert calls[0][0]["content"] == calls[1][0]["content"] == classification_system_prompt(
+            router.config.classifier_context_window_size
+        )
+        payloads: Final = (calls[0][1]["content"], calls[1][1]["content"])
+        for payload, expected_system in zip(payloads, (False, forwards_system)):
+            assert payload.endswith("Classify this message:\nNow prove it cannot livelock")
+            assert ("ENVIRONMENT_CATALOG" in payload) is expected_system
+            assert ("AGENT_CATALOG" in payload) is expected_system
+            assert ("SKILL_CATALOG" in payload) is expected_system
+            assert "Design the retry state machine" in payload
+            assert "lease and fencing token" in payload
+            assert "TOP_LEVEL_HARNESS_SYSTEM" not in payload
+            assert "Conversation so far: ~35 tokens across the request" in payload
+
+    @pytest.mark.asyncio
+    async def test_claude_code_first_turn_without_context_omits_harness_system_prompt(
+        self, llm_classifier_config: dict[str, object]
+    ) -> None:
+        dependency: Final = MagicMock(acompletion=AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}')))
+        router: Final = ComplexityRouter(
+            "test-complexity-router",
+            dependency,
+            {**llm_classifier_config, "classifier_context_window_size": 0},
+        )
+        messages: Final = [
+            {"role": "user", "content": "What is two plus two?"},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "ENVIRONMENT_CATALOG\nAGENT_CATALOG\nSKILL_CATALOG"}],
+            },
+        ]
+        request_kwargs: Final = {"litellm_metadata": {"user_agent": "claude-code/2.1.233"}}
+        original: Final = deepcopy((messages, request_kwargs))
+
+        result: Final = await router.async_pre_routing_hook("test-complexity-router", request_kwargs, messages)
+
+        assert result is not None and result.routing_decision["cause"] == "llm_classifier"
+        assert result.messages == messages == original[0]
+        assert request_kwargs == original[1]
+        classifier_messages: Final = dependency.acompletion.call_args.kwargs["messages"]
+        assert classifier_messages[0]["content"] == classification_system_prompt(
+            router.config.classifier_context_window_size
+        )
+        assert classifier_messages[1]["content"].strip() == "Classify this message:\nWhat is two plus two?"
 
     @pytest.mark.parametrize(
         "tail,expected",
