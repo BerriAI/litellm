@@ -347,6 +347,16 @@ def _get_user_in_team(team_table: LiteLLM_TeamTableCachedObj, user_id: str | Non
     return None
 
 
+def _get_caller_team_role(
+    team_table: LiteLLM_TeamTableCachedObj,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Literal["admin", "user"] | None:
+    if user_api_key_dict.is_team_service_account and user_api_key_dict.team_id == team_table.team_id:
+        return "user"
+    member: Final = _get_user_in_team(team_table=team_table, user_id=user_api_key_dict.user_id)
+    return None if member is None else member.role
+
+
 def _calculate_key_rotation_time(rotation_interval: str) -> datetime:
     """
     Helper function to calculate the next rotation time for a key based on the rotation interval.
@@ -441,7 +451,7 @@ def _team_key_operation_team_member_check(
                 detail=f"User={assigned_user_id} not assigned to team={team_table.team_id}",
             )
 
-    team_member_object: Final = _get_user_in_team(team_table=team_table, user_id=user_api_key_dict.user_id)
+    caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
 
     is_admin: Final = (
         user_api_key_dict.user_role is not None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
@@ -449,22 +459,22 @@ def _team_key_operation_team_member_check(
 
     if is_admin:
         return True
-    elif team_member_object is None:
+    elif caller_team_role is None:
         raise HTTPException(
             status_code=400,
             detail=f"User={user_api_key_dict.user_id} not assigned to team={team_table.team_id}",
         )
     elif (
         "allowed_team_member_roles" in team_key_generation
-        and team_member_object.role not in team_key_generation["allowed_team_member_roles"]
+        and caller_team_role not in team_key_generation["allowed_team_member_roles"]
     ):
         raise HTTPException(
             status_code=400,
-            detail=f"Team member role {team_member_object.role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
+            detail=f"Team member role {caller_team_role} not in allowed_team_member_roles={team_key_generation['allowed_team_member_roles']}",
         )
 
     TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
-        team_member_object=team_member_object,
+        team_member_role=caller_team_role,
         team_table=team_table,
         route=route,
     )
@@ -584,6 +594,12 @@ def key_generation_check(
     """
     Check if admin has restricted key creation to certain roles for teams or individuals
     """
+
+    if user_api_key_dict.is_team_service_account and data.team_id != user_api_key_dict.team_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Service account keys can only create keys for their own team. team_id={user_api_key_dict.team_id}",
+        )
 
     ## check if key is for team or individual
     is_team_key: Final = _is_team_key(data=data)
@@ -2045,6 +2061,10 @@ async def generate_service_account_key_fn(
         team_id=data.team_id,
         prisma_client=prisma_client,
     )
+
+    if data.metadata is None or data.metadata.get("service_account_id") is None:
+        service_account_id: Final = (data.metadata or {}).get("service_account_id") or data.key_alias or str(uuid.uuid4())
+        data.metadata = {**(data.metadata or {}), "service_account_id": service_account_id}  # rebind-ok: stamping the generated service_account_id onto the request model so it persists on the key
 
     verbose_proxy_logger.debug("entered /key/generate")
 
@@ -3609,8 +3629,10 @@ async def validate_key_team_change(
                 detail=f"Key={key.token} has a rpm_limit={key.rpm_limit} which is greater than the team's rpm_limit={team.rpm_limit}.",
             )
 
+    team_table: Final = cast(LiteLLM_TeamTableCachedObj, team)
+
     # Check if the key's user_id is a member of the team
-    member_object: Final = _get_user_in_team(team_table=cast(LiteLLM_TeamTableCachedObj, team), user_id=key.user_id)
+    member_object: Final = _get_user_in_team(team_table=team_table, user_id=key.user_id)
     if key.user_id is not None:
         if not member_object:
             raise HTTPException(
@@ -3626,8 +3648,11 @@ async def validate_key_team_change(
             team_obj=team,
         )
         or TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
-            team_member_object=member_object,
-            team_table=cast(LiteLLM_TeamTableCachedObj, team),
+            team_member_role=_get_caller_team_role(
+                team_table=team_table,
+                user_api_key_dict=change_initiated_by,
+            ),
+            team_table=team_table,
             route=KeyManagementRoutes.KEY_UPDATE.value,
         )
     ):

@@ -14,6 +14,7 @@ import inspect
 
 from litellm.proxy._types import (
     GenerateKeyRequest,
+    KeyManagementRoutes,
     NewUserRequest,
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
@@ -2995,7 +2996,7 @@ async def test_validate_key_team_change_with_member_permissions():
 
                     # Verify the permission check was called with correct parameters
                     mock_has_perms.assert_called_once_with(
-                        team_member_object=mock_member_object,
+                        team_member_role=mock_member_object.role,
                         team_table=mock_team,
                         route=KeyManagementRoutes.KEY_UPDATE.value,
                     )
@@ -18129,3 +18130,130 @@ def test_key_generation_check_blank_team_id_uses_personal_permissions(monkeypatc
         )
         is True
     )
+
+
+class TestServiceAccountKeyGenerationCheck:
+    """Service account keys (user_id=None, team_id set, metadata.service_account_id)
+    may only create keys for their own team."""
+
+    def _service_account_token(self, team_id: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key="sk-sa",
+            user_id=None,
+            team_id=team_id,
+            metadata={"service_account_id": "sa-1"},
+        )
+
+    def test_other_team_denied(self):
+        data = GenerateKeyRequest(team_id="team-b")
+        with pytest.raises(HTTPException) as exc_info:
+            key_generation_check(
+                team_table=None,
+                user_api_key_dict=self._service_account_token(team_id="team-a"),
+                data=data,
+                route=KeyManagementRoutes.KEY_GENERATE,
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_personal_key_denied(self):
+        """team_id=None would mint a personal key; service accounts may only
+        create keys for their own team."""
+        data = GenerateKeyRequest()
+        with pytest.raises(HTTPException) as exc_info:
+            key_generation_check(
+                team_table=None,
+                user_api_key_dict=self._service_account_token(team_id="team-a"),
+                data=data,
+                route=KeyManagementRoutes.KEY_GENERATE,
+            )
+        assert exc_info.value.status_code == 403
+
+    def test_own_team_with_permission_allowed(self):
+        team_table = LiteLLM_TeamTableCachedObj(
+            team_id="team-a",
+            members_with_roles=[],
+            team_member_permissions=["/key/generate"],
+        )
+        data = GenerateKeyRequest(team_id="team-a")
+        assert (
+            key_generation_check(
+                team_table=team_table,
+                user_api_key_dict=self._service_account_token(team_id="team-a"),
+                data=data,
+                route=KeyManagementRoutes.KEY_GENERATE,
+            )
+            is True
+        )
+
+    def test_own_team_without_permission_denied(self):
+        team_table = LiteLLM_TeamTableCachedObj(
+            team_id="team-a",
+            members_with_roles=[],
+            team_member_permissions=["/key/info"],
+        )
+        data = GenerateKeyRequest(team_id="team-a")
+        with pytest.raises(ProxyException) as exc_info:
+            key_generation_check(
+                team_table=team_table,
+                user_api_key_dict=self._service_account_token(team_id="team-a"),
+                data=data,
+                route=KeyManagementRoutes.KEY_GENERATE,
+            )
+        assert str(exc_info.value.code) == "401"
+
+
+def _stub_service_account_generation(monkeypatch):
+    """Stub the DB lookups generate_service_account_key_fn needs so the test
+    exercises only the service_account_id stamping and user_id clearing."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints import key_management_endpoints as kme
+
+    mock_helper = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(kme, "validate_team_id_used_in_service_account_request", AsyncMock())
+    monkeypatch.setattr(kme, "_common_key_generation_helper", mock_helper)
+    return mock_helper
+
+
+@pytest.mark.asyncio
+async def test_generate_service_account_key_stamps_service_account_id(monkeypatch):
+    """generate_service_account_key_fn must stamp metadata.service_account_id
+    (key_alias fallback) so the key is identifiable as a service account by
+    is_team_service_account and check_if_token_is_service_account."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_service_account_key_fn,
+    )
+
+    mock_helper = _stub_service_account_generation(monkeypatch)
+    data = GenerateKeyRequest(team_id="team-a", key_alias="sa-alias")
+
+    await generate_service_account_key_fn(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"),
+        litellm_changed_by=None,
+    )
+
+    assert data.metadata is not None
+    assert data.metadata["service_account_id"] == "sa-alias"
+    assert data.user_id is None
+    mock_helper.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_service_account_key_generates_uuid_when_no_alias(monkeypatch):
+    """Without key_alias, service_account_id falls back to a generated uuid."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_service_account_key_fn,
+    )
+
+    _stub_service_account_generation(monkeypatch)
+    data = GenerateKeyRequest(team_id="team-a")
+
+    await generate_service_account_key_fn(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1"),
+        litellm_changed_by=None,
+    )
+
+    assert data.metadata is not None
+    assert data.metadata["service_account_id"]

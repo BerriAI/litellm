@@ -3208,6 +3208,15 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
+    @property
+    def is_team_service_account(self) -> bool:
+        return (
+            self.user_id is None
+            and self.team_id is not None
+            and bool(self.metadata)
+            and self.metadata.get("service_account_id") is not None
+        )
+
 
 def user_api_key_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """Return True if the caller's role grants unscoped read access to all

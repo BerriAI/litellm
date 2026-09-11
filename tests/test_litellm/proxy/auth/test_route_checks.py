@@ -3941,3 +3941,72 @@ def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_
             valid_token=valid_token,
             request_data={},
         )
+
+
+@pytest.mark.parametrize("route", ["/key/generate", "/key/update"])
+def test_team_service_account_key_allowed_key_management_routes(route):
+    """A service account key (user_id=None, team_id set, metadata.service_account_id)
+    can reach key-management routes; team scoping is enforced in the handlers."""
+    valid_token = UserAPIKeyAuth(
+        api_key="sk",
+        team_id="t1",
+        user_id=None,
+        metadata={"service_account_id": "ci"},
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    result = RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=None,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+    assert result is None
+
+
+def test_team_service_account_key_rejected_for_non_key_management_route():
+    """The service account carve-out does not extend past key-management routes."""
+    valid_token = UserAPIKeyAuth(
+        api_key="sk",
+        team_id="t1",
+        user_id=None,
+        metadata={"service_account_id": "ci"},
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=None,
+            route="/team/new",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
+def test_team_key_without_service_account_marker_still_rejected():
+    """A team key without metadata.service_account_id is not a service account
+    and still cannot reach key-management routes."""
+    valid_token = UserAPIKeyAuth(
+        api_key="sk",
+        team_id="t1",
+        user_id=None,
+        metadata={},
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=None,
+            route="/key/generate",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
