@@ -6718,12 +6718,14 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
                 "end_date": end_date,
                 "group_by_session": "true",
                 "session_cursor": "2026-08-29 09:00:00|hashed-key|req-solo",
+                "page": 401,
                 "page_size": 2,
             },
             headers={"Authorization": "Bearer sk-test"},
         )
         assert response.status_code == 200, response.text
         data = response.json()
+        assert data["page"] == 401
         assert data["has_more"] is False
         assert data["next_session_cursor"] is None
         assert [row["request_id"] for row in data["data"]] == ["req-2"]
@@ -6738,6 +6740,159 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
             "req-solo",
             "hashed-key",
         ), "cursor params must line up with (MAX(startTime), session key, api_key)"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_capped_cursor_continues(client, monkeypatch):
+    page_rows = [
+        _session_page_row(f"sess-{index}", f"2026-08-29 09:{59 - index:02d}:00") for index in range(26)
+    ]
+    cursor_page_rows = [_session_page_row("sess-26", "2026-08-29 09:33:00")]
+    reps = [_session_representative_row(f"req-{index}", f"sess-{index}") for index in range(27)]
+    mock_prisma = _session_grouped_mock_prisma(page_rows, 10001, reps)
+    original_query_raw = mock_prisma.db.query_raw.side_effect
+
+    async def cursor_aware_query_raw(sql_query, *params):
+        if "HAVING" in sql_query:
+            return cursor_page_rows
+        return await original_query_raw(sql_query, *params)
+
+    mock_prisma.db.query_raw.side_effect = cursor_aware_query_raw
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        capped_page = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page": 400,
+                "page_size": 25,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert capped_page.status_code == 200, capped_page.text
+        capped_data = capped_page.json()
+        assert capped_data["total"] == 10000
+        assert capped_data["total_is_capped"] is True
+        assert capped_data["has_more"] is True
+        assert capped_data["next_session_cursor"] == "2026-08-29 09:35:00|hashed-key|sess-24"
+
+        continuation = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page": 401,
+                "page_size": 25,
+                "session_cursor": capped_data["next_session_cursor"],
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert continuation.status_code == 200, continuation.text
+        continuation_data = continuation.json()
+        assert continuation_data["page"] == 401
+        assert continuation_data["has_more"] is False
+        assert [row["request_id"] for row in continuation_data["data"]] == ["req-26"]
+        continuation_query = next(
+            call.args[0] for call in mock_prisma.db.query_raw.await_args_list if "HAVING" in call.args[0]
+        )
+        assert "OFFSET" not in continuation_query
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_uncached_page_uses_offset(client, monkeypatch):
+    page_rows = [
+        _session_page_row("sess-7", "2026-08-29 07:00:00"),
+        _session_page_row("sess-8", "2026-08-29 06:00:00"),
+        _session_page_row("sess-9", "2026-08-29 05:00:00"),
+    ]
+    reps = [
+        _session_representative_row("req-7", "sess-7"),
+        _session_representative_row("req-8", "sess-8"),
+    ]
+    mock_prisma = _session_grouped_mock_prisma(page_rows, 9, reps)
+    original_query_raw = mock_prisma.db.query_raw.side_effect
+
+    async def page_aware_query_raw(sql_query, *params):
+        if 'MAX("startTime")::text AS last_activity' in sql_query and params[-2:] != (3, 6):
+            return []
+        return await original_query_raw(sql_query, *params)
+
+    mock_prisma.db.query_raw.side_effect = page_aware_query_raw
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page": 4,
+                "page_size": 2,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["page"] == 4
+        assert data["total"] == 9
+        assert data["total_pages"] == 5
+        assert data["has_more"] is True
+        assert data["next_session_cursor"] == "2026-08-29 06:00:00|hashed-key|sess-8"
+        assert [row["request_id"] for row in data["data"]] == ["req-7", "req-8"]
+
+        page_query_call = mock_prisma.db.query_raw.await_args_list[0]
+        page_query_sql = page_query_call.args[0]
+        assert "HAVING" not in page_query_sql
+        assert "OFFSET" in page_query_sql
+        assert page_query_call.args[-2:] == (3, 6)
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_ui_view_spend_logs_rejects_grouped_page_past_count_cap(client, monkeypatch):
+    mock_prisma = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page": 401,
+                "page_size": 25,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["param"] == "page"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -6772,6 +6927,7 @@ async def test_ui_view_spend_logs_group_by_session_offset_for_non_starttime_sort
                 "end_date": end_date,
                 "group_by_session": "true",
                 "session_cursor": "2026-08-29 09:00:00|hashed-key|req-solo",
+                "page": 401,
                 "sort_by": "spend",
             },
             headers={"Authorization": "Bearer sk-test"},
@@ -6816,6 +6972,7 @@ async def test_ui_view_spend_logs_search_returns_flat_rows_when_grouping_by_sess
             params={
                 "search": "sess-1",
                 "group_by_session": "true",
+                "page": 401,
                 "start_date": start_date,
                 "end_date": end_date,
             },
@@ -6826,6 +6983,32 @@ async def test_ui_view_spend_logs_search_returns_flat_rows_when_grouping_by_sess
         assert [row["request_id"] for row in data["data"]] == ["req-1", "req-2"]
         assert data["total"] == 2
         assert "next_session_cursor" not in data
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_spend_logs_v2_grouped_page_is_not_limited_by_ui_offset_cap(client, monkeypatch):
+    mock_prisma = _session_grouped_mock_prisma([], 0, [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/v2",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page": 401,
+                "page_size": 25,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        emitted_sql = [call.args[0] for call in mock_prisma.db.query_raw.await_args_list]
+        assert "OFFSET" in emitted_sql[1]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

@@ -258,6 +258,43 @@ describe("RequestLogsPanel", () => {
       });
     });
 
+    it("navigates to the last page without using the next-page cursor", async () => {
+      const firstPage = Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `req-${index}` }));
+      const lastPage = Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `last-${index}` }));
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ page }) =>
+        page === 4
+          ? {
+              data: lastPage,
+              total: 100,
+              page: 4,
+              page_size: 25,
+              total_pages: 4,
+              next_session_cursor: null,
+              has_more: false,
+            }
+          : {
+              data: firstPage,
+              total: 100,
+              page: 1,
+              page_size: 25,
+              total_pages: 4,
+              next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
+              has_more: true,
+            },
+      );
+      renderPanel();
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      fireEvent.click(screen.getByTestId("pagination-last"));
+
+      await waitFor(() => expect(row("last-0")).not.toBeNull());
+      expect(lastCall()?.page).toBe(4);
+      expect(lastCall()?.params?.session_cursor).toBeUndefined();
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 4 of 4");
+      expect(screen.getByTestId("pagination-next")).toBeDisabled();
+      expect(screen.getByTestId("pagination-last")).toBeDisabled();
+    });
+
     it("drops the cursor and returns to the first page when a filter changes", async () => {
       const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
       vi.mocked(uiSpendLogsCall).mockResolvedValue({
@@ -394,6 +431,27 @@ describe("RequestLogsPanel", () => {
         expect(call.page).toBe(1);
       });
       expect(lastCall()?.params?.request_id).toBeUndefined();
+      expect(lastCall()?.params?.session_cursor).toBeUndefined();
+    });
+
+    it("navigates search results without a session cursor", async () => {
+      const initialRows = Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `initial-${index}` }));
+      const searchRows = Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `search-${index}` }));
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) => ({
+        data: params?.search ? searchRows : initialRows,
+        total: 80,
+        page: 1,
+        page_size: 25,
+        total_pages: 4,
+      }));
+      renderPanel();
+
+      await waitFor(() => expect(row("initial-0")).not.toBeNull());
+      fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "req-search" } });
+      await waitFor(() => expect(row("search-0")).not.toBeNull());
+      fireEvent.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
       expect(lastCall()?.params?.session_cursor).toBeUndefined();
     });
 

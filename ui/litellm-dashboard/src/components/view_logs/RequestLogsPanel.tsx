@@ -213,11 +213,13 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         setPagination(requested);
         return;
       }
-      const nextCursor = filteredLogs.next_session_cursor;
-      if (!nextCursor || logsQuery.isPlaceholderData) return;
+      if (logsQuery.isPlaceholderData) return;
       const nextPageIndex = pagination.pageIndex + 1;
-      setSessionCursors((previous) => ({ ...previous, [nextPageIndex]: nextCursor }));
-      setPagination({ ...requested, pageIndex: nextPageIndex });
+      const nextCursor = filteredLogs.next_session_cursor;
+      if (requested.pageIndex === nextPageIndex && nextCursor) {
+        setSessionCursors((previous) => ({ ...previous, [nextPageIndex]: nextCursor }));
+      }
+      setPagination(requested);
     },
     [usesSessionCursor, pagination, filteredLogs.next_session_cursor, logsQuery.isPlaceholderData],
   );

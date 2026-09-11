@@ -2942,13 +2942,12 @@ async def _ui_session_grouped_spend_logs(
     table): rows sharing a ``session_id`` and ``api_key`` form a session, rows
     without a session id are singletons keyed by ``request_id``. A page is the
     next ``page_size`` sessions ordered by ``(MAX(startTime), session_key,
-    api_key)``, resumed from the ``session_cursor`` keyset
-    ``'<last_activity>|<api_key>|<session_key>'`` instead of an OFFSET, so
-    page depth does not degrade the query plan. Each session is represented
-    by its newest non-MCP row, enriched by ``_build_ui_spend_logs_response``
-    exactly like the flat listing, and the response carries
-    ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
-    (capped like the flat total).
+    api_key)``. Sequential pages resume from the ``session_cursor`` keyset
+    ``'<last_activity>|<api_key>|<session_key>'``; uncached jumps use the page
+    offset. Each session is represented by its newest non-MCP row, enriched by
+    ``_build_ui_spend_logs_response`` exactly like the flat listing, and the
+    response carries ``next_session_cursor`` / ``has_more`` while ``total``
+    counts sessions (capped like the flat total).
     """
     where_clause: Final = " AND ".join(sql_conditions) if sql_conditions else "TRUE"
     cmp_op: Final = "<" if sort_desc else ">"
@@ -2963,6 +2962,16 @@ async def _ui_session_grouped_spend_logs(
     )
     cursor_params: Final[tuple[object, ...]] = cursor if cursor else ()
     limit_index: Final = next_param_index + len(cursor_params)
+    offset: Final = (page - 1) * page_size if cursor is None and page > 1 else None
+    if offset is not None and offset >= SPEND_LOGS_PAGINATION_COUNT_CAP:
+        raise ProxyException(
+            message="Page exceeds the maximum supported session offset",
+            type="bad_request",
+            param="page",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    offset_clause: Final = f"OFFSET ${limit_index + 1}" if offset is not None else ""
+    offset_params: Final[tuple[object, ...]] = (offset,) if offset is not None else ()
 
     page_query: Final = f"""
         SELECT {_SESSION_KEY_EXPR} AS session_key,
@@ -2974,9 +2983,10 @@ async def _ui_session_grouped_spend_logs(
         {having_clause}
         ORDER BY MAX("startTime") {direction}, {_SESSION_KEY_EXPR} {direction}, api_key {direction}
         LIMIT ${limit_index}
+        {offset_clause}
     """
     page_rows: Final[Sequence[_SessionPageRow]] = await _query_raw(
-        prisma_client, page_query, *sql_params, *cursor_params, page_size + 1
+        prisma_client, page_query, *sql_params, *cursor_params, page_size + 1, *offset_params
     )
 
     has_more: Final = len(page_rows) > page_size
