@@ -1,0 +1,10 @@
+{
+  "commit": "7419a536ad6857165b28b9b545a62d5916f696d2",
+  "image_id": "sha256:2121d505d843ad0588326d01bd3684cdb40dc17f3038c32076120d4cfaac48fa",
+  "source_sha256": {
+    "litellm/proxy/_experimental/mcp_server/mcp_server_manager.py": "9f93de3fdc07ee84a18e5c98af305de4cd2b673d1c45cf2560916d3bb6ce8da6",
+    "litellm/proxy/_experimental/mcp_server/openapi_to_mcp_generator.py": "f87c91b401b9cff4438ea22d15e28f0714be8510cfafa022cf724009d2249ec3",
+    "litellm/llms/custom_httpx/http_handler.py": "e17596a6862dac516496d7e5573df52df52e67b62b9fac7f3f8886e2d32519c7"
+  },
+  "matches_git": true
+}

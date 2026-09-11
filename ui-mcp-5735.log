@@ -1,0 +1,15 @@
+
+> litellm-dashboard@0.1.0 test:component
+> vitest run --project component src/app/(dashboard)/mcp-servers/_components/mcp_servers.test.tsx
+
+
+ RUN  v4.1.11 /Users/jvalluru/LiteLLM-work/litellm-lit-4896-fix/ui/litellm-dashboard
+
+Importing from "vitest/environments" is deprecated since Vitest 4.1. Please use "vitest/runtime" instead.
+The Vitest environment jsdom-fetch defines the "transformMode". This options was deprecated in Vitest 4 and will be removed in the next major version. Please, use "viteEnvironment" instead.
+
+ Test Files  1 passed (1)
+      Tests  6 passed (6)
+   Start at  19:32:06
+   Duration  17.70s (transform 6.10s, setup 803ms, import 10.10s, tests 4.37s, environment 2.07s)
+

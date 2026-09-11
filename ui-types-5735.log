@@ -1,0 +1,16 @@
+
+> litellm-dashboard@0.1.0 test:types
+> vitest run --project types
+
+Testing types with tsc and vue-tsc is an experimental feature.
+Breaking changes might not follow SemVer, please pin Vitest's version when using it.
+
+ RUN  v4.1.11 /Users/jvalluru/LiteLLM-work/litellm-lit-4896-fix/ui/litellm-dashboard
+
+
+ Test Files  2 passed (2)
+      Tests  4 passed (4)
+Type Errors  no errors
+   Start at  19:30:37
+   Duration  169.40s (transform 0ms, setup 0ms, import 0ms, tests 0ms, environment 0ms, typecheck 169.28s)
+

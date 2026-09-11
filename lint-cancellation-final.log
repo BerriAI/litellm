@@ -1,0 +1,22 @@
+uv sync --inexact --frozen --group proxy-dev --group e2e-dev
+Audited 205 packages in 31ms
+uv run --no-sync python scripts/prisma_generate_if_needed.py
+Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
+cd litellm && uv run --no-sync ruff check . && cd ..
+uv run --no-sync python scripts/ruff_strict_gate.py --base "origin/litellm_internal_staging"
+uv run --no-sync python scripts/type_discipline_gate.py --base "origin/litellm_internal_staging"
+uv run --no-sync python scripts/test_quality_gate.py --base "origin/litellm_internal_staging"
+uv run --no-sync python scripts/type_check_gate.py --base "origin/litellm_internal_staging"
+uv run --no-sync basedpyright tests/e2e
+cd litellm && uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py && cd ..
+No LiteLLM type hints found.
+All checks passed!
+uv run --no-sync ruff check --config ruff-tests.toml tests
+3 files already formatted
+All checks passed!
+[from litellm import *] OK! no issues!
+OK: every strict rule is within its codebase ceiling (base origin/litellm_internal_staging)
+0 errors, 0 warnings, 0 notes
+OK: every TQ rule is within its test-suite ceiling (base origin/litellm_internal_staging)
+OK: every LIT rule is within its codebase ceiling (base origin/litellm_internal_staging)
+OK: every rule is within its basedpyright limit or no higher than base (138497 errors total)

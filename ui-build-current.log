@@ -1,0 +1,90 @@
+
+> litellm-dashboard@0.1.0 build
+> next build
+
+▲ Next.js 16.3.3 (Turbopack)
+- Environments: .env.production
+✓ Running next.config.mjs took 6ms
+- Experiments (use with caution):
+  ⨯ useTypeScriptCli
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 2.3s
+  Running TypeScript ...
+  Finished TypeScript in 20.3s ...
+  Collecting page data using 17 workers ...
+  Generating static pages using 17 workers (0/51) ...
+  Generating static pages using 17 workers (12/51) 
+  Generating static pages using 17 workers (25/51) 
+  Generating static pages using 17 workers (38/51) 
+✓ Generating static pages using 17 workers (51/51) in 435ms
+Turbopack build encountered 1 warning:
+./public/assets/logos/enkrypt_ai.avif
+Warning: AVIF image not supported
+This version of Turbopack does not support AVIF images, will emit without optimization or encoding
+
+Import trace:
+  Client Component SSR:
+    ./public/assets/logos/enkrypt_ai.avif
+    ./src/app/(dashboard)/guardrails/_components/guardrail_info_helpers.tsx [Client Component SSR]
+    ./src/app/(dashboard)/guardrails/_components/GuardrailsPanel.tsx [Client Component SSR]
+    ./src/app/(dashboard)/guardrails/page.tsx [Client Component SSR]
+    ./src/app/(dashboard)/guardrails/page.tsx [Server Component]
+
+
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /access-groups
+├ ○ /admin-panel
+├ ○ /agents
+├ ○ /api-keys
+├ ○ /api-reference
+├ ○ /budgets
+├ ○ /caching
+├ ○ /chat
+├ ○ /chat/api-keys
+├ ○ /chat/credentials
+├ ○ /chat/integrations
+├ ○ /chat/logs
+├ ○ /chat/usage
+├ ○ /connect
+├ ○ /cost-optimization
+├ ○ /cost-tracking
+├ ○ /guardrails
+├ ○ /guardrails-monitor
+├ ○ /logging-and-alerts
+├ ○ /login
+├ ○ /logs
+├ ○ /mcp-servers
+├ ○ /mcp/oauth/callback
+├ ○ /memory
+├ ○ /model_hub
+├ ○ /model_hub_table
+├ ○ /model-hub-table
+├ ○ /models-and-endpoints
+├ ○ /old-usage
+├ ○ /onboarding
+├ ○ /organizations
+├ ○ /playground
+├ ○ /policies
+├ ○ /projects
+├ ○ /prompts
+├ ○ /router-settings
+├ ○ /search-tools
+├ ○ /skills
+├ ○ /tag-management
+├ ○ /teams
+├ ○ /tool-policies
+├ ○ /transform-request
+├ ○ /ui-theme
+├ ○ /usage
+├ ○ /users
+├ ○ /vector-stores
+└ ○ /workflows
+
+
+○  (Static)  prerendered as static content
+

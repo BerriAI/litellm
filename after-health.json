@@ -1,0 +1,95 @@
+{
+  "commit": "ca03c889c9b72ec47a5d4f604626ac0b7cfdfadd",
+  "results": [
+    {
+      "case": "remote_none",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/4465a5d6-5b0a-427b-b2ff-467f63b28474",
+      "http_status": 200,
+      "health": "healthy",
+      "error": null,
+      "elapsed_seconds": 0.02
+    },
+    {
+      "case": "remote_bearer",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/d00422a5-c80b-4cc3-a6ae-288ab95ed298",
+      "http_status": 200,
+      "health": "healthy",
+      "error": null,
+      "elapsed_seconds": 0.02
+    },
+    {
+      "case": "remote_missing",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/1d95ce8d-e756-45a0-b179-8a9779ebb1f3",
+      "http_status": 200,
+      "health": "unhealthy",
+      "error": "OpenAPI specification request failed (HTTP 404)",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "case": "remote_invalid",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/e09c918b-3b69-43ad-ab61-6771c2e6eedd",
+      "http_status": 200,
+      "health": "unhealthy",
+      "error": "OpenAPI specification could not be loaded (JSONDecodeError)",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "case": "remote_timeout",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/202094bc-5133-4533-b0e2-9830d5c45328",
+      "http_status": 200,
+      "health": "unhealthy",
+      "error": "OpenAPI specification check timed out after 10.0 seconds",
+      "elapsed_seconds": 9.55
+    },
+    {
+      "case": "native_http",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/7e3a8612-b37c-4548-b892-67e1a7f93808",
+      "http_status": 200,
+      "health": "healthy",
+      "error": null,
+      "elapsed_seconds": 0.14
+    },
+    {
+      "case": "local_none",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/0bbf01a5-f3c8-40a8-8d3c-a3444b09d9a1",
+      "http_status": 200,
+      "health": "unknown",
+      "error": "OpenAPI servers have no protocol-level health probe",
+      "elapsed_seconds": 0.02
+    },
+    {
+      "case": "local_bearer",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/1a2aad82-a663-4bfa-9f0c-6f1cb0368614",
+      "http_status": 200,
+      "health": "unknown",
+      "error": "OpenAPI servers have no protocol-level health probe",
+      "elapsed_seconds": 0.02
+    },
+    {
+      "case": "remote_large",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/f4dfe801-5a8e-4cdf-8f91-a8586b901218",
+      "http_status": 200,
+      "health": "unknown",
+      "error": "OpenAPI specification probe refused: Response exceeds the configured size limit",
+      "elapsed_seconds": 0.01
+    },
+    {
+      "case": "remote_compressed",
+      "method": "GET",
+      "url": "http://localhost:44896/v1/mcp/server/325e4dfc-235b-4f2c-8dc8-135820331c59",
+      "http_status": 200,
+      "health": "unknown",
+      "error": "OpenAPI specification probe refused: Response size limits require an uncompressed response",
+      "elapsed_seconds": 0.01
+    }
+  ]
+}

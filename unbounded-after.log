@@ -1,0 +1,1 @@
+{"requests": 1, "bytes_sent": 0, "statuses": ["unknown", "unknown", "unknown"], "errors": ["OpenAPI specification probe refused: Response exceeds the configured size limit", "OpenAPI specification probe refused: Response exceeds the configured size limit", "OpenAPI specification probe refused: Response exceeds the configured size limit"]}

@@ -1,0 +1,10 @@
+{
+  "status": 200,
+  "request": {
+    "server_id": "4465a5d6-5b0a-427b-b2ff-467f63b28474",
+    "name": "getauthenticateduser",
+    "arguments": {}
+  },
+  "isError": false,
+  "content_returned": true
+}

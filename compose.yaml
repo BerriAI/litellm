@@ -1,0 +1,40 @@
+name: litellm-4896
+services:
+  gateway:
+    cpus: 1.0
+    mem_limit: 1g
+    image: litellm-4896:ca03c889c9
+    ports: ['127.0.0.1:44896:4000']
+    volumes: ['./config.yaml:/verification/config.yaml:ro', './github-openapi.json:/verification/github-openapi.json:ro']
+    command: ['--config', '/verification/config.yaml', '--port', '4000']
+    environment:
+      DATABASE_URL: postgresql://lit4896:${POSTGRES_PASSWORD}@db:5432/lit4896
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      UI_USERNAME: admin
+      UI_PASSWORD: ${LITELLM_MASTER_KEY}
+      STORE_MODEL_IN_DB: 'True'
+    depends_on:
+      db: {condition: service_healthy}
+  spec-host:
+    cpus: 0.25
+    mem_limit: 128m
+    image: litellm-4896:8a4fae0e17
+    entrypoint: ['python', '/verification/spec_host.py']
+    volumes: ['.:/verification:ro']
+    ports: ['127.0.0.1:44897:8080']
+  db:
+    cpus: 0.25
+    mem_limit: 256m
+    image: postgres:16
+    environment:
+      POSTGRES_DB: lit4896
+      POSTGRES_USER: lit4896
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: ['db_data:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -d lit4896 -U lit4896']
+      interval: 2s
+      retries: 30
+volumes:
+  db_data:

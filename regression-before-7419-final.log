@@ -1,0 +1,1417 @@
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF                                [100%]
+=================================== FAILURES ===================================
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[http-False-none] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111767f50>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111585580>
+auth_type = <MCPAuth.none: 'none'>, is_byok = False, scheme = 'http'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unhealthy' == 'healthy'
+E         
+E         - healthy
+E         + unhealthy
+E         ? ++
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[http-False-bearer_token] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111767980>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109238590>
+auth_type = <MCPAuth.bearer_token: 'bearer_token'>, is_byok = False
+scheme = 'http'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unhealthy' == 'healthy'
+E         
+E         - healthy
+E         + unhealthy
+E         ? ++
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[http-False-api_key] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111783a40>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dd3dd0>
+auth_type = <MCPAuth.api_key: 'api_key'>, is_byok = False, scheme = 'http'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unhealthy' == 'healthy'
+E         
+E         - healthy
+E         + unhealthy
+E         ? ++
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[http-False-oauth2] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x1117835c0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dff890>
+auth_type = <MCPAuth.oauth2: 'oauth2'>, is_byok = False, scheme = 'http'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unknown' == 'healthy'
+E         
+E         - healthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[http-True-none] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x1117832c0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dfe390>
+auth_type = <MCPAuth.none: 'none'>, is_byok = True, scheme = 'http'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unhealthy' == 'healthy'
+E         
+E         - healthy
+E         + unhealthy
+E         ? ++
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[http-True-bearer_token] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111783320>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111e15460>
+auth_type = <MCPAuth.bearer_token: 'bearer_token'>, is_byok = True
+scheme = 'http'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unknown' == 'healthy'
+E         
+E         - healthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[http-True-api_key] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x1117830e0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111e17a70>
+auth_type = <MCPAuth.api_key: 'api_key'>, is_byok = True, scheme = 'http'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unknown' == 'healthy'
+E         
+E         - healthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[http-True-oauth2] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782d50>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111e17fb0>
+auth_type = <MCPAuth.oauth2: 'oauth2'>, is_byok = True, scheme = 'http'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unknown' == 'healthy'
+E         
+E         - healthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[https-False-none] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782c30>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111e17d10>
+auth_type = <MCPAuth.none: 'none'>, is_byok = False, scheme = 'https'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unhealthy' == 'healthy'
+E         
+E         - healthy
+E         + unhealthy
+E         ? ++
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[https-False-bearer_token] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782b70>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1117f63c0>
+auth_type = <MCPAuth.bearer_token: 'bearer_token'>, is_byok = False
+scheme = 'https'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unhealthy' == 'healthy'
+E         
+E         - healthy
+E         + unhealthy
+E         ? ++
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[https-False-api_key] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x1117827e0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1115bec60>
+auth_type = <MCPAuth.api_key: 'api_key'>, is_byok = False, scheme = 'https'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unhealthy' == 'healthy'
+E         
+E         - healthy
+E         + unhealthy
+E         ? ++
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[https-False-oauth2] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782750>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111de7b90>
+auth_type = <MCPAuth.oauth2: 'oauth2'>, is_byok = False, scheme = 'https'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unknown' == 'healthy'
+E         
+E         - healthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[https-True-none] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782720>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dfcd10>
+auth_type = <MCPAuth.none: 'none'>, is_byok = True, scheme = 'https'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unhealthy' == 'healthy'
+E         
+E         - healthy
+E         + unhealthy
+E         ? ++
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[https-True-bearer_token] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782330>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dea150>
+auth_type = <MCPAuth.bearer_token: 'bearer_token'>, is_byok = True
+scheme = 'https'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unknown' == 'healthy'
+E         
+E         - healthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[https-True-api_key] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782270>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111de84a0>
+auth_type = <MCPAuth.api_key: 'api_key'>, is_byok = True, scheme = 'https'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unknown' == 'healthy'
+E         
+E         - healthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+_ TestMCPServerManager.test_openapi_health_loads_spec_without_mcp_handshake[https-True-oauth2] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782540>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111de8dd0>
+auth_type = <MCPAuth.oauth2: 'oauth2'>, is_byok = True, scheme = 'https'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+>       assert result.status == "healthy"
+E       AssertionError: assert 'unknown' == 'healthy'
+E         
+E         - healthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4497: AssertionError
+_ TestMCPServerManager.test_openapi_local_spec_health_is_unknown[/config/openapi.json-none] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x1117947a0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+auth_type = <MCPAuth.none: 'none'>, spec_path = '/config/openapi.json'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token])
+    @pytest.mark.parametrize("spec_path", ["/config/openapi.json", "relative/openapi.json"])
+    async def test_openapi_local_spec_health_is_unknown(self, respx_mock, auth_type, spec_path):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="local-openapi-health",
+            name="local-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=spec_path,
+            auth_type=auth_type,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        result = await manager.health_check_server(server.server_id)
+>       assert result.status == "unknown"
+E       AssertionError: assert 'unhealthy' == 'unknown'
+E         
+E         - unknown
+E         + unhealthy
+
+../lit-4896-verification/test_manager_before.py:4521: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_local_spec_health_is_unknown[/config/openapi.json-bearer_token] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111794740>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+auth_type = <MCPAuth.bearer_token: 'bearer_token'>
+spec_path = '/config/openapi.json'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token])
+    @pytest.mark.parametrize("spec_path", ["/config/openapi.json", "relative/openapi.json"])
+    async def test_openapi_local_spec_health_is_unknown(self, respx_mock, auth_type, spec_path):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="local-openapi-health",
+            name="local-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=spec_path,
+            auth_type=auth_type,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        result = await manager.health_check_server(server.server_id)
+        assert result.status == "unknown"
+>       assert result.health_check_error == "OpenAPI servers have no protocol-level health probe"
+E       AssertionError: assert None == 'OpenAPI servers have no protocol-level health probe'
+E        +  where None = LiteLLM_MCPServerTable(server_id='local-openapi-health', server_name=None, alias=None, description=None, url='https://...ent_requests=None, approval_status='active', submitted_by=None, submitted_at=None, reviewed_at=None, review_notes=None).health_check_error
+
+../lit-4896-verification/test_manager_before.py:4522: AssertionError
+_ TestMCPServerManager.test_openapi_local_spec_health_is_unknown[relative/openapi.json-none] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111794980>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+auth_type = <MCPAuth.none: 'none'>, spec_path = 'relative/openapi.json'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token])
+    @pytest.mark.parametrize("spec_path", ["/config/openapi.json", "relative/openapi.json"])
+    async def test_openapi_local_spec_health_is_unknown(self, respx_mock, auth_type, spec_path):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="local-openapi-health",
+            name="local-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=spec_path,
+            auth_type=auth_type,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        result = await manager.health_check_server(server.server_id)
+>       assert result.status == "unknown"
+E       AssertionError: assert 'unhealthy' == 'unknown'
+E         
+E         - unknown
+E         + unhealthy
+
+../lit-4896-verification/test_manager_before.py:4521: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:27 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for https://rest.example.com
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for https://rest.example.com
+_ TestMCPServerManager.test_openapi_local_spec_health_is_unknown[relative/openapi.json-bearer_token] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111794a40>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+auth_type = <MCPAuth.bearer_token: 'bearer_token'>
+spec_path = 'relative/openapi.json'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token])
+    @pytest.mark.parametrize("spec_path", ["/config/openapi.json", "relative/openapi.json"])
+    async def test_openapi_local_spec_health_is_unknown(self, respx_mock, auth_type, spec_path):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="local-openapi-health",
+            name="local-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=spec_path,
+            auth_type=auth_type,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        result = await manager.health_check_server(server.server_id)
+        assert result.status == "unknown"
+>       assert result.health_check_error == "OpenAPI servers have no protocol-level health probe"
+E       AssertionError: assert None == 'OpenAPI servers have no protocol-level health probe'
+E        +  where None = LiteLLM_MCPServerTable(server_id='local-openapi-health', server_name=None, alias=None, description=None, url='https://...ent_requests=None, approval_status='active', submitted_by=None, submitted_at=None, reviewed_at=None, review_notes=None).health_check_error
+
+../lit-4896-verification/test_manager_before.py:4522: AssertionError
+_ TestMCPServerManager.test_openapi_health_reports_safe_failures[failure0-unhealthy-OpenAPI specification request failed (HTTP 401)] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782210>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dccec0>
+failure = <Response [401 Unauthorized]>, expected_status = 'unhealthy'
+expected_error = 'OpenAPI specification request failed (HTTP 401)'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "expected_status", "expected_error"),
+        [
+            (httpx.Response(401, text="secret response content"), "unhealthy", "OpenAPI specification request failed (HTTP 401)"),
+            (httpx.Response(404), "unhealthy", "OpenAPI specification request failed (HTTP 404)"),
+            (httpx.Response(500), "unhealthy", "OpenAPI specification request failed (HTTP 500)"),
+            (httpx.ConnectError("secret network details"), "unhealthy", "OpenAPI specification could not be loaded (ConnectError)"),
+            (httpx.Response(200, text="secret invalid JSON body"), "unhealthy", "OpenAPI specification could not be loaded (JSONDecodeError)"),
+        ],
+    )
+    async def test_openapi_health_reports_safe_failures(self, respx_mock, monkeypatch, failure, expected_status, expected_error):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="failed-openapi-health",
+            name="failed-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path="https://93.184.216.34/key-secret?token=query-secret",
+            auth_type=MCPAuth.bearer_token,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).mock(side_effect=[failure])
+        result = await manager.health_check_server(server.server_id)
+>       assert result.status == expected_status
+E       AssertionError: assert 'unknown' == 'unhealthy'
+E         
+E         - unhealthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4552: AssertionError
+_ TestMCPServerManager.test_openapi_health_reports_safe_failures[failure1-unhealthy-OpenAPI specification request failed (HTTP 404)] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x1117827b0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dead80>
+failure = <Response [404 Not Found]>, expected_status = 'unhealthy'
+expected_error = 'OpenAPI specification request failed (HTTP 404)'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "expected_status", "expected_error"),
+        [
+            (httpx.Response(401, text="secret response content"), "unhealthy", "OpenAPI specification request failed (HTTP 401)"),
+            (httpx.Response(404), "unhealthy", "OpenAPI specification request failed (HTTP 404)"),
+            (httpx.Response(500), "unhealthy", "OpenAPI specification request failed (HTTP 500)"),
+            (httpx.ConnectError("secret network details"), "unhealthy", "OpenAPI specification could not be loaded (ConnectError)"),
+            (httpx.Response(200, text="secret invalid JSON body"), "unhealthy", "OpenAPI specification could not be loaded (JSONDecodeError)"),
+        ],
+    )
+    async def test_openapi_health_reports_safe_failures(self, respx_mock, monkeypatch, failure, expected_status, expected_error):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="failed-openapi-health",
+            name="failed-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path="https://93.184.216.34/key-secret?token=query-secret",
+            auth_type=MCPAuth.bearer_token,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).mock(side_effect=[failure])
+        result = await manager.health_check_server(server.server_id)
+>       assert result.status == expected_status
+E       AssertionError: assert 'unknown' == 'unhealthy'
+E         
+E         - unhealthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4552: AssertionError
+_ TestMCPServerManager.test_openapi_health_reports_safe_failures[failure2-unhealthy-OpenAPI specification request failed (HTTP 500)] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782ba0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111de9970>
+failure = <Response [500 Internal Server Error]>, expected_status = 'unhealthy'
+expected_error = 'OpenAPI specification request failed (HTTP 500)'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "expected_status", "expected_error"),
+        [
+            (httpx.Response(401, text="secret response content"), "unhealthy", "OpenAPI specification request failed (HTTP 401)"),
+            (httpx.Response(404), "unhealthy", "OpenAPI specification request failed (HTTP 404)"),
+            (httpx.Response(500), "unhealthy", "OpenAPI specification request failed (HTTP 500)"),
+            (httpx.ConnectError("secret network details"), "unhealthy", "OpenAPI specification could not be loaded (ConnectError)"),
+            (httpx.Response(200, text="secret invalid JSON body"), "unhealthy", "OpenAPI specification could not be loaded (JSONDecodeError)"),
+        ],
+    )
+    async def test_openapi_health_reports_safe_failures(self, respx_mock, monkeypatch, failure, expected_status, expected_error):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="failed-openapi-health",
+            name="failed-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path="https://93.184.216.34/key-secret?token=query-secret",
+            auth_type=MCPAuth.bearer_token,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).mock(side_effect=[failure])
+        result = await manager.health_check_server(server.server_id)
+>       assert result.status == expected_status
+E       AssertionError: assert 'unknown' == 'unhealthy'
+E         
+E         - unhealthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4552: AssertionError
+_ TestMCPServerManager.test_openapi_health_reports_safe_failures[failure3-unhealthy-OpenAPI specification could not be loaded (ConnectError)] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782cf0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dea990>
+failure = ConnectError('secret network details'), expected_status = 'unhealthy'
+expected_error = 'OpenAPI specification could not be loaded (ConnectError)'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "expected_status", "expected_error"),
+        [
+            (httpx.Response(401, text="secret response content"), "unhealthy", "OpenAPI specification request failed (HTTP 401)"),
+            (httpx.Response(404), "unhealthy", "OpenAPI specification request failed (HTTP 404)"),
+            (httpx.Response(500), "unhealthy", "OpenAPI specification request failed (HTTP 500)"),
+            (httpx.ConnectError("secret network details"), "unhealthy", "OpenAPI specification could not be loaded (ConnectError)"),
+            (httpx.Response(200, text="secret invalid JSON body"), "unhealthy", "OpenAPI specification could not be loaded (JSONDecodeError)"),
+        ],
+    )
+    async def test_openapi_health_reports_safe_failures(self, respx_mock, monkeypatch, failure, expected_status, expected_error):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="failed-openapi-health",
+            name="failed-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path="https://93.184.216.34/key-secret?token=query-secret",
+            auth_type=MCPAuth.bearer_token,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).mock(side_effect=[failure])
+        result = await manager.health_check_server(server.server_id)
+>       assert result.status == expected_status
+E       AssertionError: assert 'unknown' == 'unhealthy'
+E         
+E         - unhealthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4552: AssertionError
+_ TestMCPServerManager.test_openapi_health_reports_safe_failures[failure4-unhealthy-OpenAPI specification could not be loaded (JSONDecodeError)] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111782d20>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dd30e0>
+failure = <Response [200 OK]>, expected_status = 'unhealthy'
+expected_error = 'OpenAPI specification could not be loaded (JSONDecodeError)'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "expected_status", "expected_error"),
+        [
+            (httpx.Response(401, text="secret response content"), "unhealthy", "OpenAPI specification request failed (HTTP 401)"),
+            (httpx.Response(404), "unhealthy", "OpenAPI specification request failed (HTTP 404)"),
+            (httpx.Response(500), "unhealthy", "OpenAPI specification request failed (HTTP 500)"),
+            (httpx.ConnectError("secret network details"), "unhealthy", "OpenAPI specification could not be loaded (ConnectError)"),
+            (httpx.Response(200, text="secret invalid JSON body"), "unhealthy", "OpenAPI specification could not be loaded (JSONDecodeError)"),
+        ],
+    )
+    async def test_openapi_health_reports_safe_failures(self, respx_mock, monkeypatch, failure, expected_status, expected_error):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="failed-openapi-health",
+            name="failed-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path="https://93.184.216.34/key-secret?token=query-secret",
+            auth_type=MCPAuth.bearer_token,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).mock(side_effect=[failure])
+        result = await manager.health_check_server(server.server_id)
+>       assert result.status == expected_status
+E       AssertionError: assert 'unknown' == 'unhealthy'
+E         
+E         - unhealthy
+E         + unknown
+
+../lit-4896-verification/test_manager_before.py:4552: AssertionError
+_ TestMCPServerManager.test_openapi_health_timeout_and_cancellation_cleanup[False] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x111794a70>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dd20f0>
+cancel = False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancel", [False, True])
+    async def test_openapi_health_timeout_and_cancellation_cleanup(self, respx_mock, monkeypatch, cancel):
+>       from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_spec_health
+E       ImportError: cannot import name '_openapi_spec_health' from 'litellm.proxy._experimental.mcp_server.mcp_server_manager' (/Users/jvalluru/LiteLLM-work/litellm-lit-4896-repro/litellm/proxy/_experimental/mcp_server/mcp_server_manager.py)
+
+../lit-4896-verification/test_manager_before.py:4560: ImportError
+_ TestMCPServerManager.test_openapi_health_timeout_and_cancellation_cleanup[True] _
+
+self = <test_manager_before.TestMCPServerManager object at 0x1117948f0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dfcf20>
+cancel = True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancel", [False, True])
+    async def test_openapi_health_timeout_and_cancellation_cleanup(self, respx_mock, monkeypatch, cancel):
+>       from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_spec_health
+E       ImportError: cannot import name '_openapi_spec_health' from 'litellm.proxy._experimental.mcp_server.mcp_server_manager' (/Users/jvalluru/LiteLLM-work/litellm-lit-4896-repro/litellm/proxy/_experimental/mcp_server/mcp_server_manager.py)
+
+../lit-4896-verification/test_manager_before.py:4560: ImportError
+______ test_openapi_health_coalesces_concurrent_checks_and_reuses_results ______
+
+fut = <coroutine object Event.wait at 0x11203bae0>, timeout = 1
+
+    async def wait_for(fut, timeout):
+        """Wait for the single Future or coroutine to complete, with timeout.
+    
+        Coroutine will be wrapped in Task.
+    
+        Returns result of the Future or coroutine.  When a timeout occurs,
+        it cancels the task and raises TimeoutError.  To avoid the task
+        cancellation, wrap it in shield().
+    
+        If the wait is cancelled, the task is also cancelled.
+    
+        If the task suppresses the cancellation and returns a value instead,
+        that value is returned.
+    
+        This function is a coroutine.
+        """
+        # The special case for timeout <= 0 is for the following case:
+        #
+        # async def test_waitfor():
+        #     func_started = False
+        #
+        #     async def func():
+        #         nonlocal func_started
+        #         func_started = True
+        #
+        #     try:
+        #         await asyncio.wait_for(func(), 0)
+        #     except asyncio.TimeoutError:
+        #         assert not func_started
+        #     else:
+        #         assert False
+        #
+        # asyncio.run(test_waitfor())
+    
+    
+        if timeout is not None and timeout <= 0:
+            fut = ensure_future(fut)
+    
+            if fut.done():
+                return fut.result()
+    
+            await _cancel_and_wait(fut)
+            try:
+                return fut.result()
+            except exceptions.CancelledError as exc:
+                raise TimeoutError from exc
+    
+        async with timeouts.timeout(timeout):
+>           return await fut
+                   ^^^^^^^^^
+
+../../.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/asyncio/tasks.py:520: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <asyncio.locks.Event object at 0x111e16f00 [unset]>
+
+    async def wait(self):
+        """Block until the internal flag is true.
+    
+        If the internal flag is true on entry, return True
+        immediately.  Otherwise, block until another coroutine calls
+        set() to set the flag to true, then return True.
+        """
+        if self._value:
+            return True
+    
+        fut = self._get_loop().create_future()
+        self._waiters.append(fut)
+        try:
+>           await fut
+E           asyncio.exceptions.CancelledError
+
+../../.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/asyncio/locks.py:212: CancelledError
+
+The above exception was the direct cause of the following exception:
+
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111e14e60>
+
+    @pytest.mark.asyncio
+    async def test_openapi_health_coalesces_concurrent_checks_and_reuses_results(respx_mock, monkeypatch):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="coalesced",
+            name="coalesced",
+            transport=MCPTransport.http,
+            spec_path="https://93.184.216.34/coalesced.json",
+            auth_type=MCPAuth.none,
+        )
+        manager.registry = {server.server_id: server}
+        started = asyncio.Event()
+        release = asyncio.Event()
+    
+        async def serve(request):
+            started.set()
+            await release.wait()
+            return httpx.Response(200, json={"paths": {}})
+    
+        route = respx_mock.get(server.spec_path).mock(side_effect=serve)
+        tasks = [asyncio.create_task(manager.health_check_server(server.server_id)) for _ in range(4)]
+>       await asyncio.wait_for(started.wait(), timeout=1)
+
+../lit-4896-verification/test_manager_before.py:12812: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../../.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/asyncio/tasks.py:519: in wait_for
+    async with timeouts.timeout(timeout):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Timeout [expired]>
+exc_type = <class 'asyncio.exceptions.CancelledError'>
+exc_val = CancelledError(), exc_tb = <traceback object at 0x111bf3a00>
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> Optional[bool]:
+        assert self._state in (_State.ENTERED, _State.EXPIRING)
+    
+        if self._timeout_handler is not None:
+            self._timeout_handler.cancel()
+            self._timeout_handler = None
+    
+        if self._state is _State.EXPIRING:
+            self._state = _State.EXPIRED
+    
+            if self._task.uncancel() <= self._cancelling and exc_type is exceptions.CancelledError:
+                # Since there are no new cancel requests, we're
+                # handling this.
+>               raise TimeoutError from exc_val
+E               TimeoutError
+
+../../.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/asyncio/timeouts.py:115: TimeoutError
+----------------------------- Captured stderr call -----------------------------
+20:00:28 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for stdio
+20:00:28 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for stdio
+20:00:28 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for stdio
+20:00:28 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for stdio
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for stdio
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for stdio
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for stdio
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for stdio
+_____________ test_openapi_health_cache_expires_at_thirty_seconds ______________
+
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111e14860>
+
+    @pytest.mark.asyncio
+    async def test_openapi_health_cache_expires_at_thirty_seconds(respx_mock, monkeypatch):
+>       from litellm.proxy._experimental.mcp_server.mcp_server_manager import _OpenAPIHealthProbe
+E       ImportError: cannot import name '_OpenAPIHealthProbe' from 'litellm.proxy._experimental.mcp_server.mcp_server_manager' (/Users/jvalluru/LiteLLM-work/litellm-lit-4896-repro/litellm/proxy/_experimental/mcp_server/mcp_server_manager.py)
+
+../lit-4896-verification/test_manager_before.py:12824: ImportError
+_____ test_openapi_health_reports_size_limit_as_unknown_and_caches_failure _____
+
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111e146b0>
+
+    @pytest.mark.asyncio
+    async def test_openapi_health_reports_size_limit_as_unknown_and_caches_failure(respx_mock, monkeypatch):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oversized",
+            name="oversized",
+            transport=MCPTransport.http,
+            spec_path="https://93.184.216.34/large.json",
+            auth_type=MCPAuth.none,
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, headers={"content-length": str(12 * 1024 * 1024)})
+        result = await manager.health_check_server(server.server_id)
+        cached = await manager.health_check_server(server.server_id)
+>       assert result.status == "unknown"
+E       AssertionError: assert 'unhealthy' == 'unknown'
+E         
+E         - unknown
+E         + unhealthy
+
+../lit-4896-verification/test_manager_before.py:12860: AssertionError
+----------------------------- Captured stderr call -----------------------------
+20:00:29 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for stdio
+20:00:29 - LiteLLM:WARNING: client.py:538 - MCP client run_with_session failed for stdio
+------------------------------ Captured log call -------------------------------
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for stdio
+WARNING  LiteLLM:client.py:538 MCP client run_with_session failed for stdio
+___ TestBoundedOpenAPISpecLoading.test_exact_size_and_smaller_specs_load[12] ___
+
+self = <test_generator_before.TestBoundedOpenAPISpecLoading object at 0x1119a6a20>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dd1f40>
+max_bytes = 12
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("max_bytes", [12, 13])
+    async def test_exact_size_and_smaller_specs_load(self, respx_mock, monkeypatch, max_bytes):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+    
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        route = respx_mock.get("https://93.184.216.34/spec.json").respond(200, content=b'{"paths":{}}')
+>       assert await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=max_bytes) == {"paths": {}}
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: load_openapi_spec_async() got an unexpected keyword argument 'max_bytes'
+
+../lit-4896-verification/test_generator_before.py:1390: TypeError
+___ TestBoundedOpenAPISpecLoading.test_exact_size_and_smaller_specs_load[13] ___
+
+self = <test_generator_before.TestBoundedOpenAPISpecLoading object at 0x1119a59d0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dd2fc0>
+max_bytes = 13
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("max_bytes", [12, 13])
+    async def test_exact_size_and_smaller_specs_load(self, respx_mock, monkeypatch, max_bytes):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+    
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        route = respx_mock.get("https://93.184.216.34/spec.json").respond(200, content=b'{"paths":{}}')
+>       assert await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=max_bytes) == {"paths": {}}
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: load_openapi_spec_async() got an unexpected keyword argument 'max_bytes'
+
+../lit-4896-verification/test_generator_before.py:1390: TypeError
+_ TestBoundedOpenAPISpecLoading.test_unsafe_response_headers_reject_before_reading[headers0] _
+
+self = <test_generator_before.TestBoundedOpenAPISpecLoading object at 0x1119a5a60>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111de97c0>
+headers = {'content-length': '1000000'}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("headers", [{"content-length": "1000000"}, {"content-encoding": "gzip"}])
+    async def test_unsafe_response_headers_reject_before_reading(self, respx_mock, monkeypatch, headers):
+        import httpx
+>       from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+E       ImportError: cannot import name 'HTTPResponseLimitError' from 'litellm.llms.custom_httpx.http_handler' (/Users/jvalluru/LiteLLM-work/litellm-lit-4896-repro/litellm/llms/custom_httpx/http_handler.py)
+
+../lit-4896-verification/test_generator_before.py:1397: ImportError
+_ TestBoundedOpenAPISpecLoading.test_unsafe_response_headers_reject_before_reading[headers1] _
+
+self = <test_generator_before.TestBoundedOpenAPISpecLoading object at 0x1119a5bb0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111deb950>
+headers = {'content-encoding': 'gzip'}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("headers", [{"content-length": "1000000"}, {"content-encoding": "gzip"}])
+    async def test_unsafe_response_headers_reject_before_reading(self, respx_mock, monkeypatch, headers):
+        import httpx
+>       from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+E       ImportError: cannot import name 'HTTPResponseLimitError' from 'litellm.llms.custom_httpx.http_handler' (/Users/jvalluru/LiteLLM-work/litellm-lit-4896-repro/litellm/llms/custom_httpx/http_handler.py)
+
+../lit-4896-verification/test_generator_before.py:1397: ImportError
+__ TestBoundedOpenAPISpecLoading.test_chunked_response_is_bounded_and_closed ___
+
+self = <test_generator_before.TestBoundedOpenAPISpecLoading object at 0x1119a61e0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dcca70>
+
+    @pytest.mark.asyncio
+    async def test_chunked_response_is_bounded_and_closed(self, respx_mock, monkeypatch):
+        import httpx
+>       from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+E       ImportError: cannot import name 'HTTPResponseLimitError' from 'litellm.llms.custom_httpx.http_handler' (/Users/jvalluru/LiteLLM-work/litellm-lit-4896-repro/litellm/llms/custom_httpx/http_handler.py)
+
+../lit-4896-verification/test_generator_before.py:1421: ImportError
+_ TestBoundedOpenAPISpecLoading.test_bounded_spec_redirects_preserve_ssrf_protection[https://93.184.216.35/final.json] _
+
+self = <test_generator_before.TestBoundedOpenAPISpecLoading object at 0x1119a68a0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111deaa80>
+target = 'https://93.184.216.35/final.json'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("target", ["https://93.184.216.35/final.json", "http://127.0.0.1/private.json"])
+    async def test_bounded_spec_redirects_preserve_ssrf_protection(self, respx_mock, monkeypatch, target):
+        from litellm.litellm_core_utils.url_utils import SSRFError
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+    
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        respx_mock.get("https://93.184.216.34/spec.json").respond(302, headers={"location": target})
+        destination = respx_mock.get(target).respond(200, json={"paths": {}})
+        if "127.0.0.1" in target:
+            with pytest.raises(SSRFError):
+                await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=100)
+            assert not destination.called
+        else:
+>           assert await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=100) == {"paths": {}}
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: load_openapi_spec_async() got an unexpected keyword argument 'max_bytes'
+
+../lit-4896-verification/test_generator_before.py:1459: TypeError
+_ TestBoundedOpenAPISpecLoading.test_bounded_spec_redirects_preserve_ssrf_protection[http://127.0.0.1/private.json] _
+
+self = <test_generator_before.TestBoundedOpenAPISpecLoading object at 0x1119a69c0>
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111de8dd0>
+target = 'http://127.0.0.1/private.json'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("target", ["https://93.184.216.35/final.json", "http://127.0.0.1/private.json"])
+    async def test_bounded_spec_redirects_preserve_ssrf_protection(self, respx_mock, monkeypatch, target):
+        from litellm.litellm_core_utils.url_utils import SSRFError
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+    
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        respx_mock.get("https://93.184.216.34/spec.json").respond(302, headers={"location": target})
+        destination = respx_mock.get(target).respond(200, json={"paths": {}})
+        if "127.0.0.1" in target:
+            with pytest.raises(SSRFError):
+>               await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=100)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               TypeError: load_openapi_spec_async() got an unexpected keyword argument 'max_bytes'
+
+../lit-4896-verification/test_generator_before.py:1456: TypeError
+_ test_bounded_get_preserves_sdk_redirect_auth_and_query_handling[https://example.com/final.json?next=1] _
+
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dea7b0>
+target = 'https://example.com/final.json?next=1'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("target", ["https://example.com/final.json?next=1", "https://other.example/final.json?next=1"])
+    async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_mock, monkeypatch, target):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        respx_mock.get("https://example.com/spec.json?original=1").respond(302, headers={"location": target})
+        destination = respx_mock.get(target).respond(200, json={"paths": {}})
+        handler = AsyncHTTPHandler()
+        try:
+>           response = await handler.get(
+                "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
+                headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
+            )
+E           TypeError: AsyncHTTPHandler.get() got an unexpected keyword argument 'max_response_bytes'
+
+../lit-4896-verification/test_http_before.py:1625: TypeError
+_ test_bounded_get_preserves_sdk_redirect_auth_and_query_handling[https://other.example/final.json?next=1] _
+
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dfc1a0>
+target = 'https://other.example/final.json?next=1'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("target", ["https://example.com/final.json?next=1", "https://other.example/final.json?next=1"])
+    async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_mock, monkeypatch, target):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        respx_mock.get("https://example.com/spec.json?original=1").respond(302, headers={"location": target})
+        destination = respx_mock.get(target).respond(200, json={"paths": {}})
+        handler = AsyncHTTPHandler()
+        try:
+>           response = await handler.get(
+                "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
+                headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
+            )
+E           TypeError: AsyncHTTPHandler.get() got an unexpected keyword argument 'max_response_bytes'
+
+../lit-4896-verification/test_http_before.py:1625: TypeError
+____________________ test_bounded_get_stops_redirect_loops _____________________
+
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x111dceb10>
+
+    @pytest.mark.asyncio
+    async def test_bounded_get_stops_redirect_loops(respx_mock, monkeypatch):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        route = respx_mock.get("https://example.com/spec.json").respond(302, headers={"location": "/spec.json"})
+        handler = AsyncHTTPHandler()
+        try:
+            with pytest.raises(ValueError, match="Too many redirects"):
+>               await handler.get("https://example.com/spec.json", max_response_bytes=100, follow_redirects=True)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               TypeError: AsyncHTTPHandler.get() got an unexpected keyword argument 'max_response_bytes'
+
+../lit-4896-verification/test_http_before.py:1646: TypeError
+________________ test_bounded_get_closes_stream_on_cancellation ________________
+
+respx_mock = <respx.router.MockRouter object at 0x107926810>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11201f770>
+
+    @pytest.mark.asyncio
+    async def test_bounded_get_closes_stream_on_cancellation(respx_mock, monkeypatch):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        started = asyncio.Event()
+        closed = asyncio.Event()
+    
+        class SlowStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b"x"
+                started.set()
+                await asyncio.Event().wait()
+    
+            async def aclose(self):
+                closed.set()
+    
+        respx_mock.get("https://example.com/slow.json").respond(200, stream=SlowStream())
+        handler = AsyncHTTPHandler()
+        try:
+>           task = asyncio.create_task(handler.get("https://example.com/slow.json", max_response_bytes=100))
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: AsyncHTTPHandler.get() got an unexpected keyword argument 'max_response_bytes'
+
+../lit-4896-verification/test_http_before.py:1670: TypeError
+=========================== short test summary info ============================
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[http-False-none]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[http-False-bearer_token]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[http-False-api_key]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[http-False-oauth2]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[http-True-none]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[http-True-bearer_token]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[http-True-api_key]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[http-True-oauth2]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[https-False-none]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[https-False-bearer_token]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[https-False-api_key]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[https-False-oauth2]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[https-True-none]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[https-True-bearer_token]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[https-True-api_key]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_loads_spec_without_mcp_handshake[https-True-oauth2]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_local_spec_health_is_unknown[/config/openapi.json-none]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_local_spec_health_is_unknown[/config/openapi.json-bearer_token]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_local_spec_health_is_unknown[relative/openapi.json-none]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_local_spec_health_is_unknown[relative/openapi.json-bearer_token]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_reports_safe_failures[failure0-unhealthy-OpenAPI specification request failed (HTTP 401)]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_reports_safe_failures[failure1-unhealthy-OpenAPI specification request failed (HTTP 404)]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_reports_safe_failures[failure2-unhealthy-OpenAPI specification request failed (HTTP 500)]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_reports_safe_failures[failure3-unhealthy-OpenAPI specification could not be loaded (ConnectError)]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_reports_safe_failures[failure4-unhealthy-OpenAPI specification could not be loaded (JSONDecodeError)]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_timeout_and_cancellation_cleanup[False]
+FAILED ../../../../dev::TestMCPServerManager::test_openapi_health_timeout_and_cancellation_cleanup[True]
+FAILED ../../../../dev::test_openapi_health_coalesces_concurrent_checks_and_reuses_results
+FAILED ../../../../dev::test_openapi_health_cache_expires_at_thirty_seconds
+FAILED ../../../../dev::test_openapi_health_reports_size_limit_as_unknown_and_caches_failure
+FAILED ../../../../dev::TestBoundedOpenAPISpecLoading::test_exact_size_and_smaller_specs_load[12]
+FAILED ../../../../dev::TestBoundedOpenAPISpecLoading::test_exact_size_and_smaller_specs_load[13]
+FAILED ../../../../dev::TestBoundedOpenAPISpecLoading::test_unsafe_response_headers_reject_before_reading[headers0]
+FAILED ../../../../dev::TestBoundedOpenAPISpecLoading::test_unsafe_response_headers_reject_before_reading[headers1]
+FAILED ../../../../dev::TestBoundedOpenAPISpecLoading::test_chunked_response_is_bounded_and_closed
+FAILED ../../../../dev::TestBoundedOpenAPISpecLoading::test_bounded_spec_redirects_preserve_ssrf_protection[https://93.184.216.35/final.json]
+FAILED ../../../../dev::TestBoundedOpenAPISpecLoading::test_bounded_spec_redirects_preserve_ssrf_protection[http://127.0.0.1/private.json]
+FAILED ../../../../dev::test_bounded_get_preserves_sdk_redirect_auth_and_query_handling[https://example.com/final.json?next=1]
+FAILED ../../../../dev::test_bounded_get_preserves_sdk_redirect_auth_and_query_handling[https://other.example/final.json?next=1]
+FAILED ../../../../dev::test_bounded_get_stops_redirect_loops - TypeError: As...
+FAILED ../../../../dev::test_bounded_get_closes_stream_on_cancellation - Type...
+41 failed, 731 deselected in 4.42s

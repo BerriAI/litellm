@@ -1,0 +1,10 @@
+{
+  "url": "http://localhost:44896/v1/mcp/server/health?server_ids=4465a5d6-5b0a-427b-b2ff-467f63b28474",
+  "status": 200,
+  "body": [
+    {
+      "server_id": "4465a5d6-5b0a-427b-b2ff-467f63b28474",
+      "status": "healthy"
+    }
+  ]
+}

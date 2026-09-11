@@ -1,0 +1,108 @@
+{
+  "base": "7419a536ad6857165b28b9b545a62d5916f696d2",
+  "tip": "ca03c889c9b72ec47a5d4f604626ac0b7cfdfadd",
+  "changed_executable_lines": 71,
+  "covered_changed_lines": 71,
+  "changed_line_percent": 100.0,
+  "files": {
+    "litellm/proxy/_experimental/mcp_server/mcp_server_manager.py": {
+      "changed_executable_lines": 39,
+      "covered_changed_lines": 39,
+      "uncovered_changed_lines": [],
+      "touched_functions": {
+        "_openapi_spec_health": {
+          "covered_lines": 16,
+          "executable_lines": 16,
+          "missing_lines": [],
+          "covered_branch_arcs": 2,
+          "branch_arcs": 2,
+          "missing_branch_arcs": []
+        },
+        "_OpenAPIHealthProbe.__init__": {
+          "covered_lines": 6,
+          "executable_lines": 6,
+          "missing_lines": [],
+          "covered_branch_arcs": 0,
+          "branch_arcs": 0,
+          "missing_branch_arcs": []
+        },
+        "_OpenAPIHealthProbe.check": {
+          "covered_lines": 11,
+          "executable_lines": 11,
+          "missing_lines": [],
+          "covered_branch_arcs": 2,
+          "branch_arcs": 2,
+          "missing_branch_arcs": []
+        },
+        "MCPServerManager.health_check_server": {
+          "covered_lines": 29,
+          "executable_lines": 34,
+          "missing_lines": [
+            6778,
+            6785,
+            6786,
+            6788,
+            6789
+          ],
+          "covered_branch_arcs": 8,
+          "branch_arcs": 8,
+          "missing_branch_arcs": []
+        }
+      }
+    },
+    "litellm/proxy/_experimental/mcp_server/openapi_to_mcp_generator.py": {
+      "changed_executable_lines": 2,
+      "covered_changed_lines": 2,
+      "uncovered_changed_lines": [],
+      "touched_functions": {
+        "load_openapi_spec_async": {
+          "covered_lines": 9,
+          "executable_lines": 10,
+          "missing_lines": [
+            180
+          ],
+          "covered_branch_arcs": 3,
+          "branch_arcs": 4,
+          "missing_branch_arcs": [
+            [
+              179,
+              180
+            ]
+          ]
+        }
+      }
+    },
+    "litellm/llms/custom_httpx/http_handler.py": {
+      "changed_executable_lines": 30,
+      "covered_changed_lines": 30,
+      "uncovered_changed_lines": [],
+      "touched_functions": {
+        "AsyncHTTPHandler.get": {
+          "covered_lines": 8,
+          "executable_lines": 8,
+          "missing_lines": [],
+          "covered_branch_arcs": 2,
+          "branch_arcs": 2,
+          "missing_branch_arcs": []
+        },
+        "AsyncHTTPHandler._get_with_response_limit": {
+          "covered_lines": 4,
+          "executable_lines": 4,
+          "missing_lines": [],
+          "covered_branch_arcs": 0,
+          "branch_arcs": 0,
+          "missing_branch_arcs": []
+        },
+        "AsyncHTTPHandler._read_with_response_limit": {
+          "covered_lines": 21,
+          "executable_lines": 21,
+          "missing_lines": [],
+          "covered_branch_arcs": 14,
+          "branch_arcs": 14,
+          "missing_branch_arcs": []
+        }
+      }
+    }
+  },
+  "note": "Local affected-test coverage only; not repository-wide coverage"
+}

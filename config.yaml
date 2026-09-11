@@ -1,0 +1,6 @@
+model_list: []
+litellm_settings:
+  user_url_allowed_hosts: [spec-host:8080]
+general_settings:
+  store_model_in_db: true
+  proxy_config_reload_interval_seconds: 3600
