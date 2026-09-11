@@ -361,6 +361,19 @@ model_list:
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
 
+When the current ask is a Responses API `agent_message` containing `encrypted_content`, LLM
+classification preserves the encrypted task and uses native Responses. This also bypasses the
+local scoring shortcut in `heuristic_first` and `hybrid` modes. The configured classifier must use
+a native OpenAI or Azure OpenAI Responses deployment with access to the encrypted content. The
+provider handles the encrypted task, and the classifier still chooses the tier dynamically
+
+Compatibility is checked after normal deployment selection. A paused incompatible member of the
+classifier group does not prevent an eligible compatible deployment from classifying the task
+
+Unsupported classifier deployments and provider decryption errors use the existing
+`classifier_fallback` policy. No fixed tier is introduced for encrypted tasks. Plaintext asks and
+requests carrying only historical encrypted reasoning retain the existing classifier path
+
 Classifier calls have a one-attempt hard deadline. After a timeout, the router opens a process-local
 circuit for that classifier and sends every session through `classifier_fallback` for
 `classifier_llm_config.circuit_breaker_cooldown_seconds` (30 seconds by default). When the cooldown
@@ -442,11 +455,26 @@ If 2+ reasoning markers are detected in the user message, the request is promote
 
 Reasoning markers in the system prompt do **not** trigger the reasoning override. This prevents system prompts like "Think step by step before answering" from forcing all requests to the reasoning tier.
 
+For requests identified by a `claude-cli/` or `claude-code/` user agent, the LLM classifier omits caller system
+text to avoid classifying environment, agent, and skill catalogs. The current ask, configured prior-turn context,
+and trajectory signal remain unchanged. The routed completion still receives the original system text. This
+also excludes genuine task constraints supplied only in Claude Code system messages. Other clients keep the
+existing system-context behavior. The browser routing preview has no client-identity field and retains that
+generic behavior; use the real client when checking Claude Code routing.
+
 ### Harness Reminder Blocks
 
 Agent harnesses inject their own context into the conversation as ordinary message text. That text is plumbing, not something a human asked for, so the router strips complete reminder blocks before classifying and picking a tier. A turn that is nothing but a reminder block strips to empty and is skipped, and the router falls back to the last real ask instead
 
-By default a block is anything between `<system-reminder>` and `</system-reminder>`. `reminder_markers` replaces that with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
+By default the router strips complete `<system-reminder>` blocks. For requests with a Codex user agent, it also strips complete `<environment_context>`, `<recommended_plugins>`, `<user_instructions>`, and `<environments_instructions>` blocks, plus repository instructions from the fixed heading prefix `# AGENTS.md instructions for ` through `</INSTRUCTIONS>`, regardless of the repository path. Other clients keep those tags and their contents
+
+The proxy records the incoming user agent in request metadata. SDK callers can supply `metadata.user_agent` (or `litellm_metadata.user_agent` on Responses requests), or configure `reminder_markers` explicitly when their client identity is unavailable
+
+The Codex `Message Type: NEW_TASK` wrapper and its delegated-task payload remain available for classification. Cleanup applies to the current ask and quoted prior turns; the routed request retains its original content
+
+In `classification_mode: user_turn`, complete text-only reminder tails leave the preceding fresh ask eligible for classification. Assistant turns and tool results still mark continuations, including tool results carried alongside reminder text
+
+`reminder_markers` replaces these defaults with your harness's own delimiters. Many harnesses use a different envelope per agent type, so list every pair you emit:
 
 ```yaml
 model_list:
@@ -461,7 +489,7 @@ model_list:
             close: "[[SUBAGENT_CONTEXT_END]]"
 ```
 
-Setting `reminder_markers` replaces the built-in `<system-reminder>` pair rather than adding to it, so list that pair too if your harness also emits it. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
+Setting `reminder_markers` replaces all built-in pairs, including the Codex heading pair, so include every default your harness still needs. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
 
 ### Code Detection
 

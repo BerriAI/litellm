@@ -6,7 +6,7 @@ import json
 import os
 import re
 import urllib.parse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
@@ -14,7 +14,8 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
@@ -31,6 +32,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.bedrock import AwsSessionTag
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -51,6 +53,47 @@ _STS_REGION_FROM_ENDPOINT_PATTERN: Final = re.compile(
 )
 
 SIGV4_COMPUTED_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "date"})
+
+_AWS_SESSION_TAGS_ADAPTER: Final[TypeAdapter[tuple[AwsSessionTag, ...]]] = TypeAdapter(tuple[AwsSessionTag, ...])
+
+
+def _canonical_aws_session_tags(raw_tags: object) -> tuple[AwsSessionTag, ...] | None:
+    if raw_tags is None:
+        return None
+    try:
+        validated: Final = _AWS_SESSION_TAGS_ADAPTER.validate_python(raw_tags)
+    except ValidationError as e:
+        raise ValueError(
+            "Invalid 'aws_session_tags' value. Expected a list of {'Key': <str>, 'Value': <str>} dicts, "
+            f"e.g. [{{'Key': 'team', 'Value': 'genai'}}]. Got: {raw_tags!r}"
+        ) from e
+    return tuple(sorted(validated, key=lambda tag: tag["Key"]))
+
+
+class _AssumeRoleParams(TypedDict):
+    RoleArn: ReadOnly[str]
+    RoleSessionName: ReadOnly[str]
+    ExternalId: ReadOnly[NotRequired[str]]
+    Tags: ReadOnly[NotRequired[tuple[AwsSessionTag, ...]]]
+
+
+def _assume_role_params(
+    aws_role_name: str,
+    aws_session_name: str,
+    aws_external_id: str | None,
+    aws_session_tags: Sequence[AwsSessionTag] | None,
+) -> _AssumeRoleParams:
+    match (aws_external_id, tuple(aws_session_tags or ())):
+        case (None, ()):
+            return _AssumeRoleParams(RoleArn=aws_role_name, RoleSessionName=aws_session_name)
+        case (None, tags):
+            return _AssumeRoleParams(RoleArn=aws_role_name, RoleSessionName=aws_session_name, Tags=tags)
+        case (external_id, ()):
+            return _AssumeRoleParams(RoleArn=aws_role_name, RoleSessionName=aws_session_name, ExternalId=external_id)
+        case (external_id, tags):
+            return _AssumeRoleParams(
+                RoleArn=aws_role_name, RoleSessionName=aws_session_name, ExternalId=external_id, Tags=tags
+            )
 
 
 class BedrockRequestTarget(BaseModel):
@@ -129,6 +172,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "aws_sts_endpoint",
             "aws_bedrock_runtime_endpoint",
             "aws_external_id",
+            "aws_session_tags",
         ]
 
     def _get_ssl_verify(self, ssl_verify: bool | str | None = None):
@@ -146,7 +190,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
         return get_ssl_verify(ssl_verify=ssl_verify)
 
-    def get_cache_key(self, credential_args: Mapping[str, str | bool | None]) -> str:
+    def get_cache_key(self, credential_args: Mapping[str, str | bool | tuple[AwsSessionTag, ...] | None]) -> str:
         """
         Generate a unique cache key based on the credential arguments.
         """
@@ -156,7 +200,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
     def _get_or_set_cached_credentials(
         self,
-        credential_args: Mapping[str, str | bool | None],
+        credential_args: Mapping[str, str | bool | tuple[AwsSessionTag, ...] | None],
         credential_fetcher: Callable[[], tuple[Credentials, int | None]],
     ) -> Any:
         """
@@ -231,6 +275,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_web_identity_token: str | None = None,
         aws_sts_endpoint: str | None = None,
         aws_external_id: str | None = None,
+        aws_session_tags: Sequence[AwsSessionTag] | None = None,
         ssl_verify: bool | str | None = None,
     ):
         """
@@ -267,6 +312,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 (aws_external_id, "AWS_EXTERNAL_ID"),
             )
         )
+        session_tags: Final = _canonical_aws_session_tags(aws_session_tags)
 
         verbose_logger.debug(
             "in get credentials\n"
@@ -279,7 +325,8 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "aws_role_name=%s\n"
             "aws_web_identity_token=[set=%s]\n"
             "aws_sts_endpoint=%s\n"
-            "aws_external_id=%s",
+            "aws_external_id=%s\n"
+            "aws_session_tags=%s",
             aws_access_key_id is not None,
             aws_secret_access_key is not None,
             aws_session_token is not None,
@@ -290,6 +337,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_web_identity_token is not None,
             aws_sts_endpoint,
             aws_external_id,
+            session_tags,
         )
 
         args: Final = {
@@ -303,6 +351,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "aws_web_identity_token": aws_web_identity_token,
             "aws_sts_endpoint": aws_sts_endpoint,
             "aws_external_id": aws_external_id,
+            "aws_session_tags": session_tags,
             "ssl_verify": ssl_verify,
         }
 
@@ -345,6 +394,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                     aws_region_name=aws_region_name,
                     aws_sts_endpoint=aws_sts_endpoint,
                     aws_external_id=aws_external_id,
+                    aws_session_tags=session_tags,
                     ssl_verify=ssl_verify,
                 ),
             )
@@ -989,6 +1039,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_sts_endpoint: str | None = None,
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
+        aws_session_tags: Sequence[AwsSessionTag] | None = None,
     ) -> dict:
         """Handle cross-account role assumption for IRSA."""
         import boto3
@@ -1041,16 +1092,9 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
         # Now assume the target role
         verbose_logger.debug("Attempting to assume target role: %s with session: %s", aws_role_name, aws_session_name)
-        assume_role_params: Final = {
-            "RoleArn": aws_role_name,
-            "RoleSessionName": aws_session_name,
-        }
-
-        # Add ExternalId parameter if provided
-        if aws_external_id is not None:
-            assume_role_params["ExternalId"] = aws_external_id
-
-        return sts_client_with_creds.assume_role(**assume_role_params)
+        return sts_client_with_creds.assume_role(
+            **_assume_role_params(aws_role_name, aws_session_name, aws_external_id, aws_session_tags)
+        )
 
     def _handle_irsa_same_account(
         self,
@@ -1060,6 +1104,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_sts_endpoint: str | None = None,
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
+        aws_session_tags: Sequence[AwsSessionTag] | None = None,
     ) -> dict:
         """Handle same-account role assumption for IRSA."""
         import boto3
@@ -1083,16 +1128,9 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
         # Assume the role
         verbose_logger.debug("Attempting to assume role: %s with session: %s", aws_role_name, aws_session_name)
-        assume_role_params: Final = {
-            "RoleArn": aws_role_name,
-            "RoleSessionName": aws_session_name,
-        }
-
-        # Add ExternalId parameter if provided
-        if aws_external_id is not None:
-            assume_role_params["ExternalId"] = aws_external_id
-
-        return sts_client.assume_role(**assume_role_params)
+        return sts_client.assume_role(
+            **_assume_role_params(aws_role_name, aws_session_name, aws_external_id, aws_session_tags)
+        )
 
     def _extract_credentials_and_ttl(self, sts_response: dict) -> tuple[Credentials, int | None]:
         """Extract credentials and TTL from STS response.
@@ -1127,6 +1165,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_region_name: str | None,
         aws_sts_endpoint: str | None,
         aws_external_id: str | None,
+        aws_session_tags: tuple[AwsSessionTag, ...] | None,
         ssl_verify: bool | str | None,
     ) -> tuple[Credentials, int | None]:
         """
@@ -1153,6 +1192,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_region_name=aws_region_name,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
             ssl_verify=ssl_verify,
         )
 
@@ -1168,6 +1208,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_sts_endpoint: str | None = None,
         aws_external_id: str | None = None,
         ssl_verify: bool | str | None = None,
+        aws_session_tags: Sequence[AwsSessionTag] | None = None,
     ) -> tuple[Credentials, int | None]:
         """
         Authenticate with AWS Role
@@ -1198,6 +1239,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                         aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
                         aws_region_name=aws_region_name,
+                        aws_session_tags=aws_session_tags,
                     )
                 else:
                     sts_response = self._handle_irsa_same_account(
@@ -1207,6 +1249,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                         aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
                         aws_region_name=aws_region_name,
+                        aws_session_tags=aws_session_tags,
                     )
 
                 return self._extract_credentials_and_ttl(sts_response)
@@ -1243,14 +1286,9 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                     **sts_client_kwargs,
                 )
 
-        assume_role_params: Final = {
-            "RoleArn": aws_role_name,
-            "RoleSessionName": aws_session_name,
-        }
-
-        # Add ExternalId parameter if provided
-        if aws_external_id is not None:
-            assume_role_params["ExternalId"] = aws_external_id
+        assume_role_params: Final = _assume_role_params(
+            aws_role_name, aws_session_name, aws_external_id, aws_session_tags
+        )
 
         try:
             sts_response = sts_client.assume_role(**assume_role_params)
@@ -1469,6 +1507,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_external_id: Final = optional_params.pop("aws_external_id", None)
+        aws_session_tags: Final = optional_params.pop("aws_session_tags", None)
 
         if bearer_token is not None:
             return BearerRequestTarget(
@@ -1487,6 +1526,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
         return Boto3CredentialsInfo(
             credentials=credentials,
@@ -1632,6 +1672,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_web_identity_token: Final = optional_params.get("aws_web_identity_token", None)
         aws_sts_endpoint: Final = optional_params.get("aws_sts_endpoint", None)
         aws_external_id: Final = optional_params.get("aws_external_id", None)
+        aws_session_tags: Final = optional_params.get("aws_session_tags", None)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
 
         credentials: Final[Credentials] = self.get_credentials(
@@ -1645,6 +1686,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
 
         sigv4: Final = SigV4Auth(credentials, service_name, aws_region_name)

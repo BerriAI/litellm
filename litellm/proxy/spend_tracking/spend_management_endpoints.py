@@ -26,7 +26,12 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
+from litellm.constants import (
+    EMPTY_MAPPING,
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+)
+from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -3099,7 +3104,11 @@ async def _resolve_request_response_payload(
     proxy_server_request: Final = row.get("proxy_server_request")
 
     pg_payload: Final = RequestResponsePayload(messages, response, proxy_server_request)
-    if (
+    stored_request: Final = classifier_input_snapshot(proxy_server_request)
+    truncated_audit: Final = bool(stored_request and classifier_audit_fields(stored_request)) and (
+        LITELLM_TRUNCATED_PAYLOAD_FIELD in str(proxy_server_request)
+    )
+    if not truncated_audit and (
         _spend_log_field_has_content(messages)
         or _spend_log_field_has_content(response)
         or _spend_log_field_has_content(proxy_server_request)
@@ -3124,10 +3133,22 @@ async def _resolve_request_response_payload(
     if payload is None:
         return pg_payload
 
+    cold_audit: Final = classifier_audit_fields(payload)
+    resolved_request: Final = (
+        {
+            **(classifier_input_snapshot(payload.get("proxy_server_request")) or stored_request or EMPTY_MAPPING),
+            **cold_audit,
+        }
+        if cold_audit
+        else payload.get("proxy_server_request")
+    )
+    if truncated_audit:
+        return RequestResponsePayload(messages, response, resolved_request if cold_audit else proxy_server_request)
+
     return RequestResponsePayload(
         messages=payload.get("messages"),
         response=payload.get("response"),
-        proxy_server_request=payload.get("proxy_server_request"),
+        proxy_server_request=resolved_request,
     )
 
 
@@ -4633,16 +4654,16 @@ async def _assert_user_can_view_request_id(
     Verify the requesting non-admin user is allowed to view this spend-log row.
     Allowed when the log belongs to the user directly, or to one of their
     permitted teams (admin or ``/spend/logs`` permission).
-    Raises HTTP 403 if not.
+    Raises HTTP 403 if not, including when no spend-log row exists for the
+    request_id (e.g. it was pruned by retention), so a missing row can't be
+    used to read a payload out of cold storage via the detail endpoint.
     """
     row: Final = await _find_spend_log_row(prisma_client, request_id)
-    if row is None:
+
+    if row is not None and row.user is not None and row.user == user_api_key_dict.user_id:
         return
 
-    if row.user is not None and row.user == user_api_key_dict.user_id:
-        return
-
-    if row.team_id:
+    if row is not None and row.team_id:
         can_view: Final = await _can_team_member_view_log(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
