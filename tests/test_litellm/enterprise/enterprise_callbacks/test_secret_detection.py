@@ -201,8 +201,6 @@ def test_scan_message_closes_a_yaml_block_at_the_next_unindented_line():
 
 
 def test_scan_message_redacts_every_credential_on_one_line():
-    """detect_secrets keeps the first hit per pattern, so a JSON object holding two credentials
-    would leave the second one in the prompt."""
     guardrail = _guardrail()
     content = '{"db_password": "Tq8Zm2XpLv9KdNbRcYw3", "client_secret": "correcthorsebattery"}'
 
@@ -350,7 +348,6 @@ def test_credential_keyword_detector_honours_its_minimum_length(value, redacted)
     ids=["at-default-minimum-length", "below-default-minimum-length"],
 )
 def test_credential_keyword_detector_defaults_its_minimum_length(value, redacted):
-    """An operator config that names the plugin without sizing it keeps the same floor."""
     guardrail = _ENTERPRISE_SecretDetection(
         guardrail_name="hide-secrets",
         event_hook="pre_call",
@@ -367,7 +364,6 @@ def test_credential_keyword_detector_defaults_its_minimum_length(value, redacted
 
 
 def test_credential_keyword_detector_honours_keyword_exclude():
-    """The upstream plugin's opt-out for lines an operator names has to survive the override."""
     guardrail = _ENTERPRISE_SecretDetection(
         guardrail_name="hide-secrets",
         event_hook="pre_call",
@@ -386,8 +382,6 @@ def test_credential_keyword_detector_honours_keyword_exclude():
 
 @pytest.mark.parametrize("minimum_length", ["12", 0, -1, 1.5], ids=["string", "zero", "negative", "float"])
 def test_credential_keyword_detector_rejects_an_unusable_minimum_length(minimum_length):
-    """A bad value in an operator config has to fail while the guardrail is being built;
-    reaching the scan with one turns every single request into a 500."""
     guardrail = _ENTERPRISE_SecretDetection(
         guardrail_name="hide-secrets",
         event_hook="pre_call",
@@ -418,7 +412,6 @@ def test_credential_keyword_detector_rejects_an_unusable_minimum_length(minimum_
     ids=["unclosed", "bare-bracket", "bracketed-prose", "stray-close", "empty-header"],
 )
 def test_scan_message_reads_a_config_with_a_broken_section_header(content):
-    """A half-typed section header must not take the assignments below it down with it."""
     guardrail = _guardrail()
 
     assert "Zx4Kp9Lm2Qr7Ns3Vt" not in guardrail.redact_text(content)
@@ -435,16 +428,12 @@ def test_scan_message_reads_a_config_with_a_broken_section_header(content):
     ids=["empty-key", "leading-continuation", "interpolation", "nul-byte"],
 )
 def test_scan_message_reads_lines_that_a_stock_ini_parser_rejects(content):
-    """The parser has no error fallback, so every line shape must be filtered or
-    accepted before it reaches configparser, or one odd line would 500 the request."""
     guardrail = _guardrail()
 
     assert "Zx4Kp9Lm2Qr7Ns3Vt" not in guardrail.redact_text(content)
 
 
 def test_scan_message_reads_a_config_that_repeats_a_section():
-    """A pasted ini can name the same section twice, and refusing to parse it would drop
-    every assignment in the message, not just the repeated one."""
     guardrail = _guardrail()
     content = "[db]\nhost = localhost\n[db]\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n"
 
@@ -452,8 +441,6 @@ def test_scan_message_reads_a_config_that_repeats_a_section():
 
 
 def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
-    """A litellm config names api_key once per model, so keeping only the last one would
-    leave every earlier model's credential in the prompt."""
     guardrail = _guardrail()
     content = (
         "model_list:\n"
@@ -526,7 +513,6 @@ def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
     ],
 )
 def test_scan_message_still_sees_assignments_sharing_a_message_with_a_vendor_key(content, secret):
-    """detect_secrets stops quoting assignments as soon as its first pass matches."""
     guardrail = _guardrail()
 
     redacted = guardrail.redact_text(content)
@@ -543,7 +529,6 @@ def test_environment_reference_filter_only_drops_the_whole_value():
 
 
 def test_environment_variable_names_are_dropped_only_for_the_keyword_plugin():
-    """The exclusion lives on the plugin, so it cannot suppress a vendor detector's hit."""
     guardrail = _guardrail()
 
     assert guardrail.redact_text("password=REDIS_PASSWORD") == "password=REDIS_PASSWORD"
@@ -578,8 +563,6 @@ def test_masked_entity_count_keeps_the_vendor_type_beside_the_entropy_type():
     ids=["anchor-expansion", "deep-nesting", "unparseable"],
 )
 def test_scan_message_contains_hostile_config_text(content, monkeypatch, tmp_path):
-    """The retry pass parses attacker-controlled text, so it must not raise, hang, or
-    leave the prompt behind in a temp file."""
     guardrail = _guardrail()
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setattr(tempfile, "tempdir", None)
@@ -609,8 +592,6 @@ def test_scan_message_contains_hostile_config_text(content, monkeypatch, tmp_pat
     ],
 )
 def test_scan_message_never_reports_a_value_the_message_does_not_hold(content):
-    """The rewritten copy is parsed with interpolation off, so no reported value can be one
-    the parser assembled rather than read; reporting one would mask unrelated text."""
     guardrail = _guardrail()
 
     for secret in guardrail.scan_message_for_secrets(content):
@@ -618,8 +599,6 @@ def test_scan_message_never_reports_a_value_the_message_does_not_hold(content):
 
 
 def test_scan_message_leaves_unrelated_text_alone_when_a_value_is_echoed():
-    """A value the parser could assemble also appears verbatim in a benign sentence; redacting
-    it would destroy the sentence while leaving the line it came from untouched."""
     guardrail = _guardrail()
     content = (
         f"api_key = '{OPENAI_KEY}'\nbase = Kp7Nq2Wz9Bt4\npassword = x\n"
@@ -698,8 +677,6 @@ def test_scan_message_stays_linear_on_repeated_sk_separators():
     ],
 )
 def test_scan_message_stays_linear_on_adversarial_credential_lines(content):
-    """A backtracking blow-up on these runs takes minutes, so the bound is loose enough
-    to stay green on a loaded CI box."""
     guardrail = _guardrail()
 
     started = time.perf_counter()
