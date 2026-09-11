@@ -948,6 +948,7 @@ async def pass_through_request(
             general_settings.pass_through_request_timeout, then 600s.
     """
     from litellm.exceptions import ModifyResponseException
+    from litellm.integrations.otel.plumbing.context import inject_trace_context
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
         PassthroughGuardrailHandler,
@@ -978,6 +979,7 @@ async def pass_through_request(
             headers=headers,
             forward_headers=forward_headers,
         )
+        headers = inject_trace_context(headers, inbound_headers=_safe_get_request_headers(request))
 
         requested_query_params: dict | None = query_params or dict(request.query_params)
 
@@ -2174,20 +2176,22 @@ async def websocket_passthrough_request(
         await websocket.accept()
         verbose_proxy_logger.debug("WebSocket passthrough (%s): WebSocket connection accepted", endpoint)
 
-    # Prepare headers for the upstream connection
-    upstream_headers: Final = custom_headers.copy()
+    from litellm.integrations.otel.plumbing.context import inject_trace_context
 
-    if forward_headers:
-        # Forward relevant headers from the incoming request
-        incoming_headers: Final = dict(websocket.headers)
-        for header_name, header_value in incoming_headers.items():
-            # Only forward certain headers to avoid conflicts
-            if header_name.lower() in [
-                "authorization",
-                "x-api-key",
-                "x-goog-user-project",
-            ]:
-                upstream_headers[header_name] = header_value
+    incoming_headers: Final = dict(websocket.headers)  # mutable-ok: websocket headers are copied for context extraction
+    forwarded_headers: Final = {  # mutable-ok: assembled as the upstream header carrier
+        **custom_headers,
+        **{
+            header_name: header_value
+            for header_name, header_value in incoming_headers.items()
+            if forward_headers
+            and header_name.lower() in frozenset(("authorization", "x-api-key", "x-goog-user-project"))
+        },
+    }
+    upstream_headers: Final = inject_trace_context(
+        forwarded_headers,
+        inbound_headers=incoming_headers,
+    )
 
     # Initialize logging object similar to HTTP passthrough
     team_callbacks: Final = _resolve_team_callback_wiring(

@@ -4243,6 +4243,40 @@ def _relay_client_request(method="GET"):
 
 
 @pytest.mark.asyncio
+async def test_pass_through_request_propagates_active_trace_context():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.trace import get_current_span
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    captured: dict[str, httpx.Headers] = {}
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, {})
+            tracer = TracerProvider().get_tracer("test")
+            with tracer.start_as_current_span("passthrough") as span:
+                response = await pass_through_request(
+                    request=_relay_client_request(method="POST"),
+                    target="http://internal-api.test/v1/generate",
+                    custom_headers={},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert response.status_code == 200
+    propagated = get_current_span(TraceContextTextMapPropagator().extract(captured["headers"]))
+    assert propagated.get_span_context().trace_id == span.get_span_context().trace_id
+
+
+@pytest.mark.asyncio
 async def test_pass_through_request_relays_non_json_body_without_buffering():
     """
     Regression (LIT-4009): non-SSE passthrough responses used to be fully
@@ -4836,6 +4870,63 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
     forwarded = json.loads(websocket.send_text.await_args.args[0])
     assert forwarded["session"]["instructions"] == "Hablas español, ¿sí?"
     assert all(call.kwargs.get("code") != 1011 for call in websocket.close.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.trace import get_current_span
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    from starlette.websockets import WebSocketState
+
+    captured: dict[str, dict[str, str]] = {}
+    upstream_ws = FakeUpstreamWebSocket(b"{}")
+
+    def fake_connect(target, additional_headers):
+        captured["headers"] = additional_headers
+        return FakeUpstreamConnect(upstream_ws)
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_text = AsyncMock()
+    websocket.send_bytes = AsyncMock()
+    websocket.receive = AsyncMock(return_value={"type": "websocket.disconnect"})
+    websocket.close = AsyncMock()
+    websocket.headers = {}
+    websocket.client_state = WebSocketState.CONNECTED
+    websocket.application_state = WebSocketState.CONNECTED
+    tracer = TracerProvider().get_tracer("test")
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+    mock_proxy_logging.post_call_success_hook = AsyncMock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_worker = MagicMock()
+    mock_worker.ensure_initialized_and_enqueue = MagicMock(
+        side_effect=lambda async_coroutine: async_coroutine.close()
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    monkeypatch.setattr(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+        fake_connect,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER",
+        mock_worker,
+    )
+    with tracer.start_as_current_span("websocket_passthrough") as span:
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://upstream.example.test/v1/realtime",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/realtime",
+            accept_websocket=True,
+        )
+
+    propagated = get_current_span(TraceContextTextMapPropagator().extract(captured["headers"]))
+    assert propagated.get_span_context().trace_id == span.get_span_context().trace_id
 
 
 class ClosingUpstreamWebSocket:
