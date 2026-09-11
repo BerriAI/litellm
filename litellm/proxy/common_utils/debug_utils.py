@@ -75,14 +75,21 @@ def _awaited(awaitable: object) -> object | None:
     return None
 
 
-def _awaited_chain(awaitable: object) -> Iterator[FrameType]:
+def _next_awaitable(awaitable: object, _: object) -> object | None:
+    return _awaited(awaitable)
+
+
+def _awaitable_frame_tuple(awaitable: object) -> tuple[FrameType, ...]:
     frame: Final = _awaitable_frame(awaitable)
-    if frame is None:
-        return
-    yield frame
-    awaited: Final = _awaited(awaitable)
-    if awaited is not None:
-        yield from _awaited_chain(awaited)
+    return (frame,) if frame is not None else ()
+
+
+def _awaited_chain(awaitable: object) -> Iterator[FrameType]:
+    awaitables: Final = itertools.takewhile(
+        lambda current: _awaitable_frame(current) is not None,
+        itertools.accumulate(itertools.repeat(None), _next_awaitable, initial=awaitable),
+    )
+    return itertools.chain.from_iterable(_awaitable_frame_tuple(current) for current in awaitables)
 
 
 def _task_stack(task: asyncio.Task[object], max_frames: int) -> tuple[_Frame, ...]:
