@@ -485,13 +485,7 @@ def _indexed_message_count(attributes, prefix):
 
 @pytest.mark.parametrize("turns", [60, 200])
 def test_long_conversation_does_not_evict_core_attributes(turns):
-    """Per-message OpenInference attributes must never crowd core telemetry off the span.
-
-    With content capture on, the OpenInference vocabulary spells every prompt and
-    response message out as two per-index attributes. A few dozen turns overruns
-    the OTel SDK's 128-attribute span limit, which evicts oldest-first, so the
-    ``gen_ai.*`` set written before it is what disappears.
-    """
+    """Per-message OpenInference attributes must never crowd core telemetry off the span."""
     span = _conversation_span(["genai", "openinference"], _conversation_payload(turns))
     a = span.attributes
 
@@ -522,12 +516,7 @@ def test_short_conversation_keeps_every_message_indexed():
 
 
 def test_indexed_prompt_keeps_opener_and_latest_turns_under_a_value_length_limit(monkeypatch):
-    """The per-index keys are the only untruncated copy once the SDK clips string values.
-
-    Operators bound attribute sizes with ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT``,
-    which cuts the ``input.value`` blob short. The system prompt and the live turn
-    then have to survive as their own short keys, whatever the conversation length.
-    """
+    """The system prompt and the live turn keep their own keys once the SDK clips ``input.value``."""
     monkeypatch.setenv("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT", "256")
     payload = _conversation_payload(60)
     payload["messages"][0] = {"role": "system", "content": "be terse"}
@@ -547,11 +536,7 @@ def test_indexed_prompt_keeps_opener_and_latest_turns_under_a_value_length_limit
 
 
 def test_message_cap_is_shared_across_input_and_output():
-    """One span-wide allowance covers both directions, and the response always keeps a share.
-
-    A long prompt takes what a single reply leaves over, and a many-choice reply
-    cannot take the whole allowance away from the prompt either.
-    """
+    """One span-wide allowance covers both directions, and the response always keeps a share."""
     long_prompt = _conversation_span(["genai", "openinference"], _conversation_payload(60, choices=1)).attributes
     many_choices = _conversation_span(["genai", "openinference"], _conversation_payload(60, choices=20)).attributes
 
@@ -569,13 +554,7 @@ def test_message_cap_is_shared_across_input_and_output():
 
 
 def test_fully_populated_span_with_every_vocabulary_stays_within_the_attribute_limit():
-    """Every capped family maxed at once still leaves the whole core intact.
-
-    Every vocabulary in the registry plus ``legacy``, every request parameter,
-    every cost component, a hundred-plus tools, a two-hundred-turn prompt and
-    twenty choices is the worst case the two span-wide ceilings have to absorb
-    together.
-    """
+    """Every capped family maxed at once still leaves the whole core intact."""
     payload = _conversation_payload(
         200,
         choices=20,
