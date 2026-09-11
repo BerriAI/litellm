@@ -75,6 +75,27 @@ describe("Cost column", () => {
   });
 });
 
+describe("Internal User column", () => {
+  const emailById: Record<string, string> = { "106514937785257944828": "alice@example.com" };
+  const deps = { ...noopDeps, resolveUserEmail: (userId: string) => emailById[userId] };
+
+  it("shows the user's email instead of the raw id, with both in the tooltip", async () => {
+    const user = userEvent.setup();
+    renderRows([logEntry({ request_id: "req-known-user", user: "106514937785257944828" })], deps);
+
+    const emailCell = screen.getByText("alice@example.com");
+    expect(screen.queryByText("106514937785257944828")).not.toBeInTheDocument();
+    await user.hover(emailCell);
+    expect(await screen.findByText("alice@example.com (106514937785257944828)")).toBeInTheDocument();
+  });
+
+  it("falls back to the raw id when no email is known for the user", () => {
+    renderRows([logEntry({ request_id: "req-unknown-user", user: "unknown-user-id" })], deps);
+
+    expect(screen.getByText("unknown-user-id")).toBeInTheDocument();
+  });
+});
+
 describe("Tokens column", () => {
   const sessionRow: Partial<LogEntry> = {
     request_id: "req-session-tokens",

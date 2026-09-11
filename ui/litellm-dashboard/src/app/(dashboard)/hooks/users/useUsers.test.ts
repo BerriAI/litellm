@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useInfiniteUsers, useUserLookup } from "./useUsers";
+import { useInfiniteUsers, useUserEmailLookup, useUserLookup } from "./useUsers";
 import { userListCall } from "@/components/networking";
 import type { UserListResponse } from "@/components/networking";
 
@@ -329,6 +329,65 @@ describe("useUserLookup", () => {
     mockUseAuthorized.mockReturnValue({ ...DEFAULT_AUTH, userRole: "Internal User" });
 
     const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(userListCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("useUserEmailLookup", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue(DEFAULT_AUTH);
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("fetches the distinct ids in one call and maps each id to its email", async () => {
+    const response = buildUserListResponse(1, 1, 2);
+    vi.mocked(userListCall).mockResolvedValue(response);
+
+    const { result } = renderHook(() => useUserEmailLookup(["user-1-1", "user-1-0", "user-1-1", ""]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(userListCall).toHaveBeenCalledTimes(1);
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["user-1-0", "user-1-1"], 1, 2);
+    expect(result.current.data).toEqual({
+      "user-1-0": "user-1-0@example.com",
+      "user-1-1": "user-1-1@example.com",
+    });
+  });
+
+  it("omits users that have no email so callers fall back to the id", async () => {
+    const response = buildUserListResponse(1, 1, 2);
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      users: [{ ...response.users[0], user_email: "" }, response.users[1]],
+    });
+
+    const { result } = renderHook(() => useUserEmailLookup(["user-1-0", "user-1-1"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ "user-1-1": "user-1-1@example.com" });
+  });
+
+  it("does not query with no ids", async () => {
+    const { result } = renderHook(() => useUserEmailLookup([]), { wrapper });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(userListCall).not.toHaveBeenCalled();
+  });
+
+  it("does not query for a non-admin role", async () => {
+    mockUseAuthorized.mockReturnValue({ ...DEFAULT_AUTH, userRole: "Internal User" });
+
+    const { result } = renderHook(() => useUserEmailLookup(["user-1-0"]), { wrapper });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.fetchStatus).toBe("idle");

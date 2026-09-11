@@ -38,6 +38,24 @@ export const useInfiniteUsers = (pageSize: number = DEFAULT_PAGE_SIZE, searchEma
   });
 };
 
+const USER_LIST_MAX_PAGE_SIZE = 100;
+
+export const useUserEmailLookup = (userIds: readonly string[]) => {
+  const { accessToken, userRole } = useAuthorized();
+  const distinctIds = Array.from(new Set(userIds.filter((id) => id !== ""))).sort();
+  return useQuery<Record<string, string>>({
+    queryKey: userLookupKeys.list({ filters: { ids: distinctIds.join(",") } }),
+    queryFn: async () => {
+      const ids = distinctIds.slice(0, USER_LIST_MAX_PAGE_SIZE);
+      const response = await userListCall(accessToken!, ids, 1, ids.length);
+      return Object.fromEntries(
+        response.users.filter((user) => Boolean(user.user_email)).map((user) => [user.user_id, user.user_email]),
+      );
+    },
+    enabled: Boolean(accessToken) && distinctIds.length > 0 && all_admin_roles.includes(userRole!),
+  });
+};
+
 export const useUserLookup = (userId: string | null) => {
   const { accessToken, userRole } = useAuthorized();
   return useQuery<UserInfo | null>({
