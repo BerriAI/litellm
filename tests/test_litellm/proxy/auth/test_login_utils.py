@@ -1142,58 +1142,65 @@ async def test_disabling_the_control_removes_the_delay_as_well(monkeypatch, logi
     assert login_delays.seconds == []
 
 
-class _NoExpiryRedis:
-    """Redis that stores the counter but never records an expiry for it.
+class _FakeRedis:
+    """Redis whose only counter write is the atomic INCRBY-plus-EXPIRE Lua call.
 
-    Models the window between INCRBYFLOAT committing and the TTL call failing.
+    `async_increment` is deliberately absent: a two-step increment would fail the test
+    with AttributeError, because Redis could then commit a count without its expiry.
     """
 
     def __init__(self):
         self.values: dict = {}
-        self.expiry_repairs = 0
+        self.ttls: dict = {}
 
     async def async_get_cache(self, key, **kwargs):
         return self.values.get(key)
 
-    async def async_increment(self, key, value, ttl=None, **kwargs):
-        if int(value) == 0:
-            self.expiry_repairs += 1
-        self.values[key] = self.values.get(key, 0) + int(value)
+    async def async_increment_with_floor(self, key, value, ttl):
+        self.values[key] = self.values.get(key, 0) + value
+        self.ttls.setdefault(key, ttl)
         return self.values[key]
 
     async def async_get_ttl(self, key):
-        return None
+        return self.ttls.get(key)
 
     async def async_delete_cache(self, key):
         self.values.pop(key, None)
+        self.ttls.pop(key, None)
+
+    def persist(self):
+        self.ttls.clear()
 
 
 @pytest.mark.asyncio
-async def test_a_counter_left_without_an_expiry_is_repaired(monkeypatch):
+async def test_counters_are_written_with_their_expiry_and_re_armed_if_stripped(monkeypatch):
     """Regression: a counter with no TTL would refuse the pair forever.
 
-    Redis commits the increment before setting the expiry, and nothing increments the key
-    again once the limit is reached, so a TTL that never landed is never repaired on its
-    own and the username and source pair stays refused with no way back.
+    Nothing increments a key once the limit is reached, so a counter that ever exists
+    without an expiry stays refused with no way back. Every write must therefore carry the
+    expiry, and a refusal that finds it stripped (PERSIST) must put the window back.
     """
     from litellm.proxy._types import ProxyException
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
-    redis = _NoExpiryRedis()
-    throttle = _throttle(max_attempts=2, redis_cache=redis)
+    redis = _FakeRedis()
+    throttle = _throttle(max_attempts=2, window_seconds=77, redis_cache=redis)
 
     for _ in range(2):
         with pytest.raises(ProxyException):
             await _guess(throttle)
 
-    assert redis.expiry_repairs >= 1, "each recorded failure must leave the counter with an expiry"
+    assert redis.values, "failures must land in the shared counter"
+    assert set(redis.ttls) == set(redis.values), "no counter may exist without its expiry"
+    assert set(redis.ttls.values()) == {77}
 
-    repairs_before_block = redis.expiry_repairs
+    redis.persist()
     with pytest.raises(ProxyException) as blocked:
         await _guess(throttle)
     assert blocked.value.code == "429"
-    assert redis.expiry_repairs > repairs_before_block, "the refusal path must repair a missing expiry too"
+    assert blocked.value.headers.get("Retry-After") == "77"
+    assert set(redis.ttls) >= {k for k in redis.values if ":user:" in k}, "the refusal must re-arm a stripped expiry"
 
 
 @pytest.mark.asyncio
