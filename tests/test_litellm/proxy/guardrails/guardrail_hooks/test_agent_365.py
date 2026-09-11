@@ -1,12 +1,16 @@
 import asyncio
 import time
+import uuid
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, Final
+from unittest.mock import patch
 
 import httpx
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -18,11 +22,14 @@ from litellm.proxy.guardrails.guardrail_hooks.agent_365 import (
     guardrail_initializer_registry,
     initialize_guardrail,
 )
+from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import agent_365_authorization_servers
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
     SupportedGuardrailIntegrations,
 )
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
@@ -61,15 +68,44 @@ def _allow_response(correlation_id: str = "corr-1") -> httpx.Response:
     )
 
 
-def _block_response(message: str = "Blocked by policy", correlation_id: str = "corr-2") -> httpx.Response:
+def _block_response(
+    message: str = "Blocked by policy", correlation_id: str = "corr-2", status: str = "Evaluated"
+) -> httpx.Response:
     return _response(
         200,
         {
             "allowed": False,
-            "defender": {"status": "Evaluated", "verdict": "Block", "message": message},
+            "defender": {"status": status, "verdict": "Block", "message": message},
             "correlationId": correlation_id,
         },
     )
+
+
+def _not_evaluated_response(status: str, correlation_id: str = "corr-3") -> httpx.Response:
+    return _response(
+        200,
+        {
+            "allowed": True,
+            "defender": {"status": status, "verdict": None, "message": None},
+            "observability": {"status": "Unavailable"},
+            "correlationId": correlation_id,
+        },
+    )
+
+
+def _logging_obj(litellm_call_id: str, mcp_session_id: str | None = None) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="mcp",
+        messages=[],
+        stream=False,
+        call_type="call_mcp_tool",
+        start_time=None,
+        litellm_call_id=litellm_call_id,
+        function_id="fn-1",
+    )
+    if mcp_session_id is not None:
+        logging_obj.model_call_details["mcp_tool_call_metadata"] = {"mcp_session_id": mcp_session_id}
+    return logging_obj
 
 
 class FakeHandler:
@@ -331,6 +367,29 @@ class TestAllowFlow:
         assert evaluate_call.json["agentId"] == "agent-007"
 
     @pytest.mark.asyncio
+    async def test_evaluate_payload_includes_listed_tool_metadata(self):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        schema: Final = {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]}
+        await _run(guardrail, _mcp_data(mcp_tool_description="Send an email", mcp_tool_input_schema=schema))
+        assert handler.calls[1].json["tool"] == {
+            "name": "send_email",
+            "description": "Send an email",
+            "inputSchema": schema,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("description", "schema"),
+        [(None, None), ("", None), (None, ["not", "a", "schema"]), (42, "type: object")],
+    )
+    async def test_evaluate_payload_omits_missing_or_malformed_tool_metadata(self, description, schema):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        await _run(guardrail, _mcp_data(mcp_tool_description=description, mcp_tool_input_schema=schema))
+        assert handler.calls[1].json["tool"] == {"name": "send_email"}
+
+    @pytest.mark.asyncio
     async def test_agent_id_falls_back_to_key_alias(self):
         handler: Final = FakeHandler([_token_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler)
@@ -349,6 +408,33 @@ class TestAllowFlow:
 
 class TestConversationId:
     @pytest.mark.asyncio
+    async def test_request_call_id_beats_logging_obj_and_client_header(self):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        data: Final = _mcp_data(
+            litellm_call_id="call-id-from-data",
+            litellm_logging_obj=_logging_obj("call-id-from-logging", mcp_session_id="sess-from-logging"),
+        )
+        await _run(guardrail, data)
+        assert handler.calls[1].json["conversationId"] == "call-id-from-data"
+
+    @pytest.mark.asyncio
+    async def test_logging_obj_call_id_beats_session_metadata_and_client_header(self):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        data: Final = _mcp_data(litellm_logging_obj=_logging_obj("call-id-1", mcp_session_id="sess-from-logging"))
+        await _run(guardrail, data)
+        assert handler.calls[1].json["conversationId"] == "call-id-1"
+
+    @pytest.mark.asyncio
+    async def test_logging_obj_session_id_beats_client_header(self):
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail: Final = _make_guardrail(handler)
+        data: Final = _mcp_data(litellm_logging_obj=_logging_obj("", mcp_session_id="sess-from-logging"))
+        await _run(guardrail, data)
+        assert handler.calls[1].json["conversationId"] == "sess-from-logging"
+
+    @pytest.mark.asyncio
     async def test_session_id_header_case_insensitive(self):
         handler: Final = FakeHandler([_token_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler)
@@ -357,30 +443,12 @@ class TestConversationId:
         assert handler.calls[1].json["conversationId"] == "sess-CASED"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_logging_obj_session_id(self):
+    async def test_generates_uuid_when_no_identifier_available(self):
         handler: Final = FakeHandler([_token_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler)
-        logging_obj: Final = LiteLLMLoggingObj(
-            model="mcp",
-            messages=[],
-            stream=False,
-            call_type="call_mcp_tool",
-            start_time=None,
-            litellm_call_id="call-id-1",
-            function_id="fn-1",
-        )
-        logging_obj.model_call_details["mcp_tool_call_metadata"] = {"mcp_session_id": "sess-from-logging"}
-        data: Final = _mcp_data(metadata={"headers": {}}, litellm_logging_obj=logging_obj)
-        await _run(guardrail, data)
-        assert handler.calls[1].json["conversationId"] == "sess-from-logging"
-
-    @pytest.mark.asyncio
-    async def test_falls_back_to_litellm_call_id(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
-        guardrail: Final = _make_guardrail(handler)
-        data: Final = _mcp_data(metadata={"headers": {}}, litellm_call_id="call-id-2")
-        await _run(guardrail, data)
-        assert handler.calls[1].json["conversationId"] == "call-id-2"
+        await _run(guardrail, _mcp_data(metadata={"headers": {}}, litellm_logging_obj=_logging_obj("")))
+        conversation_id: Final = handler.calls[1].json["conversationId"]
+        assert uuid.UUID(conversation_id).version == 4
 
 
 class TestBlockFlow:
@@ -407,6 +475,65 @@ class TestBlockFlow:
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
         assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["Skipped", "FailedOpen"])
+    async def test_explicit_block_wins_over_non_evaluated_status(self, status):
+        handler: Final = FakeHandler([_token_response(), _block_response(status=status)])
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 400
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_intervened"
+        assert info["guardrail_response"]["verdict"] == "Block"
+        assert info["guardrail_response"]["defender_status"] == status
+
+
+class TestDefenderNotEvaluated:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["Skipped", "FailedOpen"])
+    async def test_fail_closed_blocks_allowed_but_unevaluated_call(self, status):
+        handler: Final = FakeHandler([_token_response(), _not_evaluated_response(status)])
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_closed")
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        assert f"defender.status={status}" in exc_info.value.detail["message"]
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
+        assert info["guardrail_response"]["verdict"] == "Unavailable"
+        assert info["guardrail_response"]["defender_status"] == status
+        assert info["guardrail_response"]["correlation_id"] == "corr-3"
+        assert info["guardrail_response"]["latency_ms"] >= 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", ["Skipped", "FailedOpen"])
+    async def test_fail_open_allows_unevaluated_call_as_unscanned(self, status):
+        handler: Final = FakeHandler([_token_response(), _not_evaluated_response(status)])
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        result: Final = await _run(guardrail, data)
+        assert result is data
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
+        assert info["guardrail_response"]["verdict"] == "Unscanned"
+        assert info["guardrail_response"]["defender_status"] == status
+        assert info["guardrail_response"]["correlation_id"] == "corr-3"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("payload", [{"allowed": True}, {"allowed": True, "defender": {"verdict": "Allow"}}])
+    async def test_allowed_without_defender_status_is_not_an_evaluated_allow(self, payload):
+        handler: Final = FakeHandler([_token_response(), _response(200, payload)])
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_closed")
+        data: Final = _mcp_data()
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, data)
+        assert exc_info.value.status_code == 503
+        assert "defender.status=missing" in exc_info.value.detail["message"]
+        assert "defender_status" not in _guardrail_info(data)["guardrail_response"]
 
     @pytest.mark.asyncio
     async def test_http_400_always_blocks_even_fail_open(self):
@@ -1025,3 +1152,92 @@ class TestVeriaHardening:
         assert len(records) == 1
         assert records[0]["guardrail_response"]["verdict"] == "Unscanned"
         assert records[0]["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+ENTRA_ISSUER: Final = "https://login.microsoftonline.com/tenant-abc/v2.0"
+GATEWAY_SCOPE: Final = "api://gateway-app/access_as_user"
+
+
+def _mcp_server(auth_type: MCPAuth = MCPAuth.none, scopes: list[str] | None = None, **fields: Any) -> MCPServer:
+    return MCPServer(
+        server_id="tools-id",
+        name="tools",
+        server_name="tools",
+        transport=MCPTransport.http,
+        url="https://tools.test/mcp",
+        auth_type=auth_type,
+        scopes=scopes,
+        **fields,
+    )
+
+
+@pytest.fixture
+def registered_guardrail() -> Iterator[Agent365Guardrail]:
+    guardrail: Final = _make_guardrail(FakeHandler([]))
+    litellm.logging_callback_manager.add_litellm_callback(guardrail)
+    try:
+        yield guardrail
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, guardrail, require_self=False
+        )
+
+
+class TestAgent365AuthorizationServers:
+    def test_names_the_guardrail_tenant_for_a_scoped_gateway_signed_in_server(self, registered_guardrail):
+        assert agent_365_authorization_servers(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == (ENTRA_ISSUER,)
+        assert agent_365_authorization_servers(
+            _mcp_server(MCPAuth.api_key, scopes=[GATEWAY_SCOPE], auth_value="k"), None
+        ) == (ENTRA_ISSUER,)
+
+    def test_silent_without_advertised_scopes(self, registered_guardrail):
+        assert agent_365_authorization_servers(_mcp_server(scopes=None), None) == ()
+        assert agent_365_authorization_servers(_mcp_server(scopes=[]), None) == ()
+
+    def test_silent_when_no_guardrail_is_registered(self):
+        assert agent_365_authorization_servers(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == ()
+
+    @pytest.mark.parametrize(
+        "server",
+        [
+            _mcp_server(MCPAuth.oauth2, scopes=[GATEWAY_SCOPE]),
+            _mcp_server(MCPAuth.oauth2_token_exchange, scopes=[GATEWAY_SCOPE], token_exchange_endpoint="https://i/t"),
+            _mcp_server(MCPAuth.oauth2_id_jag, scopes=[GATEWAY_SCOPE]),
+            _mcp_server(MCPAuth.true_passthrough, scopes=[GATEWAY_SCOPE]),
+            _mcp_server(MCPAuth.oauth_delegate, scopes=[GATEWAY_SCOPE]),
+            _mcp_server(MCPAuth.none, scopes=[GATEWAY_SCOPE], extra_headers=["Authorization"]),
+        ],
+        ids=["oauth2", "token_exchange", "id_jag", "true_passthrough", "oauth_delegate", "forwards_authorization"],
+    )
+    def test_leaves_servers_whose_own_auth_mode_owns_sign_in_alone(self, registered_guardrail, server):
+        assert agent_365_authorization_servers(server, None) == ()
+
+    def test_dedupes_guardrails_sharing_a_tenant(self, registered_guardrail):
+        twin: Final = _make_guardrail(FakeHandler([]))
+        twin.guardrail_name = "agent-365-twin"
+        litellm.logging_callback_manager.add_litellm_callback(twin)
+        try:
+            assert agent_365_authorization_servers(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == (ENTRA_ISSUER,)
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, twin, require_self=False
+            )
+
+    def test_key_selected_guardrail_challenges_only_that_key(self):
+        guardrail: Final = _make_guardrail(FakeHandler([]))
+        guardrail.default_on = False
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        server: Final = _mcp_server(scopes=[GATEWAY_SCOPE])
+        plain_key: Final = UserAPIKeyAuth(api_key="sk-plain", user_id="u-1")
+        guarded_key: Final = UserAPIKeyAuth(
+            api_key="sk-guarded", user_id="u-2", metadata={"guardrails": ["agent-365-guard"]}
+        )
+        try:
+            with patch("litellm.proxy.proxy_server.premium_user", True):
+                assert agent_365_authorization_servers(server, plain_key) == ()
+                assert agent_365_authorization_servers(server, guarded_key) == (ENTRA_ISSUER,)
+                assert agent_365_authorization_servers(server, None) == (ENTRA_ISSUER,)
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )

@@ -1779,6 +1779,7 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+        self._listed_tools_by_server_id: dict[str, dict[str, MCPTool]] = {}
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -4239,18 +4240,18 @@ class MCPServerManager:
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
-                if not add_prefix:
-                    prefix: Final = get_server_prefix(server)
-                    sep: Final = MCP_TOOL_PREFIX_SEPARATOR
-                    tools = [
-                        (
-                            t.model_copy(update={"name": t.name[len(prefix) + len(sep) :]})
-                            if t.name.startswith(f"{prefix}{sep}")
-                            else t
-                        )
-                        for t in tools
-                    ]
-                return tools
+                prefix: Final = get_server_prefix(server)
+                sep: Final = MCP_TOOL_PREFIX_SEPARATOR
+                bare_tools: Final = [
+                    (
+                        t.model_copy(update={"name": t.name[len(prefix) + len(sep) :]})
+                        if t.name.startswith(f"{prefix}{sep}")
+                        else t
+                    )
+                    for t in tools
+                ]
+                self._listed_tools_by_server_id[server.server_id] = {t.name: t for t in bare_tools}
+                return tools if add_prefix else bare_tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
@@ -5131,8 +5132,13 @@ class MCPServerManager:
             for spelling in iter_known_tool_name_spellings(original_name, server):
                 self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
+        self._listed_tools_by_server_id[server.server_id] = {tool.name: tool for tool in tools}
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
         return prefixed_tools
+
+    def get_listed_tool(self, server: MCPServer, name: str) -> MCPTool | None:
+        listed: Final = self._listed_tools_by_server_id.get(server.server_id, {})
+        return listed.get(name) or listed.get(strip_known_server_prefix(name, server))
 
     def _create_prefixed_prompts(
         self, prompts: list[Prompt], server: MCPServer, add_prefix: bool = True
@@ -5372,6 +5378,7 @@ class MCPServerManager:
         server: MCPServer,
         raw_headers: dict[str, str] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        tool: MCPTool | None = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -5384,6 +5391,9 @@ class MCPServerManager:
         ``litellm_logging_obj`` is the request's logger, and it is what lands a
         ``pre_mcp_call`` evaluation (or a block) on the spend-log row the Guardrails
         Monitor counts. It stays optional so callers that do no logging are unchanged.
+
+        ``tool`` is the upstream tool definition when one was listed, so guardrails
+        can see its description and input schema, not just the name and arguments.
 
         Returns a dict that may contain:
         - "arguments": hook-modified tool arguments (only if changed)
@@ -5438,6 +5448,8 @@ class MCPServerManager:
             "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
             "incoming_bearer_token": incoming_bearer_token,
             "headers": logging_safe_mcp_headers(raw_headers),
+            "tool_description": tool.description if tool is not None else None,
+            "tool_input_schema": tool.inputSchema if tool is not None else None,
         }
 
         # Create MCP request object for processing
@@ -5492,6 +5504,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         start_time: datetime.datetime,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        tool: MCPTool | None = None,
     ):
         """Create and return a during hook task for MCP tool calls.
 
@@ -5506,6 +5519,8 @@ class MCPServerManager:
             tool_name=name,
             arguments=arguments,
             server_name=server_name_from_prefix,
+            tool_description=tool.description if tool is not None else None,
+            tool_input_schema=tool.inputSchema if tool is not None else None,
             start_time=start_time.timestamp() if start_time else None,
             hidden_params=HiddenParams(),
         )
@@ -6101,6 +6116,7 @@ class MCPServerManager:
             server=mcp_server,
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
+            tool=self.get_listed_tool(mcp_server, name),
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -6116,6 +6132,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
+                tool=self.get_listed_tool(mcp_server, name),
             )
             tasks.append(during_hook_task)
 

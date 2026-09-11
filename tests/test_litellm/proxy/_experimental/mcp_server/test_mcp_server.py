@@ -8739,6 +8739,90 @@ class TestSingleServerPreflightReachesIdJag:
         preflight.assert_not_awaited()
 
 
+class TestAgent365ChallengeAtConnect:
+    """A missing Entra bearer on an Agent 365 gated server is challenged at connect (RFC 9728), where the
+    WWW-Authenticate header survives, instead of only inside the tools/call JSON-RPC error."""
+
+    GATEWAY_SCOPE = "api://gateway-app/access_as_user"
+
+    def _server(self, scopes: list[str] | None) -> MCPServer:
+        return MCPServer(
+            server_id="id-tools",
+            name="tools",
+            alias="tools",
+            server_name="tools",
+            url="https://tools.test/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            scopes=scopes,
+            mcp_info={"server_name": "tools"},
+        )
+
+    @pytest.fixture
+    def agent_365_guardrail(self):
+        import litellm
+        from litellm.proxy.guardrails.guardrail_hooks.agent_365 import Agent365Guardrail
+
+        guardrail = Agent365Guardrail(
+            guardrail_name="agent-365-guard",
+            tenant_id="tenant-abc",
+            client_id="client-xyz",
+            client_secret="secret-123",
+            async_handler=AsyncMock(),
+            event_hook="pre_mcp_call",
+            default_on=True,
+        )
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            yield guardrail
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+    async def _connect(self, server: MCPServer, oauth2_headers: dict[str, str] | None) -> None:
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        with (
+            patch.object(  # test-quality-ok: route wiring must use the manager's configured server
+                server_module.global_mcp_server_manager, "get_mcp_server_by_name", return_value=server
+            ),
+            patch.object(  # test-quality-ok: allowed-set resolution needs the DB; the test controls its answer
+                server_module, "_get_allowed_mcp_servers", AsyncMock(return_value=[])
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/tools", "headers": []},
+                mcp_servers=["tools"],
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                client_ip=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_bearer_gets_the_discovery_challenge(self, agent_365_guardrail):
+        with pytest.raises(HTTPException) as exc:
+            await self._connect(self._server([self.GATEWAY_SCOPE]), None)
+
+        assert exc.value.status_code == 401
+        www_authenticate = (exc.value.headers or {}).get("WWW-Authenticate", "")
+        assert 'error="invalid_token"' in www_authenticate
+        assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/tools"' in www_authenticate
+
+    @pytest.mark.asyncio
+    async def test_bearer_present_connects(self, agent_365_guardrail):
+        await self._connect(self._server([self.GATEWAY_SCOPE]), {"Authorization": "Bearer entra-user-token"})
+
+    @pytest.mark.asyncio
+    async def test_server_without_advertised_scopes_is_not_challenged(self, agent_365_guardrail):
+        await self._connect(self._server(None), None)
+
+    @pytest.mark.asyncio
+    async def test_no_registered_guardrail_means_no_challenge(self):
+        await self._connect(self._server([self.GATEWAY_SCOPE]), None)
+
+
 def _make_obo_server(alias: str) -> MCPServer:
     return MCPServer(
         server_id=f"id-{alias}",
