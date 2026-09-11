@@ -317,10 +317,22 @@ def test_inception_mercury_2_5_cost_and_tokens(monkeypatch):
         prompt_tokens=1000,
         completion_tokens=500,
     )
-    # $0.20 per 1M input tokens -> 1000 * 0.0000002 = 0.0002
-    # $0.75 per 1M output tokens -> 500 * 0.00000075 = 0.000375
     assert abs(prompt_cost - 0.0002) < 1e-9
     assert abs(completion_cost - 0.000375) < 1e-9
+
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    cached_usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400),
+    )
+    cached_prompt_cost, _ = litellm.cost_per_token(
+        model=model,
+        usage_object=cached_usage,
+    )
+    assert abs(cached_prompt_cost - 0.000128) < 1e-9
 
     model_info = litellm.get_model_info(model)
     assert model_info["max_input_tokens"] == 260000
@@ -344,6 +356,20 @@ def test_openrouter_inception_mercury_2_5_cost_and_tokens(monkeypatch):
     )
     assert abs(prompt_cost - 0.0002) < 1e-9
     assert abs(completion_cost - 0.000375) < 1e-9
+
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    cached_usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400),
+    )
+    cached_prompt_cost, _ = litellm.cost_per_token(
+        model=model,
+        usage_object=cached_usage,
+    )
+    assert abs(cached_prompt_cost - 0.000128) < 1e-9
 
     model_info = litellm.get_model_info(model)
     assert model_info["max_input_tokens"] == 260000
