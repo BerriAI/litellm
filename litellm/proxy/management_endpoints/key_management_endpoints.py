@@ -3648,10 +3648,7 @@ async def validate_key_team_change(
             team_obj=team,
         )
         or TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
-            team_member_role=_get_caller_team_role(
-                team_table=team_table,
-                user_api_key_dict=change_initiated_by,
-            ),
+            team_member_role=None if member_object is None else member_object.role,
             team_table=team_table,
             route=KeyManagementRoutes.KEY_UPDATE.value,
         )
