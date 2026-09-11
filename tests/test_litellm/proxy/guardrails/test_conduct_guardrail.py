@@ -13,7 +13,6 @@ here we only verify the LiteLLM-tree wiring:
 from __future__ import annotations
 
 import importlib
-import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -59,15 +58,14 @@ def test_registries_populated() -> None:
 
 def test_only_pre_call_event_hook_advertised() -> None:
     """Regression for veria-ai finding on #38143 —
-    ``during_call`` mode was silently accepted but never evaluated
-    because ``async_moderation_hook`` was not overridden. We only
-    advertise pre_call today so LiteLLM validates configs against
-    supported hooks and rejects unsupported modes."""
+    ``during_call`` mode was silently accepted but never evaluated.
+    Since plugin 0.2.3 the supported-hooks contract lives on
+    ``ConductGuard`` in the plugin package itself; the LiteLLM shim
+    is a pure alias, so we verify against the alias."""
     from litellm.proxy.guardrails.guardrail_hooks.conduct import ConductGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
 
     hooks = ConductGuardrail.get_supported_event_hooks()
-    assert hooks == [GuardrailEventHooks.pre_call]
+    assert hooks == ["pre_call"]
 
 
 def test_initialize_guardrail_returns_wired_callback(
@@ -190,13 +188,13 @@ def test_missing_standalone_package_raises_at_initialize() -> None:
     ``initialize_guardrail`` calls at config-load time when actionable."""
     from litellm.proxy.guardrails.guardrail_hooks.conduct import conduct as _mod
 
-    original_error = _mod._IMPORT_ERROR
+    original_error = _mod._import_error
     try:
-        _mod._IMPORT_ERROR = ImportError("simulated missing package")
+        _mod._import_error = ImportError("simulated missing package")
         with pytest.raises(ImportError, match="pip install"):
             _mod.raise_if_missing_package()
     finally:
-        _mod._IMPORT_ERROR = original_error
+        _mod._import_error = original_error
 
 
 def test_raise_if_missing_package_is_noop_when_present() -> None:
