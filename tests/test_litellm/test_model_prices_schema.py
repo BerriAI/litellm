@@ -224,15 +224,19 @@ BEDROCK_OPENAI_XHIGH_MARKERS: Final = ("openai.gpt-5.4", "openai.gpt-5.5", "open
 BEDROCK_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse", "bedrock_mantle"))
 
 
-def test_bedrock_openai_gpt_rows_advertise_xhigh_like_their_openai_twins(prices: dict):
+def test_bedrock_openai_gpt_rows_mirror_their_openai_twins_effort_ladder(prices: dict):
     """Bedrock forwards reasoning_effort to these models unchanged, and xhigh is opt-in for the
-    capability resolver, so a row without the flag drops xhigh from every group it belongs to."""
-    missing = [
+    capability resolver, so a row without the flag drops xhigh from every group it belongs to.
+    The OpenAI twins reject minimal, and Bedrock forwards reasoning_effort unchanged."""
+    mismatched = [
         name
         for name, entry in prices.items()
         if isinstance(entry, dict)
         and entry.get("litellm_provider") in BEDROCK_PROVIDERS
         and any(marker in name for marker in BEDROCK_OPENAI_XHIGH_MARKERS)
-        and "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
+        and (
+            "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
+            or "minimal" in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
+        )
     ]
-    assert missing == []
+    assert mismatched == []
