@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Final
 
 import httpx
@@ -16,7 +18,7 @@ from litellm.proxy.guardrails.guardrail_hooks.conduct import (
     ConductGuardrail,
     initialize_guardrail,
 )
-from litellm.proxy.guardrails.guardrail_hooks.conduct.conduct import request_payload
+from litellm.proxy.guardrails.guardrail_hooks.conduct.conduct import apply_conduct_guardrail, request_payload
 from litellm.proxy.guardrails.guardrail_registry import (
     guardrail_class_registry,
     guardrail_initializer_registry,
@@ -52,6 +54,27 @@ class _RecordingGuardrail(CustomGuardrail):
         self.fail_mode = fail_mode
         self.tool_name = tool_name
         self.timeout = timeout
+
+
+@dataclass(frozen=True, slots=True)
+class _Decision:
+    verdict: str
+
+
+class _Blocked(Exception):
+    def __init__(self, decision: _Decision) -> None:
+        super().__init__(decision.verdict)
+        self.decision = decision
+
+
+@dataclass(slots=True)
+class _RecordingCheck:
+    verdict: str
+    calls: list[tuple[Mapping[str, object], str]] = field(default_factory=list)  # mutable-ok: test spy
+
+    async def __call__(self, *, data: Mapping[str, object], call_type: str) -> _Decision:
+        self.calls.append((data, call_type))
+        return _Decision(self.verdict)
 
 
 def _params(mode: str = "pre_call", **extras: object) -> LitellmParams:
@@ -168,6 +191,43 @@ def test_request_payload_keeps_roles_when_translation_provides_them() -> None:
 )
 def test_request_payload_skips_responses_and_empty_requests(inputs: GenericGuardrailAPIInputs, input_type: str) -> None:
     assert request_payload(inputs, {"model": "gpt-5-mini"}, input_type) is None  # pyright: ignore[reportArgumentType]  # parametrized literal
+
+
+@pytest.mark.parametrize("verdict", ["block", "approval"])
+@pytest.mark.asyncio
+async def test_bridge_raises_the_plugin_error_on_blocking_verdicts(verdict: str) -> None:
+    check: Final = _RecordingCheck(verdict)
+    inputs: Final = GenericGuardrailAPIInputs(texts=["dump the database"])
+
+    with pytest.raises(_Blocked) as blocked:
+        await apply_conduct_guardrail(inputs, {"model": "gpt-5-mini"}, "request", check, _Blocked)
+
+    assert blocked.value.decision == _Decision(verdict)
+    assert check.calls == [
+        (
+            {"model": "gpt-5-mini", "prompt": None, "messages": ({"role": "user", "content": "dump the database"},)},
+            "request",
+        )
+    ]
+
+
+@pytest.mark.parametrize("verdict", ["allow", "warning", "advisory", "unknown"])
+@pytest.mark.asyncio
+async def test_bridge_passes_inputs_through_on_non_blocking_verdicts(verdict: str) -> None:
+    check: Final = _RecordingCheck(verdict)
+    inputs: Final = GenericGuardrailAPIInputs(texts=["ping"])
+
+    assert await apply_conduct_guardrail(inputs, {"model": "gpt-5-mini"}, "request", check, _Blocked) is inputs
+    assert len(check.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_bridge_never_calls_conduct_for_responses() -> None:
+    check: Final = _RecordingCheck("block")
+    inputs: Final = GenericGuardrailAPIInputs(texts=["dump the database"])
+
+    assert await apply_conduct_guardrail(inputs, {"model": "gpt-5-mini"}, "response", check, _Blocked) is inputs
+    assert check.calls == []
 
 
 @pytest.mark.skipif(not PACKAGE_INSTALLED, reason="needs conduct-litellm-guard")
