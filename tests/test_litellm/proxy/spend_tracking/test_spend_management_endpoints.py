@@ -6629,12 +6629,12 @@ def _session_page_row(session_key, last_activity):
     return {"session_key": session_key, "api_key": "hashed-key", "last_activity": last_activity}
 
 
-def _session_grouped_paginating_prisma(sessions):
+def _session_grouped_paginating_prisma(sessions, counted_total=None):
     """Mock prisma serving the grouped page query out of ``sessions``, honoring the LIMIT and OFFSET it asks for."""
 
     async def mock_query_raw(sql_query, *params):
         if "COUNT(*) AS total_count" in sql_query:
-            return [{"total_count": min(len(sessions), params[-1])}]
+            return [{"total_count": min(len(sessions) if counted_total is None else counted_total, params[-1])}]
         if "DISTINCT ON" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         if "COALESCE(SUM(spend)" in sql_query:
@@ -6799,6 +6799,42 @@ async def test_ui_view_spend_logs_group_by_session_jumps_to_page_without_cursor(
         assert data["has_more"] is False
         assert data["next_session_cursor"] is None
         assert [row["request_id"] for row in data["data"]] == [f"req-sess-{index:02d}" for index in range(50, 60)]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_short_page_totals_itself(client, monkeypatch):
+    """A page that runs out of sessions is the end of the list, so the total comes from it and nothing is counted."""
+    sessions = tuple((f"sess-{index:02d}", f"2026-08-29 10:{59 - index:02d}:00") for index in range(10))
+    mock_prisma = _session_grouped_paginating_prisma(sessions, counted_total=999)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page": 1,
+                "page_size": 25,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["total"] == 10, "the count query's 999 would have won if it had been asked"
+        assert data["total_is_capped"] is False
+        assert data["total_pages"] == 1
+        assert len(data["data"]) == 10
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
