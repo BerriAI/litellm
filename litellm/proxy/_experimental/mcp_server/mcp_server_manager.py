@@ -91,6 +91,7 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     canonicalize_url_identity,
+    get_byok_www_authenticate,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
@@ -1232,7 +1233,7 @@ async def _resolve_byok_mcp_auth_header(
                         "Complete the OAuth authorization flow to provide your API key."
                     ),
                 },
-                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+                headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
         return byok_cred
 

@@ -126,6 +126,14 @@ def _resolve_proxy_base_url_env() -> str | None:
     return None
 
 
+BYOK_RESOURCE_METADATA_PATH: Final = "/v1/mcp/oauth/protected-resource"
+
+
+def get_byok_www_authenticate() -> str:
+    base_url: Final = _resolve_proxy_base_url_env() or well_known_root_suffix()
+    return f'Bearer resource_metadata="{base_url}{BYOK_RESOURCE_METADATA_PATH}"'
+
+
 def get_request_base_url(request: Request) -> str:
     """
     Get the base URL for the request, considering X-Forwarded-* headers.

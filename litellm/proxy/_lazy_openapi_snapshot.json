@@ -25026,6 +25026,129 @@
           ]
         }
       },
+      "/authorize/mcp-session": {
+        "get": {
+          "operationId": "authorize_mcp_session_authorize_mcp_session_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "redirect_uri",
+              "required": true,
+              "schema": {
+                "title": "Redirect Uri",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "client_id",
+              "required": true,
+              "schema": {
+                "title": "Client Id",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "state",
+              "required": false,
+              "schema": {
+                "default": "",
+                "title": "State",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge"
+              }
+            },
+            {
+              "in": "query",
+              "name": "code_challenge_method",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Code Challenge Method"
+              }
+            },
+            {
+              "in": "query",
+              "name": "response_type",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Response Type"
+              }
+            },
+            {
+              "in": "query",
+              "name": "resource",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Resource"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Authorize Mcp Session",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
       "/callback": {
         "get": {
           "description": "OAuth 2.0 authorization response handler for MCP loopback clients.\n\nAccepts either:\n\n- A successful authorization response (``code`` + ``state``), which is\n  forwarded back to the validated client ``redirect_uri`` with the\n  original (un-wrapped) ``state``.\n- An error response (``error``[+``error_description``/``error_uri``]), per\n  RFC 6749 \u00a74.1.2.1. When ``state`` is present and decodes to a trusted\n  ``redirect_uri``, the error params are propagated back to the client so\n  its OAuth library can surface them. Otherwise we render an HTML error\n  page so the user is not left on an opaque 422 / blank screen.",
