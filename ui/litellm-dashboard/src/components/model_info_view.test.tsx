@@ -1596,6 +1596,32 @@ describe("ModelInfoView", () => {
       expect(payload.model_info.team_id).toBe("team-2");
     });
 
+    it("only offers a team admin the teams they administer", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha", members_with_roles: [{ user_id: "123", role: "admin" }] },
+          { team_id: "team-2", team_alias: "beta", members_with_roles: [{ user_id: "123", role: "user" }] },
+          { team_id: "team-3", team_alias: "gamma", members_with_roles: [{ user_id: "123", role: "admin" }] },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="Internal User" />, { wrapper });
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      await user.click(await screen.findByText("alpha (team-1)"));
+
+      expect(await screen.findByRole("option", { name: "gamma (team-3)" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "beta (team-2)" })).not.toBeInTheDocument();
+    });
+
     it("sends the edited LiteLLM extra params", async () => {
       const user = userEvent.setup();
       await enterEditMode(user);
