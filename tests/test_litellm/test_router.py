@@ -7382,6 +7382,63 @@ async def test_async_get_fully_unhealthy_model_names_marks_name_when_all_unhealt
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("health_check_probe", [False, True])
+@pytest.mark.parametrize(
+    "state, health_routing, fails_policy, scoped, strict_ids",
+    [
+        ("absent", True, False, False, ("dep-0", "dep-1")),
+        ("partial", True, False, False, ("dep-1",)),
+        ("all", True, False, False, ()),
+        ("stale", True, False, False, ("dep-0", "dep-1")),
+        ("all", False, False, False, ("dep-0", "dep-1")),
+        ("all", True, True, False, ("dep-0", "dep-1")),
+        ("all", True, True, True, ()),
+    ],
+)
+async def test_health_probe_preserves_normal_caller_policy(
+    health_check_probe: bool,
+    state: str,
+    health_routing: bool,
+    fails_policy: bool,
+    scoped: bool,
+    strict_ids: tuple[str, ...],
+) -> None:
+    import time
+    from litellm.types.router import AllowedFailsPolicy, RouterRateLimitError
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "health-group",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "test-only"},
+                "model_info": {"id": model_id},
+            }
+            for model_id in ("dep-0", "dep-1")
+        ],
+        enable_health_check_routing=health_routing,
+        allowed_fails_policy=AllowedFailsPolicy(ServiceUnavailableErrorAllowedFails=2) if fails_policy else None,
+        background_health_check_model_groups=["health-group"] if scoped else None,
+    )
+    if state != "absent":
+        _seed_unhealthy_states(
+            router,
+            ("dep-0",) if state == "partial" else ("dep-0", "dep-1"),
+            time.time() - router.health_state_cache.staleness_threshold - 10 if state == "stale" else None,
+        )
+    expected: Final = strict_ids if strict_ids or health_check_probe else ("dep-0", "dep-1")
+    if not expected:
+        with pytest.raises(RouterRateLimitError, match="No deployments available"):
+            await router.async_get_healthy_deployments(model="health-group", request_kwargs={}, health_check_probe=True)
+    else:
+        deployments: Final = await router.async_get_healthy_deployments(
+            model="health-group", request_kwargs={}, health_check_probe=health_check_probe
+        )
+        assert {d["model_info"]["id"] for d in deployments} == set(expected)
+    assert await router.cooldown_cache.async_get_active_cooldowns(["dep-0", "dep-1"], parent_otel_span=None) == []
+
+
+
+@pytest.mark.asyncio
 async def test_async_get_fully_unhealthy_model_names_keeps_name_when_partial():
     router = _router_with_two_deployments([False, False])
     _seed_unhealthy_states(router, {"dep-0"})

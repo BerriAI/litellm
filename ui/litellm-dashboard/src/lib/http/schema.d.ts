@@ -9547,26 +9547,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/openai/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * WebSocket: openai_websocket_proxy_route
-         * @description WebSocket connection endpoint
-         */
-        get: operations["websocket_openai_websocket_proxy_route_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/openai/deployments/{model}/chat/completions": {
         parameters: {
             query?: never;
@@ -10122,26 +10102,6 @@ export interface paths {
         patch: operations["openai_proxy_route_openai__endpoint__patch"];
         trace?: never;
     };
-    "/openai_passthrough/": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * WebSocket: openai_websocket_proxy_route
-         * @description WebSocket connection endpoint
-         */
-        get: operations["websocket_openai_websocket_proxy_route_get_2"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/openai_passthrough/{endpoint}": {
         parameters: {
             query?: never;
@@ -10150,132 +10110,72 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        get: operations["openai_proxy_route_openai_passthrough__endpoint__get"];
+        get: operations["openai_passthrough_route_openai_passthrough__endpoint__get"];
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        put: operations["openai_proxy_route_openai_passthrough__endpoint__put"];
+        put: operations["openai_passthrough_route_openai_passthrough__endpoint__put"];
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        post: operations["openai_proxy_route_openai_passthrough__endpoint__post"];
+        post: operations["openai_passthrough_route_openai_passthrough__endpoint__post"];
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        delete: operations["openai_proxy_route_openai_passthrough__endpoint__delete"];
+        delete: operations["openai_passthrough_route_openai_passthrough__endpoint__delete"];
         options?: never;
         head?: never;
         /**
-         * Openai Proxy Route
-         * @description Pass-through endpoint for OpenAI API calls.
-         *
-         *     Available on both routes:
-         *     - /openai/{endpoint:path} - Standard OpenAI passthrough route
-         *     - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
-         *
-         *     Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
-         *     with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+         * Openai Passthrough Route
+         * @description Dedicated pass-through to the OpenAI API with no overlap with LiteLLM's native
+         *     implementations (e.g. the Responses API at /v1/responses).
          *
          *     Examples:
-         *         Standard route:
-         *         - /openai/v1/chat/completions
-         *         - /openai/v1/assistants
-         *         - /openai/v1/threads
-         *
-         *         Dedicated passthrough (for Responses API):
          *         - /openai_passthrough/v1/responses
          *         - /openai_passthrough/v1/responses/{response_id}
          *         - /openai_passthrough/v1/responses/{response_id}/input_items
          *
          *     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
          */
-        patch: operations["openai_proxy_route_openai_passthrough__endpoint__patch"];
+        patch: operations["openai_passthrough_route_openai_passthrough__endpoint__patch"];
         trace?: never;
     };
     "/organization/daily/activity": {
@@ -21891,52 +21791,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/vertex-ai/{endpoint}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        get: operations["vertex_proxy_route_vertex_ai__endpoint__get_2"];
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        put: operations["vertex_proxy_route_vertex_ai__endpoint__put_2"];
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        post: operations["vertex_proxy_route_vertex_ai__endpoint__post_2"];
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        delete: operations["vertex_proxy_route_vertex_ai__endpoint__delete_2"];
-        options?: never;
-        head?: never;
-        /**
-         * Vertex Proxy Route
-         * @description Call LiteLLM proxy via Vertex AI SDK.
-         *
-         *     [Docs](https://docs.litellm.ai/docs/pass_through/vertex_ai)
-         */
-        patch: operations["vertex_proxy_route_vertex_ai__endpoint__patch_2"];
-        trace?: never;
-    };
     "/vertex_ai/discovery/{endpoint}": {
         parameters: {
             query?: never;
@@ -25776,6 +25630,11 @@ export interface components {
              */
             allow_cli_sso_verification_uri_complete?: boolean | null;
             /**
+             * Allow Unmanaged Response Ids
+             * @description If True, lets keys address Responses API ids that this proxy did not issue (raw provider ids, or ids issued before response-id encryption was configured). Such an id carries no owner, so no ownership check can run on it; ids this proxy did issue keep full ownership enforcement. Off by default, in which case an unrecognized response id is rejected with 403
+             */
+            allow_unmanaged_response_ids?: boolean | null;
+            /**
              * Allowed Routes
              * @description Proxy API Endpoints you want users to be able to access
              */
@@ -25894,6 +25753,11 @@ export interface components {
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
             disable_password_login_when_sso_enabled?: boolean | null;
+            /**
+             * Disable Responses Id Security
+             * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
+             */
+            disable_responses_id_security?: boolean | null;
             /**
              * Enable Openai Websocket Passthrough
              * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
@@ -26153,6 +26017,11 @@ export interface components {
              * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
              */
             use_spend_logs_partitioning?: boolean | null;
+            /**
+             * User Api Key Cache Max Size
+             * @description max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth lookups keep hitting the DB
+             */
+            user_api_key_cache_max_size?: number | null;
             /** User Header Mappings */
             user_header_mappings?: components["schemas"]["UserHeaderMapping"][] | null;
             /**
@@ -36460,7 +36329,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -52513,24 +52382,6 @@ export interface operations {
             };
         };
     };
-    websocket_openai_websocket_proxy_route_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description WebSocket Protocol Switched */
-            101: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
     chat_completion_openai_deployments__model__chat_completions_post: {
         parameters: {
             query?: never;
@@ -53430,25 +53281,7 @@ export interface operations {
             };
         };
     };
-    websocket_openai_websocket_proxy_route_get_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description WebSocket Protocol Switched */
-            101: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    openai_proxy_route_openai_passthrough__endpoint__get: {
+    openai_passthrough_route_openai_passthrough__endpoint__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -53479,7 +53312,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__put: {
+    openai_passthrough_route_openai_passthrough__endpoint__put: {
         parameters: {
             query?: never;
             header?: never;
@@ -53510,7 +53343,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__post: {
+    openai_passthrough_route_openai_passthrough__endpoint__post: {
         parameters: {
             query?: never;
             header?: never;
@@ -53541,7 +53374,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__delete: {
+    openai_passthrough_route_openai_passthrough__endpoint__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -53572,7 +53405,7 @@ export interface operations {
             };
         };
     };
-    openai_proxy_route_openai_passthrough__endpoint__patch: {
+    openai_passthrough_route_openai_passthrough__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -67954,161 +67787,6 @@ export interface operations {
             header?: never;
             path: {
                 vector_store_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__get_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__put_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__post_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__delete_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vertex_proxy_route_vertex_ai__endpoint__patch_2: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
             };
             cookie?: never;
         };
