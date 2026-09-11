@@ -220,7 +220,7 @@ async def test_async_ocr_wrapper_sends_final_failure_to_attached_completion(
     monkeypatch.setattr("litellm.utils.load_credentials_from_list", MagicMock())
     wrapped: Final = client(aocr)
 
-    with pytest.raises(ValueError) as caught:
+    with pytest.raises(ValueError, match="mapped OCR failure") as caught:
         await wrapped()
 
     assert caught.value is mapped_error
