@@ -52,6 +52,7 @@ from typing import Annotated, Final, Protocol, TypeAlias, cast
 from pydantic import AliasChoices, BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from litellm.proxy.db.pgbouncer import database_url_is_pooled
 from litellm.proxy.db.token_auth import (
     AZURE_POSTGRESQL_AUTH_ENV_VAR,
     DEFAULT_POSTGRES_PORT,
@@ -358,8 +359,12 @@ class DatabaseURLSettings(BaseSettings):
         Raises ``RuntimeError`` (naming the offending vars) when token auth is
         enabled but a required field is missing — the proxy cannot recover
         from this and a clear startup error beats a Prisma connect failure.
+        A ``DATABASE_URL`` the supervisor pointed at the in-container PgBouncer
+        is kept even under token auth: the pooler renews the token upstream.
         """
         auth: Final = self.token_auth()
+        if auth is not None and database_url_is_pooled():
+            return None
         if auth is not None:
             missing: Final = tuple(
                 env

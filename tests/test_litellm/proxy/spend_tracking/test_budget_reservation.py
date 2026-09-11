@@ -1,16 +1,23 @@
+import json
 import math
 from typing import Final
 
 import pytest
 
 import litellm
-import litellm.proxy.proxy_server as proxy_server
 from litellm.caching import DualCache
+from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.spend_tracking.budget_reservation import estimate_request_max_cost, reserve_budget_for_request
+from litellm.proxy.spend_tracking.budget_reservation import (
+    count_request_input_tokens,
+    estimate_request_max_cost,
+    reserve_budget_for_request,
+)
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge import token_counter as rust_token_counter
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 TOKEN_COUNTING_ROUTES: Final = (
@@ -197,3 +204,128 @@ def test_deployment_pricing_update_invalidates_cached_estimate() -> None:
     after: Final = estimate_request_max_cost(request_body=TIERED_BODY, route="/chat/completions", llm_router=router)
     assert after is not None
     assert math.isclose(after, before * 1000)
+
+
+ANTHROPIC_TOKENIZER_MODEL: Final = "claude-sonnet-4-5-20250929"
+RUST_COUNTED_BODY: Final = {"model": ANTHROPIC_TOKENIZER_MODEL, "max_tokens": 16, "messages": ANTHROPIC_MESSAGES}
+RUST_INPUT_TOKENS: Final = 4_321
+
+
+class _FakeDeclined(Exception):
+    pass
+
+
+class _FakeUpstream(Exception):
+    pass
+
+
+class _FakeNative:
+    RustBridgeDeclined = _FakeDeclined
+    RustUpstreamError = _FakeUpstream
+
+
+class _RecordingCounter:
+    bodies: Final[list[bytes]] = []
+
+    def __init__(self, tokenizer_json: str) -> None:
+        pass
+
+    async def acount_request(self, body: bytes) -> object:
+        self.bodies.append(body)
+        return {"model": ANTHROPIC_TOKENIZER_MODEL, "input_tokens": RUST_INPUT_TOKENS}
+
+
+class _DecliningCounter:
+    def __init__(self, tokenizer_json: str) -> None:
+        pass
+
+    async def acount_request(self, body: bytes) -> object:
+        raise _FakeDeclined("unsupported content block")
+
+
+@pytest.fixture
+def rust_counter(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
+    rust_token_counter._anthropic_counter.cache_clear()
+    configuration.reset_rust_configuration()
+    _RecordingCounter.bodies.clear()
+    yield
+    rust_token_counter.TOKEN_COUNTER.reset()
+    rust_token_counter._anthropic_counter.cache_clear()
+    configuration.reset_rust_configuration()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "request_body"),
+    (
+        ("/v1/messages", RUST_COUNTED_BODY),
+        ("/v1/chat/completions", {"model": ANTHROPIC_TOKENIZER_MODEL, "messages": ANTHROPIC_MESSAGES}),
+        ("/v1/completions", {"model": ANTHROPIC_TOKENIZER_MODEL, "prompt": "hi"}),
+        ("/v1/responses", {"model": ANTHROPIC_TOKENIZER_MODEL, "input": "hi"}),
+        ("/v1/embeddings", {"model": ANTHROPIC_TOKENIZER_MODEL, "input": ["hi"]}),
+        ("/v1/rerank", {"model": ANTHROPIC_TOKENIZER_MODEL, "query": "hi", "documents": ["a"]}),
+    ),
+)
+async def test_rust_count_replaces_python_tokenizing_on_every_llm_route(
+    rust_counter: None, route: str, request_body: dict
+) -> None:
+    litellm.rust(True)
+    rust_token_counter.TOKEN_COUNTER.override(_RecordingCounter)
+    raw_body: Final = json.dumps(request_body).encode()
+
+    counts: Final = await count_request_input_tokens(
+        request_body=request_body, route=route, llm_router=None, raw_body=raw_body
+    )
+
+    assert dict(counts) == {ANTHROPIC_TOKENIZER_MODEL: RUST_INPUT_TOKENS}
+    assert _RecordingCounter.bodies == [raw_body]
+
+
+@pytest.mark.asyncio
+async def test_rust_decline_falls_back_to_python_count(rust_counter: None) -> None:
+    litellm.rust(True)
+    rust_token_counter.TOKEN_COUNTER.override(_DecliningCounter)
+    python_counts: Final = await count_request_input_tokens(
+        request_body=RUST_COUNTED_BODY, route="/v1/messages", llm_router=None
+    )
+
+    counts: Final = await count_request_input_tokens(
+        request_body=RUST_COUNTED_BODY,
+        route="/v1/messages",
+        llm_router=None,
+        raw_body=json.dumps(RUST_COUNTED_BODY).encode(),
+    )
+
+    assert dict(counts) == dict(python_counts)
+    assert counts[ANTHROPIC_TOKENIZER_MODEL] != RUST_INPUT_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_disabled_rust_never_sees_the_raw_body(rust_counter: None) -> None:
+    litellm.rust(False)
+    rust_token_counter.TOKEN_COUNTER.override(_RecordingCounter)
+
+    counts: Final = await count_request_input_tokens(
+        request_body=RUST_COUNTED_BODY,
+        route="/v1/messages",
+        llm_router=None,
+        raw_body=json.dumps(RUST_COUNTED_BODY).encode(),
+    )
+
+    assert _RecordingCounter.bodies == []
+    assert counts[ANTHROPIC_TOKENIZER_MODEL] != RUST_INPUT_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_non_anthropic_tokenizer_models_stay_in_python(rust_counter: None) -> None:
+    litellm.rust(True)
+    rust_token_counter.TOKEN_COUNTER.override(_RecordingCounter)
+    body: Final = {"model": "gpt-4o", "messages": ANTHROPIC_MESSAGES}
+
+    counts: Final = await count_request_input_tokens(
+        request_body=body, route="/v1/chat/completions", llm_router=None, raw_body=json.dumps(body).encode()
+    )
+
+    assert _RecordingCounter.bodies == []
+    assert counts["gpt-4o"] != RUST_INPUT_TOKENS
