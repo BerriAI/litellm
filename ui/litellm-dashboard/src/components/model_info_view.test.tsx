@@ -1596,7 +1596,19 @@ describe("ModelInfoView", () => {
       expect(payload.model_info.team_id).toBe("team-2");
     });
 
-    it("only offers a team admin the teams they administer", async () => {
+    it("shows the Team ID placeholder for a model with no team", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [{ team_id: "team-1", team_alias: "alpha" }],
+        isLoading: false,
+        error: null,
+      });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      expect(screen.getByText("Select a team")).toBeInTheDocument();
+    });
+
+    it.each(["Internal User", "Org Admin"])("only offers a %s the teams they administer", async (userRole) => {
       mockUseTeams.mockReturnValue({
         data: [
           { team_id: "team-1", team_alias: "alpha", members_with_roles: [{ user_id: "123", role: "admin" }] },
@@ -1613,7 +1625,7 @@ describe("ModelInfoView", () => {
       mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
       mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
       const user = userEvent.setup();
-      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole="Internal User" />, { wrapper });
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} userRole={userRole} />, { wrapper });
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
       await user.click(await screen.findByText("alpha (team-1)"));

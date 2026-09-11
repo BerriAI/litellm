@@ -816,7 +816,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                     return (
                       <Select
                         items={items}
-                        value={(value as string) ?? ""}
+                        value={(value as string | undefined) || null}
                         onValueChange={(selected: string | null) => onChange(selected ?? "")}
                       >
                         <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
