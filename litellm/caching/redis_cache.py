@@ -197,10 +197,13 @@ class RedisCircuitBreaker:
         self._timeout_streak_started_at: float | None = None
         self._opened_at: float | None = None
         self._state = self.CLOSED
+        self._generation = 0
         _breaker_metrics().record_state_change(None, self._state)
 
-    def is_half_open(self) -> bool:
-        return self._state == self.HALF_OPEN
+    @property
+    def generation(self) -> int:
+        """Counts state transitions, so a call can tell whether the breaker moved while it ran."""
+        return self._generation
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
@@ -270,6 +273,7 @@ class RedisCircuitBreaker:
         _breaker_metrics().record_transition(state)
         _breaker_metrics().record_state_change(self._state, state)
         self._state = state
+        self._generation += 1
 
 
 _RedisCallResult = TypeVar("_RedisCallResult")
@@ -412,27 +416,28 @@ def log_redis_failure(
 @dataclass(frozen=True, slots=True)
 class _BreakerAdmission:
     swallowed_before: int
-    is_probe: bool
+    generation: int
 
 
 def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> _BreakerAdmission:
     """Reject the call if the breaker is open, else record what its success may later prove."""
     if breaker.is_open():
         raise RedisCircuitBreakerOpenError(f"Redis circuit breaker is open — skipping {name}")
-    return _BreakerAdmission(swallowed_before=_swallowed_redis_failures.get(), is_probe=breaker.is_half_open())
+    return _BreakerAdmission(swallowed_before=_swallowed_redis_failures.get(), generation=breaker.generation)
 
 
 def _exit_circuit_breaker(breaker: RedisCircuitBreaker, admission: _BreakerAdmission) -> None:
-    """Record success only when nothing failed while the call ran and the call may vouch for Redis.
+    """Record success only when nothing failed while the call ran and the breaker has not moved since.
 
     Several Redis methods catch their own connection errors and return a default, so a
-    method that returned is not on its own proof of a healthy Redis. While the breaker is
-    half open only the designated recovery probe may close it: a call admitted before the
-    breaker opened that finishes late says nothing about whether Redis recovered.
+    method that returned is not on its own proof of a healthy Redis. A success also vouches
+    only for the breaker state that admitted the call: a call admitted before the breaker
+    opened, or a probe admitted before a later failure reopened it, finishes knowing nothing
+    about whether Redis has recovered since, so only the current probe may close the breaker.
     """
     if _swallowed_redis_failures.get() != admission.swallowed_before:
         return
-    if breaker.is_half_open() and not admission.is_probe:
+    if breaker.generation != admission.generation:
         return
     breaker.record_success()
 

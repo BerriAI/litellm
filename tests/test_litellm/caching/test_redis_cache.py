@@ -1152,3 +1152,53 @@ async def test_stale_success_during_the_recovery_probe_leaves_the_breaker_to_the
 
     assert breaker._state == breaker.CLOSED
     assert breaker.is_open() is False
+
+
+@pytest.mark.asyncio
+async def test_a_probe_overtaken_by_a_later_outage_leaves_the_breaker_to_the_new_probe():
+    """A probe still in flight when a late failure reopens the breaker must not close it for the next probe.
+
+    Once the breaker has reopened, only the probe admitted after that outage has reached
+    Redis, so the older probe's success no longer says anything about whether Redis recovered.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
+    old_probe_admitted = asyncio.Event()
+    old_probe_release = asyncio.Event()
+    new_probe_admitted = asyncio.Event()
+    new_probe_release = asyncio.Event()
+
+    async def old_probe_call() -> str:
+        old_probe_admitted.set()
+        await old_probe_release.wait()
+        return "old probe"
+
+    async def new_probe_call() -> str:
+        new_probe_admitted.set()
+        await new_probe_release.wait()
+        return "new probe"
+
+    for _ in range(3):
+        breaker.record_failure()
+    breaker._opened_at = time.time() - 9999
+    old_probe = asyncio.ensure_future(_run_under_circuit_breaker(breaker, "op", old_probe_call))
+    await old_probe_admitted.wait()
+    assert breaker._state == breaker.HALF_OPEN
+
+    breaker.record_failure()
+    assert breaker._state == breaker.OPEN
+    breaker._opened_at = time.time() - 9999
+    new_probe = asyncio.ensure_future(_run_under_circuit_breaker(breaker, "op", new_probe_call))
+    await new_probe_admitted.wait()
+    assert breaker._state == breaker.HALF_OPEN
+
+    old_probe_release.set()
+    assert await old_probe == "old probe"
+
+    assert breaker._state == breaker.HALF_OPEN, "the overtaken probe must not close the breaker for the new probe"
+    assert breaker.is_open() is True
+
+    new_probe_release.set()
+    assert await new_probe == "new probe"
+    assert breaker._state == breaker.CLOSED
