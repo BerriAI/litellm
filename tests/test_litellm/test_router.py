@@ -2623,6 +2623,76 @@ def test_adopt_fallback_response_headers_keeps_identity_when_fallback_has_none()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_kind", ["object", "dict", "async-generator"])
+async def test_set_response_headers_exposes_complexity_decision_on_every_response_shape(response_kind):
+    class HeaderResponse:
+        def __init__(self):
+            self._hidden_params: dict[str, object] = {}
+
+    response: object
+    if response_kind == "object":
+        response = HeaderResponse()
+    elif response_kind == "dict":
+        response = {}
+    else:
+        response = _AsyncList()
+
+    router = Router(model_list=[])
+    result = await router.set_response_headers(
+        response=response,
+        request_kwargs={
+            "metadata": {
+                "routing_decision": {
+                    "router_type": "complexity",
+                    "tier": "SIMPLE",
+                    "cause": "heuristic_scorer",
+                    "score": 0.25,
+                    "tier_litellm_params": {"reasoning_effort": "low"},
+                }
+            }
+        },
+    )
+    hidden_params = result["_hidden_params"] if isinstance(result, dict) else result._hidden_params
+    additional_headers = hidden_params["additional_headers"]
+
+    assert additional_headers == {
+        "x-litellm-model-group": None,
+        "x-litellm-complexity-router-tier": "SIMPLE",
+        "x-litellm-complexity-router-cause": "heuristic_scorer",
+        "x-litellm-complexity-router-score": "0.25",
+        "x-litellm-complexity-router-reasoning-effort": "low",
+    }
+
+
+@pytest.mark.asyncio
+async def test_set_response_headers_is_the_only_complexity_header_source_for_proxy_headers():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    router = Router(model_list=[])
+    response = await router.set_response_headers(response={}, request_kwargs={})
+    additional_headers = response["_hidden_params"]["additional_headers"]
+    proxy_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+        user_api_key_dict=UserAPIKeyAuth(),
+        request_data={
+            "metadata": {
+                "routing_decision": {
+                    "router_type": "complexity",
+                    "tier": "REASONING",
+                    "cause": "heuristic_scorer",
+                    "tier_litellm_params": {"reasoning_effort": "xhigh"},
+                }
+            }
+        },
+        **additional_headers,
+    )
+
+    assert not {
+        key for key in proxy_headers if key.startswith("x-litellm-complexity-router-")
+    }
+
+
+@pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_adopts_fallback_response_headers():
     """LIT-6767: after a successful pre-first-chunk fallback, the wrapper must
     describe the deployment that served the stream, with no value left over
@@ -3472,9 +3542,10 @@ def _make_responses_iterator(
 class _AsyncList:
     """Generic async iterator over a list — used as the fallback response."""
 
-    def __init__(self, items=()):
+    def __init__(self, items=(), hidden_params=None):
         self._items = list(items)
         self._idx = 0
+        self._hidden_params = hidden_params or {}
 
     def __aiter__(self):
         return self
@@ -3560,6 +3631,54 @@ async def test_aresponses_streaming_iterator_fallback():
     assert fbk["original_generic_function"] is litellm.aresponses
     assert call_kwargs["model_group"] == "anthropic/claude-sonnet-4-6"
     assert call_kwargs["disable_fallbacks"] is False
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_replaces_complexity_headers_before_fallback_output():
+    error = MidStreamFallbackError(
+        message="primary failed before output",
+        model="gpt-4",
+        llm_provider="openai",
+        is_pre_first_chunk=True,
+        generated_content="",
+    )
+    primary_headers = {
+        "x-litellm-complexity-router-tier": "REASONING",
+        "x-litellm-complexity-router-reasoning-effort": "xhigh",
+    }
+    source = _make_responses_iterator(
+        error=error,
+        hidden_params={"additional_headers": primary_headers},
+    )
+    fallback = _AsyncList(
+        [MagicMock(type="response.output_text.delta")],
+        hidden_params={"model_id": "fallback-deployment", "additional_headers": {"x-fallback-only": "yes"}},
+    )
+    router = _make_router_with_fallback()
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=fallback,
+    ):
+        wrapped = await router._aresponses_streaming_iterator(
+            response=source,
+            initial_kwargs={
+                "model": "gpt-4",
+                "stream": True,
+                "input": "Hello",
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+        assert wrapped._hidden_params["additional_headers"] == primary_headers
+        first_output = await wrapped.__anext__()
+
+    assert first_output.type == "response.output_text.delta"
+    assert wrapped.fallback_headers_adopted is True
+    assert wrapped._hidden_params == {
+        "model_id": "fallback-deployment",
+        "additional_headers": {"x-fallback-only": "yes"},
+    }
 
 
 @pytest.mark.asyncio
@@ -12577,6 +12696,43 @@ async def test_anthropic_messages_fallback_merges_fallback_hidden_params():
     headers = wrapped._hidden_params["additional_headers"]
     assert headers["x-amzn-requestid"] == "req-2"
     assert headers["x-fallback-only"] == "yes"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_fallback_removes_primary_complexity_headers_before_output():
+    router = _anthropic_messages_make_router()
+    source = _AnthropicMessagesFallbackByteStream(
+        [_anthropic_messages_overloaded_error_chunk()],
+        hidden_params={
+            "additional_headers": {
+                "x-litellm-complexity-router-tier": "REASONING",
+                "x-litellm-complexity-router-reasoning-effort": "xhigh",
+            }
+        },
+    )
+    fallback_stream = _AnthropicMessagesFallbackByteStream(
+        [_anthropic_messages_content_chunk("fallback answer")],
+        hidden_params={"model_id": "fallback-deployment", "additional_headers": {"x-fallback-only": "yes"}},
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=fallback_stream),
+    ):
+        wrapped = await router._aanthropic_messages_streaming_iterator(
+            response=source,
+            initial_kwargs={"model": "primary"},
+        )
+        assert wrapped._hidden_params["additional_headers"]["x-litellm-complexity-router-tier"] == "REASONING"
+        first_output = await wrapped.__anext__()
+
+    assert first_output == _anthropic_messages_content_chunk("fallback answer")
+    assert wrapped.fallback_headers_adopted is True
+    assert wrapped._hidden_params == {
+        "model_id": "fallback-deployment",
+        "additional_headers": {"x-fallback-only": "yes"},
+    }
 
 
 @pytest.mark.asyncio
