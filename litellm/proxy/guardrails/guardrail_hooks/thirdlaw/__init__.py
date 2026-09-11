@@ -22,6 +22,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         streaming_end_of_stream_only=getattr(litellm_params, "streaming_end_of_stream_only", True),
         streaming_sampling_rate=getattr(litellm_params, "streaming_sampling_rate", 5),
         unreachable_fallback=getattr(litellm_params, "unreachable_fallback", None) or "fail_closed",
+        unscannable_stream_fallback=getattr(litellm_params, "unscannable_stream_fallback", None) or "fail_closed",
         additional_provider_specific_params=getattr(litellm_params, "additional_provider_specific_params", None),
         headers=getattr(litellm_params, "headers", None),
         extra_headers=getattr(litellm_params, "extra_headers", None),

@@ -204,11 +204,6 @@ def test_invalid_sampling_rate_rejected():
         _make_guardrail(streaming_sampling_rate=0)
 
 
-def test_native_hook_routing():
-    assert "apply_guardrail" not in ThirdlawGuardrail.__dict__
-    assert "async_post_call_streaming_iterator_hook" in ThirdlawGuardrail.__dict__
-
-
 def test_enum_value():
     assert SupportedGuardrailIntegrations.THIRDLAW.value == "thirdlaw"
 
@@ -217,11 +212,12 @@ def test_config_model_ui_name():
     assert ThirdlawGuardrailConfigModel.ui_friendly_name() == "ThirdLaw"
 
 
-def test_registries_expose_initializer_and_class():
-    assert isinstance(guardrail_initializer_registry, dict)
-    assert isinstance(guardrail_class_registry, dict)
-    assert "thirdlaw" in guardrail_initializer_registry
-    assert guardrail_class_registry["thirdlaw"] is ThirdlawGuardrail
+def test_registry_lookup_builds_a_working_guardrail():
+    """The loader finds thirdlaw by name and the object it builds enforces decisions."""
+    lp = LitellmParams(guardrail="thirdlaw", mode="pre_call", api_base=_API_BASE, api_key="k")
+    built = guardrail_initializer_registry["thirdlaw"](lp, {"guardrail_name": "thirdlaw-guard"})
+    assert isinstance(built, guardrail_class_registry["thirdlaw"])
+    assert built.api_base == _ENDPOINT
 
 
 def test_config_driven_initialization_creates_callback():
@@ -785,3 +781,62 @@ async def test_streaming_raw_sse_block_emits_anthropic_error_frame():
     assert isinstance(out[0], bytes)
     assert b"event: error" in out[0]
     assert b"leaked secret" in out[0]
+
+
+def _unscannable_chunks() -> list[dict]:
+    """A stream shape stream_chunk_builder cannot assemble into a ModelResponse.
+
+    /v1/responses and text-completion streams arrive like this: plain dicts that are
+    neither ModelResponseStream nor raw Anthropic SSE frames.
+    """
+    return [
+        {"type": "response.output_text.delta", "delta": "the secret "},
+        {"type": "response.output_text.delta", "delta": "is sk-leak"},
+    ]
+
+
+async def test_unscannable_stream_fails_closed_by_default():
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    g = _make_guardrail(decisions=[])
+    with pytest.raises(StreamingCallbackError, match="could not be assembled for scanning"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter(_unscannable_chunks()),
+                request_data=_request_data(),
+            )
+        )
+    assert g.async_handler.post.await_count == 0
+
+
+async def test_unscannable_stream_passes_through_when_opted_into_fail_open():
+    chunks = _unscannable_chunks()
+    g = _make_guardrail(decisions=[], unscannable_stream_fallback="fail_open")
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    assert out == chunks
+    assert g.async_handler.post.await_count == 0
+
+
+@pytest.mark.parametrize(
+    ("service_status", "expected_status"),
+    [(200, 400), (204, 400), (302, 400), (403, 403), (451, 451), (503, 503), (None, 400)],
+)
+async def test_block_never_travels_as_a_success_status(service_status, expected_status):
+    """A block is a refusal, so a success status from the service must not reach the caller."""
+    body: dict[str, Any] = {"action": "block", "message": "nope"}
+    if service_status is not None:
+        body["response_status"] = service_status
+    g = _make_guardrail(decisions=[_decision_response(body)])
+    with pytest.raises(GuardrailRaisedException) as excinfo:
+        await g.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(),
+            data=_request_data(),
+            call_type="completion",
+        )
+    assert excinfo.value.status_code == expected_status

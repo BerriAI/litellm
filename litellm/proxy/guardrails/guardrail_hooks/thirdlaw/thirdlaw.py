@@ -279,6 +279,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         streaming_end_of_stream_only: bool = True,
         streaming_sampling_rate: int = 5,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
+        unscannable_stream_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         additional_provider_specific_params: Mapping[str, object] | None = None,
         headers: Mapping[str, str] | None = None,
         extra_headers: Sequence[str] | None = None,
@@ -315,6 +316,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         self.streaming_end_of_stream_only = streaming_end_of_stream_only
         self.streaming_sampling_rate = streaming_sampling_rate
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
+        self.unscannable_stream_fallback: Literal["fail_closed", "fail_open"] = unscannable_stream_fallback
         self.additional_provider_specific_params: Mapping[str, object] = (
             additional_provider_specific_params or _EMPTY_MAP
         )
@@ -426,8 +428,6 @@ class ThirdlawGuardrail(CustomGuardrail):
                 headers=dict(self.http_headers),  # mutable-ok: the HTTP client requires a plain dict
                 json=payload.model_dump(mode="json", exclude_none=True),
             )
-            if http_response is None:
-                raise ValueError("ThirdLaw guardrail HTTP client returned no response")
             http_response.raise_for_status()
             decision: Final = ThirdlawGuardrailResponse.model_validate(http_response.json())
         except Exception as error:  # noqa: BLE001  # every transport/parse failure funnels into the fallback policy
@@ -450,12 +450,28 @@ class ThirdlawGuardrail(CustomGuardrail):
         )
         return decision
 
+    def _block_status(self, response_status: int | None) -> int:
+        """A block is a refusal, so it can only travel as a 4xx/5xx.
+
+        Honoring a success status the service sent would hand the caller a 200 that
+        reads as an allow.
+        """
+        if response_status is None:
+            return 400
+        if 400 <= response_status <= 599:
+            return response_status
+        verbose_proxy_logger.warning(
+            "ThirdLaw guardrail: ignoring non-error response_status %s on a block decision; using 400",
+            response_status,
+        )
+        return 400
+
     def _block_exception(self, decision: ThirdlawGuardrailResponse) -> GuardrailRaisedException:
         return GuardrailRaisedException(
             guardrail_name=self.guardrail_name,
             message=decision.message or "Content violates ThirdLaw policy",
             should_wrap_with_default_message=False,
-            status_code=decision.response_status or 400,
+            status_code=self._block_status(decision.response_status),
             blocked_content=True,
         )
 
@@ -748,22 +764,26 @@ class ThirdlawGuardrail(CustomGuardrail):
         raw_sse: bool,
         buffer: bool,
     ) -> AsyncGenerator[object, None]:
-        """Fail closed for scannable stream shapes; pass through the rest.
+        """Refuse a stream that could not be assembled for scanning.
 
-        A blanket fail-closed would break /v1/responses and text-completion streams
-        (which assemble to non-ModelResponse shapes) for default_on deployments.
+        Shapes that assemble to a non-ModelResponse (/v1/responses and text-completion
+        streams) are refused too unless ``unscannable_stream_fallback`` is ``fail_open``,
+        because forwarding them unscanned lets a caller pick an endpoint to dodge the
+        guardrail.
         """
+        refusal: Final = f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
         if raw_sse:
-            for frame in anthropic_sse_error_frames(
-                f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
-            ):
+            for frame in anthropic_sse_error_frames(refusal):
                 yield frame
             return
         if any(isinstance(item, ModelResponseStream) for item in collected):
-            raise self._streaming_block_error(
-                f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
-            )
-        verbose_proxy_logger.warning("ThirdLaw guardrail: unsupported stream shape; passing through without scanning")
+            raise self._streaming_block_error(refusal)
+        if self.unscannable_stream_fallback == "fail_closed":
+            raise self._streaming_block_error(refusal)
+        verbose_proxy_logger.warning(
+            "ThirdLaw guardrail: unsupported stream shape passed through unscanned "
+            "(unscannable_stream_fallback=fail_open)"
+        )
         if buffer:
             for item in collected:
                 yield item

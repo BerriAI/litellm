@@ -66,6 +66,10 @@ class ThirdlawGuardrailConfigModelOptionalParams(BaseModel):
         default="fail_closed",
         description="Controls LiteLLM behavior when ThirdLaw is unreachable (network error, timeout, 502-504). fail_closed blocks the request. fail_open allows the request to continue. A block decision from ThirdLaw always blocks regardless of this setting.",
     )
+    unscannable_stream_fallback: Literal["fail_closed", "fail_open"] = Field(
+        default="fail_closed",
+        description="Controls LiteLLM behavior when a streamed response cannot be assembled into a scannable shape (for example /v1/responses and text-completion streams). fail_closed refuses the stream. fail_open forwards it unscanned, which lets a caller pick such an endpoint to bypass response moderation.",
+    )
     streaming_buffer_until_moderated: bool | None = Field(
         default=True,
         description="If true (default), a streamed response is withheld until ThirdLaw has moderated the assembled response; a modify_response decision is then applied before anything reaches the client.",
