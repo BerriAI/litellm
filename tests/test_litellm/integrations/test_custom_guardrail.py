@@ -2345,6 +2345,62 @@ class TestUndecoratedApplyGuardrailIsLogged:
 
         assert _Labelled.seen_label == "docs-style"
 
+    @pytest.mark.asyncio
+    async def test_post_call_recorded_outside_decorator_reaches_standard_logging_object(self):
+        """LIT-7608 regression: the auto-wrapped pre_call apply_guardrail copies the request bucket
+        into logging_obj.litellm_params["metadata"]. A post_call entry recorded later without the
+        decorator (the Bedrock streaming hook) must not be shadowed by that stale copy."""
+        import datetime as dt
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        messages: Final = [{"role": "user", "content": "hello there"}]
+        litellm_metadata: Final[dict] = {"user_api_key_user_id": "u1"}
+        logging_obj: Final = Logging(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=messages,
+            stream=True,
+            call_type=CallTypes.acompletion.value,
+            start_time=dt.datetime.now(),
+            litellm_call_id="call-1",
+            function_id="fn-1",
+        )
+        logging_obj.update_environment_variables(
+            litellm_params={"litellm_metadata": litellm_metadata},
+            optional_params={},
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            custom_llm_provider="bedrock",
+        )
+        request_data: Final = {
+            "model": "bedrock-haiku",
+            "messages": messages,
+            "litellm_metadata": litellm_metadata,
+            "litellm_logging_obj": logging_obj,
+        }
+        guardrail: Final = _UndecoratedGuardrail(guardrail_name="bedrock-pre", event_hook=GuardrailEventHooks.pre_call)
+
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["hello there"]),
+            request_data=request_data,
+            input_type="request",
+            logging_obj=logging_obj,
+        )
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"action": "NONE"},
+            request_data=request_data,
+            guardrail_status="success",
+            event_type=GuardrailEventHooks.post_call,
+        )
+        await logging_obj.async_success_handler(
+            result=ModelResponse(choices=[Choices(message=Message(role="assistant", content="general kenobi"))]),
+            start_time=dt.datetime.now(),
+            end_time=dt.datetime.now(),
+        )
+
+        entries: Final = logging_obj.model_call_details["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_mode"] for e in entries] == ["pre_call", "post_call"]
+
 
 class _ApplyOnlyObserver(CustomGuardrail):
     """Overrides only apply_guardrail, like panw_prisma_airs; inherits async_logging_hook."""
