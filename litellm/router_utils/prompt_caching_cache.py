@@ -140,6 +140,22 @@ class PromptCachingCache:
         return cacheable_prefix
 
     @staticmethod
+    def extract_cacheable_tools(
+        tools: list[ChatCompletionToolParam],
+    ) -> list[ChatCompletionToolParam]:
+        cacheable_tool_index: Final = next(
+            (
+                index
+                for index in range(len(tools) - 1, -1, -1)
+                if isinstance(tools[index].get("cache_control"), dict)
+                and tools[index]["cache_control"].get("type") == "ephemeral"
+            ),
+            None,
+        )
+        # Match the provider prefix exactly instead of pinning on uncached trailing tools
+        return tools[: cacheable_tool_index + 1] if cacheable_tool_index is not None else []
+
+    @staticmethod
     def prepend_system_prompt(
         messages: list[AllMessageValues],
         system: object | None,
@@ -164,6 +180,7 @@ class PromptCachingCache:
         cacheable_prefix: list[AllMessageValues],
         tools: list[ChatCompletionToolParam] | None,
     ) -> int:
+        cacheable_tools: Final = PromptCachingCache.extract_cacheable_tools(tools or [])
         cache_control_values: Final = tuple(
             cache_control
             for message in cacheable_prefix
@@ -176,8 +193,9 @@ class PromptCachingCache:
                 ),
             )
             if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral"
-        ) + tuple(tool.get("cache_control") for tool in (tools or ()) if isinstance(tool.get("cache_control"), dict))
-        return 3600 if any(value.get("ttl") == "1h" for value in cache_control_values) else 300
+        ) + tuple(tool.get("cache_control") for tool in cacheable_tools if isinstance(tool.get("cache_control"), dict))
+        # Prefer the shortest provider lifetime so affinity never outlives a cached segment
+        return 3600 if cache_control_values and all(value.get("ttl") == "1h" for value in cache_control_values) else 300
 
     @staticmethod
     def get_prompt_caching_cache_key(
@@ -205,7 +223,8 @@ class PromptCachingCache:
             serialized_messages: Final = PromptCachingCache.serialize_object(cacheable_messages)
             data_to_hash["messages"] = serialized_messages
         if tools is not None:
-            serialized_tools: Final = PromptCachingCache.serialize_object(tools)
+            cacheable_tools: Final = PromptCachingCache.extract_cacheable_tools(tools)
+            serialized_tools: Final = PromptCachingCache.serialize_object(cacheable_tools)
             data_to_hash["tools"] = serialized_tools
 
         # Combine serialized data into a single string

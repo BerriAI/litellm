@@ -61,6 +61,29 @@ def _messages(word_count: int) -> List[AllMessageValues]:
     )
 
 
+def test_prepend_system_prompt_without_system_preserves_messages():
+    messages = _messages(word_count=10)
+
+    assert PromptCachingCache.prepend_system_prompt(messages, None) is messages
+
+
+def test_tool_affinity_ignores_tools_after_cache_breakpoint():
+    messages = _messages(word_count=10)
+    cached_tools = cast(
+        list[ChatCompletionToolParam],
+        [
+            {"type": "function", "function": {"name": "stable", "parameters": {}}, "cache_control": {"type": "ephemeral"}},
+            {"type": "function", "function": {"name": "first-trailing", "parameters": {}}},
+        ],
+    )
+    changed_trailing_tools = [*cached_tools[:-1], {"type": "function", "function": {"name": "second-trailing", "parameters": {}}}]
+
+    assert PromptCachingCache.extract_cacheable_tools(cached_tools) == cached_tools[:1]
+    assert PromptCachingCache.get_prompt_caching_cache_key(messages, cached_tools) == PromptCachingCache.get_prompt_caching_cache_key(
+        messages, changed_trailing_tools
+    )
+
+
 @pytest.mark.asyncio
 async def test_system_parameter_is_part_of_prompt_cache_affinity():
     cache = DualCache()
@@ -94,6 +117,24 @@ def test_prompt_caching_affinity_ttl_matches_cache_control(ttl: str | None, expe
     )
 
     assert PromptCachingCache.get_prompt_caching_ttl(messages) == expected_affinity_ttl
+
+
+def test_mixed_cache_ttls_use_the_shortest_affinity_ttl():
+    messages = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "system", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "user", "cache_control": {"type": "ephemeral", "ttl": "5m"}}],
+            },
+        ],
+    )
+
+    assert PromptCachingCache.get_prompt_caching_ttl(messages) == 300
 
 
 def test_add_model_id_uses_one_hour_affinity_ttl():
@@ -141,7 +182,15 @@ async def test_async_add_model_id_uses_one_hour_tool_affinity_ttl():
     cache = DualCache()
     async_set_cache = AsyncMock()
     cache.async_set_cache = async_set_cache
-    messages = _messages(word_count=1400)
+    messages = cast(
+        List[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "cached", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            }
+        ],
+    )
     tools = cast(
         list[ChatCompletionToolParam],
         [
