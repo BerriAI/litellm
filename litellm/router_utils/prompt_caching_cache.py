@@ -140,13 +140,20 @@ class PromptCachingCache:
         return cacheable_prefix
 
     @staticmethod
-    def get_prompt_caching_ttl(messages: list[AllMessageValues] | None) -> int:
-        if messages is None:
-            return 300
+    def get_prompt_caching_ttl(
+        messages: list[AllMessageValues] | None,
+        tools: list[ChatCompletionToolParam] | None = None,
+    ) -> int:
+        cacheable_prefix: Final = PromptCachingCache.extract_cacheable_prefix(messages) if messages is not None else []
+        return PromptCachingCache.get_prompt_caching_ttl_from_prefix(cacheable_prefix, tools)
 
-        cacheable_prefix: Final = PromptCachingCache.extract_cacheable_prefix(messages)
-        cache_control_ttls: Final = tuple(
-            cache_control.get("ttl")
+    @staticmethod
+    def get_prompt_caching_ttl_from_prefix(
+        cacheable_prefix: list[AllMessageValues],
+        tools: list[ChatCompletionToolParam] | None,
+    ) -> int:
+        cache_control_values: Final = tuple(
+            cache_control
             for message in cacheable_prefix
             for cache_control in (
                 message.get("cache_control"),
@@ -157,24 +164,28 @@ class PromptCachingCache:
                 ),
             )
             if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral"
-        )
-        return 3600 if "1h" in cache_control_ttls else 300
+        ) + tuple(tool.get("cache_control") for tool in (tools or ()) if isinstance(tool.get("cache_control"), dict))
+        return 3600 if any(value.get("ttl") == "1h" for value in cache_control_values) else 300
 
     @staticmethod
     def get_prompt_caching_cache_key(
         messages: list[AllMessageValues] | None,
         tools: list[ChatCompletionToolParam] | None,
     ) -> str | None:
-        if messages is None and tools is None:
-            return None
+        cacheable_messages: Final = (
+            PromptCachingCache.extract_cacheable_prefix(messages) if messages is not None else None
+        )
+        return PromptCachingCache.get_prompt_caching_cache_key_from_prefix(cacheable_messages, tools)
 
-        # Extract cacheable prefix from messages (only include up to last cache_control block)
-        cacheable_messages = None
-        if messages is not None:
-            cacheable_messages = PromptCachingCache.extract_cacheable_prefix(messages)
-            # If no cacheable prefix found, return None (can't cache)
-            if not cacheable_messages:
-                return None
+    @staticmethod
+    def get_prompt_caching_cache_key_from_prefix(
+        cacheable_messages: list[AllMessageValues] | None,
+        tools: list[ChatCompletionToolParam] | None,
+    ) -> str | None:
+        if cacheable_messages is None and tools is None:
+            return None
+        if cacheable_messages is not None and not cacheable_messages:
+            return None
 
         # Use serialize_object for consistent and stable serialization
         data_to_hash: Final = {}
@@ -205,15 +216,17 @@ class PromptCachingCache:
         if messages is None and tools is None:
             return
 
-        cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
-        # If no cacheable prefix found, don't cache (can't generate cache key)
+        cacheable_prefix: Final = (
+            PromptCachingCache.extract_cacheable_prefix(messages) if messages is not None else None
+        )
+        cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key_from_prefix(cacheable_prefix, tools)
         if cache_key is None:
             return
 
         self.cache.set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
-            ttl=PromptCachingCache.get_prompt_caching_ttl(messages),
+            ttl=PromptCachingCache.get_prompt_caching_ttl_from_prefix(cacheable_prefix or [], tools),
         )
         return
 
@@ -226,15 +239,17 @@ class PromptCachingCache:
         if messages is None and tools is None:
             return
 
-        cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
-        # If no cacheable prefix found, don't cache (can't generate cache key)
+        cacheable_prefix: Final = (
+            PromptCachingCache.extract_cacheable_prefix(messages) if messages is not None else None
+        )
+        cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key_from_prefix(cacheable_prefix, tools)
         if cache_key is None:
             return
 
         await self.cache.async_set_cache(
             cache_key,
             PromptCachingCacheValue(model_id=model_id),
-            ttl=PromptCachingCache.get_prompt_caching_ttl(messages),
+            ttl=PromptCachingCache.get_prompt_caching_ttl_from_prefix(cacheable_prefix or [], tools),
         )
         return
 

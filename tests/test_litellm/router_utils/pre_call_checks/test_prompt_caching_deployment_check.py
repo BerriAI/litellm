@@ -1,7 +1,7 @@
 import asyncio
 import copy
 from typing import List, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -16,7 +16,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
     _get_min_token_count_for_deployments,
 )
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt, token_counter
 
 MODEL_GROUP_ALIAS = "my-claude-group"
@@ -75,6 +75,20 @@ def test_prompt_caching_affinity_ttl_matches_cache_control(ttl: str | None, expe
     assert PromptCachingCache.get_prompt_caching_ttl(messages) == expected_affinity_ttl
 
 
+def test_add_model_id_uses_one_hour_affinity_ttl():
+    cache = DualCache()
+    set_cache = Mock()
+    cache.set_cache = set_cache
+    messages = cast(
+        List[AllMessageValues],
+        [{"role": "system", "content": [{"type": "text", "text": "cached", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]}],
+    )
+
+    PromptCachingCache(cache=cache).add_model_id("dep-1", messages, None)
+
+    assert set_cache.call_args.kwargs["ttl"] == 3600
+
+
 @pytest.mark.asyncio
 async def test_async_add_model_id_uses_one_hour_affinity_ttl():
     cache = DualCache()
@@ -97,6 +111,28 @@ async def test_async_add_model_id_uses_one_hour_affinity_ttl():
     )
 
     await PromptCachingCache(cache=cache).async_add_model_id("dep-1", messages, None)
+
+    assert async_set_cache.call_args.kwargs["ttl"] == 3600
+
+
+@pytest.mark.asyncio
+async def test_async_add_model_id_uses_one_hour_tool_affinity_ttl():
+    cache = DualCache()
+    async_set_cache = AsyncMock()
+    cache.async_set_cache = async_set_cache
+    messages = _messages(word_count=1400)
+    tools = cast(
+        list[ChatCompletionToolParam],
+        [
+            {
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {}},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ],
+    )
+
+    await PromptCachingCache(cache=cache).async_add_model_id("dep-1", messages, tools)
 
     assert async_set_cache.call_args.kwargs["ttl"] == 3600
 
