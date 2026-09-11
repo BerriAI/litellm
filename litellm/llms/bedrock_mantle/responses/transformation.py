@@ -214,15 +214,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             summary,
             sorted(_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES),
         )
-        stripped: Final = {  # mutable-ok: dynamic reasoning fields must remain a mutable dict
-            key: value for key, value in reasoning.items() if key != "summary"
-        }
+        stripped: Final = {key: value for key, value in reasoning.items() if key != "summary"}
         return (
-            {**params, "reasoning": stripped}  # mutable-ok: downstream parameter filtering needs a mutable dict
+            {**params, "reasoning": stripped}
             if stripped
-            else {  # mutable-ok: downstream parameter filtering needs a mutable dict
-                key: value for key, value in params.items() if key != "reasoning"
-            }
+            else {key: value for key, value in params.items() if key != "reasoning"}
         )
 
     def transform_responses_api_request(
