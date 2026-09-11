@@ -92,7 +92,7 @@ def configured_router(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", [{"model_name": "gpt-4"}])
     monkeypatch.setattr(proxy_server, "user_model", None)
-    monkeypatch.setattr(proxy_server, "_get_proxy_model_info", lambda model: model)
+    monkeypatch.setattr(proxy_server, "_get_proxy_model_info", lambda model, llm_router=None: model)
     yield router
 
 
