@@ -55278,6 +55278,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_web_search": true
     },
     "bedrock_mantle/openai.gpt-5.6-terra": {
@@ -55317,6 +55318,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_web_search": true
     },
     "bedrock_mantle/openai.gpt-5.6-cyber": {
@@ -55345,6 +55347,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true
     },
     "bedrock_mantle/openai.gpt-daybreak-blue-5.6-sol": {
@@ -55377,6 +55380,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html"
     },
@@ -55417,6 +55421,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_web_search": true
     },
     "us.openai.gpt-5.6-sol": {
@@ -55443,6 +55448,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-sol": {
@@ -55469,6 +55475,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true
     },
     "us.openai.gpt-5.6-terra": {
@@ -55495,6 +55502,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-terra": {
@@ -55521,6 +55529,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true
     },
     "us.openai.gpt-5.6-luna": {
@@ -55547,6 +55556,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-luna": {
@@ -55573,6 +55583,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true
     },
     "bedrock_mantle/openai.gpt-6-astra": {
@@ -55606,6 +55617,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
     },
@@ -55634,6 +55646,7 @@
         "supports_tool_choice": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
     },
@@ -55662,6 +55675,7 @@
         "supports_tool_choice": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html"
     },
@@ -55699,6 +55713,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_web_search": true
     },
     "bedrock_mantle/openai.gpt-5.4": {
@@ -55735,6 +55750,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_web_search": true
     },
     "bedrock_mantle/google.gemma-4-31b": {
@@ -61170,6 +61186,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "input_cost_per_token": 2.64e-06,
         "input_cost_per_token_above_272k_tokens": 5.28e-06,
@@ -61203,6 +61220,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "input_cost_per_token": 2.64e-07,
         "input_cost_per_token_above_272k_tokens": 5.28e-07,
@@ -61235,6 +61253,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "input_cost_per_token": 3.3e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -61397,6 +61416,7 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
+        "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "input_cost_per_token": 3.3e-06,
         "cache_read_input_token_cost": 3.3e-07,

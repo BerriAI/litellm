@@ -4,6 +4,7 @@ import importlib.util
 import json
 import re
 from pathlib import Path
+from typing import Final
 
 import jsonschema
 import pytest
@@ -217,3 +218,21 @@ def test_chat_latest_declares_the_one_effort_openai_accepts(prices: dict):
     with no declared levels resolves to None, which lets /model_group/info and the dashboard offer
     levels the upstream will 400 on."""
     assert resolve_supported_reasoning_efforts(prices["chat-latest"], deployment_is_mapped=True) == ("medium",)
+
+
+BEDROCK_OPENAI_XHIGH_MARKERS: Final = ("openai.gpt-5.4", "openai.gpt-5.5", "openai.gpt-5.6", "openai.gpt-6-astra")
+BEDROCK_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse", "bedrock_mantle"))
+
+
+def test_bedrock_openai_gpt_rows_advertise_xhigh_like_their_openai_twins(prices: dict):
+    """Bedrock forwards reasoning_effort to these models unchanged, and xhigh is opt-in for the
+    capability resolver, so a row without the flag drops xhigh from every group it belongs to."""
+    missing = [
+        name
+        for name, entry in prices.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") in BEDROCK_PROVIDERS
+        and any(marker in name for marker in BEDROCK_OPENAI_XHIGH_MARKERS)
+        and "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
+    ]
+    assert missing == []
