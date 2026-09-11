@@ -48,7 +48,7 @@ GET    /v1/workflows/runs/{run_id}/messages  Conversation history (ordered by se
 ```bash
 # Create a run
 curl -X POST http://localhost:4000/v1/workflows/runs \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"workflow_type": "shin-builder", "metadata": {"title": "Fix login bug"}}'
 
@@ -56,19 +56,19 @@ curl -X POST http://localhost:4000/v1/workflows/runs \
 
 # Mark step started (sets status → running)
 curl -X POST http://localhost:4000/v1/workflows/runs/abc-123/events \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"event_type": "step.started", "step_name": "grill", "data": {"claude_session_id": "sess-789"}}'
 
 # Store a conversation message
 curl -X POST http://localhost:4000/v1/workflows/runs/abc-123/messages \
-  -H "Authorization: Bearer sk-1234" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"role": "user", "content": "What is the expected behavior?", "session_id": "sess-789"}'
 
 # Restart recovery: fetch active runs and resume from last event's data.claude_session_id
 curl "http://localhost:4000/v1/workflows/runs?status=running,paused&workflow_type=shin-builder" \
-  -H "Authorization: Bearer sk-1234"
+  -H "Authorization: Bearer $LITELLM_API_KEY"
 ```
 
 ## Status Auto-Update Rules

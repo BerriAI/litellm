@@ -57,7 +57,7 @@ async def search(
     Example with search_tool_name in URL (recommended - keeps body Perplexity-compatible):
     ```bash
     curl -X POST "http://localhost:4000/v1/search/litellm-search" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "query": "latest AI developments 2024",
@@ -70,7 +70,7 @@ async def search(
     Example with search_tool_name in body:
     ```bash
     curl -X POST "http://localhost:4000/v1/search" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "search_tool_name": "litellm-search",
@@ -264,7 +264,7 @@ async def list_search_tools(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/search/tools" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     
     Response:

@@ -272,7 +272,7 @@ docker build -f docker/Dockerfile.non_root -t litellm_dev .
 # Run with your config
 docker run \
     -v $(pwd)/proxy_config.yaml:/app/config.yaml \
-    -e LITELLM_MASTER_KEY="sk-1234" \
+    -e LITELLM_MASTER_KEY="sk-<paste-a-long-random-key>" \
     -p 4000:4000 \
     litellm_dev \
     --config /app/config.yaml --detailed_debug

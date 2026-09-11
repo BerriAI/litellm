@@ -628,7 +628,7 @@ def route_in_additonal_public_routes(current_route: str):
 
     ```yaml
     general_settings:
-        master_key: sk-1234
+        master_key: os.environ/LITELLM_MASTER_KEY
         public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate", "/api/*"]
     ```
     """

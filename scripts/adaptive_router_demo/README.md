@@ -83,7 +83,7 @@ The dashboard is a single static HTML file. Either:
 In the connect bar, fill in:
 
 - **Proxy URL:** `http://localhost:4000`
-- **Master Key:** the `master_key` from your config (`sk-1234` in the example).
+- **Master Key:** the `master_key` from your config (`sk-<your-litellm-master-key>` in the example).
 
 Click **Connect**. The dashboard polls `GET /adaptive_router/state` every
 500ms (admin-only endpoint, returns one snapshot per configured router).
@@ -95,7 +95,7 @@ In a second terminal:
 ```bash
 uv run python scripts/adaptive_router_demo/traffic.py \
     --proxy-url http://localhost:4000 \
-    --api-key   sk-1234 \
+    --api-key   sk-<your-litellm-api-key> \
     --router    smart-cheap-router \
     --rounds    100 \
     --rate      0.5

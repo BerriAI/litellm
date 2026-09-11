@@ -18,4 +18,4 @@ litellm_settings:
   telemetry: False
 
 general_settings:
-  master_key: sk-1234  # Change this to a secure key
+  master_key: os.environ/LITELLM_MASTER_KEY  # Change this to a secure key

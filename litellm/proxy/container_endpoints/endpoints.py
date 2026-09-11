@@ -52,7 +52,7 @@ async def create_container(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/containers" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "name": "My Container",
@@ -66,7 +66,7 @@ async def create_container(
     Or specify provider via header:
     ```bash
     curl -X POST "http://localhost:4000/v1/containers" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -H "custom-llm-provider: azure" \
         -H "Content-Type: application/json" \
         -d '{
@@ -187,13 +187,13 @@ async def list_containers(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers?limit=20&order=desc" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     
     Or specify provider via header or query param:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers?custom_llm_provider=azure" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -290,13 +290,13 @@ async def retrieve_container(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     
     Or specify provider via header:
     ```bash
     curl -X GET "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -H "custom-llm-provider: azure"
     ```
     """
@@ -395,13 +395,13 @@ async def delete_container(
     Example:
     ```bash
     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_API_KEY"
     ```
     
     Or specify provider via header:
     ```bash
     curl -X DELETE "http://localhost:4000/v1/containers/cntr_123" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_API_KEY" \
         -H "custom-llm-provider: azure"
     ```
     """

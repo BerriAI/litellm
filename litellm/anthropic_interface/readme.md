@@ -86,7 +86,7 @@ import anthropic
 # point anthropic sdk to litellm proxy 
 client = anthropic.Anthropic(
     base_url="http://0.0.0.0:4000",
-    api_key="sk-1234",
+    api_key="sk-<your-litellm-api-key>",
 )
 
 response = client.messages.create(
