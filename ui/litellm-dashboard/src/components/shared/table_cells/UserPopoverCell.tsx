@@ -31,7 +31,7 @@ export function UserPopoverCell({ userAlias, userEmail, userId, width }: UserPop
         <div key={label} className="flex flex-col min-w-0">
           <span className="text-muted-foreground">{label}</span>
           {value ? (
-            <IdCell value={value} variant="plain" copyable className="max-w-full" />
+            <IdCell value={value} variant="plain" copyable copyLabel={`Copy ${label}`} className="max-w-full" />
           ) : (
             <span className="font-mono">-</span>
           )}
