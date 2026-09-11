@@ -282,7 +282,7 @@ async def test_async_ocr_wrapper_sends_final_failure_to_attached_completion(
 
 
 @pytest.mark.asyncio
-async def test_async_ocr_wrapper_retains_completion_until_metadata_finishes(
+async def test_async_ocr_wrapper_reports_metadata_failure_without_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     native_completion: Final = RecordingCompletion()
@@ -307,7 +307,7 @@ async def test_async_ocr_wrapper_retains_completion_until_metadata_finishes(
         await wrapped()
 
     assert caught.value is metadata_error
-    assert native_completion.successes == [response]
+    assert native_completion.successes == []
     assert native_completion.failures == [metadata_error, metadata_error]
 
 
@@ -343,9 +343,23 @@ async def test_ocr_completion_stays_separate_from_marshaled_provider_options(
     ) -> OCRResponse:
         return run(request, resolve_secret, convert_file_document)
 
-    monkeypatch.setattr(import_module("litellm.ocr.main"), "rust_enabled", lambda: True)
-    monkeypatch.setattr(rust_ocr_bridge, "run", run)
-    monkeypatch.setattr(rust_ocr_bridge, "arun", arun)
+    def run_bridge(
+        request: rust_ocr_bridge.LiteLLMOcrRequest,
+        resolve_api_key: Callable[[str], str | None],
+    ) -> OCRResponse:
+        return run(request, resolve_api_key, lambda document: {})
+
+    async def arun_bridge(
+        request: rust_ocr_bridge.LiteLLMOcrRequest,
+        resolve_api_key: Callable[[str], str | None],
+    ) -> OCRResponse:
+        return await arun(request, resolve_api_key, lambda document: {})
+
+    ocr_main: Final = import_module("litellm.ocr.main")
+    monkeypatch.setattr(ocr_main, "rust_enabled", lambda: True)
+    monkeypatch.setattr(ocr_main, "_rust_ocr_supported", lambda request: True)
+    monkeypatch.setattr(ocr_main, "_run_rust_ocr", run_bridge)
+    monkeypatch.setattr(ocr_main, "_run_rust_aocr", arun_bridge)
     arguments: Final = {
         "model": "mistral/mistral-ocr-latest",
         "document": {"type": "document_url", "document_url": "https://example.com/doc.pdf"},
