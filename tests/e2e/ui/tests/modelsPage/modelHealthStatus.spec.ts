@@ -4,7 +4,7 @@ import {
   type Locator,
   type Page as PlaywrightPage,
 } from "@playwright/test";
-import { ADMIN_STORAGE_PATH } from "../../constants";
+import { ADMIN_STORAGE_PATH, PROPAGATION_TIMEOUT_MS } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
 import { readBack } from "../../helpers/roundTrip";
@@ -145,6 +145,24 @@ async function withDeployment(
         timeout: 60_000,
       })
       .toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get("/health", {
+            headers: { Authorization: `Bearer ${masterKey()}` },
+            params: { model_id: id },
+          });
+          if (![200, 503].includes(response.status())) return 0;
+          const body: { healthy_count?: number; unhealthy_count?: number } = await response.json();
+          return (body.healthy_count ?? 0) + (body.unhealthy_count ?? 0);
+        },
+        {
+          message: `deployment ${name} never became available to /health`,
+          timeout: PROPAGATION_TIMEOUT_MS,
+          intervals: [2_000],
+        },
+      )
+      .toBe(1);
     await use(name);
   } finally {
     await deleteDeployment(page, id);
