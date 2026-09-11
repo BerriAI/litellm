@@ -810,6 +810,22 @@ async def test_unscannable_stream_fails_closed_by_default():
     assert g.async_handler.post.await_count == 0
 
 
+@pytest.mark.parametrize("typo", ["fail_close", "failopen", "FAIL_OPEN", ""])
+async def test_unscannable_stream_fails_closed_on_a_mistyped_fallback(typo):
+    """Literal is not enforced at runtime, so anything but the exact opt-in must block."""
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    g = _make_guardrail(decisions=[], unscannable_stream_fallback=typo)
+    with pytest.raises(StreamingCallbackError, match="could not be assembled for scanning"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter(_unscannable_chunks()),
+                request_data=_request_data(),
+            )
+        )
+
+
 async def test_unscannable_stream_passes_through_when_opted_into_fail_open():
     chunks = _unscannable_chunks()
     g = _make_guardrail(decisions=[], unscannable_stream_fallback="fail_open")

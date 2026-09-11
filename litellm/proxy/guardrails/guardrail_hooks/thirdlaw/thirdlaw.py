@@ -778,7 +778,9 @@ class ThirdlawGuardrail(CustomGuardrail):
             return
         if any(isinstance(item, ModelResponseStream) for item in collected):
             raise self._streaming_block_error(refusal)
-        if self.unscannable_stream_fallback == "fail_closed":
+        # Only the explicit opt-in opens: Literal is not enforced at runtime, so a typo
+        # in the config must fail closed rather than silently disable the scan.
+        if self.unscannable_stream_fallback != "fail_open":
             raise self._streaming_block_error(refusal)
         verbose_proxy_logger.warning(
             "ThirdLaw guardrail: unsupported stream shape passed through unscanned "
