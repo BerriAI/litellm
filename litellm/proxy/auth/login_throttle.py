@@ -76,6 +76,12 @@ def warn_login_counters_are_per_worker(num_workers: str) -> None:
     )
 
 
+@cache
+def _rate_limit_disabled() -> bool:
+    """Resolved once per process so an unauthenticated flood never reaches the secret manager."""
+    return bool(get_secret_bool("LITELLM_DISABLE_LOGIN_RATE_LIMIT", False))
+
+
 async def _sleep(seconds: float) -> None:
     """The wait a rejected sign-in is held for. Replaced in tests so the suite pays no wall clock."""
     await asyncio.sleep(seconds)
@@ -161,7 +167,7 @@ class LoginThrottle:
             username_cache=_FAILED_LOGIN_USERNAME_CACHE,
             source_cache=_FAILED_LOGIN_SOURCE_CACHE,
             redis_cache=redis_usage_cache,
-            enabled=not get_secret_bool("LITELLM_DISABLE_LOGIN_RATE_LIMIT", False),
+            enabled=not _rate_limit_disabled(),
         )
 
     @staticmethod
