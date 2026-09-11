@@ -11,7 +11,7 @@ https://platform.openai.com/docs/api-reference/fine-tuning
 import asyncio
 import contextvars
 import os
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
 from typing import Any, Final, Literal
 
@@ -37,8 +37,8 @@ vertex_fine_tuning_apis_instance: Final = VertexFineTuningAPI()
 
 def _prepare_azure_extra_body(
     extra_body: dict[str, Any] | None,
-    kwargs: dict[str, Any],
-    azure_specific_hyperparams: dict[str, Any],
+    kwargs: Mapping[str, object],
+    azure_specific_hyperparams: Mapping[str, object],
 ) -> dict[str, Any]:
     """
     Prepare extra_body for Azure fine-tuning API by combining Azure-specific parameters.
@@ -138,7 +138,7 @@ def _build_fine_tuning_job_data(model, training_file, hyperparameters, suffix, v
 
 
 def _resolve_fine_tuning_timeout(
-    timeout: Any,
+    timeout: float | str | httpx.Timeout | None,
     custom_llm_provider: str,
 ) -> float | httpx.Timeout:
     """Normalise a raw timeout value to a float (seconds) or httpx.Timeout for fine-tuning calls."""
@@ -163,7 +163,7 @@ def create_fine_tuning_job(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
+) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
     """
     Creates a fine-tuning job which begins the process of creating a new model from a given dataset.
 
@@ -375,7 +375,7 @@ def cancel_fine_tuning_job(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
+) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
     """
     Immediately cancel a fine-tune job.
 
@@ -682,7 +682,7 @@ def retrieve_fine_tuning_job(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
+) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
     """
     Get info about a fine-tuning job.
     """

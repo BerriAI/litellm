@@ -4,10 +4,13 @@ Tests for gateway repository layer.
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
+from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from prisma import models as prisma_models
+from prisma.builder import QueryBuilder
 
 from litellm.models.base import DomainModel
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -307,6 +310,23 @@ class TestModelRepository:
         client = MockPrismaClient()
         return ModelRepository(client)
 
+    @pytest.mark.asyncio
+    async def test_find_all_except_serializes_exclusion_for_prisma(self) -> None:
+        find_many: Final = AsyncMock(return_value=[])
+        client: Final = SimpleNamespace(
+            db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))
+        )
+
+        await ModelRepository(client).find_all_except("current-model")
+
+        find_many.assert_awaited_once()
+        query: Final = QueryBuilder(
+            method="find_many",
+            model=prisma_models.LiteLLM_ProxyModelTable,
+            arguments=find_many.call_args.kwargs,
+        ).build_query()
+        assert 'where: { model_id: { not: "current-model" } }' in " ".join(query.split())
+
     def test_table_is_wrapped_for_config_sync(self, repo):
         from litellm.proxy.common_utils.config_sync_pubsub import (
             _PublishOnWriteActions,
@@ -541,17 +561,26 @@ class TestTeamRepository:
 
         assert [m.user_id for m in members] == expected_ids
         sql = tx.query_raw.call_args.args[0]
-        assert "FOR UPDATE" in sql
+        assert "FOR UPDATE" not in sql, (
+            "a row lock here can deadlock with the access-group endpoints; the caller must "
+            "already hold the team's advisory lock, so a plain read is all this needs"
+        )
         assert tx.query_raw.call_args.args[1] == "team-1"
 
     @pytest.mark.asyncio
     async def test_get_members_with_roles_locked_missing_row(self, repo):
+        """None, not [], so a caller can tell a deleted team from an empty one.
+
+        /team/member_add reconciles membership under the team's advisory lock and has to
+        fail, without writing anything, when a /team/delete committed underneath it. An
+        empty list would look like a live team with no members and it would carry on writing.
+        """
         tx = MagicMock()
         tx.query_raw = AsyncMock(return_value=[])
 
         members = await repo.get_members_with_roles_locked(tx, "missing")
 
-        assert members == []
+        assert members is None
 
     @pytest.mark.asyncio
     async def test_create_team_all_fields(self, repo):

@@ -26,22 +26,22 @@ describe("IdCell", () => {
     render(<IdCell value="sk-1234567890abcdef" />);
     const el = screen.getByText("sk-1234567890abcdef");
     expect(el.tagName).toBe("SPAN");
-    expect(el.className).toContain("bg-blue-50");
-    expect(el.className).toContain("font-mono");
-    expect(el.className).toContain("max-w-[15ch]");
-    expect(el.className).toContain("truncate");
+    expect(el).toHaveClass("bg-info/10");
+    expect(el).toHaveClass("font-mono");
+    expect(el).toHaveClass("max-w-[15ch]");
+    expect(el).toHaveClass("truncate");
   });
 
   it("renders plain mono text without pill styling for the plain variant", () => {
     render(<IdCell value="req-123" variant="plain" />);
     const el = screen.getByText("req-123");
-    expect(el.className).toContain("font-mono");
-    expect(el.className).not.toContain("bg-blue-50");
+    expect(el).toHaveClass("font-mono");
+    expect(el).not.toHaveClass("bg-info/10");
   });
 
   it("does not truncate when truncate is false", () => {
     render(<IdCell value="audit-object-id" truncate={false} />);
-    expect(screen.getByText("audit-object-id").className).not.toContain("truncate");
+    expect(screen.getByText("audit-object-id")).not.toHaveClass("truncate");
   });
 
   it("becomes a button that fires onClick with the id value", async () => {
@@ -69,6 +69,14 @@ describe("IdCell", () => {
     await user.click(screen.getByRole("button", { name: "Copy ID" }));
     expect(copyToClipboardMock).toHaveBeenCalledWith("key-hash-9");
     expect(rowClick).not.toHaveBeenCalled();
+  });
+
+  it("names the copy button after the field it copies", async () => {
+    const user = userEvent.setup();
+    render(<IdCell value="alice@example.com" copyable copyLabel="Copy User Email" />);
+    expect(screen.queryByRole("button", { name: "Copy ID" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy User Email" }));
+    expect(copyToClipboardMock).toHaveBeenCalledWith("alice@example.com");
   });
 
   it("passes dataTestId through to the id element", () => {

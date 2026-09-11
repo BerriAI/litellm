@@ -7,6 +7,7 @@ with ``client_id``, ``client_secret``, and ``token_url``.
 
 import asyncio
 import hashlib
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -27,6 +28,8 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     build_upstream_oauth2_token_request,
     resolve_upstream_resource,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_cache_codec import OAuthTokenCacheCodec
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -67,7 +70,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
         rest of the identity rather than stored in a key."""
         material: Final = "\x00".join(
             (
-                server.token_url or "",
+                server.effective_token_url or "",
                 server.client_id or "",
                 server.client_secret or "",
                 " ".join(server.scopes or ()),
@@ -82,7 +85,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
 
     @staticmethod
     def _has_client_credentials_config(server: "MCPServer") -> bool:
-        return bool(server.client_id and server.client_secret and server.token_url)
+        return bool(server.client_id and server.client_secret and server.effective_token_url)
 
     async def async_get_token(self, server: "MCPServer") -> str | None:
         """Return a valid access token, fetching or refreshing as needed.
@@ -112,19 +115,20 @@ class MCPOAuth2TokenCache(InMemoryCache):
             return token
 
     async def _fetch_token(self, server: "MCPServer") -> tuple[str, int]:
-        """POST to ``token_url`` with ``grant_type=client_credentials``.
+        """POST to ``effective_token_url`` with ``grant_type=client_credentials``.
 
         Returns ``(access_token, ttl_seconds)`` where ttl accounts for the
         expiry buffer so the cache entry expires before the real token does.
         """
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
-        if not server.client_id or not server.client_secret or not server.token_url:
+        token_url: Final = server.effective_token_url
+        if not server.client_id or not server.client_secret or not token_url:
             raise ValueError(
                 f"MCP server '{server.server_id}' missing required OAuth2 fields: "
                 f"client_id={bool(server.client_id)}, "
                 f"client_secret={bool(server.client_secret)}, "
-                f"token_url={bool(server.token_url)}"
+                f"token_url={bool(token_url)}"
             )
 
         token_request: Final = build_upstream_oauth2_token_request(
@@ -145,9 +149,8 @@ class MCPOAuth2TokenCache(InMemoryCache):
             server.server_id,
         )
 
-        post_kwargs: Final = {"data": data, **({"headers": token_request.headers} if token_request.headers else {})}
         try:
-            response: Final = await client.post(server.token_url, **post_kwargs)
+            response: Final = await client.post(token_url, data=data, headers=token_request.headers or None)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ValueError(
@@ -232,8 +235,17 @@ class MCPPerUserTokenCache:
     def _cache_key(self, user_id: str, server_id: str) -> str:
         return f"{MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX}:{user_id}:{server_id}"
 
+    def _codec(self) -> OAuthTokenCacheCodec:
+        return OAuthTokenCacheCodec(
+            encrypt_value_helper,
+            lambda blob: decrypt_value_helper(blob, key="mcp_per_user_token", exception_type="debug"),
+        )
+
     async def get(self, user_id: str, server_id: str) -> str | None:
-        """Return the plaintext access_token, or None on miss/error."""
+        token: Final = await self.get_token(user_id, server_id)
+        return token.access_token if token is not None else None
+
+    async def get_token(self, user_id: str, server_id: str) -> OAuthToken | None:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
@@ -241,12 +253,7 @@ class MCPPerUserTokenCache:
             encrypted: Final = await user_api_key_cache.async_get_cache(key)
             if encrypted is None:
                 return None
-            plaintext: Final = decrypt_value_helper(
-                encrypted,
-                key="mcp_per_user_token",
-                exception_type="debug",
-            )
-            return plaintext or None
+            return self._codec().decode(encrypted)
         except Exception as exc:
             verbose_logger.debug(
                 "MCPPerUserTokenCache.get failed for user=%s server=%s: %s",
@@ -262,13 +269,16 @@ class MCPPerUserTokenCache:
         server_id: str,
         access_token: str,
         ttl: int,
+        identity_binding_proof: str | None = None,
     ) -> None:
         """Store NaCl-encrypted access_token in Redis with the given TTL."""
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
             key: Final = self._cache_key(user_id, server_id)
-            encrypted: Final = encrypt_value_helper(access_token)
+            encrypted: Final = self._codec().encode(
+                OAuthToken(access_token=access_token, identity_binding_proof=identity_binding_proof)
+            )
             await user_api_key_cache.async_set_cache(key, encrypted, ttl=ttl)
             verbose_logger.debug(
                 "MCPPerUserTokenCache.set: cached token for user=%s server=%s ttl=%ds",
@@ -313,9 +323,26 @@ async def resolve_mcp_auth(
     1. ``mcp_auth_header`` — per-request/per-user override
     2. OAuth2 client_credentials token — auto-fetched and cached
     3. ``server.authentication_token`` — static token from config/DB
+
+    ``resolved_token_header`` answers, for the same two inputs, which header the value belongs in.
     """
     if mcp_auth_header:
         return mcp_auth_header
     if server.has_client_credentials:
         return await mcp_oauth2_token_cache.async_get_token(server)
     return server.authentication_token
+
+
+def resolved_token_header(
+    server: "MCPServer",
+    mcp_auth_header: str | Mapping[str, str] | None = None,
+) -> str | None:
+    """Which upstream header the value ``resolve_mcp_auth`` just returned belongs in.
+
+    ``None`` means keep the auth_type default. A caller-supplied ``mcp_auth_header`` is the caller's
+    own credential aimed at the slot the upstream normally uses, so it never moves; only the values
+    the gateway resolved from its own config (the minted M2M token, the static token) follow
+    ``upstream_token_header``. Same inputs and same branch order as ``resolve_mcp_auth``, so the two
+    cannot disagree about which case they are in.
+    """
+    return None if mcp_auth_header else server.upstream_token_header

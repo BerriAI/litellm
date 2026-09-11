@@ -8,12 +8,14 @@ Pins (PR2):
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+import json
 
 import pytest
 
 import litellm
 from litellm.proxy import proxy_server
+from litellm.router_utils import pattern_match_deployments
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -56,6 +58,31 @@ def test_token_counter_happy_path(client, auth_as, patched_token_counter):
     }
 
 
+def test_token_counter_counts_off_the_event_loop(client, auth_as, patched_token_counter, monkeypatch):
+    """
+    A large prompt must not stall the proxy: the count runs in a worker thread, where there
+    is no running event loop, rather than on the loop serving other requests.
+    """
+    counted_off_loop = []
+
+    def recording_counter(**kwargs):
+        try:
+            asyncio.get_running_loop()
+            counted_off_loop.append(False)
+        except RuntimeError:
+            counted_off_loop.append(True)
+        return 7
+
+    monkeypatch.setattr(litellm, "token_counter", recording_counter)
+
+    with auth_as():
+        response = client.post("/utils/token_counter", json={"model": "gpt-4", "prompt": "Hi there"})
+
+    assert response.status_code == 200
+    assert response.json()["total_tokens"] == 7
+    assert counted_off_loop == [True]
+
+
 def test_token_counter_missing_input_returns_400(
     client, auth_as, patched_token_counter
 ):
@@ -73,6 +100,7 @@ def test_token_counter_missing_input_returns_400(
 
 @pytest.fixture
 def patched_supported_params(monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(
         litellm,
         "get_llm_provider",
@@ -98,12 +126,104 @@ def test_supported_openai_params_happy_path(client, auth_as, patched_supported_p
     }
 
 
+def test_supported_openai_params_resolves_router_alias(client, auth_as, monkeypatch):
+    """A router alias absent from the cost map resolves through the deployment's underlying model."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-opus-4-6-cached",
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "sk-test"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with auth_as():
+        response = client.get("/utils/supported_openai_params", params={"model": "claude-opus-4-6-cached"})
+
+    assert response.status_code == 200
+    expected = litellm.get_supported_openai_params(model="claude-opus-4-6", custom_llm_provider="anthropic")
+    assert response.json() == {"supported_openai_params": expected}
+    assert "max_tokens" in response.json()["supported_openai_params"]
+
+
+def test_supported_openai_params_declared_prefix_alias_resolves_through_router(client, auth_as, monkeypatch):
+    """Regression: an alias whose name starts with an authenticating provider's prefix skipped
+    router resolution and answered with that provider's params instead of the deployment's."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "github_copilot/gpt-4o",
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "sk-test"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with auth_as():
+        response = client.get("/utils/supported_openai_params", params={"model": "github_copilot/gpt-4o"})
+
+    assert response.status_code == 200
+    expected = litellm.get_supported_openai_params(model="claude-opus-4-6", custom_llm_provider="anthropic")
+    assert response.json() == {"supported_openai_params": expected}
+
+
+def test_supported_openai_params_never_runs_oauth_for_authenticating_providers(client, auth_as, monkeypatch, tmp_path):
+    """Regression: github_copilot/chatgpt names answer from their declaration; resolving them
+    through ``get_llm_provider`` would run the provider's OAuth device flow and block the event loop."""
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "access-token").write_text("fake-access-token")
+    (tmp_path / "api-key.json").write_text(
+        json.dumps(
+            {
+                "token": "fake-api-key",
+                "expires_at": 4102444800,
+                "endpoints": {"api": "https://api.githubcopilot.com"},
+            }
+        )
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "copilot-alias",
+                "litellm_params": {"model": "github_copilot/gpt-4o"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    resolution_attempts: list[str] = []
+
+    def _oauth_tripwire(model, *args, **kwargs):
+        resolution_attempts.append(model)
+        raise AssertionError("get_llm_provider would run the OAuth device flow")
+
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire)
+    monkeypatch.setattr(pattern_match_deployments, "get_llm_provider", _oauth_tripwire)
+    expected = litellm.get_supported_openai_params(model="gpt-4o", custom_llm_provider="github_copilot")
+
+    with auth_as():
+        via_alias = client.get("/utils/supported_openai_params", params={"model": "copilot-alias"})
+        via_direct_name = client.get("/utils/supported_openai_params", params={"model": "github_copilot/gpt-4o"})
+
+    assert via_alias.status_code == 200
+    assert via_alias.json() == {"supported_openai_params": expected}
+    assert via_direct_name.status_code == 200
+    assert via_direct_name.json() == {"supported_openai_params": expected}
+    assert resolution_attempts == []
+
+
 def test_supported_openai_params_invalid_model(client, auth_as, monkeypatch):
     """Pins ``GET /utils/supported_openai_params`` (error: unknown model)."""
 
     def _raise(model):
         raise Exception("unknown")
 
+    monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(litellm, "get_llm_provider", _raise)
     with auth_as():
         response = client.get("/utils/supported_openai_params", params={"model": "??"})
@@ -158,3 +278,69 @@ def test_transform_request_unsafe_body(client, auth_as, monkeypatch):
         response = client.post("/utils/transform_request", json=payload)
     assert response.status_code == 400
     assert "unsafe" in response.text or "error" in response.text
+
+
+def test_token_counter_fallback_counts_tools_system_and_anthropic_blocks(client, auth_as, monkeypatch):
+    """The ``litellm.token_counter`` fallback counts the request's tools and system prompt, and Anthropic ``image``/``document`` blocks, instead of 500ing."""
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
+    system = [{"type": "text", "text": "You are a terse assistant. Answer in one sentence."}]
+    tools = [
+        {
+            "name": "get_weather",
+            "description": "Look up the current weather for a city",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this file?"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}},
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}},
+            ],
+        }
+    ]
+
+    def count(payload: dict) -> int:
+        with auth_as():
+            response = client.post("/utils/token_counter", json={"model": "claude-fable-5", **payload})
+        assert response.status_code == 200, response.text
+        return response.json()["total_tokens"]
+
+    bare = count({"messages": messages})
+    full = count({"messages": messages, "tools": tools, "system": system})
+
+    assert bare == litellm.token_counter(model="claude-fable-5", messages=messages)
+    assert full == litellm.token_counter(
+        model="claude-fable-5",
+        messages=[{"role": "system", "content": system}, *messages],
+        tools=tools,
+    )
+    assert full > bare
+
+
+def test_token_counter_fallback_prompt_with_tools_does_not_500(client, auth_as, monkeypatch):
+    """Regression: a ``prompt`` request carrying ``tools`` but no ``messages`` still counts, because the fallback attaches tools only when counting messages (``token_counter`` rejects tools on the text path)."""
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm, "disable_token_counter", False, raising=False)
+    prompt = "count the tokens in this sentence please"
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Look up the current weather for a city",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+            },
+        }
+    ]
+
+    with auth_as():
+        response = client.post(
+            "/utils/token_counter", json={"model": "claude-fable-5", "prompt": prompt, "tools": tools}
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total_tokens"] == litellm.token_counter(model="claude-fable-5", text=prompt)

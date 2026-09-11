@@ -15,6 +15,7 @@ interface IdCellProps {
   variant?: IdCellVariant;
   onClick?: (value: string) => void;
   copyable?: boolean;
+  copyLabel?: string;
   truncate?: boolean;
   fallback?: string;
   tooltip?: React.ReactNode;
@@ -25,12 +26,12 @@ interface IdCellProps {
 
 const VARIANT_CLASS: Record<IdCellVariant, { base: string; clickable: string }> = {
   pill: {
-    base: "font-mono text-xs font-normal px-2 py-0.5 rounded-md text-left bg-blue-50 text-blue-500",
-    clickable: "hover:bg-blue-100 cursor-pointer",
+    base: "font-mono text-xs font-normal px-2 py-0.5 rounded-md text-left bg-info/10 text-info",
+    clickable: "hover:bg-info/15 cursor-pointer",
   },
   plain: {
     base: "font-mono text-xs text-left",
-    clickable: "hover:text-blue-600 cursor-pointer",
+    clickable: "hover:text-info cursor-pointer",
   },
 };
 
@@ -39,6 +40,7 @@ export function IdCell({
   variant = "pill",
   onClick,
   copyable = false,
+  copyLabel = "Copy ID",
   truncate = true,
   fallback = "-",
   tooltip,
@@ -80,7 +82,7 @@ export function IdCell({
       {withTooltip}
       <button
         type="button"
-        aria-label="Copy ID"
+        aria-label={copyLabel}
         className="shrink-0 cursor-pointer text-muted-foreground hover:text-foreground"
         onClick={(event) => {
           event.stopPropagation();

@@ -7,15 +7,12 @@ Tests:
 """
 
 import json
-import os
-import sys
 import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
@@ -219,7 +216,7 @@ async def test_get_marketplace(mock_prisma_client):
     )
 
     # Now get the marketplace
-    response = await get_marketplace()
+    response = await get_marketplace(request=MagicMock())
 
     # Response is a JSONResponse, get the body
     body = json.loads(response.body.decode())

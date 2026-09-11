@@ -83,8 +83,8 @@ class TestDataRobotConfig:
                 == api_base
             )
 
-    def test_resolve_api_base_with_environment_variable(self, handler):
-        os.environ["DATAROBOT_ENDPOINT"] = "https://env.datarobot.com"
+    def test_resolve_api_base_with_environment_variable(self, handler, monkeypatch):
+        monkeypatch.setenv("DATAROBOT_ENDPOINT", "https://env.datarobot.com")
         assert (
             handler._resolve_api_base(None)
             == "https://env.datarobot.com/api/v2/genai/llmgw/chat/completions/"
@@ -101,7 +101,7 @@ class TestDataRobotConfig:
     def test_resolve_api_key(self, api_key, expected_api_key, handler):
         assert handler._resolve_api_key(api_key) == expected_api_key
 
-    def test_resolve_api_key_with_environment_variable(self, handler):
-        os.environ["DATAROBOT_API_TOKEN"] = "env_key"
+    def test_resolve_api_key_with_environment_variable(self, handler, monkeypatch):
+        monkeypatch.setenv("DATAROBOT_API_TOKEN", "env_key")
         assert handler._resolve_api_key(None) == "env_key"
         del os.environ["DATAROBOT_API_TOKEN"]

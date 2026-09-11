@@ -2,14 +2,11 @@
 #    This tests if get_optional_params works as expected
 import asyncio
 import inspect
-import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -1137,7 +1134,7 @@ def test_ollama_pydantic_obj():
     )
 
 
-def test_gemini_frequency_penalty():
+def test_gemini_frequency_penalty_listed_in_vertex_ai_supported_params():
     from litellm.utils import get_supported_openai_params
 
     optional_params = get_supported_openai_params(
