@@ -176,7 +176,6 @@ describe("ChatUI", () => {
     await user.click(screen.getByRole("option", { name: "Model 1Mode: chat" }));
     expect(screen.getByPlaceholderText("Select a Model")).toHaveValue("Model 1");
 
-    // The endpoint and model each have a clear button; the endpoint comes first.
     await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
     const input = screen.getByPlaceholderText("Describe the image you want to generate...");
     fireEvent.change(input, { target: { value: "Contract endpoint check" } });
