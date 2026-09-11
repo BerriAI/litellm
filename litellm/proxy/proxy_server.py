@@ -6423,9 +6423,9 @@ class ProxyConfig:
             return get_secret(decrypted_value)
         return decrypted_value
 
-    def _add_deployment(self, db_models: list) -> int:
+    def _add_deployment(self, db_models: list, config_models: list | None = None) -> int:
         """
-        Iterate through db models
+        Iterate through db models and config models
 
         for any not in router - add them.
 
@@ -6463,6 +6463,58 @@ class ProxyConfig:
 
             if added is not None:
                 added_models += 1
+
+        ## ADD CONFIG MODEL LOGIC
+        if config_models is None:
+            config_state = self.get_config_state()
+            if isinstance(config_state, dict):
+                config_models = config_state.get("model_list", None)
+            if not config_models and user_config_file_path and os.path.exists(user_config_file_path):
+                try:
+                    with open(user_config_file_path, "r") as f:
+                        yaml_cfg = yaml.safe_load(f)
+                        if isinstance(yaml_cfg, dict):
+                            config_models = yaml_cfg.get("model_list", None)
+                except Exception:
+                    pass
+
+        if config_models:
+            for model in config_models:
+                try:
+                    raw_litellm_params = copy.deepcopy(model.get("litellm_params", {}))
+                    for k, v in raw_litellm_params.items():
+                        if isinstance(v, str) and v.startswith("os.environ/"):
+                            raw_litellm_params[k] = get_secret(v)
+
+                    model_info_dict = copy.deepcopy(model.get("model_info", {}))
+                    model_id = model_info_dict.get("id", None)
+                    if model_id is None:
+                        model_id = llm_router.generate_model_id(
+                            model_group=model["model_name"],
+                            litellm_params=raw_litellm_params,
+                        )
+                    else:
+                        model_id = str(model_id)
+                    model_info_dict["id"] = model_id
+                    model_info_dict["db_model"] = False
+
+                    _model_info = RouterModelInfo(**model_info_dict)
+                    _litellm_params = LiteLLM_Params.model_validate(raw_litellm_params)
+
+                    added = llm_router.upsert_deployment(
+                        deployment=Deployment(
+                            model_name=model["model_name"],
+                            litellm_params=_litellm_params,
+                            model_info=_model_info,
+                        )
+                    )
+                    if added is not None:
+                        added_models += 1
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        "Error adding config model to llm_router: %s. model=%s", e, model
+                    )
+
         return added_models
 
     def decrypt_model_list_from_db(self, new_models: list) -> list:
