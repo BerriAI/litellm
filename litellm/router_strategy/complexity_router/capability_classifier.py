@@ -185,7 +185,7 @@ def capability_classifier_response_format(
 ) -> Mapping[str, object]:
     """Fresh copy of Switchyard's packaged strict JSON Schema wrapper."""
     return (
-        {"type": "json_object"}
+        _RESPONSE_FORMAT_ADAPTER.validate_json('{"type": "json_object"}')
         if mode == "json_object"
         else _RESPONSE_FORMAT_ADAPTER.validate_json(_CAPABILITY_CLASSIFIER_RESPONSE_FORMAT_JSON)
     )
