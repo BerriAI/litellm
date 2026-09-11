@@ -6953,3 +6953,53 @@ def test_transform_response_honors_json_mode_kwarg_when_optional_params_lack_it(
     )
     assert result.choices[0].message.tool_calls is None
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "population": 2100000}
+
+
+def test_transform_request_injects_dummy_tool_without_tools_param():
+    """
+    Bedrock Converse rejects requests with tool turns when toolConfig is omitted.
+    LiteLLM must inject a dummy tool without requiring litellm.modify_params.
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+    prev_modify_params = litellm.modify_params
+    litellm.modify_params = False
+    try:
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": "Calling tool",
+                "tool_calls": [
+                    {
+                        "id": "tooluse_test_dummy",
+                        "type": "function",
+                        "function": {"name": "get_x", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "tooluse_test_dummy",
+                "content": "{}",
+            },
+        ]
+        result = config.transform_request(
+            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.modify_params = prev_modify_params
+
+    assert "toolConfig" in result
+    tools = result["toolConfig"].get("tools", [])
+    tool_names = [
+        t.get("toolSpec", {}).get("name")
+        for t in tools
+        if isinstance(t, dict) and "toolSpec" in t
+    ]
+    assert "dummy_tool" in tool_names
