@@ -106,9 +106,7 @@ async def test_streaming_trace_id_prefers_logging_trace_id():
         captured["extra_headers"] = extra_headers
         raise RuntimeError("stop")
 
-    with patch.object(
-        a2a_main, "create_a2a_client", new=AsyncMock(side_effect=_capture)
-    ):
+    with patch.object(a2a_main, "create_a2a_client", new=AsyncMock(side_effect=_capture)):
         with pytest.raises(RuntimeError, match="stop"):
             async for _ in a2a_main.asend_message_streaming(
                 request=request,
@@ -220,9 +218,7 @@ _LOWERCASE_BINDING_CARD = {
     "defaultInputModes": ["text/plain"],
     "defaultOutputModes": ["text/plain"],
     "skills": [],
-    "supportedInterfaces": [
-        {"url": "http://127.0.0.1:9/", "protocolBinding": "jsonrpc", "protocolVersion": "1.0"}
-    ],
+    "supportedInterfaces": [{"url": "http://127.0.0.1:9/", "protocolBinding": "jsonrpc", "protocolVersion": "1.0"}],
 }
 
 
@@ -413,3 +409,138 @@ async def test_the_pooled_a2a_client_arrives_with_cookie_persistence_disabled(is
 
     assert dict(handler.client.cookies) == {}, "the pooled A2A client kept an upstream's cookie"
     await handler.close()
+
+
+def _bridge_logging_obj(call_type: str):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    return Logging(
+        model="a2a_agent/tf-agent",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.now(),
+        litellm_call_id="bridge-call",
+        function_id="bridge-call",
+    )
+
+
+@pytest.mark.asyncio
+async def test_bridge_non_streaming_sets_cost_params_agent_id_and_reported_cost(monkeypatch):
+    """Regression: the completion-bridge branch returned before cost params, usage, or
+    agent_id reached the logging obj, so every custom_llm_provider agent spend-logged $0."""
+    from litellm.a2a_protocol import main as a2a_main
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import A2ACompletionBridgeHandler
+    from litellm.a2a_protocol.providers.base import A2A_PROVIDER_RESPONSE_COST_KEY
+
+    async def _fake_handle(request_id, params, litellm_params, api_base=None, agent_extra_headers=None, **_):
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "kind": "message",
+                "role": "agent",
+                "parts": [{"kind": "text", "text": "done"}],
+                "messageId": "m9",
+            },
+            A2A_PROVIDER_RESPONSE_COST_KEY: 0.112,
+        }
+
+    monkeypatch.setattr(A2ACompletionBridgeHandler, "handle_non_streaming", staticmethod(_fake_handle))
+    logging_obj = _bridge_logging_obj("asend_message")
+
+    response = await a2a_main.asend_message(
+        request=_request(),
+        api_base="https://agent.tinyfish.ai",
+        litellm_params={"custom_llm_provider": "tinyfish", "cost_per_query": 0.05, "agent_name": "tf-agent"},
+        agent_id="agent-1",
+        litellm_logging_obj=logging_obj,
+    )
+
+    response_dict = response.model_dump(mode="json", exclude_none=True)
+    assert A2A_PROVIDER_RESPONSE_COST_KEY not in response_dict
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.112)
+    assert logging_obj.model_call_details["litellm_params"]["cost_per_query"] == 0.05
+    assert logging_obj.model_call_details["agent_id"] == "agent-1"
+    assert logging_obj.model_call_details["usage"].total_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_bridge_streaming_strips_cost_key_and_records_spend(monkeypatch):
+    """Regression: bridge streams bypassed A2AStreamingIterator entirely, so no success
+    handler ever fired and no spend log was written for provider-config streaming."""
+    from litellm.a2a_protocol import main as a2a_main
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import A2ACompletionBridgeHandler
+    from litellm.a2a_protocol.providers.base import A2A_PROVIDER_RESPONSE_COST_KEY
+
+    async def _fake_stream(request_id, params, litellm_params, api_base=None, agent_extra_headers=None, **_):
+        yield {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {"kind": "task", "id": "t1", "status": {"state": "submitted"}},
+        }
+        yield {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {"kind": "status-update", "final": True, "status": {"state": "completed"}, "taskId": "t1"},
+            A2A_PROVIDER_RESPONSE_COST_KEY: 0.064,
+        }
+
+    monkeypatch.setattr(A2ACompletionBridgeHandler, "handle_streaming", staticmethod(_fake_stream))
+    logging_obj = _bridge_logging_obj("asend_message_streaming")
+
+    request = SendStreamingMessageRequest(
+        id="rpc-bridge-stream",
+        params=MessageSendParams(
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+    chunks = [
+        chunk
+        async for chunk in a2a_main.asend_message_streaming(
+            request=request,
+            litellm_params={"custom_llm_provider": "tinyfish", "agent_name": "tf-agent"},
+            agent_id="agent-1",
+            litellm_logging_obj=logging_obj,
+        )
+    ]
+
+    assert len(chunks) == 2
+    assert all(A2A_PROVIDER_RESPONSE_COST_KEY not in chunk for chunk in chunks)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.064)
+    assert logging_obj.model_call_details["agent_id"] == "agent-1"
+
+
+@pytest.mark.asyncio
+async def test_bridge_streaming_flat_cost_per_query_reaches_response_cost(monkeypatch):
+    """cost_per_query on a bridge agent must price the stream when the provider reports no cost."""
+    from litellm.a2a_protocol import main as a2a_main
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import A2ACompletionBridgeHandler
+
+    async def _fake_stream(request_id, params, litellm_params, api_base=None, agent_extra_headers=None, **_):
+        yield {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {"kind": "status-update", "final": True, "status": {"state": "completed"}, "taskId": "t1"},
+        }
+
+    monkeypatch.setattr(A2ACompletionBridgeHandler, "handle_streaming", staticmethod(_fake_stream))
+    logging_obj = _bridge_logging_obj("asend_message_streaming")
+
+    request = SendStreamingMessageRequest(
+        id="rpc-flat-cost",
+        params=MessageSendParams(
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+    async for _ in a2a_main.asend_message_streaming(
+        request=request,
+        litellm_params={"custom_llm_provider": "tinyfish", "cost_per_query": 0.05, "agent_name": "tf-agent"},
+        agent_id="agent-1",
+        litellm_logging_obj=logging_obj,
+    ):
+        pass
+
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.05)

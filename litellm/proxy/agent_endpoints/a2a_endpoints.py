@@ -724,9 +724,11 @@ async def invoke_agent_a2a(
                 A2A_USER_API_KEY_HASH_PARAM,
             )
 
+            # agent_name rides along so bridge streaming spend logs name the agent instead of "unknown"
             litellm_params = {
                 **litellm_params,
                 A2A_USER_API_KEY_HASH_PARAM: user_api_key_dict.api_key,
+                "agent_name": str(agent_name),
             }
 
         # URL is required unless using completion bridge with a provider that derives endpoint from model

@@ -13,7 +13,7 @@ import asyncio
 import datetime
 import uuid
 from collections.abc import AsyncIterator, Coroutine, Mapping
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, Optional, cast
 
 import litellm
@@ -83,6 +83,8 @@ from litellm.a2a_protocol.exceptions import A2ALocalhostURLError
 
 # Use our custom resolver instead of the default A2A SDK resolver
 A2ACardResolver: Final = LiteLLMA2ACardResolver
+
+_EMPTY_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _set_usage_on_logging_obj(
@@ -204,6 +206,7 @@ async def _send_message_via_completion_bridge(
     api_base: str | None,
     litellm_params: dict[str, object],
     agent_extra_headers: dict[str, str] | None = None,
+    kwargs: Mapping[str, object] | None = None,
 ) -> LiteLLMSendMessageResponse:
     """
     Route a send_message through the LiteLLM completion bridge (e.g. LangGraph, Bedrock AgentCore).
@@ -218,15 +221,51 @@ async def _send_message_via_completion_bridge(
 
     params = request.params.model_dump(mode="json") if hasattr(request.params, "model_dump") else dict(request.params)
 
-    response_dict: Final = await A2ACompletionBridgeHandler.handle_non_streaming(
+    raw_response_dict: Final = await A2ACompletionBridgeHandler.handle_non_streaming(
         request_id=str(request.id),
         params=params,
         litellm_params=litellm_params,
         api_base=api_base,
         agent_extra_headers=agent_extra_headers,
     )
+    response_dict: Final = _strip_provider_response_cost(raw_response_dict, kwargs=kwargs or _EMPTY_KWARGS)
+
+    prompt_tokens, completion_tokens, _ = A2ARequestUtils.calculate_usage_from_request_response(
+        request=request,
+        response_dict=response_dict,
+    )
+    _set_usage_on_logging_obj(
+        kwargs=kwargs or _EMPTY_KWARGS,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
 
     return LiteLLMSendMessageResponse.from_dict(response_dict, request_id=str(request.id))
+
+
+def _strip_provider_response_cost(
+    chunk: Mapping[str, object],
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the response is JSON-serialized downstream; must be a plain dict
+    """Pop a provider-reported actual cost off the response and record it for spend logging."""
+    from litellm.a2a_protocol.providers.base import A2A_PROVIDER_RESPONSE_COST_KEY
+
+    if A2A_PROVIDER_RESPONSE_COST_KEY in chunk:
+        reported_cost: Final = chunk[A2A_PROVIDER_RESPONSE_COST_KEY]
+        logging_obj: Final = kwargs.get("litellm_logging_obj")
+        if isinstance(logging_obj, Logging) and isinstance(reported_cost, (int, float)):
+            logging_obj.model_call_details["response_cost"] = float(reported_cost)
+    return {  # mutable-ok: the response is JSON-serialized downstream; must be a plain dict
+        key: value for key, value in chunk.items() if key != A2A_PROVIDER_RESPONSE_COST_KEY
+    }
+
+
+async def _strip_provider_cost_from_stream(
+    stream: AsyncIterator[Mapping[str, object]],
+    kwargs: Mapping[str, object],
+) -> AsyncIterator[dict[str, object]]:  # mutable-ok: SSE chunks are JSON-serialized; must be plain dicts
+    async for chunk in stream:
+        yield _strip_provider_response_cost(chunk, kwargs=kwargs)
 
 
 def _get_a2a_call_context(a2a_client: "A2AClientType") -> Optional["A2ACallContextType"]:
@@ -451,13 +490,18 @@ async def asend_message(
     if custom_llm_provider:
         if request is None:
             raise ValueError("request is required for completion bridge")
-        return await _send_message_via_completion_bridge(
+        bridge_response: Final = await _send_message_via_completion_bridge(
             request=request,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             litellm_params=litellm_params,
             agent_extra_headers=agent_extra_headers,
+            kwargs=kwargs,
         )
+        # Cost params + agent_id previously reached the logging obj only on the native path, so bridge spend logged $0
+        _set_litellm_params_on_logging_obj(kwargs=kwargs, litellm_params=litellm_params)
+        _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
+        return bridge_response
 
     # Standard A2A client flow
     if request is None:
@@ -669,12 +713,38 @@ async def asend_message_streaming(
             request.params.model_dump(mode="json") if hasattr(request.params, "model_dump") else dict(request.params)
         )
 
-        async for chunk in A2ACompletionBridgeHandler.handle_streaming(
+        _raw_bridge_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        bridge_logging_obj: Final = (
+            _raw_bridge_logging_obj
+            if isinstance(_raw_bridge_logging_obj, Logging)
+            else _build_streaming_logging_obj(
+                request=request,
+                agent_name=str(litellm_params.get("agent_name") or "unknown"),
+                agent_id=agent_id,
+                litellm_params=litellm_params,
+                metadata=metadata,
+                proxy_server_request=proxy_server_request,
+            )
+        )
+        bridge_kwargs: Final[Mapping[str, object]] = MappingProxyType(
+            {**kwargs, "litellm_logging_obj": bridge_logging_obj}
+        )
+        _set_litellm_params_on_logging_obj(kwargs=bridge_kwargs, litellm_params=litellm_params)
+        _set_agent_id_on_logging_obj(kwargs=bridge_kwargs, agent_id=agent_id)
+
+        bridge_stream: Final = A2ACompletionBridgeHandler.handle_streaming(
             request_id=str(request.id),
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
             agent_extra_headers=agent_extra_headers,
+        )
+        # A2AStreamingIterator dispatches success handlers at stream end; without it bridge streams never spend-logged
+        async for chunk in A2AStreamingIterator(
+            stream=_strip_provider_cost_from_stream(bridge_stream, kwargs=bridge_kwargs),
+            request=request,
+            logging_obj=bridge_logging_obj,
+            agent_name=str(litellm_params.get("agent_name") or "unknown"),
         ):
             yield chunk
         return

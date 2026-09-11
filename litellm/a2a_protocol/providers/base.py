@@ -4,7 +4,10 @@ Base configuration for A2A protocol providers.
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Final
+
+# Providers report actual upstream cost via this key on a returned dict/yielded chunk; the bridge strips it.
+A2A_PROVIDER_RESPONSE_COST_KEY: Final = "_litellm_response_cost"
 
 
 class BaseA2AProviderConfig(ABC):

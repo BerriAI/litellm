@@ -3,7 +3,7 @@ A2A Streaming Iterator with token tracking and logging support.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -26,7 +26,7 @@ class A2AStreamingIterator:
 
     def __init__(
         self,
-        stream: AsyncIterator["SendStreamingMessageResponse"],
+        stream: AsyncIterator["SendStreamingMessageResponse | Mapping[str, object]"],
         request: "SendStreamingMessageRequest",
         logging_obj: LiteLLMLoggingObj,
         agent_name: str = "unknown",
@@ -45,7 +45,7 @@ class A2AStreamingIterator:
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> "SendStreamingMessageResponse":
+    async def __anext__(self) -> "SendStreamingMessageResponse | Mapping[str, object]":
         try:
             chunk: Final = await self.stream.__anext__()
 
@@ -68,11 +68,21 @@ class A2AStreamingIterator:
             await self._handle_stream_complete()
             raise
 
+    @staticmethod
+    def _chunk_as_dict(chunk: object) -> Mapping[str, object]:
+        """Bridge provider configs yield plain dicts; the native path yields SDK models."""
+        if isinstance(chunk, dict):
+            return chunk
+        dumper: Final = getattr(chunk, "model_dump", None)
+        if not callable(dumper):
+            return {}
+        dumped: Final[object] = dumper(mode="json", exclude_none=True)  # any-ok: SDK model_dump -> Any
+        return dumped if isinstance(dumped, dict) else {}
+
     def _collect_text_from_chunk(self, chunk: Any) -> None:
         """Extract text from a streaming chunk and add to collected parts."""
         try:
-            chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
-            text: Final = A2ARequestUtils.extract_text_from_response(chunk_dict)
+            text: Final = A2ARequestUtils.extract_text_from_response(self._chunk_as_dict(chunk))
             if text:
                 self.collected_text_parts.append(text)
         except Exception:
@@ -81,7 +91,7 @@ class A2AStreamingIterator:
     def _is_completed_chunk(self, chunk: Any) -> bool:
         """Check if chunk indicates stream completion."""
         try:
-            chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
+            chunk_dict: Final = self._chunk_as_dict(chunk)
             result: Final = chunk_dict.get("result", {})
             if isinstance(result, dict):
                 status: Final = result.get("status", {})
@@ -159,7 +169,7 @@ class A2AStreamingIterator:
         # Add final chunk result if available
         if self.final_chunk:
             try:
-                chunk_dict: Final = self.final_chunk.model_dump(mode="json", exclude_none=True)
+                chunk_dict: Final = self._chunk_as_dict(self.final_chunk)
                 result["result"] = chunk_dict.get("result", {})
             except Exception:
                 pass
