@@ -2702,13 +2702,23 @@ async def _validate_update_key_caller_access(
             premium_user=premium_user,
         )
         return
-    await _check_key_admin_access(
-        user_api_key_dict=user_api_key_dict,
-        hashed_token=existing_key_row.token,
+    team_obj: Final = await get_team_object(
+        team_id=existing_key_row.team_id,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
-        route="/key/update",
+        check_db_only=True,
     )
+    if team_obj is None or not (
+        _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+        or await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Only proxy admins, team admins, or org admins can call /key/update. "
+                f"user_role={user_api_key_dict.user_role}, user_id={user_api_key_dict.user_id}"
+            },
+        )
     _check_model_access_group(
         models=data.models,
         llm_router=llm_router,

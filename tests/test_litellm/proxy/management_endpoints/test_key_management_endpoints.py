@@ -10916,10 +10916,6 @@ async def test_update_key_team_member_cannot_change_budget(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_update_key_team_admin_can_change_budget_of_member_key(monkeypatch):
-    """A team admin (role="admin" in members_with_roles) can update max_budget
-    on a team key owned by another member. Previously the caller-vs-owner
-    check in common_key_access_checks rejected this with 403 before the
-    team-admin path was reached."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         update_key_fn,
     )
@@ -11027,10 +11023,6 @@ async def test_update_key_team_admin_can_change_budget_of_member_key(monkeypatch
 async def test_update_key_non_admin_team_member_cannot_update_other_members_key(
     monkeypatch,
 ):
-    """A non-admin team member with /key/update in member_permissions still
-    cannot update another member's key (budget or otherwise): the
-    _check_key_admin_access path requires team/org admin for keys owned by
-    someone else."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         update_key_fn,
     )
