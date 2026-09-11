@@ -30,6 +30,7 @@ from litellm.types.utils import (
     GuardrailStatus,
     GuardrailTracingDetail,
     LLMResponseTypes,
+    ModelResponse,
     StandardLoggingGuardrailInformation,
 )
 
@@ -602,9 +603,7 @@ class CustomGuardrail(CustomLogger):
         supported_event_hooks: list[GuardrailEventHooks],
     ) -> None:
         allowed_hooks: Final = frozenset(supported_event_hooks) | (
-            frozenset((GuardrailEventHooks.logging_only,))
-            if self.uses_apply_guardrail_interface() and not self.use_native_lifecycle_hooks
-            else frozenset()
+            frozenset((GuardrailEventHooks.logging_only,)) if self.uses_apply_guardrail_interface() else frozenset()
         )
 
         def _validate_event_hook_list_is_in_supported_event_hooks(
@@ -883,7 +882,9 @@ class CustomGuardrail(CustomLogger):
         """logging_only: run apply_guardrail on copies of the logged request/response and record the verdict."""
         from litellm.llms import get_guardrail_translation_mapping
 
-        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
+        if not self.uses_apply_guardrail_interface():
+            return kwargs, result
+        if not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
             return kwargs, result
         try:
             translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
@@ -922,6 +923,8 @@ class CustomGuardrail(CustomLogger):
         translation: "BaseTranslation",
         scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
+        from litellm.llms import get_guardrail_translation_mapping
+
         optional_params: Final = kwargs.get("optional_params") or {}
         scratch_input: Final = copy.deepcopy(kwargs.get("messages") or kwargs.get("input"))
         scratch_request: Final = {
@@ -933,8 +936,18 @@ class CustomGuardrail(CustomLogger):
             "metadata": scratch_metadata,
         }
         await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
-        await translation.process_output_response(
-            response=copy.deepcopy(result), guardrail_to_apply=self, request_data=scratch_request
+        response: Final = (
+            kwargs.get("async_complete_streaming_response") or kwargs.get("complete_streaming_response") or result
+        )
+        if response is None:
+            return
+        output_translation: Final = (
+            get_guardrail_translation_mapping(CallTypes.acompletion)()
+            if isinstance(response, ModelResponse)
+            else translation
+        )
+        await output_translation.process_output_response(
+            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
 
     def supports_scan_only_tool_results(self) -> bool:
