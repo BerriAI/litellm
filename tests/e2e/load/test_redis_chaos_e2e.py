@@ -50,7 +50,7 @@ from lifecycle import ResourceManager
 from load_client import LoadClient
 from locust_load import LoadResult, run_gateway_load
 from models import KeyGenerateBody, LiteLLMParamsBody
-from phase_budget import Budget, violations
+from phase_budget import AbsoluteBudget, Budget, RatioBudget, violations
 from proxy_client import ProxyClient
 from proxy_usage import ProxyUsageSampler, UsageWindow
 
@@ -70,23 +70,25 @@ BASELINE_SECONDS: Final = 60.0
 CHAOS_SECONDS: Final = 90.0
 REDIS_PAUSE_MS: Final = int(CHAOS_SECONDS * 1000)
 
-# Chaos-phase ceilings, as a multiple of the same metric in the baseline phase. Ratios rather
-# than absolutes because every absolute here is machine-shaped: RSS scales with worker count
-# and latency with core count, so a number calibrated on one runner means nothing on another.
-# Calibrated from local runs under CLIENT PAUSE ALL that came in around 4x latency at every
-# percentile, 1.03x RSS and 4.4x CPU per request, and deliberately loose: the regression these
-# guard against grew memory by an order of magnitude, so catching it does not need a tight
-# bound, and a tight one would flake on a shared CI runner. Latency gets the most slack because
-# it is the metric a Redis outage is legitimately allowed to move, by its socket timeout on
-# every call a request attempts.
-CHAOS_LATENCY_RATIO_CEILING: Final = 12.0
+# RSS and CPU are budgeted as a multiple of the same metric in the baseline phase, because both
+# are machine-shaped: RSS scales with worker count and CPU with core count, so a number
+# calibrated on one runner means nothing on another. Calibrated from local runs under CLIENT
+# PAUSE ALL that came in around 1.03x RSS and 4.4x CPU per request, and deliberately loose: the
+# regression these guard against grew memory by an order of magnitude, so catching it does not
+# need a tight bound, and a tight one would flake on a shared CI runner.
 CHAOS_RSS_RATIO_CEILING: Final = 1.5
 CHAOS_CPU_PER_REQUEST_RATIO_CEILING: Final = 6.0
-# Uncalibrated: no chaos run has measured this yet, since JSON_LOGS and the padded payload
-# landed after the last run this file's other ceilings were calibrated from. Deliberately loose
-# until a real run tightens it; the failed-tracking alert body that motivates this test already
-# logs the full request metadata per timeout, so a JSON-encoded traceback storm should dwarf this.
-CHAOS_LOG_BYTES_PER_REQUEST_RATIO_CEILING: Final = 20.0
+
+# Latency and log volume get flat ceilings instead, because a ratio cannot bound either one. Once
+# the breaker opens, a request skips Redis rather than waiting on its socket timeout, so the chaos
+# phase can come in faster than baseline (local runs measured p90 at 0.61x) and a ratio passes on a
+# phase that was never slow. What a user actually cares about is the wall-clock number, which these
+# hold directly. Calibrated from local runs whose worst chaos phase was p50 0.66s, p90 0.74s, p99
+# 1.20s and 3.4 KB of log per request, then left roughly 3x loose for a shared CI runner.
+CHAOS_P50_LATENCY_CEILING_SECONDS: Final = 2.0
+CHAOS_P90_LATENCY_CEILING_SECONDS: Final = 3.0
+CHAOS_P99_LATENCY_CEILING_SECONDS: Final = 5.0
+CHAOS_LOG_BYTES_PER_REQUEST_CEILING: Final = 12_000.0
 
 DRAIN_TIMEOUT_SECONDS: Final = 30.0
 DRAIN_POLL_SECONDS: Final = 1.0
@@ -289,19 +291,12 @@ def _drive(keys: tuple[str, ...], seconds: float) -> LoadResult:
     )
 
 
-def _latency_budget(percentile: str, baseline: float, degraded: float) -> Budget:
-    return Budget(
-        name=f"{percentile} latency",
-        baseline=baseline,
-        degraded=degraded,
-        ratio_ceiling=CHAOS_LATENCY_RATIO_CEILING,
-        unit="s",
-        decimals=3,
-    )
+def _latency_budget(percentile: str, measured: float, ceiling: float) -> Budget:
+    return AbsoluteBudget(name=f"{percentile} latency", measured=measured, ceiling=ceiling, unit="s", decimals=3)
 
 
 def _rss_budget(percentile: str, baseline: UsageWindow, degraded: UsageWindow, fraction: float) -> Budget:
-    return Budget(
+    return RatioBudget(
         name=f"{percentile} RSS",
         baseline=baseline.rss_percentile(fraction) / 2**20,
         degraded=degraded.rss_percentile(fraction) / 2**20,
@@ -312,18 +307,18 @@ def _rss_budget(percentile: str, baseline: UsageWindow, degraded: UsageWindow, f
 
 
 def _chaos_budgets(baseline: Phase, chaos: Phase) -> tuple[Budget, ...]:
-    """What a Redis outage is allowed to cost, measured against the same run's healthy phase.
+    """What a Redis outage is allowed to cost.
 
     Every request still succeeding is the headline assertion, but a proxy can answer every
     request while leaking: the v1.100.0 regression (LIT-6780) served traffic the whole way up
-    to a 61 GB worker. These bound the cost of serving it.
+    to a 61 GB worker. These bound the cost of serving it. RSS and CPU are bounded against the
+    same run's healthy phase, latency and log bytes against a flat ceiling; see phase_budget
+    for why the two kinds of metric cannot share one shape.
 
     Latency and RSS are budgeted at p50, p90 and p99 so a regression that only shows up in the
-    tail (or only in the median) cannot hide behind the other. Latency gets the loosest bound
-    because a timing-out Redis legitimately adds its socket_timeout to every request that
-    touches it, several times over on a retried request. RSS gets the tightest: the failure
-    path has no business allocating more per request. CPU and log bytes are each budgeted once,
-    as an amount per request rather than per percentile: cores-busy saturates at the worker
+    tail (or only in the median) cannot hide behind the other. RSS gets the tightest bound: the
+    failure path has no business allocating more per request. CPU and log bytes are each budgeted
+    once, as an amount per request rather than per percentile: cores-busy saturates at the worker
     count under load, so its percentiles read the same whether a request costs 10 ms of CPU or
     40, and cannot budget anything; per-request is the figure that actually moves. Log bytes
     isolates the cost of the failed-tracking alert's own noisy error handling from the CPU it
@@ -331,24 +326,23 @@ def _chaos_budgets(baseline: Phase, chaos: Phase) -> tuple[Budget, ...]:
     CPU number.
     """
     return (
-        _latency_budget("p50", baseline.load.p50_seconds, chaos.load.p50_seconds),
-        _latency_budget("p90", baseline.load.p90_seconds, chaos.load.p90_seconds),
-        _latency_budget("p99", baseline.load.p99_seconds, chaos.load.p99_seconds),
+        _latency_budget("p50", chaos.load.p50_seconds, CHAOS_P50_LATENCY_CEILING_SECONDS),
+        _latency_budget("p90", chaos.load.p90_seconds, CHAOS_P90_LATENCY_CEILING_SECONDS),
+        _latency_budget("p99", chaos.load.p99_seconds, CHAOS_P99_LATENCY_CEILING_SECONDS),
         _rss_budget("p50", baseline.usage, chaos.usage, 0.5),
         _rss_budget("p90", baseline.usage, chaos.usage, 0.9),
         _rss_budget("p99", baseline.usage, chaos.usage, 0.99),
-        Budget(
+        RatioBudget(
             name="CPU per request",
             baseline=baseline.cpu_seconds_per_request * 1000,
             degraded=chaos.cpu_seconds_per_request * 1000,
             ratio_ceiling=CHAOS_CPU_PER_REQUEST_RATIO_CEILING,
             unit=" ms",
         ),
-        Budget(
+        AbsoluteBudget(
             name="log bytes per request",
-            baseline=baseline.log_bytes_per_request,
-            degraded=chaos.log_bytes_per_request,
-            ratio_ceiling=CHAOS_LOG_BYTES_PER_REQUEST_RATIO_CEILING,
+            measured=chaos.log_bytes_per_request,
+            ceiling=CHAOS_LOG_BYTES_PER_REQUEST_CEILING,
             unit=" B",
             decimals=0,
         ),
@@ -447,8 +441,7 @@ class TestRedisChaos:
 
         blown: Final = violations(_chaos_budgets(baseline, chaos))
         assert not blown, (
-            f"pausing Redis cost the proxy more than the socket timeout on the calls it attempts: "
-            f"{'; '.join(blown)}. {report}"
+            f"pausing Redis cost the proxy more than a Redis outage is allowed to: {'; '.join(blown)}. {report}"
         )
 
         rows: Final = proxy.poll_logs_for_key(keys[0], min_rows=1)
