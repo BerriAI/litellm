@@ -8,6 +8,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
@@ -3513,6 +3514,8 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._custom_tool_names = set()
         iterator.responses_api_request = {}
         iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
+        iterator._web_search_calls = {}
+        iterator._queued_web_search_call_ids = set()
         return iterator
 
     def _make_text_chunk(self):
@@ -4057,6 +4060,105 @@ class TestBridgedOutputItemIdPrefixes:
             responses_api_request={},
             chat_completion_response=chat_completion_response,
         )
+
+    @pytest.mark.parametrize(
+        "tool_type,result_kind,expected_sources",
+        [
+            (
+                "web_search",
+                "valid",
+                {"srvtoolu_01Search": ["https://example.com/one"], "srvtoolu_02Search": ["https://example.com/two"]},
+            ),
+            (
+                "web_search_preview",
+                "valid",
+                {"srvtoolu_01Search": ["https://example.com/one"], "srvtoolu_02Search": ["https://example.com/two"]},
+            ),
+            ("function", "valid", {}),
+            ("web_search", "unpaired", {"srvtoolu_01Search": ["https://example.com/one"]}),
+            ("web_search", "web_fetch", {"srvtoolu_02Search": ["https://example.com/two"]}),
+            ("web_search", "error", {"srvtoolu_01Search": [], "srvtoolu_02Search": ["https://example.com/two"]}),
+        ],
+    )
+    def test_anthropic_web_search_output_mapping(self, tool_type, result_kind, expected_sources):
+        call_ids: Final = ("srvtoolu_01Search", "srvtoolu_02Search")
+        valid_results: Final = (
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": call_ids[0],
+                "content": [{"type": "web_search_result", "url": "https://example.com/one"}],
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": call_ids[1],
+                "content": [{"type": "web_search_result", "url": "https://example.com/two"}],
+            },
+        )
+        first_result: Final = (
+            {**valid_results[0], "type": "web_fetch_tool_result"}
+            if result_kind == "web_fetch"
+            else {**valid_results[0], "content": {"type": "web_search_tool_result_error", "error_code": "unavailable"}}
+            if result_kind == "error"
+            else valid_results[0]
+        )
+        results: Final = (first_result,) if result_kind == "unpaired" else (first_result, valid_results[1])
+        message: Final = Message(
+            role="assistant",
+            content="answer",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    id=call_id,
+                    type="function",
+                    function=Function(name="web_search", arguments=json.dumps({"query": query})),
+                )
+                for call_id, query in zip(call_ids, ("one", "two"), strict=True)
+            ]
+            + [
+                ChatCompletionMessageToolCall(
+                    id="toolu_regular",
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"city":"Paris"}'),
+                )
+            ],
+            provider_specific_fields={
+                "web_search_results": results,
+                "web_search_calls": [
+                    build_web_search_call(
+                        tool_id=result["tool_use_id"],
+                        tool_input={"query": "one" if result["tool_use_id"].endswith("01Search") else "two"},
+                        result=result,
+                    )
+                    for result in results
+                    if tool_type != "function" and result["type"] == "web_search_tool_result"
+                ],
+            },
+        )
+        request_tools: Final = (
+            [{"type": "function", "name": "web_search", "parameters": {"type": "object"}}]
+            if tool_type == "function"
+            else [{"type": tool_type}]
+        )
+        response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="search",
+            responses_api_request={"tools": request_tools},
+            chat_completion_response=_bridged_chat_completion_response(
+                choices=[Choices(index=0, finish_reason="stop", message=message)]
+            ),
+        )
+        search_items: Final = {
+            item.id.removeprefix("ws_"): item for item in response.output if item.type == "web_search_call"
+        }
+        function_ids: Final = {item.call_id for item in response.output if item.type == "function_call"}
+
+        assert set(search_items) == set(expected_sources)
+        assert function_ids == set(call_ids).difference(expected_sources) | {"toolu_regular"}
+        assert [item.content[0].text for item in response.output if item.type == "message"] == ["answer"]
+        for call_id, item in search_items.items():
+            assert item.status == ("failed" if result_kind == "error" and call_id.endswith("01Search") else "completed")
+            assert item.action.type == "search"
+            assert item.action.query == ("one" if call_id.endswith("01Search") else "two")
+            assert item.action.queries == [item.action.query]
+            assert [source.url for source in item.action.sources] == expected_sources[call_id]
 
     def test_message_item_id_uses_msg_prefix(self):
         response = self._transform(_bridged_chat_completion_response())

@@ -25,7 +25,7 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     Function as NamedToolChoiceFunction,
 )
-from openai.types.responses import ResponseFunctionToolCall
+from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
@@ -1438,7 +1438,6 @@ class LiteLLMCompletionResponsesConfig:
         return input_item.get("type") in [
             "function_call_output",
             "custom_tool_call_output",
-            "web_search_call",
             "computer_call_output",
             "tool_result",  # Anthropic/MCP format
         ]
@@ -2041,7 +2040,7 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
-    ) -> list[ResponseFunctionToolCall | CustomToolCallOutputItem]:
+    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem]:
         """
         Transform a Chat Completion tools into a Responses API tools.
 
@@ -2064,7 +2063,12 @@ class LiteLLMCompletionResponsesConfig:
         custom_tool_names: Final = extract_custom_tool_names(request_tools)
         namespace_tool_names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(request_tools)
 
-        responses_tools: Final[list[ResponseFunctionToolCall | CustomToolCallOutputItem]] = []
+        web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
+            chat_completion_response
+        )
+        responses_tools: Final[
+            list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem]
+        ] = []  # mutable-ok: preserves provider tool-call order
         for tool in all_chat_completion_tools:
             if tool.type == "function":
                 function_definition = tool.function
@@ -2072,8 +2076,10 @@ class LiteLLMCompletionResponsesConfig:
                 tool_id = tool.id or ""
                 tool_arguments = serialize_tool_call_arguments(function_definition.get("arguments"))
 
-                # Check if this is a custom tool
-                if is_custom_tool_call(tool_name, custom_tool_names):
+                web_search_call = web_search_calls.get(tool_id)
+                if web_search_call is not None:
+                    responses_tools.append(web_search_call)
+                elif is_custom_tool_call(tool_name, custom_tool_names):
                     # Build custom_tool_call output item
                     input_str = unwrap_custom_tool_arguments(tool_arguments)
                     custom_item = CustomToolCallOutputItem(
@@ -2127,6 +2133,35 @@ class LiteLLMCompletionResponsesConfig:
 
                     responses_tools.append(output_tool_call)
         return responses_tools
+
+    @staticmethod
+    def _web_search_calls_by_call_id(
+        chat_completion_response: ModelResponse,
+    ) -> Mapping[str, ResponseFunctionWebSearch]:
+        calls: Final[dict[str, ResponseFunctionWebSearch]] = {}  # mutable-ok: indexes provider-built calls
+        for choice in chat_completion_response.choices:
+            provider_fields = getattr(choice.message, "provider_specific_fields", None)
+            if not isinstance(provider_fields, Mapping):
+                continue
+            web_search_calls = provider_fields.get("web_search_calls")
+            items = (
+                web_search_calls.values()
+                if isinstance(web_search_calls, Mapping)
+                else web_search_calls
+                if isinstance(web_search_calls, Sequence)
+                else ()
+            )
+            for item in items:
+                try:
+                    call = (
+                        item
+                        if isinstance(item, ResponseFunctionWebSearch)
+                        else ResponseFunctionWebSearch.model_validate(item)
+                    )
+                except (TypeError, ValueError):
+                    continue
+                calls[call.id.removeprefix("ws_")] = call
+        return MappingProxyType(calls)
 
     @staticmethod
     def _map_chat_completion_finish_reason_to_responses_status(
@@ -2326,6 +2361,7 @@ class LiteLLMCompletionResponsesConfig:
         | OutputFunctionToolCall
         | OutputImageGenerationCall
         | ResponseFunctionToolCall
+        | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
     ]:
         responses_output: list[
@@ -2334,6 +2370,7 @@ class LiteLLMCompletionResponsesConfig:
             | OutputFunctionToolCall
             | OutputImageGenerationCall
             | ResponseFunctionToolCall
+            | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
         ] = []
 
