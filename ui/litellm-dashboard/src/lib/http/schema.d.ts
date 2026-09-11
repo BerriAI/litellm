@@ -207,17 +207,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Oauth Protected Resource Mcp
-         * @description OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
-         *
-         *     Legacy pattern: /{server_name}/mcp
-         *     Discovery path: /.well-known/oauth-protected-resource/{server_name}/mcp
-         *
-         *     This endpoint is kept for backward compatibility. New integrations should
-         *     use the standard MCP pattern (/mcp/{server_name}) instead.
-         */
-        get: operations["oauth_protected_resource_mcp__well_known_oauth_protected_resource_get"];
+        /** Oauth Protected Resource Root */
+        get: operations["oauth_protected_resource_root__well_known_oauth_protected_resource_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -40285,11 +40276,9 @@ export interface operations {
             };
         };
     };
-    oauth_protected_resource_mcp__well_known_oauth_protected_resource_get: {
+    oauth_protected_resource_root__well_known_oauth_protected_resource_get: {
         parameters: {
-            query?: {
-                mcp_server_name?: string | null;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -40302,16 +40291,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": {
+                        [key: string]: string | string[];
+                    };
                 };
             };
         };

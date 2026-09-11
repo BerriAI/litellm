@@ -7,7 +7,6 @@ just a form that asks the user for their API key — not a full identity-provide
 
 Endpoints implemented here:
   GET  /.well-known/oauth-authorization-server      — OAuth authorization server metadata
-  GET  /.well-known/oauth-protected-resource         — OAuth protected resource metadata
   GET  /v1/mcp/oauth/authorize                       — Shows HTML form to collect the API key
   POST /v1/mcp/oauth/authorize                       — Stores temp auth code and redirects
   POST /v1/mcp/oauth/token                           — Exchanges code for a bearer JWT token
@@ -608,18 +607,6 @@ async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code"],
             "code_challenge_methods_supported": ["S256"],
-        }
-    )
-
-
-@router.get("/.well-known/oauth-protected-resource", include_in_schema=False)
-async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
-    """RFC 9728 Protected Resource Metadata pointing back at this server."""
-    base_url: Final = get_request_base_url(request)
-    return JSONResponse(
-        {
-            "resource": base_url,
-            "authorization_servers": [base_url],
         }
     )
 

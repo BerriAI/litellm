@@ -107,15 +107,6 @@ def test_oauth_authorization_server_metadata(client):
     assert "S256" in data["code_challenge_methods_supported"]
 
 
-def test_oauth_protected_resource_metadata(client):
-    resp = client.get("/.well-known/oauth-protected-resource")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "resource" in data
-    assert "authorization_servers" in data
-    assert len(data["authorization_servers"]) == 1
-
-
 # ---------------------------------------------------------------------------
 # Authorization GET endpoint
 # ---------------------------------------------------------------------------

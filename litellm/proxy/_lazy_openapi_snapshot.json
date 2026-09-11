@@ -22415,47 +22415,34 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            }
-          ],
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get",
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "title": "Response Oauth Protected Resource Root  Well Known Oauth Protected Resource Get",
+                    "type": "object"
                   }
                 }
               },
-              "description": "Validation Error"
+              "description": "Successful Response"
             }
           },
-          "summary": "Oauth Protected Resource Mcp",
+          "summary": "Oauth Protected Resource Root",
           "tags": [
             "mcp_byok_oauth"
           ]
@@ -24636,47 +24623,34 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource_get_2",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mcp_server_name",
-              "required": false,
-              "schema": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Mcp Server Name"
-              }
-            }
-          ],
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get_2",
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
                   "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      ]
+                    },
+                    "title": "Response Oauth Protected Resource Root  Well Known Oauth Protected Resource Get",
+                    "type": "object"
                   }
                 }
               },
-              "description": "Validation Error"
+              "description": "Successful Response"
             }
           },
-          "summary": "Oauth Protected Resource Mcp",
+          "summary": "Oauth Protected Resource Root",
           "tags": [
             "mcp_discoverable"
           ]
