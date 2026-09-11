@@ -1156,6 +1156,9 @@ class _FakeRedis:
     async def async_get_cache(self, key, **kwargs):
         return self.values.get(key)
 
+    async def async_batch_get_counts(self, key_list):
+        return tuple(self.values.get(key) for key in key_list)
+
     async def async_increment_with_floor(self, key, value, ttl):
         self.values[key] = self.values.get(key, 0) + value
         self.ttls.setdefault(key, ttl)
@@ -1204,9 +1207,16 @@ async def test_counters_are_written_with_their_expiry_and_re_armed_if_stripped(m
 
 
 class _DownRedis(_FakeRedis):
-    """Redis whose every call raises, as during an outage or an open circuit breaker."""
+    """Redis whose every call fails, as during an outage or an open circuit breaker.
+
+    `async_get_cache` returns None rather than raising, as the real one does: it swallows the
+    error, so a failed GET is indistinguishable from an empty key to anyone reading through it.
+    """
 
     async def async_get_cache(self, key, **kwargs):
+        return None
+
+    async def async_batch_get_counts(self, key_list):
         raise ConnectionError("redis is down")
 
     async def async_increment_with_floor(self, key, value, ttl):
@@ -1278,6 +1288,50 @@ async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch
         await _guess(throttle)
     assert blocked.value.code == "429"
     assert blocked.value.headers.get("Retry-After") == "900"
+
+
+class _WriteRefusingRedis(_FakeRedis):
+    """Redis that answers reads but raises on writes until `recover()` is called."""
+
+    def __init__(self):
+        super().__init__()
+        self.writable = False
+
+    def recover(self):
+        self.writable = True
+
+    async def async_increment_with_floor(self, key, value, ttl):
+        if not self.writable:
+            raise ConnectionError("redis write failed")
+        return await super().async_increment_with_floor(key, value, ttl)
+
+
+@pytest.mark.asyncio
+async def test_failures_redis_refused_still_count_once_redis_recovers(monkeypatch):
+    """Regression: a guess Redis could not record must not be forgotten when Redis comes back.
+
+    Such a guess lands in this worker's own store. Reading only Redis afterwards handed the
+    attacker that guess again, so the budget was the limit plus however many writes failed.
+    """
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    redis = _WriteRefusingRedis()
+    throttle = _throttle(max_attempts=2, redis_cache=redis)
+
+    with pytest.raises(ProxyException, match="Invalid credentials"):
+        await _guess(throttle)
+    assert not redis.values, "the refused write must not have reached Redis"
+
+    redis.recover()
+    with pytest.raises(ProxyException, match="Invalid credentials"):
+        await _guess(throttle)
+    assert [v for k, v in redis.values.items() if ":user:" in k] == [1], "only the recorded guess is in Redis"
+
+    with pytest.raises(ProxyException) as blocked:
+        await _guess(throttle)
+    assert blocked.value.code == "429", "the guess Redis missed and the one it took must add up to the limit"
 
 
 @pytest.mark.asyncio
