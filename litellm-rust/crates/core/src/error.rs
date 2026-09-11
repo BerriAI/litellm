@@ -22,7 +22,7 @@ pub enum Error {
     )]
     MissingApiKey { provider: &'static str },
     #[error(
-        "Missing Azure AI credentials - set AZURE_AI_API_KEY or provide an Authorization header"
+        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
     )]
     MissingAzureAiCredentials,
     #[error("Missing Azure AI credentials - set AZURE_AI_API_KEY or provide azure_ad_token")]
@@ -121,6 +121,15 @@ impl From<TransportError> for Error {
     }
 }
 
+impl From<crate::AuthError> for Error {
+    fn from(error: crate::AuthError) -> Self {
+        match error {
+            crate::AuthError::MissingApiKey { provider } => Self::MissingApiKey { provider },
+            error => Self::Auth(error.to_string()),
+        }
+    }
+}
+
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
@@ -135,6 +144,14 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
 #[cfg(test)]
 mod transport_tests {
     use super::*;
+
+    #[test]
+    fn missing_auth_key_preserves_provider_in_public_error() {
+        assert_eq!(
+            Error::from(crate::AuthError::MissingApiKey { provider: "Vertex" }),
+            Error::MissingApiKey { provider: "Vertex" }
+        );
+    }
 
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {
