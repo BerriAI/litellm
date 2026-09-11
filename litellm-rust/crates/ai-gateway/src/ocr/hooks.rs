@@ -265,6 +265,12 @@ impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLi
         Box::pin(async move { Ok(request) })
     }
 
+    #[tracing::instrument(
+        name = "success_callback",
+        target = "litellm::function_trace",
+        level = "trace",
+        skip_all
+    )]
     fn async_log_success_event<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
@@ -288,6 +294,12 @@ impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLi
         })
     }
 
+    #[tracing::instrument(
+        name = "failure_callback",
+        target = "litellm::function_trace",
+        level = "trace",
+        skip_all
+    )]
     fn async_log_failure_event<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
@@ -374,7 +386,10 @@ fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
 
 fn core_error_kind(error: &Error) -> &'static str {
     match error {
-        Error::Auth(_) => "AuthError",
+        Error::Auth(_)
+        | Error::MissingApiKey { .. }
+        | Error::MissingAzureAiCredentials
+        | Error::MissingAzureAiCredentialsOrAdToken => "AuthError",
         Error::InvalidProvider(_) => "InvalidProvider",
         Error::InvalidRequest(_) => "InvalidRequest",
         Error::InvalidType { .. } => "InvalidType",

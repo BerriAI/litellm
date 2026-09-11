@@ -14,11 +14,13 @@ Works across multiple proxy instances via DualCache (in-memory + Redis).
 Follows the same pattern as max_iterations_limiter.py.
 """
 
+import logging
 import os
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -215,9 +217,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                     return float(result)
                 return 0.0
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "MaxBudgetPerSessionHandler: Redis GET failed, falling back to in-memory: %s",
-                    str(e),
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "MaxBudgetPerSessionHandler: Redis GET failed, falling back to in-memory",
+                    e,
                 )
 
         result = await self.internal_usage_cache.async_get_cache(
@@ -239,9 +243,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 )
                 return float(result)
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "MaxBudgetPerSessionHandler: Redis INCRBYFLOAT failed, falling back to in-memory: %s",
-                    str(e),
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "MaxBudgetPerSessionHandler: Redis INCRBYFLOAT failed, falling back to in-memory",
+                    e,
                 )
 
         return await self._in_memory_increment_spend(cache_key, amount)

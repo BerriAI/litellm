@@ -29,6 +29,8 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.bindings import native_exception_types
+from litellm.rust_bridge.configuration import rust_enabled
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -196,12 +198,6 @@ def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
 
 
-def _rust_ocr_enabled(prepared_request: _PreparedOCRRequest) -> bool:
-    raw_request_override: Final = prepared_request.litellm_params.get("rust")
-    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-    return rust_ocr_bridge.rust_ocr_enabled(request_override=request_override)
-
-
 def _rust_bridge_optional_params(
     prepared_request: _PreparedOCRRequest,
     resolve_secret: Callable[[str], str | None],
@@ -286,6 +282,33 @@ def _prepare_rust_ocr_call(
     )
 
 
+def _map_rust_ocr_error(
+    error: Exception,
+    prepared_request: _PreparedOCRRequest,
+    exception_types: tuple[type[BaseException], type[BaseException]] | None,
+) -> Exception:
+    if exception_types is None:
+        return error
+    _, upstream_error = exception_types
+    if not isinstance(error, upstream_error):
+        return error
+    error_args: Final = cast(  # cast-ok: BaseException.args is typed with Any in the standard library stubs
+        tuple[object, ...], error.args
+    )
+    status_value: Final = error_args[0] if error_args else 0
+    message_value: Final = error_args[1] if len(error_args) > 1 else str(error)
+    status: Final = status_value if isinstance(status_value, int) else 0
+    message: Final = message_value if isinstance(message_value, str) else str(message_value)
+    error_factory: Final = cast(  # cast-ok: the legacy provider interface leaves callable parameters untyped
+        Callable[..., Exception], prepared_request.provider_config.get_error_class
+    )
+    return error_factory(
+        error_message=message,
+        status_code=status or 500,
+        headers={},  # mutable-ok: provider error factories require a concrete header dict
+    )
+
+
 def _run_rust_ocr(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
@@ -296,16 +319,19 @@ def _run_rust_ocr(
         prepared_request=prepared_request,
         resolve_api_key=resolve_api_key,
     )
-    rust_response: Final = rust_ocr_bridge.ocr(
-        model=prepared_request.model,
-        document=prepared_request.document,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        custom_llm_provider=prepared_request.custom_llm_provider,
-        extra_headers=prepared.headers,
-        optional_params=prepared.optional_params,
-        timeout=prepared_request.effective_timeout,
-    )
+    try:
+        rust_response: Final = rust_ocr_bridge.ocr(
+            model=prepared_request.model,
+            document=prepared_request.document,
+            api_key=prepared.api_key,
+            api_base=prepared.api_base,
+            custom_llm_provider=prepared_request.custom_llm_provider,
+            extra_headers=prepared.headers,
+            optional_params=prepared.optional_params,
+            timeout=prepared_request.effective_timeout,
+        )
+    except Exception as error:
+        raise _map_rust_ocr_error(error, prepared_request, native_exception_types()) from error
     if rust_response is None:
         return None
     return OCRResponse.model_validate(rust_response)
@@ -321,16 +347,19 @@ async def _run_rust_aocr(
         prepared_request=prepared_request,
         resolve_api_key=resolve_api_key,
     )
-    rust_response: Final = await rust_ocr_bridge.aocr(
-        model=prepared_request.model,
-        document=prepared_request.document,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        custom_llm_provider=prepared_request.custom_llm_provider,
-        extra_headers=prepared.headers,
-        optional_params=prepared.optional_params,
-        timeout=prepared_request.effective_timeout,
-    )
+    try:
+        rust_response: Final = await rust_ocr_bridge.aocr(
+            model=prepared_request.model,
+            document=prepared_request.document,
+            api_key=prepared.api_key,
+            api_base=prepared.api_base,
+            custom_llm_provider=prepared_request.custom_llm_provider,
+            extra_headers=prepared.headers,
+            optional_params=prepared.optional_params,
+            timeout=prepared_request.effective_timeout,
+        )
+    except Exception as error:
+        raise _map_rust_ocr_error(error, prepared_request, native_exception_types()) from error
     if rust_response is None:
         return None
     return OCRResponse.model_validate(rust_response)
@@ -430,7 +459,7 @@ async def aocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
+        if _rust_ocr_supported(prepared) and rust_enabled():
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = await _run_rust_aocr(
@@ -702,7 +731,7 @@ def ocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
+        if _rust_ocr_supported(prepared) and rust_enabled():
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = _run_rust_ocr(

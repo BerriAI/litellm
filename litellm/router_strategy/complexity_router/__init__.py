@@ -16,6 +16,7 @@ from litellm.router_strategy.complexity_router.complexity_router import (
 from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
+    CapabilityCalibrationConfig,
     CapabilityClassifierConfig,
     ClassificationRubric,
     ComplexityRouterConfig,
@@ -29,6 +30,7 @@ from litellm.router_strategy.complexity_router.config import (
 __all__ = [
     "DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE",
     "DEFAULT_COMPLEXITY_CONFIG",
+    "CapabilityCalibrationConfig",
     "CapabilityClassifierConfig",
     "ClassificationRubric",
     "ComplexityRouter",

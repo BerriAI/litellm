@@ -658,3 +658,38 @@ def test_async_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypatc
     asyncio.run(_short_lived_script())
 
     assert len(writes) == 1
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_records_the_looked_up_key_as_the_preset_cache_key(monkeypatch):
+    """The spend log for a cache hit must reuse the key the lookup already computed instead of hashing again."""
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import CallTypes
+
+    async def acompletion(**kwargs):
+        return None
+
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    kwargs = {"model": "gpt-5.4", "messages": [{"role": "user", "content": "hello"}], "caching": True}
+    await litellm.cache.async_add_cache(
+        litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi"}}]), **kwargs
+    )
+    handler = LLMCachingHandler(original_function=acompletion, request_kwargs=kwargs, start_time=datetime.now())
+    logging_obj = _build_logging_obj(CallTypes.acompletion.value, stream=False)
+    logging_obj.async_success_handler = AsyncMock()
+
+    hit = await handler._async_get_cache(
+        model="gpt-5.4",
+        original_function=acompletion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.acompletion.value,
+        kwargs=kwargs,
+        args=(),
+    )
+
+    assert hit is not None and hit.cached_result is not None
+    assert handler.preset_cache_key is not None
+    assert logging_obj.litellm_params["preset_cache_key"] == handler.preset_cache_key
+    assert hit.cached_result._hidden_params["cache_key"] == handler.preset_cache_key

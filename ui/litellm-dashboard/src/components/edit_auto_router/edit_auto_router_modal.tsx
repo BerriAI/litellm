@@ -14,7 +14,7 @@ import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceC
 import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import { hydrateTierModelParams, normalizeTierModels } from "../add_model/complexity_router_tiers";
+import { hydrateTierModelParams } from "../add_model/complexity_router_tiers";
 import {
   type ActiveTierSet,
   CUSTOM_TIER_OMITTED_KEYS,
@@ -34,6 +34,7 @@ import {
   getSemanticConfigError,
   getPlanModeTierError,
   getTierLabelsError,
+  hydrateBuiltInTiers,
   hydrateCustomTierSet,
   hydratePlanModeMinTier,
   hydrateTierLabels,
@@ -48,6 +49,7 @@ import {
   hydrateAutoRouterCompression,
 } from "../add_model/buildAutoRouterCompression";
 import { hydrateKeywordTierRules } from "../add_model/complexity_router_keywords";
+import { customDimensionsError, hydrateCustomDimensions } from "../add_model/custom_dimensions";
 import {
   hydrateDimensionWeights,
   hydrateReasoningOverrideMinScore,
@@ -61,6 +63,7 @@ import ComplexityRouterConfig, {
   ClassifierType,
   ComplexityRouterConfigValue,
   ComplexityTiers,
+  heuristicScoringRole,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -91,6 +94,7 @@ interface EditAutoRouterModalProps {
  * hydrators validate themselves stay `unknown`; the ones assigned straight through carry their type. */
 export interface StoredComplexityRouterConfig {
   tiers?: Partial<Record<keyof ComplexityTiers, unknown>>;
+  enable_non_reasoning_tier?: boolean;
   tier_model_configs?: unknown;
   default_model?: string | null;
   plan_mode_min_tier?: unknown;
@@ -109,6 +113,7 @@ export interface StoredComplexityRouterConfig {
   tier_boundaries?: unknown;
   token_thresholds?: unknown;
   dimension_weights?: unknown;
+  custom_dimensions?: unknown;
   reasoning_override_min_score?: unknown;
   session_affinity?: unknown;
   session_affinity_ttl_seconds?: unknown;
@@ -135,18 +140,14 @@ export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
   complexityRouterDefaultModel: string | null | undefined,
 ): ComplexityRouterConfigValue => {
-  const hydratedTiers: ComplexityTiers = {
-    SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
-    MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
-    COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
-    REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
-  };
-
+  const builtIn = hydrateBuiltInTiers(parsedConfig.tiers, parsedConfig.enable_non_reasoning_tier);
+  const { tiers: hydratedTiers, enable_non_reasoning_tier } = builtIn;
   const custom_tier_set = hydrateCustomTierSet(parsedConfig);
-  const activeTiers = { tiers: hydratedTiers, custom_tier_set };
+  const activeTiers = { ...builtIn, custom_tier_set };
 
   return {
     tiers: hydratedTiers,
+    enable_non_reasoning_tier,
     custom_tier_set,
     tier_model_params: tierParamsByRowId(
       hydrateTierModelParams(parsedConfig.tiers, parsedConfig.tier_model_configs),
@@ -194,6 +195,7 @@ export const hydrateComplexityRouterConfig = (
     tier_boundaries: hydrateTierBoundaries(parsedConfig.tier_boundaries),
     token_thresholds: hydrateTokenThresholds(parsedConfig.token_thresholds),
     dimension_weights: hydrateDimensionWeights(parsedConfig.dimension_weights),
+    custom_dimensions: hydrateCustomDimensions(parsedConfig.custom_dimensions),
     reasoning_override_min_score: hydrateReasoningOverrideMinScore(parsedConfig.reasoning_override_min_score),
     session_affinity:
       typeof parsedConfig.session_affinity === "boolean" ? parsedConfig.session_affinity : DEFAULT_SESSION_AFFINITY,
@@ -234,6 +236,7 @@ export const hydrateComplexityRouterConfig = (
 
 export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tiers",
+  "enable_non_reasoning_tier",
   "tier_definitions",
   "fallback_tier",
   "tier_model_configs",
@@ -264,6 +267,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "tier_boundaries",
   "token_thresholds",
   "dimension_weights",
+  "custom_dimensions",
   "reasoning_override_min_score",
   "enable_context_window_escalation",
   "context_window_escalation_buffer",
@@ -339,6 +343,7 @@ export const buildUpdatedComplexityRouterConfig = (
 
   const builderParams: BuildComplexityRouterConfigParams = {
     tiers: value.tiers,
+    enableNonReasoningTier: value.enable_non_reasoning_tier,
     customTierSet: value.custom_tier_set,
     defaultModel: value.default_model,
     planModeMinTier: value.plan_mode_min_tier,
@@ -373,6 +378,7 @@ export const buildUpdatedComplexityRouterConfig = (
     tierBoundaries: value.tier_boundaries,
     tokenThresholds: value.token_thresholds,
     dimensionWeights: value.dimension_weights,
+    customDimensions: value.custom_dimensions,
     reasoningOverrideMinScore: value.reasoning_override_min_score,
     tierModelParams: value.tier_model_params,
     enableContextWindowEscalation: value.enable_context_window_escalation,
@@ -481,7 +487,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
             : null) ?? getTierLabelsError(complexityRouterConfig.tier_labels)) ??
       getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
       getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
-      getClassifierModelError(complexityRouterConfig);
+      getClassifierModelError(complexityRouterConfig) ??
+      (heuristicScoringRole(complexityRouterConfig) === "decides"
+        ? customDimensionsError(complexityRouterConfig.custom_dimensions)
+        : null);
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -601,7 +610,11 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         toast.fromError(tierSetError);
         return;
       }
-      const classifierError = getClassifierModelError(complexityRouterConfig);
+      const classifierError =
+        getClassifierModelError(complexityRouterConfig) ??
+        (heuristicScoringRole(complexityRouterConfig) === "decides"
+          ? customDimensionsError(complexityRouterConfig.custom_dimensions)
+          : null);
       if (classifierError) {
         setShowValidationErrors(true);
         toast.fromError(classifierError);

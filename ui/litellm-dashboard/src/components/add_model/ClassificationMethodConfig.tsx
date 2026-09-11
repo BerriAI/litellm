@@ -17,6 +17,7 @@ import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import ClassifierVisionConfig from "./ClassifierVisionConfig";
 import type { ReasoningEffort } from "./complexity_router_tiers";
+import { nonReasoningTierFields } from "./nonReasoningTierFields";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassificationFrequency,
@@ -44,8 +45,9 @@ import {
 } from "./ComplexityRouterConfig";
 
 const DEFAULT_SCORING_EXPLANATION =
-  "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
-  "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
+  "The router scores each request across 7 built-in dimensions: token count, code presence, reasoning markers, technical " +
+  "terms, simple indicators, multi-step patterns, and question complexity, plus any custom dimensions you add. " +
+  "The weighted score determines the tier:";
 
 const HEURISTIC_V2_EXPLANATION =
   "The router estimates success probability for all four tiers with the bundled calibrated model, then selects " +
@@ -287,6 +289,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           : undefined,
       hybrid_boundary_margin:
         classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
+      ...nonReasoningTierFields(classifierType, value),
     };
     onChange(nextValue);
   };
@@ -428,6 +431,15 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
       classifier_context_include_assistant_turns: includeAssistantTurns,
     });
   };
+
+  if (classifierType === "capability") {
+    return (
+      <p className="text-sm text-muted-foreground">
+        This router uses capability forecasting. Configure its classifier, threshold, and calibration through YAML or
+        the API. Saving preserves those settings
+      </p>
+    );
+  }
 
   return (
     <>

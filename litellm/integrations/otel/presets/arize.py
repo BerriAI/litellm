@@ -26,10 +26,12 @@ class _ArizeSettings(BaseSettings):
 def arize_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
+    base: Final = config_overrides or OpenTelemetryV2Config()
+    mappers: Final = ensure_mappers(base.mapper_names, "openinference")
     arize_cfg: Final = _V1ArizeLogger.get_arize_config()
     headers: Final = _arize_headers(arize_cfg)
-    base: Final = config_overrides or OpenTelemetryV2Config()
     return base.model_copy(
         update={
             "exporters": [
@@ -41,7 +43,7 @@ def arize_preset(
                     owner=ExporterOwner.ARIZE_AX,
                 ),
             ],
-            "mapper_names": ensure_mappers(base.mapper_names, "openinference"),
+            "mapper_names": mappers,
             "resource_attributes": {
                 **base.resource_attributes,
                 **({"model_id": arize_cfg.project_name} if arize_cfg.project_name else {}),
