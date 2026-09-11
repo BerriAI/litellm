@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 from locust_load import (
     LoadError,
@@ -18,12 +19,14 @@ _FAILURES_HEADER = "Method,Name,Error,Occurrences,First Seen,Last Seen\n"
 def _entry(
     *,
     num_requests: int,
+    name: str = "/chat/completions",
     num_failures: int = 0,
     start_time: float = 1000.0,
     last_request_timestamp: float = 1010.0,
     response_times: dict[int, int] | None = None,
 ) -> LocustStatEntry:
     return LocustStatEntry(
+        name=name,
         num_requests=num_requests,
         num_failures=num_failures,
         start_time=start_time,
@@ -44,6 +47,7 @@ def _result(
         p50_seconds=0.05,
         p90_seconds=0.08,
         p99_seconds=0.1,
+        endpoints=(),
         errors=errors,
         generator_warnings=generator_warnings,
     )
@@ -126,6 +130,49 @@ class TestAggregate:
         assert result.requests == 0
         assert result.requests_per_second == 0.0
         assert result.failure_ratio == 1.0
+        assert result.endpoints == ()
+
+
+class TestPerEndpoint:
+    def test_each_route_keeps_its_own_requests_failures_and_median(self) -> None:
+        entries: Final = (
+            _entry(name="/chat/completions", num_requests=100, response_times={20: 100}),
+            _entry(name="/v1/messages", num_requests=40, num_failures=3, response_times={900: 40}),
+        )
+
+        result: Final = aggregate_stats(entries, (), ())
+
+        assert tuple((one.name, one.requests, one.failures, one.p50_seconds) for one in result.endpoints) == (
+            ("/chat/completions", 100, 0, 0.02),
+            ("/v1/messages", 40, 3, 0.9),
+        )
+
+    def test_several_stats_entries_for_one_route_fold_into_a_single_row(self) -> None:
+        entries: Final = (
+            _entry(name="/v1/messages", num_requests=10, response_times={30: 10}),
+            _entry(name="/v1/messages", num_requests=30, num_failures=1, response_times={30: 30}),
+        )
+
+        result: Final = aggregate_stats(entries, (), ())
+
+        assert tuple((one.name, one.requests, one.failures) for one in result.endpoints) == (("/v1/messages", 40, 1),)
+
+    def test_a_route_that_never_ran_is_absent_so_a_one_sided_run_cannot_pass_unnoticed(self) -> None:
+        result: Final = aggregate_stats((_entry(name="/chat/completions", num_requests=10),), (), ())
+
+        assert tuple(one.name for one in result.endpoints) == ("/chat/completions",)
+
+    def test_the_summary_names_every_route_with_its_counts(self) -> None:
+        entries: Final = (
+            _entry(name="/chat/completions", num_requests=2, response_times={20: 2}),
+            _entry(name="/v1/messages", num_requests=1, num_failures=1, response_times={500: 1}),
+        )
+
+        result: Final = aggregate_stats(entries, (), ())
+
+        assert result.endpoint_summary() == (
+            "/chat/completions 2 requests, 0 failures, p50 0.020s, /v1/messages 1 requests, 1 failures, p50 0.500s"
+        )
 
 
 class TestErrorBreakdown:
