@@ -8,8 +8,9 @@ router, because the exception propagated up and was caught by the
 catch-all handler in _update_llm_router.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from litellm.proxy.proxy_server import ProxyConfig
 
@@ -294,7 +295,7 @@ class TestDeleteDeploymentKeepsPluginConfigModels:
     @pytest.mark.asyncio
     async def test_config_model_updated_params_reconciles_successfully(self, tmp_path):
         import yaml
-        import litellm
+
         from litellm.router import Router
 
         initial_config = {
