@@ -3788,11 +3788,6 @@ class TestMCPServerManager:
                 new_callable=AsyncMock,
                 return_value=mock_client,
             ) as mock_create_client,
-            patch.object(
-                manager,
-                "_create_prefixed_resources",
-                return_value=prefixed_resources,
-            ) as mock_prefix,
         ):
             result = await manager.get_resources_from_server(
                 server=server,
@@ -3808,7 +3803,6 @@ class TestMCPServerManager:
         assert called_kwargs["mcp_auth_header"] == "auth"
         assert called_kwargs["extra_headers"] == {"X-Test": "1", "X-Static": "static"}
         mock_client.list_resources.assert_awaited_once()
-        mock_prefix.assert_called_once_with(mock_resources, server, add_prefix=True)
         assert result == prefixed_resources
 
     @pytest.mark.asyncio
@@ -3832,9 +3826,9 @@ class TestMCPServerManager:
             )
         ]
         mock_client.list_resource_templates = AsyncMock(return_value=mock_templates)
-        prefixed_templates = [
+        expected_templates = [
             ResourceTemplate(
-                name="alias-server-template",
+                name="template",
                 uriTemplate="https://example.com/{id}",
             )
         ]
@@ -3846,11 +3840,6 @@ class TestMCPServerManager:
                 new_callable=AsyncMock,
                 return_value=mock_client,
             ) as mock_create_client,
-            patch.object(
-                manager,
-                "_create_prefixed_resource_templates",
-                return_value=prefixed_templates,
-            ) as mock_prefix,
         ):
             result = await manager.get_resource_templates_from_server(
                 server=server,
@@ -3868,8 +3857,7 @@ class TestMCPServerManager:
             subject_token=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
-        mock_prefix.assert_called_once_with(mock_templates, server, add_prefix=False)
-        assert result == prefixed_templates
+        assert result == expected_templates
 
     @pytest.mark.asyncio
     async def test_read_resource_from_server_success(self):
