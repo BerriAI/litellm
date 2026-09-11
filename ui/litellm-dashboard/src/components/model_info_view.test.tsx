@@ -42,6 +42,11 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   useModelCostMap: (...args: any[]) => mockUseModelCostMap(...args),
 }));
 
+const mockUseTeams = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => mockUseTeams(),
+}));
+
 const mockUsePtuCostAttributionEnabled = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () => ({
   usePtuCostAttributionEnabled: () => mockUsePtuCostAttributionEnabled(),
@@ -102,6 +107,7 @@ describe("ModelInfoView", () => {
     });
     vi.clearAllMocks();
     mockUsePtuCostAttributionEnabled.mockReturnValue(false);
+    mockUseTeams.mockReturnValue({ data: undefined, isLoading: false, error: null });
 
     mockUseModelsInfo.mockReturnValue({
       data: {
@@ -1562,6 +1568,32 @@ describe("ModelInfoView", () => {
       const payload = await save(user);
 
       expect(payload.model_info).toMatchObject({ team_id: "team-7" });
+    });
+
+    it("sends the team picked in the Team ID selector", async () => {
+      mockUseTeams.mockReturnValue({
+        data: [
+          { team_id: "team-1", team_alias: "alpha" },
+          { team_id: "team-2", team_alias: "beta" },
+        ],
+        isLoading: false,
+        error: null,
+      });
+      const teamModel = {
+        ...defaultModelData,
+        model_info: { ...defaultModelData.model_info, team_id: "team-1" },
+      };
+      mockUseModelsInfo.mockReturnValue({ data: { data: [teamModel] }, isLoading: false, error: null });
+      mockModelInfoV1Call.mockResolvedValue({ data: [teamModel] });
+      const user = userEvent.setup();
+      await enterEditMode(user);
+
+      await user.click(screen.getByText("alpha (team-1)"));
+      await user.click(await screen.findByText("beta (team-2)"));
+
+      const payload = await save(user);
+
+      expect(payload.model_info.team_id).toBe("team-2");
     });
 
     it("sends the edited LiteLLM extra params", async () => {

@@ -420,6 +420,12 @@ export default function ModelInfoView({
             health_check_model: values.health_check_model,
           };
         }
+        if (values.team_id) {
+          updatedModelInfo = {
+            ...updatedModelInfo,
+            team_id: values.team_id,
+          };
+        }
         updatedModelInfo = applyPtuModelInfo(updatedModelInfo, values, ptuCostAttributionEnabled);
       } catch (e) {
         toast.fromError("Invalid JSON in Model Info");
@@ -779,6 +785,7 @@ export default function ModelInfoView({
                   tagsList={tagsList}
                   credentialsList={credentialsList}
                   healthCheckModelOptions={healthCheckModelOptions}
+                  teams={teams ?? null}
                 />
               ) : (
                 <p className="text-sm">Loading...</p>
