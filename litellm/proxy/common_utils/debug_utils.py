@@ -17,7 +17,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PYTHON_GC_THRESHOLD
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router: Final = APIRouter()
@@ -209,7 +209,7 @@ async def get_active_task_stacks(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     max_frames: int = Query(default=40, ge=1, le=200),
 ) -> _TaskStackDump:
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(status_code=403, detail="Only proxy admins can read asyncio task stacks")
 
     max_tasks_to_check: Final = 5000

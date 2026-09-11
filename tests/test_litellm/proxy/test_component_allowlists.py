@@ -28,6 +28,7 @@ import sys
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
 # reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
@@ -85,7 +86,6 @@ _DB_ENV_KEYS = (
 _PRE_DB_ENV = {_key: os.environ.pop(_key, None) for _key in _DB_ENV_KEYS}
 _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
 from gateway.main import _is_gateway_route
-from gateway.main import app as gateway_app
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
 for _key, _previous in _PRE_DB_ENV.items():
@@ -204,25 +204,30 @@ def test_gateway_drops_ui_and_swagger_mounts():
 
 @pytest.mark.asyncio
 async def test_gateway_serves_asyncio_task_debug_routes() -> None:
-    previous_override = gateway_app.dependency_overrides.get(user_api_key_auth)
-    gateway_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    previous_override = app.dependency_overrides.get(user_api_key_auth)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    trimmed = FastAPI(routes=[route for route in app.router.routes if _is_gateway_route(route)])
+    management_route = next(route for route in app.router.routes if getattr(route, "path", None) == "/key/info")
     try:
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=gateway_app),
+            transport=httpx.ASGITransport(app=trimmed),
             base_url="http://testserver",
         ) as client:
             stacks_response = await client.get("/debug/asyncio-tasks/stacks")
             count_response = await client.get("/debug/asyncio-tasks")
+            management_response = await client.get("/key/info")
     finally:
         if previous_override is None:
-            gateway_app.dependency_overrides.pop(user_api_key_auth, None)
+            app.dependency_overrides.pop(user_api_key_auth, None)
         else:
-            gateway_app.dependency_overrides[user_api_key_auth] = previous_override
+            app.dependency_overrides[user_api_key_auth] = previous_override
 
     assert stacks_response.status_code == 200
     assert stacks_response.json()["worker_pid"]
     assert "groups" in stacks_response.json()
     assert count_response.status_code == 200
+    assert not _is_gateway_route(management_route)
+    assert management_response.status_code == 404
 
 
 def test_every_app_mount_is_assigned_to_a_component():

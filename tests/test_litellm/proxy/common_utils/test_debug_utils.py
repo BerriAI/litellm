@@ -43,6 +43,16 @@ async def test_task_stacks_require_proxy_admin() -> None:
 
 
 @pytest.mark.asyncio
+async def test_task_stacks_allow_proxy_admin_view_only() -> None:
+    app = _test_app(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    async with _client(app) as client:
+        response = await client.get("/debug/asyncio-tasks/stacks")
+
+    assert response.status_code == 200
+    assert "groups" in response.json()
+
+
+@pytest.mark.asyncio
 async def test_task_stacks_include_parked_task() -> None:
     app = _test_app(LitellmUserRoles.PROXY_ADMIN)
     parked_task = asyncio.create_task(_park_for_test(), name="parked-test-task")
