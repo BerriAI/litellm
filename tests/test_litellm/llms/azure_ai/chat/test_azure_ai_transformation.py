@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
@@ -136,6 +138,46 @@ def test_azure_ai_validate_environment_with_azure_ad_token():
     assert headers.get("Authorization") == "Bearer fake-azure-ad-token"
     assert "api-key" not in headers
     assert headers["Content-Type"] == "application/json"
+
+
+@pytest.fixture
+def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+
+
+def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
+    optional_params = AzureAIStudioConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9},
+        optional_params={},
+        model="gpt-6-astra",
+        drop_params=False,
+    )
+
+    assert optional_params == {"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9}
+
+
+def test_a_gpt_5_name_without_a_foundry_row_keeps_reading_its_own_entry(
+    monkeypatch: pytest.MonkeyPatch, _local_model_cost_map
+):
+    """Most gpt-5-family names have no azure_ai/ row. Reading an azure_ai/ key for those finds
+    nothing, and an openai.azure.com base sends the name down the azure provider, which has no key
+    for it either, so every effort answer would silently fall back to false and take temperature,
+    top_p and logprobs down with it."""
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.openai.azure.com")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "placeholder")
+
+    optional_params = litellm.utils.get_optional_params(
+        model="gpt-5.1-chat-latest",
+        custom_llm_provider="azure_ai",
+        temperature=0.2,
+        top_p=0.9,
+        logprobs=True,
+    )
+
+    assert optional_params["temperature"] == 0.2
+    assert optional_params["top_p"] == 0.9
+    assert optional_params["logprobs"] is True
 
 
 def test_azure_ai_grok_stop_parameter_handling():

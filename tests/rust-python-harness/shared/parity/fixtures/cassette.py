@@ -5,11 +5,10 @@ from datetime import datetime
 from itertools import accumulate
 from typing import Final, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from vcr.serialize import serialize
 from vcr.serializers import yamlserializer
 
-from .recording import RecordedInteraction
 from ..recorded_http import (
     HttpHeader,
     RecordedHttpResponse,
@@ -17,8 +16,8 @@ from ..recorded_http import (
     RecordedResponse,
     RecordedStreamChunk,
 )
-
-_OBJECT: Final = TypeAdapter(dict[str, object])
+from . import JSON_OBJECT_ADAPTER
+from .recording import RecordedInteraction
 
 
 class _CassetteModel(BaseModel):
@@ -118,7 +117,7 @@ def serialize_cassette(
     recorded_at: datetime,
     request_source: Literal["recorded", "python_replay"],
 ) -> str:
-    normalized: Final = _OBJECT.validate_python(
+    normalized: Final = JSON_OBJECT_ADAPTER.validate_python(
         yamlserializer.deserialize(
             serialize(
                 {

@@ -38,6 +38,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
 )
 from litellm.proxy.common_utils.user_api_key_cache import (
+    end_user_cache_key,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
     tag_cache_key,
@@ -177,6 +178,21 @@ def _model_access_group_cache_keys(row: _ModelAccessGroupRow) -> tuple[str, ...]
     return (model_access_group_cache_key(row.access_group_name),)
 
 
+def _enduser_counter_key(row: _EndUserRow) -> str:
+    return f"spend:end_user:{row.user_id}"
+
+
+def _enduser_cache_keys(row: _EndUserRow) -> tuple[str, ...]:
+    return (end_user_cache_key(row.user_id),)
+
+
+def _enduser_carried_spend(row: _EndUserRow, caps: Mapping[str, float]) -> float:
+    if not caps:
+        return 0.0
+    effective_budget_id: Final[str | None] = row.budget_id or litellm.max_end_user_budget_id
+    return _carried_spend(row.spend, caps.get(effective_budget_id) if effective_budget_id is not None else None)
+
+
 def _budget_link_where(
     budget_ids: Sequence[str],
     extra: Mapping[str, object] = MappingProxyType({}),
@@ -208,33 +224,31 @@ def _queue_budget_linked_resets(
 
 
 def _queue_enduser_resets(writes: LinkedSpendResetWrites, cascade: "_BudgetCascade") -> None:
-    """End users are matched by id rather than budget link: rows with no
-    budget_id ride the default budget tier (litellm.max_end_user_budget_id).
-    Zero-before-decrement ordering matters here too (see
-    _queue_budget_linked_resets)."""
-    if not cascade.rollover_caps:
-        if cascade.endusers:
-            writes.queue_spend_zero(
-                where={"user_id": {"in": [row.user_id for row in cascade.endusers]}}
-            )  # mutable-ok: prisma where filter must be a dict
+    """End users reset on the budget link like every other gated table, plus a
+    NULL-budget_id branch: rows created implicitly persist no link and ride the
+    default tier (litellm.max_end_user_budget_id).
+
+    Matching on the link rather than enumerating user ids keeps a statement's
+    bind count proportional to the expiring tiers instead of the customer
+    population, which past ~32,700 dependents exceeds PostgreSQL's per-statement
+    bind ceiling and wedges the cascade permanently (#40564).
+    """
+    _queue_budget_linked_resets(writes, cascade, extra=_SPENT_ROWS_WHERE)
+    default_budget_id: Final = litellm.max_end_user_budget_id
+    if default_budget_id is None or default_budget_id not in cascade.budget_ids:
         return
-    tiered: Final = tuple((row.budget_id or litellm.max_end_user_budget_id, row.user_id) for row in cascade.endusers)
-    for budget_id, cap in cascade.rollover_caps.items():
-        if not (
-            user_ids := [uid for bid, uid in tiered if bid == budget_id]
-        ):  # mutable-ok: prisma "in" filter takes a list
-            continue
+    cap: Final = cascade.rollover_caps.get(default_budget_id)
+    if cap is None:
         writes.queue_spend_zero(
-            where={"user_id": {"in": user_ids}, "spend": {"lte": cap}}
+            where={"budget_id": None, **_SPENT_ROWS_WHERE}
         )  # mutable-ok: prisma where filter must be a dict
-        writes.queue_spend_decrement(
-            where={"user_id": {"in": user_ids}, "spend": {"gt": cap}}, amount=cap
-        )  # mutable-ok: prisma where filter must be a dict
-    plain: Final = [
-        uid for bid, uid in tiered if bid is None or bid not in cascade.rollover_caps
-    ]  # mutable-ok: prisma "in" filter takes a list
-    if plain:
-        writes.queue_spend_zero(where={"user_id": {"in": plain}})  # mutable-ok: prisma where filter must be a dict
+        return
+    writes.queue_spend_zero(
+        where={"budget_id": None, "spend": {"gt": 0, "lte": cap}}
+    )  # mutable-ok: prisma where filter must be a dict
+    writes.queue_spend_decrement(
+        where={"budget_id": None, "spend": {"gt": cap}}, amount=cap
+    )  # mutable-ok: prisma where filter must be a dict
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,6 +664,7 @@ class ResetBudgetJob:
             if _rollover_enabled()
             else {}  # mutable-ok: empty sentinel immediately frozen by MappingProxyType
         )
+        endusers: Final[tuple[_EndUserRow, ...]] = await self._collect_endusers_to_reset(budget_ids)
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),
             budget_ids=budget_ids,
@@ -661,7 +676,7 @@ class ResetBudgetJob:
                 for b in budgets_to_reset
                 if b.budget_id is not None and b.budget_duration is not None
             ),
-            endusers=await self._collect_endusers_to_reset(budget_ids),
+            endusers=endusers,
             counter_resets=(
                 *(
                     (_team_membership_counter_key(row), _row_carried_spend(row, rollover_caps))
@@ -674,6 +689,7 @@ class ResetBudgetJob:
                     (_model_access_group_counter_key(row), _row_carried_spend(row, rollover_caps))
                     for row in model_access_groups
                 ),
+                *((_enduser_counter_key(row), _enduser_carried_spend(row, rollover_caps)) for row in endusers),
             ),
             rollover_caps=rollover_caps,
             cache_keys=(
@@ -682,6 +698,7 @@ class ResetBudgetJob:
                 *(key for row in orgs for key in _org_cache_keys(row)),
                 *(key for row in tags for key in _tag_cache_keys(row)),
                 *(key for row in model_access_groups for key in _model_access_group_cache_keys(row)),
+                *(key for row in endusers for key in _enduser_cache_keys(row)),
             ),
         )
 

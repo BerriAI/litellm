@@ -50,13 +50,21 @@ def _parse_data_url(data_url: str) -> tuple[bytes, str, str] | None:
     return content_bytes, content_type, ext
 
 
+def _content_type_or_default(headers: Mapping[str, str]) -> str:
+    """Return the response's ``content-type`` header, falling back to ``image/jpeg`` when absent."""
+    try:
+        return headers["content-type"]
+    except KeyError:
+        return "image/jpeg"
+
+
 def _download_image_sync(url: str) -> tuple[bytes, str, str]:
     """Download image from URL synchronously."""
     client: Final = _get_httpx_client(params={"ssl_verify": False})
     response: Final = client.get(url)
     response.raise_for_status()
 
-    content_type: Final = response.headers.get("content-type", "image/jpeg")
+    content_type: Final = _content_type_or_default(response.headers)
     ext: Final = content_type.split("/")[-1].split(";")[0] or "jpg"
 
     return response.content, content_type, ext
@@ -71,7 +79,7 @@ async def _download_image_async(url: str) -> tuple[bytes, str, str]:
     response: Final = await client.get(url)
     response.raise_for_status()
 
-    content_type: Final = response.headers.get("content-type", "image/jpeg")
+    content_type: Final = _content_type_or_default(response.headers)
     ext: Final = content_type.split("/")[-1].split(";")[0] or "jpg"
 
     return response.content, content_type, ext

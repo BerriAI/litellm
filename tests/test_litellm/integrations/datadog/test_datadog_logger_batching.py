@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 import pytest
 from httpx import Request, Response
+from pydantic import BaseModel, computed_field
 
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -31,9 +32,7 @@ def _payloads(n, message=None):
 def _raised_413():
     request = Request("POST", "https://example.com")
     response = Response(413, request=request, text="Payload Too Large")
-    return MaskedHTTPStatusError(
-        httpx.HTTPStatusError("413", request=request, response=response)
-    )
+    return MaskedHTTPStatusError(httpx.HTTPStatusError("413", request=request, response=response))
 
 
 def _make_send(max_ok, delivered, *, raise_413=True):
@@ -85,9 +84,7 @@ async def test_async_send_batch_keeps_events_appended_during_send(datadog_env):
                 status="info",
             )
         )
-        return Response(
-            202, request=Request("POST", "https://example.com"), text="Accepted"
-        )
+        return Response(202, request=Request("POST", "https://example.com"), text="Accepted")
 
     logger.async_send_compressed_data = AsyncMock(side_effect=_mock_send)
 
@@ -172,9 +169,7 @@ async def test_413_returned_response_also_splits(datadog_env):
 
     logger.log_queue = _payloads(4)
     delivered: list = []
-    logger.async_send_compressed_data = AsyncMock(
-        side_effect=_make_send(1, delivered, raise_413=False)
-    )
+    logger.async_send_compressed_data = AsyncMock(side_effect=_make_send(1, delivered, raise_413=False))
 
     await logger.async_send_batch()
 
@@ -186,9 +181,7 @@ def _make_recording_send(sent_batches, delivered):
     async def _send(data):
         sent_batches.append(list(data))
         delivered.extend(data)
-        return Response(
-            202, request=Request("POST", "https://example.com"), text="Accepted"
-        )
+        return Response(202, request=Request("POST", "https://example.com"), text="Accepted")
 
     return _send
 
@@ -206,18 +199,13 @@ async def test_oversized_payload_splits_before_any_send(datadog_env):
     logger.log_queue = list(events)
     sent_batches: list = []
     delivered: list = []
-    logger.async_send_compressed_data = AsyncMock(
-        side_effect=_make_recording_send(sent_batches, delivered)
-    )
+    logger.async_send_compressed_data = AsyncMock(side_effect=_make_recording_send(sent_batches, delivered))
 
     await logger.async_send_batch()
 
     assert delivered == events
     assert len(sent_batches) == 3
-    assert all(
-        len(safe_dumps(batch).encode("utf-8")) <= DD_MAX_PAYLOAD_SIZE_BYTES
-        for batch in sent_batches
-    )
+    assert all(len(safe_dumps(batch).encode("utf-8")) <= DD_MAX_PAYLOAD_SIZE_BYTES for batch in sent_batches)
     assert logger.log_queue == []
 
 
@@ -232,9 +220,7 @@ async def test_batch_over_max_event_count_splits_before_any_send(datadog_env):
     logger.log_queue = list(events)
     sent_batches: list = []
     delivered: list = []
-    logger.async_send_compressed_data = AsyncMock(
-        side_effect=_make_recording_send(sent_batches, delivered)
-    )
+    logger.async_send_compressed_data = AsyncMock(side_effect=_make_recording_send(sent_batches, delivered))
 
     await logger.async_send_batch()
 
@@ -281,9 +267,7 @@ async def test_partial_delivery_then_transient_error_requeues_only_undelivered(
         if messages == ['{"event": 2}', '{"event": 3}']:
             raise RuntimeError("transient network error")
         delivered.extend(messages)
-        return Response(
-            202, request=Request("POST", "https://example.com"), text="Accepted"
-        )
+        return Response(202, request=Request("POST", "https://example.com"), text="Accepted")
 
     logger.async_send_compressed_data = AsyncMock(side_effect=_send)
 
@@ -304,9 +288,7 @@ async def test_unexpected_non_202_status_requeues(datadog_env):
 
     logger.log_queue = _payloads(2)
     logger.async_send_compressed_data = AsyncMock(
-        return_value=Response(
-            200, request=Request("POST", "https://example.com"), text="OK"
-        )
+        return_value=Response(200, request=Request("POST", "https://example.com"), text="OK")
     )
 
     await logger.async_send_batch()
@@ -502,3 +484,77 @@ async def test_flush_queue_returns_without_lock(datadog_env):
     await logger.flush_queue()
 
     logger.async_send_batch.assert_not_awaited()
+
+
+class _RaisesWhileDumping(BaseModel):
+    @computed_field
+    @property
+    def rendered(self) -> str:
+        raise RuntimeError("this field cannot be rendered")
+
+
+@pytest.mark.asyncio
+async def test_event_whose_serialization_raises_is_dropped_alone(datadog_env):
+    """safe_dumps hands pydantic models to model_dump, so serialization can raise any exception
+    class. The intake-limit probe has to isolate that one event and drop it, not fail the whole
+    batch back onto the queue where it would poison every later flush."""
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.log_queue = _payloads(4)
+    logger.log_queue[1]["message"] = _RaisesWhileDumping()
+    delivered: list = []
+    logger.async_send_compressed_data = AsyncMock(side_effect=_make_send(DD_MAX_BATCH_SIZE, delivered))
+
+    await logger.async_send_batch()
+
+    assert delivered == ['{"event": 0}', '{"event": 2}', '{"event": 3}']
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_cancellation_mid_split_requeues_only_the_undelivered_events(datadog_env):
+    """A cancelled split must keep the pieces Datadog never accepted, without resending the piece
+    it did, and must surface as a plain CancelledError so asyncio.wait_for still reads it as a
+    timeout on Python 3.12."""
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.log_queue = _payloads(4)
+    attempts: list = []
+
+    async def _send(data):
+        if len(data) > 2:
+            raise _raised_413()
+        attempts.append([event["message"] for event in data])
+        if len(attempts) > 1:
+            raise asyncio.CancelledError
+        return Response(202, request=Request("POST", "https://example.com"), text="Accepted")
+
+    logger.async_send_compressed_data = AsyncMock(side_effect=_send)
+
+    with pytest.raises(asyncio.CancelledError) as excinfo:
+        await logger.async_send_batch()
+
+    assert type(excinfo.value) is asyncio.CancelledError
+    assert attempts == [['{"event": 0}', '{"event": 1}'], ['{"event": 2}', '{"event": 3}']]
+    assert [event["message"] for event in logger.log_queue] == ['{"event": 2}', '{"event": 3}']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 403, 429, 500, 503])
+async def test_raised_intake_error_preserves_datadog_requeue_behavior(datadog_env, status_code):
+    """Datadog requeues every non-413 HTTP failure so a corrected key or endpoint can recover telemetry."""
+    with patch("asyncio.create_task"):
+        logger = DataDogLogger()
+
+    logger.log_queue = _payloads(2)
+    request = Request("POST", "https://example.com")
+    response = Response(status_code, request=request, text="rejected")
+    logger.async_send_compressed_data = AsyncMock(
+        side_effect=MaskedHTTPStatusError(httpx.HTTPStatusError(str(status_code), request=request, response=response))
+    )
+
+    await logger.async_send_batch()
+
+    assert [event["message"] for event in logger.log_queue] == ['{"event": 0}', '{"event": 1}']

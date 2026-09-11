@@ -484,6 +484,8 @@ class _SessionAggRow(BaseModel):
     total_tokens: int
     spend: float
     saved_spend: float
+    classifier_cost: float
+    classifier_cost_recorded_turns: int
     session_seconds: float
 
 
@@ -520,6 +522,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         avg_tokens_per_session=row.total_tokens / sessions if sessions else 0.0,
         spend=row.spend,
         saved_spend=row.saved_spend,
+        classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
         saved_pct=_pct(row.saved_spend, baseline_spend),
         saved_per_session=row.saved_spend / sessions if sessions else 0.0,
@@ -552,6 +555,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         avg_tokens_per_session=totals.avg_tokens_per_session,
         spend=totals.spend,
         saved_spend=totals.saved_spend,
+        classifier_cost=totals.classifier_cost,
         baseline_spend=totals.baseline_spend,
         saved_pct=totals.saved_pct,
         saved_per_session=totals.saved_per_session,
@@ -582,6 +586,8 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         total_tokens=sum(row.total_tokens for row in rows),
         spend=sum(row.spend for row in rows),
         saved_spend=sum(row.saved_spend for row in rows),
+        classifier_cost=sum(row.classifier_cost for row in rows),
+        classifier_cost_recorded_turns=sum(row.classifier_cost_recorded_turns for row in rows),
         session_seconds=sum(row.session_seconds for row in rows),
     )
 
@@ -645,6 +651,7 @@ async def get_auto_router_benchmarks(
         str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date)")
     ] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
+    api_key: Annotated[str | None, Query(description="Filter to one virtual key token hash")] = None,
 ) -> AutoRouterBenchmarksResponse:
     """
     Benchmarks for the auto-router dashboard: session shape, savings against the configured
@@ -681,6 +688,7 @@ async def get_auto_router_benchmarks(
         AUTOROUTER_BENCHMARKS_SQL,
         start_day.isoformat(),
         (end_day + timedelta(days=1)).isoformat(),
+        api_key,
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
     groups: Final = (
@@ -787,6 +795,26 @@ def _for_teams(team_ids: Sequence[str | None]) -> str:
     """Name the teams a fault applies to, when it does not apply to every key alike."""
     named: Final = tuple(sorted(team for team in team_ids if team is not None))
     return f" for team {', '.join(named)}" if named else ""
+
+
+def _validate_model_scope(llm_router: "Router | None", models: Sequence[str]) -> None:
+    """Reject a scope naming a model no request on this proxy could carry, at start rather
+    than as a job that silently samples nothing. The question is "could any caller ask for
+    this name", not "does it resolve for the job's teams": a user target's traffic can arrive
+    on any team's key, so a team-public name is a legitimate scope for it, and an auto-router
+    is one too (a forward job on router A scoped to router B samples what B serves today).
+    Nothing here is ever dispatched to."""
+    unreachable: Final = tuple(
+        model
+        for model in models
+        if judge_target(llm_router, model).via == "nothing"
+        and (llm_router is None or model not in llm_router.team_public_model_names)
+    )
+    if unreachable:
+        raise HTTPException(
+            status_code=400,
+            detail="models not served by this proxy: " + ", ".join(f"'{model}'" for model in unreachable),
+        )
 
 
 _JUDGED_ROLES: Final[frozenset[StrategyRouterDependencyRole]] = frozenset({"tier", "default"})
@@ -1080,6 +1108,7 @@ class _LegRow(BaseModel):
     target_id: str
     router_name: str
     router_names: tuple[str, ...] = ()
+    models: tuple[str, ...] = ()
     direction: ShadowEvalDirection
     baseline_model: str | None = None
     judge_model: str
@@ -1150,6 +1179,7 @@ def _group_response(
             for leg in sorted(legs, key=lambda leg: (leg.target_type, leg.target_id))
         ),
         router_names=first.arm_router_names,
+        models=first.models,
         direction=first.direction,
         baseline_model=first.baseline_model,
         judge_model=first.judge_model,
@@ -1322,7 +1352,10 @@ async def start_shadow_eval(
     A target is a virtual key, a team, or a user. Team and user targets match on the
     identity every request resolves to at auth time, so they cover JWT-authenticated
     traffic, which presents no virtual key; a user target samples that user's traffic
-    across all their teams, whether it arrives on a JWT or a key they own.
+    across all their teams, whether it arrives on a JWT or a key they own. models narrows
+    every target to requests for those model groups, so a user plus one model samples that
+    user's traffic on that model across every key they own; it is forward-only, since a
+    reverse job already samples exactly the traffic its own router served.
 
     A forward job answers whether the targets should adopt router_name: it samples the
     requests the router did not serve and duplicates them through it. A reverse job
@@ -1411,6 +1444,7 @@ async def start_shadow_eval(
     if data.baseline_model is not None:
         _validate_plain_model(llm_router, data.baseline_model, "baseline_model", team_ids)
     _validate_judge_is_not_a_candidate(llm_router, data, team_ids)
+    _validate_model_scope(llm_router, data.models)
 
     requested_targets: Final[tuple[tuple[ShadowEvalTargetType, str], ...]] = (
         *(("key", key) for key in data.api_key_ids),
@@ -1456,6 +1490,7 @@ async def start_shadow_eval(
         # a pre-router_names pod samples router_name alone, so it must be a real arm
         "router_name": data.router_names[0],
         "router_names": list(data.router_names),  # mutable-ok: Prisma payload
+        "models": list(data.models),  # mutable-ok: Prisma payload
         "direction": data.direction,
         "baseline_model": data.baseline_model,
         "judge_model": data.judge_model,
@@ -1517,6 +1552,7 @@ async def start_shadow_eval(
             for target_type, target_id in sorted(requested_targets)
         ),
         router_names=data.router_names,
+        models=data.models,
         direction=data.direction,
         baseline_model=data.baseline_model,
         judge_model=data.judge_model,
