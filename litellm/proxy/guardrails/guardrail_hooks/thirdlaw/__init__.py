@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> ThirdlawGuardrail:
     import litellm
 
     # LitellmParams' multiple-inheritance MRO resolves guardrail_timeout to a
