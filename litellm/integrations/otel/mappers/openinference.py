@@ -104,22 +104,13 @@ class OpenInferenceMapper:
 
     @staticmethod
     def _indexed_split(inputs: int, outputs: int) -> tuple[int, int]:
-        """How many prompt and response messages get per-index attributes.
-
-        Both directions share one span-wide allowance. The response is reserved at
-        least half of it, so a long prompt can never push the completion off the
-        span, and the prompt takes whatever the response leaves unused.
-        """
+        """Prompt and response share one allowance; the response is reserved at least half of it."""
         indexed_out: Final = min(outputs, max(_MAX_INDEXED_MESSAGES // 2, _MAX_INDEXED_MESSAGES - inputs))
         return _MAX_INDEXED_MESSAGES - indexed_out, indexed_out
 
     @staticmethod
     def _prompt_positions(total: int, indexed: int) -> tuple[int, ...]:
-        """Which prompt messages get per-index attributes: message 0 and the most recent turns.
-
-        A value length limit clips the ``input.value`` blob, so the system prompt and the
-        live turn each keep a short key of their own. The middle of a long prompt does not.
-        """
+        """Prompt messages that get per-index attributes: message 0 and the most recent turns."""
         if total <= indexed:
             return tuple(range(total))
         return (0, *range(total - indexed + 1, total))

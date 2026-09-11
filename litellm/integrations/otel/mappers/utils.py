@@ -33,17 +33,10 @@ core telemetry no matter how many vocabularies are configured.
 
 
 MAX_MESSAGE_ATTRS_PER_SPAN: Final = DEFAULT_SPAN_ATTRIBUTE_LIMIT // 8
-"""Span-wide ceiling on attributes spent spelling out chat messages per index.
+"""Span-wide ceiling on per-index chat message attributes, prompt and response together.
 
-A conversation is the other unbounded family: two attributes per message, for
-the prompt and the response alike, on the same span. Past a few dozen turns the
-family alone exceeds the span attribute limit and evicts the core telemetry
-written before it. The ceiling covers both directions together, since a budget
-handed to each direction separately doubles. An eighth is the largest share
-that still fits beside the tool ceiling and the core of every vocabulary at
-once, request parameters, cost breakdown and identity included. The complete
-conversation still rides the JSON blob attributes; only the per-index
-convenience keys are capped.
+An eighth is the largest share that still fits beside the tool ceiling and the core
+of every vocabulary at once. The complete conversation still rides the JSON blobs.
 """
 
 
