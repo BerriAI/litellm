@@ -254,6 +254,7 @@ _TRUE_ENV_VALUES: Final = frozenset(("1", "true", "yes", "on"))
 _OAUTH_DISCOVERY_RETRY_DELAYS_SECONDS: Final = (0.05, 0.15)
 _OAUTH_DISCOVERY_RETRY_BASE_SECONDS: Final = 30.0
 _OAUTH_DISCOVERY_RETRY_MAX_SECONDS: Final = 900.0
+_OAUTH_TEMPORARY_DISCOVERY_TTL_SECONDS: Final = 300.0
 
 
 def _oauth_discovery_now() -> float:
@@ -1898,6 +1899,10 @@ class MCPServerManager:
         slot: Final = self._oauth_discovery_slot(server_id)
         return slot is not None and slot.generation == generation
 
+    def _expire_temporary_oauth_discovery(self, server_id: str, generation: int) -> None:
+        if self._oauth_discovery_slot_is_current(server_id, generation):
+            self._remove_oauth_discovery_slot(server_id)
+
     def _publish_resolved_oauth_server(
         self,
         server: MCPServer,
@@ -1910,6 +1915,12 @@ class MCPServerManager:
         elif server.server_id in self.config_mcp_servers:
             self.config_mcp_servers[server.server_id] = server
         else:
+            asyncio.get_running_loop().call_later(
+                _OAUTH_TEMPORARY_DISCOVERY_TTL_SECONDS,
+                self._expire_temporary_oauth_discovery,
+                server.server_id,
+                generation,
+            )
             return server
         self._remove_oauth_discovery_slot(server.server_id)
         return server

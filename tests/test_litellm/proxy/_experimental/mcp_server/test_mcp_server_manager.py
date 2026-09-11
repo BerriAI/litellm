@@ -12758,3 +12758,39 @@ def test_stale_discovery_cannot_overwrite_new_registered_server() -> None:
     manager._set_oauth_discovery_deferred(original.server_id, True)
     assert manager._publish_resolved_oauth_server(original, original_slot.generation) is None
     assert manager.registry[original.server_id] is replacement
+
+
+@pytest.mark.asyncio
+async def test_temporary_oauth_discovery_expires_without_more_requests() -> None:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="expiring-session", name="temporary", url="https://idp.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.true_passthrough,
+        authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+    )
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    resolved: Final = await manager.ensure_oauth_metadata_discovered(server)
+    assert manager._oauth_discovery_slot(server.server_id) is not None
+    loop: Final = asyncio.get_running_loop()
+    expired: Final = loop.create_future()
+    with patch.object(loop, "time", return_value=loop.time() + 301):
+        loop.call_later(0, expired.set_result, None)
+        await expired
+    assert resolved.authorization_url == server.authorization_url
+    assert manager._oauth_discovery_slot(server.server_id) is None
+
+
+def test_old_temporary_discovery_expiry_preserves_replacement() -> None:
+    manager: Final = MCPServerManager()
+    manager._set_oauth_discovery_deferred("reused-session", True)
+    old_slot: Final = manager._oauth_discovery_slot("reused-session")
+    assert old_slot is not None
+    manager._set_oauth_discovery_deferred("reused-session", True)
+    replacement: Final = manager._oauth_discovery_slot("reused-session")
+    manager._expire_temporary_oauth_discovery("reused-session", old_slot.generation)
+    assert manager._oauth_discovery_slot("reused-session") is replacement
+    assert replacement is not None
+    manager._expire_temporary_oauth_discovery("reused-session", replacement.generation)
+    assert manager._oauth_discovery_slot("reused-session") is None
+    manager._expire_temporary_oauth_discovery("reused-session", replacement.generation)
+    assert manager._oauth_discovery_slot("reused-session") is None
