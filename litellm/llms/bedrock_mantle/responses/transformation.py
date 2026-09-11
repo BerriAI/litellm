@@ -188,12 +188,16 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         )
         return {key: value for key, value in params.items() if key != "service_tier"}
 
-    def _handle_unsupported_reasoning_summary(self, params: dict, model: str, drop_params: bool) -> dict:
+    def _handle_unsupported_reasoning_summary(
+        self, params: dict[str, object], model: str, drop_params: bool
+    ) -> dict[str, object]:
         reasoning: Final = params.get("reasoning")
         if not self.use_openai_path or not isinstance(reasoning, dict):
             return params
         summary: Final = reasoning.get("summary")
-        if summary is None or summary in _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES:
+        if summary is None or (
+            isinstance(summary, str) and summary in _BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES
+        ):
             return params
         if not drop_params:
             raise litellm.utils.UnsupportedParamsError(
@@ -210,11 +214,15 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
             summary,
             sorted(_BEDROCK_MANTLE_OPENAI_PATH_SUPPORTED_REASONING_SUMMARIES),
         )
-        stripped: Final = {key: value for key, value in reasoning.items() if key != "summary"}
+        stripped: Final = {  # mutable-ok: dynamic reasoning fields must remain a mutable dict
+            key: value for key, value in reasoning.items() if key != "summary"
+        }
         return (
-            {**params, "reasoning": stripped}
+            {**params, "reasoning": stripped}  # mutable-ok: downstream parameter filtering needs a mutable dict
             if stripped
-            else {key: value for key, value in params.items() if key != "reasoning"}
+            else {  # mutable-ok: downstream parameter filtering needs a mutable dict
+                key: value for key, value in params.items() if key != "reasoning"
+            }
         )
 
     def transform_responses_api_request(

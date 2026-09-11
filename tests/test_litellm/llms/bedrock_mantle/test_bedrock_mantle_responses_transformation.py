@@ -572,6 +572,16 @@ class TestBedrockMantleReasoningSummary:
         assert "reasoning.summary" in str(excinfo.value)
         assert "drop_params" in str(excinfo.value)
 
+    def test_unhashable_reasoning_summary_raises_unsupported_params_error(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"summary": ["detailed"]}},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+        assert "reasoning.summary" in str(excinfo.value)
+
     @pytest.mark.parametrize("drop_params", [True, False])
     def test_supported_reasoning_summary_kept(self, drop_params):
         cfg = BedrockMantleResponsesAPIConfig()
@@ -600,18 +610,17 @@ class TestBedrockMantleReasoningSummary:
         )
         assert params == {"stream": True}
 
-    def test_drop_logged_at_warning_level(self):
-        from unittest.mock import patch
-
+    def test_drop_logged_at_warning_level(self, caplog):
         cfg = BedrockMantleResponsesAPIConfig()
-        with patch("litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning") as mock_warning:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
             cfg.map_openai_params(
                 response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
                 model="openai.gpt-5.6-sol",
                 drop_params=True,
             )
-        assert mock_warning.call_count == 1
-        assert "detailed" in str(mock_warning.call_args)
+        warnings = [record for record in caplog.records if "dropping unsupported reasoning.summary" in record.getMessage()]
+        assert len(warnings) == 1
+        assert "detailed" in warnings[0].getMessage()
 
 
 class TestBedrockMantleCodexRequestEndToEnd:
