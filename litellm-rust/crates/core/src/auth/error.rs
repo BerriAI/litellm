@@ -77,6 +77,10 @@ pub enum AuthConfigurationError {
     RequestAzureCredentialDestination,
     #[error("credentials cannot be sent to a request-controlled Vertex AI endpoint")]
     RequestVertexCredentialDestination,
+    #[error(
+        "request-controlled Vertex credentials must use the canonical Google OAuth token endpoint"
+    )]
+    RequestVertexTokenEndpoint,
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]

@@ -14,6 +14,7 @@ use crate::auth::http::apply_credential;
 use crate::auth::{AuthError, CredentialPlacement, InputSource, SecretValue, Sourced};
 
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+const GOOGLE_OAUTH_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_APPLICATION_CREDENTIALS_ENV: &str = "GOOGLE_APPLICATION_CREDENTIALS";
 const VERTEX_AI_API_KEY_ENV: &str = "VERTEX_AI_API_KEY";
 const VERTEXAI_API_KEY_ENV: &str = "VERTEXAI_API_KEY";
@@ -222,8 +223,10 @@ impl VertexProviderLoader for GcpProviderLoader {
         Box::pin(async move {
             let provider: Arc<dyn TokenProvider> = match source {
                 CredentialSource::Inline(configured) => Arc::new(
-                    CustomServiceAccount::from_json(configured.expose())
-                        .map_err(auth_acquisition_error)?,
+                    CustomServiceAccount::from_json(validate_request_credentials(
+                        configured.expose(),
+                    )?)
+                    .map_err(auth_acquisition_error)?,
                 ),
                 CredentialSource::Trusted(configured) => {
                     let configured = configured.expose();
@@ -245,6 +248,21 @@ impl VertexProviderLoader for GcpProviderLoader {
             Ok(Arc::new(GcpTokenSource(provider)) as Arc<dyn VertexTokenSource>)
         })
     }
+}
+
+fn validate_request_credentials(configured: &str) -> Result<&str, AuthError> {
+    let token_uri = serde_json::from_str::<Value>(configured)
+        .ok()
+        .and_then(|credentials| {
+            credentials
+                .get("token_uri")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    if token_uri.as_deref() != Some(GOOGLE_OAUTH_TOKEN_ENDPOINT) {
+        return Err(AuthConfigurationError::RequestVertexTokenEndpoint.into());
+    }
+    Ok(configured)
 }
 
 #[derive(Clone, Debug)]
@@ -510,6 +528,26 @@ mod tests {
             CredentialSource::Inline(SecretValue::new("same-value")).cache_key(),
             CredentialSource::Trusted(SecretValue::new("same-value")).cache_key()
         );
+    }
+
+    #[test]
+    fn request_credentials_require_canonical_token_endpoint() {
+        assert!(
+            validate_request_credentials(r#"{"token_uri":"https://oauth2.googleapis.com/token"}"#)
+                .is_ok()
+        );
+        assert!(matches!(
+            validate_request_credentials(r#"{"token_uri":"http://127.0.0.1/token"}"#),
+            Err(AuthError::Configuration(
+                AuthConfigurationError::RequestVertexTokenEndpoint
+            ))
+        ));
+        assert!(matches!(
+            validate_request_credentials("{}"),
+            Err(AuthError::Configuration(
+                AuthConfigurationError::RequestVertexTokenEndpoint
+            ))
+        ));
     }
 
     #[tokio::test]
