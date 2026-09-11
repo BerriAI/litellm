@@ -27,7 +27,7 @@ def _dashscope_thinking_body(thinking: object, reasoning_effort: object) -> Dash
     if isinstance(thinking, dict):
         enabled: Final = thinking.get("type") != "disabled"
         budget: Final = thinking.get("budget_tokens")
-        if isinstance(budget, int) and not isinstance(budget, bool):
+        if enabled and isinstance(budget, int) and not isinstance(budget, bool):
             with_budget: Final[DashScopeThinkingBody] = {"enable_thinking": enabled, "thinking_budget": budget}
             return with_budget
         toggled: Final[DashScopeThinkingBody] = {"enable_thinking": enabled}

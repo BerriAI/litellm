@@ -207,6 +207,7 @@ class TestDashScopeThinkingParams:
             ({"type": "enabled", "budget_tokens": 4096}, {"enable_thinking": True, "thinking_budget": 4096}),
             ({"type": "enabled"}, {"enable_thinking": True}),
             ({"type": "disabled"}, {"enable_thinking": False}),
+            ({"type": "disabled", "budget_tokens": 4096}, {"enable_thinking": False}),
         ],
     )
     def test_thinking_maps_to_enable_thinking_and_budget(self, thinking, expected):
