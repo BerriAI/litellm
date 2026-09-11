@@ -1,6 +1,7 @@
 import sys
 from types import ModuleType
 
+import httpx
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
@@ -119,6 +120,43 @@ async def test_lazy_loaded_hot_route_moves_to_the_front(monkeypatch):
     hot_count = sum(1 for r in target_app.router.routes if getattr(r, "path", None) in HOT_ROUTE_PATHS)
     assert _routes_scanned_before_dispatch(target_app, "POST", "/v1/messages") <= hot_count
     assert TestClient(target_app).post("/v1/messages").json() == {"type": "message"}
+
+
+@pytest.mark.asyncio
+async def test_hot_routes_first_keeps_reserved_lazy_slot_ahead_of_later_eager_routes():
+    """Liveness is registered after the provider passthrough slot, so pulling it to the
+    front must not shift where the lazily loaded catch-all is spliced back in."""
+    from litellm.proxy._lazy_features import LazyFeature, LazyFeatureMiddleware, reserve_lazy_slot
+
+    def register(app, module):
+        router = APIRouter()
+        router.add_api_route("/mistral/{endpoint:path}", lambda: {"handler": "passthrough"}, methods=["POST"])
+        app.include_router(router)
+
+    passthrough = LazyFeature(
+        name="llm_passthrough", module_path="json", path_prefixes=("/mistral/",), register_fn=register
+    )
+    target_app = FastAPI()
+    target_app.add_api_route("/mistral/v1/files", lambda: {"handler": "files"}, methods=["POST"])
+    target_app.add_api_route("/mistral/v1/batches", lambda: {"handler": "batches"}, methods=["POST"])
+    reserve_lazy_slot(target_app, "llm_passthrough", features=(passthrough,))
+    target_app.include_router(_hot_router())
+    target_app.add_api_route("/{mcp_server_name}/mcp", lambda: {"handler": "mcp"}, methods=["POST"])
+    target_app.router.routes = hot_routes_first(target_app.router.routes)
+    target_app.add_middleware(LazyFeatureMiddleware, fastapi_app=target_app, features=(passthrough,))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as client:
+        batches_first = (await client.post("/mistral/v1/batches")).json()["handler"]
+        loaded_after_batches = frozenset(target_app.state.lazy_loaded)
+        handlers = [
+            (await client.post(path)).json()["handler"]
+            for path in ("/mistral/mcp", "/mistral/v1/files", "/mistral/v1/batches")
+        ]
+
+    assert (batches_first, loaded_after_batches) == ("batches", frozenset())
+    assert handlers == ["passthrough", "files", "batches"]
+    hot_count = sum(1 for r in target_app.router.routes if getattr(r, "path", None) in HOT_ROUTE_PATHS)
+    assert _routes_scanned_before_dispatch(target_app, "GET", "/health/liveliness") <= hot_count
 
 
 def test_proxy_app_dispatches_liveness_and_chat_completions_before_the_rest():

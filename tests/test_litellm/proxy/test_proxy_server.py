@@ -9184,6 +9184,126 @@ class TestLazyFeatureMiddleware:
     """Behavior of the middleware itself, exercised in isolation."""
 
     @pytest.mark.asyncio
+    async def test_llm_passthrough_loads_on_first_provider_request(self, monkeypatch):
+        """An app that never registered the provider passthrough routes 404s a
+        provider request; behind the middleware the same request registers the
+        routes and is forwarded to the provider with the configured key."""
+        import respx
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeatureMiddleware
+
+        monkeypatch.setenv("MISTRAL_API_KEY", "sk-upstream")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        feat = next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")
+        target_app = FastAPI()
+        target_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-virtual")
+        mw = LazyFeatureMiddleware(target_app, fastapi_app=target_app, features=(feat,))
+
+        with respx.mock() as upstream:
+            route = upstream.get("https://api.mistral.ai/v1/models").mock(
+                return_value=httpx.Response(200, json={"object": "list", "data": []})
+            )
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as bare:
+                assert (await bare.get("/mistral/v1/models")).status_code == 404
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mw), base_url="http://t") as lazy:
+                response = await lazy.get("/mistral/v1/models")
+
+            assert (response.status_code, response.json()) == (200, {"object": "list", "data": []})
+            assert route.calls.last.request.headers["authorization"] == "Bearer sk-upstream"
+
+    def test_llm_passthrough_prefixes_cover_every_route_the_module_registers(self):
+        """A route the module registers under a prefix the feature does not claim
+        would 404 until an unrelated provider request happens to load the module."""
+        from litellm.proxy._lazy_features import LAZY_FEATURES
+
+        feat = next(f for f in LAZY_FEATURES if f.name == "llm_passthrough")
+        paths = [r.path for r in importlib.import_module(feat.module_path).router.routes]
+
+        assert {"/mistral/{endpoint:path}", "/openai/{endpoint:path}"} <= set(paths)
+        unreachable = [p for p in paths if not feat.matches(p.replace("{endpoint:path}", "x"))]
+        assert unreachable == [], f"routes the middleware would never load: {unreachable}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("first_hit", ["/v1/realtime/calls", "/openai/v1/models"])
+    async def test_lazy_routes_land_in_registry_order_not_first_hit_order(self, first_hit):
+        """Two lazy features with overlapping paths must answer a request with the
+        same handler no matter which one a deployment happens to hit first."""
+        from fastapi import APIRouter, FastAPI
+
+        from litellm.proxy._lazy_features import LazyFeature, LazyFeatureMiddleware
+
+        def make_register(path, handler):
+            def register(app, module):
+                router = APIRouter()
+                router.add_api_route(path, lambda: {"handler": handler}, methods=["POST"])
+                app.include_router(router)
+
+            return register
+
+        catch_all = LazyFeature(
+            name="catch_all",
+            module_path="json",
+            path_prefixes=("/openai/",),
+            register_fn=make_register("/openai/{endpoint:path}", "catch_all"),
+        )
+        specific = LazyFeature(
+            name="specific",
+            module_path="base64",
+            path_prefixes=("/openai/v1/realtime", "/v1/realtime"),
+            register_fn=make_register("/openai/v1/realtime/calls", "specific"),
+        )
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(target_app, fastapi_app=target_app, features=(catch_all, specific))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mw), base_url="http://t") as client:
+            await client.post(first_hit)
+            await client.post("/openai/v1/models")
+            response = await client.post("/openai/v1/realtime/calls")
+
+        assert response.json() == {"handler": "catch_all"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("root_path", ["", "/api"])
+    async def test_reserved_slot_keeps_lazy_catch_all_ahead_of_later_eager_routes(self, root_path):
+        """/{mcp_server_name}/mcp is registered after the provider passthrough router
+        at startup, so /mistral/mcp must keep reaching the provider catch-all once
+        that router loads lazily instead of being swallowed by the MCP route. The
+        native /mistral/v1/files route sits ahead of it, so that path neither loads
+        the feature nor changes owner, with or without a SERVER_ROOT_PATH prefix."""
+        from fastapi import APIRouter, FastAPI
+
+        from litellm.proxy._lazy_features import LazyFeature, LazyFeatureMiddleware, reserve_lazy_slot
+
+        def register(app, module):
+            router = APIRouter()
+            router.add_api_route("/mistral/{endpoint:path}", lambda: {"handler": "passthrough"}, methods=["POST"])
+            app.include_router(router)
+
+        passthrough = LazyFeature(
+            name="llm_passthrough", module_path="json", path_prefixes=("/mistral/",), register_fn=register
+        )
+        target_app = FastAPI(root_path=root_path)
+        target_app.add_api_route("/mistral/v1/files", lambda: {"handler": "files"}, methods=["POST"])
+        reserve_lazy_slot(target_app, "llm_passthrough", features=(passthrough,))
+        target_app.add_api_route("/{mcp_server_name}/mcp", lambda: {"handler": "mcp"}, methods=["POST"])
+        target_app.add_middleware(LazyFeatureMiddleware, fastapi_app=target_app, features=(passthrough,))
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as client:
+            files_first = (await client.post(f"{root_path}/mistral/v1/files")).json()["handler"]
+            loaded_after_files = frozenset(target_app.state.lazy_loaded)
+            handlers = [
+                (await client.post(f"{root_path}{path}")).json()["handler"]
+                for path in ("/mistral/mcp", "/mistral/v1/files")
+            ]
+
+        assert (files_first, loaded_after_files) == ("files", frozenset())
+        assert handlers == ["passthrough", "files"]
+
+    @pytest.mark.asyncio
     async def test_first_request_triggers_load_subsequent_does_not(self):
         from fastapi import FastAPI
 
