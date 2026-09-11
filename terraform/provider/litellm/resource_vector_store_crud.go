@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
@@ -29,7 +30,12 @@ func resourceLiteLLMVectorStoreCreate(d *schema.ResourceData, m interface{}) err
 		paramsMap[k] = v
 	}
 
+	// /vector_store/new rejects a missing vector_store_id, and the attribute is
+	// computed, so the provider has to mint the id it stores under.
+	vectorStoreID := uuid.New().String()
+
 	vectorStoreRequest := VectorStoreRequest{
+		VectorStoreID:          vectorStoreID,
 		CustomLLMProvider:      customLLMProvider,
 		VectorStoreName:        vectorStoreName,
 		VectorStoreDescription: vectorStoreDescription,
@@ -49,9 +55,7 @@ func resourceLiteLLMVectorStoreCreate(d *schema.ResourceData, m interface{}) err
 		return fmt.Errorf("failed to create vector store: %w", err)
 	}
 
-	// Set the resource ID to the vector store name for now
-	// We'll update this after reading the response to get the actual ID
-	d.SetId(vectorStoreName)
+	d.SetId(vectorStoreID)
 
 	return resourceLiteLLMVectorStoreRead(d, m)
 }
@@ -76,8 +80,11 @@ func resourceLiteLLMVectorStoreRead(d *schema.ResourceData, m interface{}) error
 		return nil
 	}
 
-	var vectorStoreResp VectorStoreResponse
-	err = handleVectorStoreAPIResponse(resp, &vectorStoreResp, client)
+	// /vector_store/info nests the store under "vector_store".
+	var infoResp struct {
+		VectorStore VectorStoreResponse `json:"vector_store"`
+	}
+	err = handleVectorStoreAPIResponse(resp, &infoResp, client)
 	if err != nil {
 		if err.Error() == "vector_store_not_found" {
 			d.SetId("")
@@ -85,6 +92,7 @@ func resourceLiteLLMVectorStoreRead(d *schema.ResourceData, m interface{}) error
 		}
 		return fmt.Errorf("failed to read vector store: %w", err)
 	}
+	vectorStoreResp := infoResp.VectorStore
 
 	// Update the resource ID to the actual vector store ID from the response
 	if vectorStoreResp.VectorStoreID != "" {
