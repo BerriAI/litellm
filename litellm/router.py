@@ -2507,7 +2507,11 @@ class Router:
                 self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
-    def _get_silent_experiment_kwargs(self, metadata_variable_name: str = "metadata", **kwargs) -> dict:
+    def _get_silent_experiment_kwargs(
+        self,
+        metadata_variable_name: str = "metadata",
+        **kwargs: object,  # kwargs-ok: the primary call's kwargs, forwarded verbatim into the silent call
+    ) -> dict:
         """
         Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
 
@@ -3444,7 +3448,12 @@ class Router:
         wrapper_ref: Final = weakref.ref(wrapped_response)
         return wrapped_response
 
-    async def _silent_experiment_ageneric(self, silent_model: str, original_function: Callable, **kwargs) -> None:
+    async def _silent_experiment_ageneric(
+        self,
+        silent_model: str,
+        original_function: Callable,
+        **kwargs: object,  # kwargs-ok: the primary call's kwargs, forwarded verbatim into the silent call
+    ) -> None:
         """
         Run a silent experiment in the background for a call that goes through
         `_ageneric_api_call_with_fallbacks` (Responses API, Anthropic Messages).
@@ -3466,9 +3475,8 @@ class Router:
             )
 
             # Auto-executed MCP tools have side effects; never replay them
-            if LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
-                mcp_tools_with_litellm_proxy=kwargs.get("tools") or []
-            ):
+            mcp_tools: Final = cast(Sequence[Mapping[str, object]], kwargs.get("tools") or [])
+            if LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_with_litellm_proxy=mcp_tools):
                 return
 
             verbose_router_logger.info("Starting silent experiment for model %s", silent_model)
