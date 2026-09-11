@@ -438,7 +438,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X GET 'http://localhost:4000/access_group/list' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *       -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Returns:
@@ -472,7 +472,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X POST 'http://localhost:4000/access_group/new' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY' \
+         *       -H "Authorization: Bearer $LITELLM_API_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "access_group": "production-models",
@@ -512,7 +512,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X GET 'http://localhost:4000/access_group/production-models/budget' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *       -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Parameters:
@@ -534,7 +534,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X PUT 'http://localhost:4000/access_group/production-models/budget' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY' \
+         *       -H "Authorization: Bearer $LITELLM_API_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "max_budget": 100.0,
@@ -565,7 +565,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *       -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Parameters:
@@ -602,7 +602,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *       -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Parameters:
@@ -634,7 +634,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X GET 'http://localhost:4000/access_group/production-models/info' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *       -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Parameters:
@@ -674,7 +674,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl -X PUT 'http://localhost:4000/access_group/production-models/update' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY' \
+         *       -H "Authorization: Bearer $LITELLM_API_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "model_names": ["gpt-4", "claude-3-sonnet"]
@@ -3810,7 +3810,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header 'Authorization: Bearer $LITELLM_API_KEY'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header "Authorization: Bearer $LITELLM_API_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_ids" :["ishaan-jaff-5"]
          *     }'
          *
@@ -3840,7 +3840,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["end_user_info_customer_info_get"];
@@ -3865,7 +3865,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["list_end_user_customer_list_get"];
@@ -3925,7 +3925,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header 'Authorization: Bearer $LITELLM_API_KEY'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_API_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
@@ -3933,7 +3933,7 @@ export interface paths {
          *         }'
          *
          *     # With object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H 'Authorization: Bearer $LITELLM_API_KEY'         -H 'Content-Type: application/json'         -d '{
+         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H "Authorization: Bearer $LITELLM_API_KEY"         -H 'Content-Type: application/json'         -d '{
          *             "user_id": "user_1",
          *             "object_permission": {
          *               "mcp_servers": ["server_1"],
@@ -4021,13 +4021,13 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
          *         "budget_id": "paid_tier"
          *     }'
          *
          *     # Updating object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "user_1",
          *         "object_permission": {
          *           "mcp_servers": ["server_3"],
@@ -4343,7 +4343,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header 'Authorization: Bearer $LITELLM_API_KEY'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/delete'         --header "Authorization: Bearer $LITELLM_API_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_ids" :["ishaan-jaff-5"]
          *     }'
          *
@@ -4373,7 +4373,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -X GET 'http://localhost:4000/customer/info?end_user_id=test-litellm-user-4'         -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["end_user_info_end_user_info_get"];
@@ -4398,7 +4398,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl --location --request GET 'http://0.0.0.0:4000/customer/list'         --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["list_end_user_end_user_list_get"];
@@ -4458,7 +4458,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header 'Authorization: Bearer $LITELLM_API_KEY'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/new'         --header "Authorization: Bearer $LITELLM_API_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
@@ -4466,7 +4466,7 @@ export interface paths {
          *         }'
          *
          *     # With object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H 'Authorization: Bearer $LITELLM_API_KEY'         -H 'Content-Type: application/json'         -d '{
+         *     curl -L -X POST 'http://localhost:4000/customer/new'         -H "Authorization: Bearer $LITELLM_API_KEY"         -H 'Content-Type: application/json'         -d '{
          *             "user_id": "user_1",
          *             "object_permission": {
          *               "mcp_servers": ["server_1"],
@@ -4554,13 +4554,13 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/customer/update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
          *         "budget_id": "paid_tier"
          *     }'
          *
          *     # Updating object permissions
-         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl -L -X POST 'http://localhost:4000/customer/update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "user_1",
          *         "object_permission": {
          *           "mcp_servers": ["server_3"],
@@ -7009,7 +7009,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -L -X GET 'http://0.0.0.0:4000/health/services?service=datadog'     -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["health_services_endpoint_health_services_get"];
@@ -7063,7 +7063,7 @@ export interface paths {
          *     ```bash
          *     # If model is configured in proxy_config.yaml, you only need to specify the model name:
          *     curl -X POST 'http://localhost:4000/health/test_connection' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY' \
+         *       -H "Authorization: Bearer $LITELLM_API_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "litellm_params": {
@@ -7076,7 +7076,7 @@ export interface paths {
          *
          *     # You can also override specific params or test with custom credentials:
          *     curl -X POST 'http://localhost:4000/health/test_connection' \
-         *       -H 'Authorization: Bearer $LITELLM_API_KEY' \
+         *       -H "Authorization: Bearer $LITELLM_API_KEY" \
          *       -H 'Content-Type: application/json' \
          *       -d '{
          *         "litellm_params": {
@@ -7498,7 +7498,7 @@ export interface paths {
          *
          *      Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/block'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/block'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
          *     }'
          *     ```
@@ -7543,7 +7543,7 @@ export interface paths {
          *
          *     Example request:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/bulk_update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/bulk_update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "keys": [
          *             {
          *                 "key": "sk-<virtual-key>",
@@ -7589,7 +7589,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/delete'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/delete'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "keys": ["sk-QWrxEynunsNpV1zT48HIrw"]
          *     }'
          *     ```
@@ -7680,7 +7680,7 @@ export interface paths {
          *     1. Allow users to turn on/off pii masking
          *
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header 'Authorization: Bearer $LITELLM_API_KEY'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header "Authorization: Bearer $LITELLM_API_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "permissions": {"allow_pii_controls": true}
          *     }'
          *     ```
@@ -7905,7 +7905,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location --request POST 'http://localhost:4000/key/sk-<virtual-key>/regenerate'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location --request POST 'http://localhost:4000/key/sk-<virtual-key>/regenerate'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "max_budget": 100,
          *         "metadata": {"team": "core-infra"},
          *         "models": ["gpt-4", "gpt-3.5-turbo"]
@@ -7983,7 +7983,7 @@ export interface paths {
          *     1. Allow users to turn on/off pii masking
          *
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header 'Authorization: Bearer $LITELLM_API_KEY'         --header 'Content-Type: application/json'         --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/generate'         --header "Authorization: Bearer $LITELLM_API_KEY"         --header 'Content-Type: application/json'         --data '{
          *             "permissions": {"allow_pii_controls": true}
          *     }'
          *     ```
@@ -8042,7 +8042,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/unblock'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/unblock'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
          *     }'
          *     ```
@@ -8132,7 +8132,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/key/update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/key/update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "key": "sk-<virtual-key>",
          *         "key_alias": "my-key",
          *         "user_id": "user-1234",
@@ -8198,7 +8198,7 @@ export interface paths {
          *
          *     Example:
          *     ```bash
-         *     curl --location --request POST 'http://localhost:4000/key/sk-<virtual-key>/regenerate'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location --request POST 'http://localhost:4000/key/sk-<virtual-key>/regenerate'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "max_budget": 100,
          *         "metadata": {"team": "core-infra"},
          *         "models": ["gpt-4", "gpt-3.5-turbo"]
@@ -8354,7 +8354,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25'         --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/budgets?sort=-max_budget&filter[budget_duration][in]=7d,30d&page_size=25'         --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["list_budgets_management_v1_budgets_get"];
@@ -8388,7 +8388,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme'         --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["list_spend_log_end_users_management_v1_spend_logs_end_users_get"];
@@ -8844,7 +8844,7 @@ export interface paths {
          *     Example:
          *     ```shell
          *     curl -X GET 'http://localhost:4000/model/deprecations' \
-         *         -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *         -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["model_deprecations_model_deprecations_get"];
@@ -9134,18 +9134,18 @@ export interface paths {
          *
          *     Example Request (All Models):
          *     ```shell
-         *     curl -X 'GET'     'http://localhost:4000/model_group/info'     -H 'accept: application/json'     -H 'x-api-key: $LITELLM_API_KEY'
+         *     curl -X 'GET'     'http://localhost:4000/model_group/info'     -H 'accept: application/json'     -H "x-api-key: $LITELLM_API_KEY"
          *     ```
          *
          *     Example Request (Specific Model Group):
          *     ```shell
-         *     curl -X 'GET'     'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0'     -H 'accept: application/json'     -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -X 'GET'     'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0'     -H 'accept: application/json'     -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml)
          *     ```shell
          *     curl -X 'GET'     'http://localhost:4000/model_group/info?model_group=openai/tts-1'
-         *     -H 'accept: application/json'     -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     -H 'accept: application/json'     -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Learn how to use and set wildcard models [here](https://docs.litellm.ai/docs/wildcard_routing)
@@ -9467,7 +9467,7 @@ export interface paths {
          * @description The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
          *     Quick Start
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header "Authorization: Bearer $LITELLM_API_KEY"     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
          *     ```
          */
         post: operations["moderations_moderations_post"];
@@ -10290,12 +10290,12 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_alias=my-org'         --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_alias=my-org'         --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Example with org_id:
          *     ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_id=123e4567-e89b-12d3-a456-426614174000'         --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_id=123e4567-e89b-12d3-a456-426614174000'         --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["list_organization_organization_list_get"];
@@ -10338,7 +10338,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl -X POST 'http://0.0.0.0:4000/organization/member_add'     -H 'Authorization: Bearer $LITELLM_API_KEY'     -H 'Content-Type: application/json'     -d '{
+         *     curl -X POST 'http://0.0.0.0:4000/organization/member_add'     -H "Authorization: Bearer $LITELLM_API_KEY"     -H 'Content-Type: application/json'     -d '{
          *         "organization_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
          *         "member": {
          *             "role": "internal_user",
@@ -10444,7 +10444,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/organization/new'
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "organization_alias": "my-secret-org",
@@ -10459,7 +10459,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/organization/new'
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "organization_alias": "my-secret-org",
@@ -11485,7 +11485,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location --request DELETE 'http://0.0.0.0:4000/project/delete' \
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY' \
+         *     --header "Authorization: Bearer $LITELLM_API_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_ids": ["project-123", "project-456"]
@@ -11515,7 +11515,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/info?project_id=project-123' \
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["project_info_project_info_get"];
@@ -11541,7 +11541,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/list' \
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["list_projects_project_list_get"];
@@ -11594,7 +11594,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY' \
+         *     --header "Authorization: Bearer $LITELLM_API_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_alias": "flight-search-assistant",
@@ -11621,7 +11621,7 @@ export interface paths {
          *
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY' \
+         *     --header "Authorization: Bearer $LITELLM_API_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_alias": "hotel-recommendations",
@@ -11675,7 +11675,7 @@ export interface paths {
          *     Example:
          *     ```bash
          *     curl --location 'http://0.0.0.0:4000/project/update' \
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY' \
+         *     --header "Authorization: Bearer $LITELLM_API_KEY" \
          *     --header 'Content-Type: application/json' \
          *     --data '{
          *         "project_id": "project-123",
@@ -13997,7 +13997,7 @@ export interface paths {
          *
          *     ```
          *     curl --location 'http://localhost:4000/spend/calculate'
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "model": "anthropic.claude-v2",
@@ -14009,7 +14009,7 @@ export interface paths {
          *
          *     ```
          *     curl --location 'http://localhost:4000/spend/calculate'
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     --header 'Content-Type: application/json'
          *     --data '{
          *         "completion_response": {
@@ -14938,7 +14938,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/block'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/block'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234"
          *     }'
          *     ```
@@ -14983,7 +14983,7 @@ export interface paths {
          *
          *     Example request:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/team/bulk_member_add'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/bulk_member_add'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234",
          *         "members": [
          *             {
@@ -15090,7 +15090,7 @@ export interface paths {
          *     - team_ids: List[str] - Required. List of team IDs to delete. Example: ["team-1234", "team-5678"]
          *
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/delete'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location 'http://0.0.0.0:4000/team/delete'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "team_ids": ["8d916b1c-510d-4894-a334-1c16a93344f5"]
          *     }'
          *     ```
@@ -15195,7 +15195,7 @@ export interface paths {
         /**
          * List Team
          * @description ```
-         *     curl --location --request GET 'http://0.0.0.0:4000/team/list'         --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl --location --request GET 'http://0.0.0.0:4000/team/list'         --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Parameters:
@@ -15229,7 +15229,7 @@ export interface paths {
          *     Only proxy_admin or admin of team, allowed to access this endpoint.
          *     ```
          *
-         *     curl -X POST 'http://0.0.0.0:4000/team/member_add'     -H 'Authorization: Bearer $LITELLM_API_KEY'     -H 'Content-Type: application/json'     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
+         *     curl -X POST 'http://0.0.0.0:4000/team/member_add'     -H "Authorization: Bearer $LITELLM_API_KEY"     -H 'Content-Type: application/json'     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
          *
          *     ```
          */
@@ -15258,7 +15258,7 @@ export interface paths {
          *     If user doesn't exist, an exception will be raised
          *     ```
          *     curl -X POST 'http://0.0.0.0:8000/team/member_delete'
-         *     -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     -H "Authorization: Bearer $LITELLM_API_KEY"
          *     -H 'Content-Type: application/json'
          *     -d '{
          *         "team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
@@ -15339,7 +15339,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/model/add'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/model/add'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234",
          *         "models": ["gpt-4", "claude-2"]
          *     }'
@@ -15371,7 +15371,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/model/delete'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/model/delete'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234",
          *         "models": ["gpt-4"]
          *     }'
@@ -15453,7 +15453,7 @@ export interface paths {
          *
          *     Example Request:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/new'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/new'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *       "team_alias": "my-new-team_2",
          *       "members_with_roles": [{"role": "admin", "user_id": "user-1234"},
          *         {"role": "user", "user_id": "user-2434"}]
@@ -15462,7 +15462,7 @@ export interface paths {
          *     ```
          *
          *      ```
-         *     curl --location 'http://0.0.0.0:4000/team/new'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/new'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *                 "team_alias": "QA Prod Bot",
          *                 "max_budget": 0.000000001,
          *                 "budget_duration": "1d"
@@ -15607,7 +15607,7 @@ export interface paths {
          *
          *     Example:
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/unblock'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/team/unblock'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "team_id": "team-1234"
          *     }'
          *     ```
@@ -15676,7 +15676,7 @@ export interface paths {
          *     - default_team_member_models: Optional[List[str]] - Default models assigned to new team members when they join this team. Must be a subset of the team's models.
          *
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location 'http://0.0.0.0:4000/team/update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
          *         "tpm_limit": 100
          *     }'
@@ -15684,7 +15684,7 @@ export interface paths {
          *
          *     Example - Update Team `max_budget` budget
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/team/update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location 'http://0.0.0.0:4000/team/update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
          *         "max_budget": 10
          *     }'
@@ -15722,7 +15722,7 @@ export interface paths {
          *     updated team.
          *
          *     ```
-         *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data-raw '{
+         *     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data-raw '{
          *         "metadata": {"cost_center": "1234", "deprecated_key": null}
          *     }'
          *     ```
@@ -15746,7 +15746,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709
@@ -15797,7 +15797,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H 'Content-Type: application/json'         -H 'Authorization: Bearer $LITELLM_API_KEY'         -d '{
+         *     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback'         -H 'Content-Type: application/json'         -H "Authorization: Bearer $LITELLM_API_KEY"         -d '{
          *         "callback_name": "langfuse",
          *         "callback_type": "success",
          *         "callback_vars": {"langfuse_public_key": "pk-lf-xxxx1", "langfuse_secret_key": "sk-xxxxx"}
@@ -15841,7 +15841,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith'         -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI. Teams still
@@ -15877,7 +15877,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging'         -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging'         -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         post: operations["disable_team_logging_team__team_id__disable_logging_post"];
@@ -16457,7 +16457,7 @@ export interface paths {
          *
          *     Example request for specific users:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "users": [
          *             {
          *                 "user_id": "user1",
@@ -16475,7 +16475,7 @@ export interface paths {
          *
          *     Example request for all users:
          *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "all_users": true,
          *         "user_updates": {
          *             "user_role": "internal_user",
@@ -16570,7 +16570,7 @@ export interface paths {
          *
          *     ```
          *     curl --location 'http://0.0.0.0:4000/user/delete'
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     --header 'Content-Type: application/json'
          *     --data-raw '{
          *         "user_ids": ["45e3e396-ee08-4a61-a88e-16b3ce7e0849"]
@@ -16634,7 +16634,7 @@ export interface paths {
          *
          *     Example request
          *     ```
-         *     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai'     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai'     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["user_info_user_info_get"];
@@ -16808,7 +16808,7 @@ export interface paths {
          * @description Example curl
          *
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/user/update'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --header 'Content-Type: application/json'     --data '{
+         *     curl --location 'http://0.0.0.0:4000/user/update'     --header "Authorization: Bearer $LITELLM_API_KEY"     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
          *         "user_role": "proxy_admin_viewer"
          *     }'
@@ -16900,7 +16900,7 @@ export interface paths {
          *
          *     Example curl:
          *     ```
-         *     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k'         --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k'         --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["supported_openai_params_utils_supported_openai_params_get"];
@@ -18305,7 +18305,7 @@ export interface paths {
          * @description List all vector store indexes. Proxy admin only.
          *
          *     ```bash
-         *     curl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *     curl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["index_list_v1_indexes_get"];
@@ -18315,7 +18315,7 @@ export interface paths {
          * @description Create an index. Just writes the index to the database.
          *
          *     ```bash
-         *     curl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H 'Authorization: Bearer $LITELLM_API_KEY'         -d '{
+         *     curl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H "Authorization: Bearer $LITELLM_API_KEY"         -d '{
          *             "index_name": "dall-e-3",
          *             "litellm_params": {
          *                 "vector_store_index": "real-index-name",
@@ -18992,7 +18992,7 @@ export interface paths {
          *     Example:
          *     ```shell
          *     curl -X GET 'http://localhost:4000/model/deprecations' \
-         *         -H 'Authorization: Bearer $LITELLM_API_KEY'
+         *         -H "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["model_deprecations_v1_model_deprecations_get"];
@@ -19154,7 +19154,7 @@ export interface paths {
          * @description The moderations endpoint is a tool you can use to check whether content complies with an LLM Providers policies.
          *     Quick Start
          *     ```
-         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header 'Authorization: Bearer $LITELLM_API_KEY'     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
+         *     curl --location 'http://0.0.0.0:4000/moderations'     --header 'Content-Type: application/json'     --header "Authorization: Bearer $LITELLM_API_KEY"     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
          *     ```
          */
         post: operations["moderations_v1_moderations_post"];
@@ -21217,7 +21217,7 @@ export interface paths {
          *     Example request:
          *     ```
          *     curl -X GET 'http://localhost:4000/v2/model/info?include_team_models=true&page=1&size=50' \
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          *
          *     Example response:
@@ -21366,7 +21366,7 @@ export interface paths {
          *     Example request:
          *     ```
          *     curl -X GET 'http://localhost:4000/v2/user/info?user_id=user123' \
-         *     --header 'Authorization: Bearer $LITELLM_API_KEY'
+         *     --header "Authorization: Bearer $LITELLM_API_KEY"
          *     ```
          */
         get: operations["user_info_v2_v2_user_info_get"];

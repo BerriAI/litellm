@@ -907,7 +907,7 @@ async def user_info(
     Example request
     ```
     curl -X GET 'http://localhost:4000/user/info?user_id=krrish7%40berri.ai' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY'
+    --header "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
@@ -1060,7 +1060,7 @@ async def user_info_v2(
     Example request:
     ```
     curl -X GET 'http://localhost:4000/v2/user/info?user_id=user123' \\
-    --header 'Authorization: Bearer $LITELLM_API_KEY'
+    --header "Authorization: Bearer $LITELLM_API_KEY"
     ```
     """
     from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
@@ -1600,7 +1600,7 @@ async def user_update(
 
     ```
     curl --location 'http://0.0.0.0:4000/user/update' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "test-litellm-user-4",
@@ -1770,7 +1770,7 @@ async def bulk_user_update(
     Example request for specific users:
     ```bash
     curl --location 'http://0.0.0.0:4000/user/bulk_update' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "users": [
@@ -1791,7 +1791,7 @@ async def bulk_user_update(
     Example request for all users:
     ```bash
     curl --location 'http://0.0.0.0:4000/user/bulk_update' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "all_users": true,
@@ -2291,7 +2291,7 @@ async def delete_user(
     ```
     curl --location 'http://0.0.0.0:4000/user/delete' \
 
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
 
     --header 'Content-Type: application/json' \
 

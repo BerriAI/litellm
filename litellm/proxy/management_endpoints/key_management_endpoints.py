@@ -1807,7 +1807,7 @@ async def generate_key_fn(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer $LITELLM_API_KEY' \
+        --header "Authorization: Bearer $LITELLM_API_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "permissions": {"allow_pii_controls": true}
@@ -2003,7 +2003,7 @@ async def generate_service_account_key_fn(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer $LITELLM_API_KEY' \
+        --header "Authorization: Bearer $LITELLM_API_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "permissions": {"allow_pii_controls": true}
@@ -3015,7 +3015,7 @@ async def update_key_fn(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-<virtual-key>",
@@ -3224,7 +3224,7 @@ async def bulk_update_keys(
     Example request:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/bulk_update' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "keys": [
@@ -3662,7 +3662,7 @@ async def delete_key_fn(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/delete' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "keys": ["sk-QWrxEynunsNpV1zT48HIrw"]
@@ -5243,7 +5243,7 @@ async def regenerate_key_fn(
     Example:
     ```bash
     curl --location --request POST 'http://localhost:4000/key/sk-<virtual-key>/regenerate' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "max_budget": 100,
@@ -6739,7 +6739,7 @@ async def block_key(
      Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/block' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
@@ -6853,7 +6853,7 @@ async def unblock_key(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/unblock' \
-    --header 'Authorization: Bearer $LITELLM_API_KEY' \
+    --header "Authorization: Bearer $LITELLM_API_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
