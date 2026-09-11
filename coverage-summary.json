@@ -1,0 +1,33 @@
+{
+  "base": "dca71e214bb04d24ee975d382cdce3d0f2bfb32a",
+  "tip": "29be5f7dd61872e90c375a5784d04ad465caf22c",
+  "changed_executable_lines": [
+    125
+  ],
+  "covered_changed_lines": [
+    125
+  ],
+  "changed_line_coverage_percent": 100,
+  "registration_function_branch_coverage": {
+    "covered": 12,
+    "missing": [],
+    "percent": 100.0
+  },
+  "module_summary": {
+    "covered_lines": 542,
+    "num_statements": 575,
+    "percent_covered": 93.64461738002593,
+    "percent_covered_display": "94",
+    "missing_lines": 33,
+    "excluded_lines": 16,
+    "percent_statements_covered": 94.26086956521739,
+    "percent_statements_covered_display": "94",
+    "num_branches": 196,
+    "num_partial_branches": 16,
+    "covered_branches": 180,
+    "missing_branches": 16,
+    "percent_branches_covered": 91.83673469387755,
+    "percent_branches_covered_display": "92"
+  },
+  "repository_wide_coverage": "Not measured locally; require completed Codecov report"
+}

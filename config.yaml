@@ -1,0 +1,8 @@
+model_list: []
+mcp_servers:
+  microsoft_learn:
+    url: https://learn.microsoft.com/api/mcp
+    transport: http
+    auth_type: none
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

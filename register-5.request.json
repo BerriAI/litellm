@@ -1,0 +1,20 @@
+{
+  "client_name": "Visual Studio Code",
+  "client_uri": "https://code.visualstudio.com",
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "redirect_uris": [
+    "https://insiders.vscode.dev/redirect",
+    "https://vscode.dev/redirect",
+    "http://127.0.0.1/",
+    "http://127.0.0.1:33418/",
+    "http://127.0.0.1:33419/"
+  ],
+  "token_endpoint_auth_method": "none",
+  "application_type": "native"
+}
