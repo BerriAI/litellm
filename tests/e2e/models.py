@@ -11,7 +11,16 @@ from datetime import datetime
 from typing import Final, Literal
 
 from e2e_http import PartialBody
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_serializer, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    RootModel,
+    model_serializer,
+    model_validator,
+)
 
 # ---------- keys ----------
 
@@ -695,6 +704,7 @@ class SpendLogRow(BaseModel):
     total_tokens: int | None = None
     request_tags: list[str] | None = None
     metadata: SpendLogMetadata | None = None
+    proxy_server_request: JsonValue = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -926,6 +936,7 @@ class LiteLLMParamsBody(BaseModel):
     timeout: float | None = None
     tpm: int | None = None
     weight: int | None = None
+    cooldown_time: float | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -1258,6 +1269,24 @@ class TagListResponse(RootModel[list[TagListEntry]]):
 
 
 # ---------- health / lifecycle ----------
+
+
+class ProcessMemory(BaseModel):
+    """The `memory` block of GET /debug/memory/summary: the serving worker's resident
+    set in MB, or `error` when the proxy has no psutil to read it with."""
+
+    ram_usage_mb: float | None = None
+    system_memory_percent: float | None = None
+    error: str | None = None
+
+
+class MemorySummaryResponse(BaseModel):
+    """GET /debug/memory/summary (master key). One worker's resident memory, keyed by
+    its pid so readings behind a load balancer can be told apart per pod."""
+
+    worker_pid: int
+    status: str
+    memory: ProcessMemory
 
 
 class ReadinessResponse(BaseModel):

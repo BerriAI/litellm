@@ -17,7 +17,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `mcp/` - the MCP server surface over api_key auth against the real Datadog remote MCP server (see "MCP suite: real Datadog only" below); plus the gateway-managed OAuth (authorization_code) path exercised through `/chat/completions`, the one behavior Datadog's static-header auth cannot reach, seeding the per-user upstream token via the interactive authorize dance driven with the mcp SDK's own OAuth client (headless-browser consent from a saved session) and asserting the completion lists and executes the server's tools with the stored per-user token
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
-- `router/` - routing and reliability behavior (fallbacks, cooldowns)
+- `router/` - routing and reliability behavior (fallbacks, cooldowns) plus the memory regression test (`test_reliability_memory_e2e.py`: a few hundred failing requests with retries and fallbacks must not grow proxy RSS past a fixed budget nor store a request snapshot past a fixed size, the release-gate check for the v1.100.0 retry-breadcrumb leak)
 - `load/` - performance-category tests, kept OUT of the main suite: throughput/load SLO tests are a different testing category from functional e2e (variance-driven, historically flaky) and live outside this suite until re-implemented as their own pipeline (LIT-5163); do not add a live load test that runs in the default collection. What remains here: the weekly session-anomaly test (`test_weekly_session_anomaly_e2e.py`, Claude Code-shaped multi-turn sessions against real providers with ceilings on error rate, cache read/write, turn time, and spend; marked `weekly` and deselected unless `E2E_WEEKLY_ANOMALY` is set, driven by `.github/workflows/weekly_load_anomaly.yml`) and markerless harness unit tests for the Locust/session-anomaly aggregation logic
 - `other/` - the holding-pen suite for the `other.*` registry cluster with no home of its own yet: the master-key auth gate and the process-lifecycle health probes (liveness, public readiness, authenticated readiness diagnostics). Promote a cluster out once it is large/stable enough for its own suite
 - `gateway/` - proxy configuration only (`litellm-config.yml`); no tests
@@ -163,7 +163,7 @@ reliability.<behavior>.<variant>.<assertion>
   behavior  : fallback | retry | cooldown | timeout | routing | cache | circuit_breaker | perf
   variant   : <trigger>   5xx | context_window | content_policy | 429 | timeout
               <strategy>  simple_shuffle | usage_based | latency_based | cost_based | least_busy
-              <dimension> latency | throughput | session_anomaly   (perf only; SLO/threshold assertion, not binary)
+              <dimension> latency | throughput | session_anomaly | memory   (perf only; SLO/threshold assertion, not binary)
   assertion : routes_to_fallback | succeeds_within_retries | picks_under_tpm | returns_cached
               | trips_then_recovers | under_slo
   e.g.  reliability.fallback.context_window.routes_to_fallback     exercised_on=[chat_completions]

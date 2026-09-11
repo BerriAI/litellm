@@ -63,6 +63,7 @@ from models import (
     ModelNewBody,
     ModelNewResponse,
     ModelsListParams,
+    MemorySummaryResponse,
     ModelsListResponse,
     ModelUpdateBody,
     OcrBody,
@@ -466,6 +467,21 @@ class ProxyClient:
                 response_type=KeyInfoResponse,
             )
         ).info
+
+    def memory_summary_everywhere(self) -> Mapping[str, Result[MemorySummaryResponse]]:
+        """GET /debug/memory/summary under the master key on every replica in
+        PROXY_REPLICA_URLS (the data-plane URL alone when the stack exports no
+        per-gateway addresses). Each read reports the pid of the worker that answered,
+        so a single address in front of several pods still tells its readings apart."""
+        return {
+            url: transport.get(
+                "/debug/memory/summary",
+                headers=transport.master,
+                params=NoBody(),
+                response_type=MemorySummaryResponse,
+            )
+            for url, transport in self.replicas.items()
+        }
 
     def read_back_everywhere[R: BaseModel](
         self,
