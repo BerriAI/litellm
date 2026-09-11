@@ -321,7 +321,15 @@ def _redis_timeout_error_types() -> tuple[type, ...]:
 
 
 def _is_redis_timeout_failure(exc: BaseException) -> bool:
-    return isinstance(exc, _redis_timeout_error_types())
+    """True when ``exc`` or any exception it was explicitly raised ``from`` is a timeout.
+
+    redis-py's blocking pool reports a pool wait timeout as ``ConnectionError`` chained from
+    ``asyncio.TimeoutError``, which is a busy pool rather than an unreachable Redis.
+    """
+    if isinstance(exc, _redis_timeout_error_types()):
+        return True
+    cause: Final = exc.__cause__
+    return cause is not None and _is_redis_timeout_failure(cause)
 
 
 class _BreakerMetrics:
