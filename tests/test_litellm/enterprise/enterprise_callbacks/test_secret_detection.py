@@ -265,6 +265,7 @@ def test_scan_message_redacts_every_credential_on_one_line():
         "Translate this recipe note into French:\nsecret_sauce: Worcestershire sauce",
         "api_key = Massachusetts (the state, not a key)",
         "secret_sauce:Worcestershire sauce",
+        "password: correctHorseBattery != anotherValue",
     ],
     ids=[
         "prose-password",
@@ -322,6 +323,7 @@ def test_scan_message_redacts_every_credential_on_one_line():
         "capitalized-word-starting-a-phrase",
         "capitalized-word-before-a-parenthetical",
         "yaml-scalar-without-a-space-after-the-colon",
+        "comparison-operator-after-the-value",
     ],
 )
 def test_scan_message_keeps_benign_values(content):
