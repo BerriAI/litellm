@@ -2134,6 +2134,9 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
     return upstream_close
 
 
+_WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("authorization", "x-api-key", "x-goog-user-project"))
+
+
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
@@ -2158,6 +2161,7 @@ async def websocket_passthrough_request(
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
     """
+    from litellm.integrations.otel.plumbing.context import inject_trace_context
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
     from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -2176,22 +2180,16 @@ async def websocket_passthrough_request(
         await websocket.accept()
         verbose_proxy_logger.debug("WebSocket passthrough (%s): WebSocket connection accepted", endpoint)
 
-    from litellm.integrations.otel.plumbing.context import inject_trace_context
-
-    incoming_headers: Final = dict(websocket.headers)  # mutable-ok: websocket headers are copied for context extraction
-    forwarded_headers: Final = {  # mutable-ok: assembled as the upstream header carrier
+    incoming_headers: Final = dict(websocket.headers)  # mutable-ok: propagator carrier
+    forwarded_headers: Final = {  # mutable-ok: propagator carrier
         **custom_headers,
         **{
             header_name: header_value
             for header_name, header_value in incoming_headers.items()
-            if forward_headers
-            and header_name.lower() in frozenset(("authorization", "x-api-key", "x-goog-user-project"))
+            if forward_headers and header_name.lower() in _WEBSOCKET_FORWARDED_HEADERS
         },
     }
-    upstream_headers: Final = inject_trace_context(
-        forwarded_headers,
-        inbound_headers=incoming_headers,
-    )
+    upstream_headers: Final = inject_trace_context(forwarded_headers, inbound_headers=incoming_headers)
 
     # Initialize logging object similar to HTTP passthrough
     team_callbacks: Final = _resolve_team_callback_wiring(
