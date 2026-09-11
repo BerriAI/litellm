@@ -127,6 +127,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
+from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     MCPMissingUserEnvVarsError,
@@ -4242,9 +4243,11 @@ class MCPServerManager:
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
+                if add_prefix:
+                    return tools
                 prefix: Final = get_server_prefix(server)
                 sep: Final = MCP_TOOL_PREFIX_SEPARATOR
-                bare_tools: Final = [  # mutable-ok: returned through the list[MCPTool] listing contract
+                return [  # mutable-ok: returned through the list[MCPTool] listing contract
                     (
                         t.model_copy(update={"name": t.name[len(prefix) + len(sep) :]})
                         if t.name.startswith(f"{prefix}{sep}")
@@ -4252,8 +4255,6 @@ class MCPServerManager:
                     )
                     for t in tools
                 ]
-                self._listed_tools_by_server_id[server.server_id] = MappingProxyType({t.name: t for t in bare_tools})
-                return tools if add_prefix else bare_tools
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
@@ -5139,6 +5140,14 @@ class MCPServerManager:
         return prefixed_tools
 
     def get_listed_tool(self, server: MCPServer, name: str) -> MCPTool | None:
+        if server.spec_path:
+            bare_name: Final = strip_known_server_prefix(name, server)
+            registered: Final = global_mcp_tool_registry.get_tool(
+                f"{get_server_prefix(server)}{MCP_TOOL_PREFIX_SEPARATOR}{bare_name}"
+            ) or global_mcp_tool_registry.get_tool(bare_name)
+            if registered is None:
+                return None
+            return MCPTool(name=bare_name, description=registered.description, inputSchema=registered.input_schema)
         listed: Final = self._listed_tools_by_server_id.get(server.server_id)
         if not listed:
             return None

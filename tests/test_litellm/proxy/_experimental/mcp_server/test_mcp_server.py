@@ -17,7 +17,6 @@ from mcp.types import (
     TextContent,
     TextResourceContents,
 )
-from mcp.types import Tool as MCPTool
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -7161,9 +7160,9 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
 
 
 @pytest.mark.asyncio
-async def test_execute_mcp_tool_hands_openapi_listed_tool_metadata_to_pre_call_hooks():
+async def test_execute_mcp_tool_hands_openapi_registered_tool_metadata_to_pre_call_hooks():
     """OpenAPI-generated tools dispatch through the local registry, so the pre-call hooks must get the
-    listed description and input schema on that path too, not only on the managed-server path."""
+    registered description and input schema on that path too, even when no tools/list ran first."""
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     petstore = MCPServer(
@@ -7179,9 +7178,7 @@ async def test_execute_mcp_tool_hands_openapi_listed_tool_metadata_to_pre_call_h
         name="petstore-list_pets", description="List the pets", input_schema=schema, handler=lambda: None
     )
     manager = mcp_module.global_mcp_server_manager
-    manager._create_prefixed_tools(
-        [MCPTool(name="list_pets", description="List the pets", inputSchema=schema)], petstore
-    )
+    manager._listed_tools_by_server_id.pop(petstore.server_id, None)
     pre_call_tool_check = AsyncMock(return_value={})
 
     try:
@@ -7206,10 +7203,13 @@ async def test_execute_mcp_tool_hands_openapi_listed_tool_metadata_to_pre_call_h
             )
     finally:
         mcp_module.global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
-        manager._listed_tools_by_server_id.pop(petstore.server_id, None)
 
     handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
-    assert handed_tool is not None and (handed_tool.description, handed_tool.inputSchema) == ("List the pets", schema)
+    assert (handed_tool.name, handed_tool.description, handed_tool.inputSchema) == (
+        "list_pets",
+        "List the pets",
+        schema,
+    )
 
 
 @pytest.mark.asyncio

@@ -6504,9 +6504,9 @@ class TestMCPServerManager:
         assert by_prefixed_name is not None and by_prefixed_name.description == "v2"
         assert manager.get_listed_tool(server, "missing") is None
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("add_prefix", [True, False])
-    async def test_openapi_listing_records_tool_metadata_for_pre_call_hooks(self, add_prefix):
+    def test_get_listed_tool_reads_openapi_registry_without_a_prior_listing(self):
+        """OpenAPI tools live in the local registry from registration on, so their metadata must resolve
+        before any tools/list has run and must disappear with the registration."""
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 
         server = MCPServer(
@@ -6519,19 +6519,21 @@ class TestMCPServerManager:
         )
         schema = {"type": "object", "properties": {"petId": {"type": "integer"}}}
         manager = MCPServerManager()
-        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
         global_mcp_tool_registry.register_tool(
             name="petstore-get_pet", description="Fetch a pet", input_schema=schema, handler=lambda: None
         )
         try:
-            listed = await manager._get_tools_from_server(server=server, add_prefix=add_prefix)
+            for spelling in ("get_pet", "petstore-get_pet"):
+                tool = manager.get_listed_tool(server, spelling)
+                assert tool is not None and (tool.name, tool.description, tool.inputSchema) == (
+                    "get_pet",
+                    "Fetch a pet",
+                    schema,
+                )
         finally:
             global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
 
-        assert [t.name for t in listed] == ["petstore-get_pet" if add_prefix else "get_pet"]
-        for spelling in ("get_pet", "petstore-get_pet"):
-            tool = manager.get_listed_tool(server, spelling)
-            assert tool is not None and (tool.description, tool.inputSchema) == ("Fetch a pet", schema)
+        assert manager.get_listed_tool(server, "petstore-get_pet") is None
 
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
