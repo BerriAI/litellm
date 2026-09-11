@@ -68,14 +68,21 @@ class ZAIChatConfig(OpenAIGPTConfig):
         reasoning_params: Final = MappingProxyType(
             {k: v for k, v in non_default_params.items() if k in ZAI_REASONING_PARAMS and k in supported_openai_params}
         )
-        optional_params.update(
-            (k, v)
-            for k, v in non_default_params.items()
-            if k in supported_openai_params and k not in ZAI_REASONING_PARAMS
-        )
-        if reasoning_params:
-            optional_params["extra_body"] = {  # mutable-ok: the OpenAI SDK json-encodes extra_body from a plain dict
-                **(optional_params.get("extra_body") or MappingProxyType({})),
-                **reasoning_params,
+        passthrough_params: Final = MappingProxyType(
+            {
+                k: v
+                for k, v in non_default_params.items()
+                if k in supported_openai_params and k not in ZAI_REASONING_PARAMS
             }
-        return optional_params
+        )
+        if not reasoning_params:
+            return {**optional_params, **passthrough_params}  # mutable-ok: base class returns a dict
+        extra_body: Final = {  # mutable-ok: the OpenAI SDK json-encodes extra_body from a plain dict
+            **(optional_params.get("extra_body") or MappingProxyType({})),
+            **reasoning_params,
+        }
+        return {  # mutable-ok: base class returns a dict
+            **optional_params,
+            **passthrough_params,
+            "extra_body": extra_body,
+        }
