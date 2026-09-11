@@ -19,9 +19,13 @@ the budget applies to, so a healthy proxy shows the second phase adding roughly
 nothing while a leaking one adds a fixed amount per request. RSS is read through
 /debug/memory/summary on every configured replica; a burst of failing calls leaves
 a transient bulge of garbage that gc reclaims within seconds, so each checkpoint
-samples for a settle window and keeps the lowest reading per worker, and the growth
-is judged per worker (by replica address and pid, since pods in their own pid
-namespaces report the same pids) so each worker is compared with itself.
+samples until no new worker has answered for a settle window and keeps the lowest
+reading per worker. The growth is judged per worker (by replica address, hostname
+and pid, since pods in their own pid namespaces report the same pids) so each
+worker is compared with itself, and the two checkpoints must see the same workers:
+a single load-balanced address reaches the workers behind it one answer at a time,
+and a worker that answered only one checkpoint would otherwise drop out of the
+comparison, which is where a leaking worker could hide.
 
 RSS alone is a coarse gauge: on the release stack (spend logs storing prompts,
 json logs, prometheus and otel callbacks) the same v1.100.0 breadcrumbs grew RSS
@@ -69,6 +73,7 @@ from reliability_support import chat_override, create_never_benched_refusing_dep
 pytestmark = pytest.mark.e2e
 
 DEPLOYMENTS_PER_GROUP: Final = 2
+RSS_SAMPLE_CAP: Final = 4 * MEMORY_RSS_SETTLE_SAMPLES
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,10 +151,21 @@ def _read_rss_everywhere_after_pause(proxy: ProxyClient) -> tuple[RssReading, ..
     )
 
 
-def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[WorkerKey, RssReading]:
-    readings: Final = tuple(
-        reading for _ in range(MEMORY_RSS_SETTLE_SAMPLES) for reading in _read_rss_everywhere_after_pause(proxy)
+def _readings_until_no_new_worker(
+    proxy: ProxyClient, readings: tuple[RssReading, ...], samples: int, samples_since_new_worker: int
+) -> tuple[RssReading, ...]:
+    if samples >= RSS_SAMPLE_CAP or samples_since_new_worker >= MEMORY_RSS_SETTLE_SAMPLES:
+        return readings
+    sample: Final = _read_rss_everywhere_after_pause(proxy)
+    known: Final = frozenset(reading.worker for reading in readings)
+    new_worker_answered: Final = any(reading.worker not in known for reading in sample)
+    return _readings_until_no_new_worker(
+        proxy, readings + sample, samples + 1, 0 if new_worker_answered else samples_since_new_worker + 1
     )
+
+
+def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[WorkerKey, RssReading]:
+    readings: Final = _readings_until_no_new_worker(proxy, (), 0, 0)
     assert readings, "no /debug/memory/summary read carried ram_usage_mb, so the proxy cannot report its RSS"
     return MappingProxyType(
         {
@@ -162,12 +178,14 @@ def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[WorkerKey, RssReading
 def _heaviest_worker_growth(
     warm: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]
 ) -> WorkerGrowth:
-    growths: Final = tuple(WorkerGrowth(warm[worker], after[worker]) for worker in warm.keys() & after.keys())
-    assert growths, (
-        f"no worker answered /debug/memory/summary at both checkpoints (warm workers {sorted(warm)}, "
-        f"after workers {sorted(after)}), so no worker can be compared with itself"
+    assert warm.keys() == after.keys(), (
+        f"the workers answering /debug/memory/summary changed between the checkpoints, so not every worker can "
+        f"be compared with itself: gone after the measured batch {sorted(warm.keys() - after.keys())} (a worker "
+        f"that died or was restarted under failing traffic, which is what an OOM kill looks like), first seen "
+        f"after it {sorted(after.keys() - warm.keys())} (the warm window never reached them, so they have no "
+        f"baseline; raise E2E_MEMORY_RSS_SETTLE_SAMPLES if the stack has more workers than the window covers)"
     )
-    return max(growths, key=lambda growth: growth.growth_mb)
+    return max((WorkerGrowth(warm[worker], after[worker]) for worker in warm), key=lambda growth: growth.growth_mb)
 
 
 def _assert_every_call_failed_through_fallback(calls: Sequence[FailedCall], fallback: str) -> None:
