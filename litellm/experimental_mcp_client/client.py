@@ -10,6 +10,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from functools import partial
 from importlib import metadata
+from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
@@ -77,6 +78,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
     MCPAuth,
@@ -631,7 +633,9 @@ class MCPClient:
                 auth=effective_auth,
                 verify=ssl_config,
                 follow_redirects=True,
-                event_hooks={"request": [guard]} if guard else {},
+                event_hooks=MappingProxyType(
+                    {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
+                ),  # mutable-ok: httpx types require lists of hooks
             )
 
         return factory

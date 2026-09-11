@@ -724,10 +724,11 @@ class ModelResponseIterator:
         content_block: Final = ContentBlockDelta(**chunk)
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
-        self.content_blocks.append(content_block)
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
-        elif "partial_json" in content_block["delta"]:
+            return text, tool_use, thinking_blocks, provider_specific_fields, reasoning_content
+        self.content_blocks.append(content_block)
+        if "partial_json" in content_block["delta"]:
             # Only emit tool calls if we're in a tool_use or server_tool_use block
             # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
             # See: https://github.com/BerriAI/litellm/issues/17254

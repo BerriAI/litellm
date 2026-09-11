@@ -103,6 +103,7 @@ class AutoRouterTurnTransaction:
     cache_ttl_seconds: int | None
     cache_touched: bool
     tier: str | None = None
+    baseline_model: str | None = None
 
 
 class TurnCacheFacts(NamedTuple):
@@ -168,7 +169,7 @@ def _write_ttl_seconds(usage_object: Mapping[str, object] | None) -> int | None:
 SESSION_ID_MAX_CHARS: Final = 256
 
 
-def _bounded_session_id(session_id: str) -> str:
+def bounded_session_id(session_id: str) -> str:
     """The session id as stored, bounded so a caller-chosen identifier cannot exceed
     Postgres's B-tree index entry limit through the composite primary key. Oversized
     ids map to a stable digest, so their turns still aggregate into one session."""
@@ -194,6 +195,9 @@ def build_autorouter_turn_transaction(
     classifier_cost folded into this turn's spend: the excluded classifier row is how
     it was billed, the decision is how it is attributed. Cache facts are derived from
     the payload's own usage record through the savings owner, never handed in beside it.
+    The baseline the turn's saved_spend was priced against travels with the turn, so the
+    row can name the counterfactual for the money it holds even after the router is
+    reconfigured or removed.
     """
     if payload.get("status") != "success":
         return None
@@ -216,13 +220,15 @@ def build_autorouter_turn_transaction(
     usage_object_raw: Final = metadata.get("usage_object")
     cache: Final = turn_cache_facts(usage_object_raw if isinstance(usage_object_raw, Mapping) else None)
     tier_raw: Final = routing_decision.get("tier")
+    baseline_raw: Final = routing_decision.get("savings_baseline_model")
     classifier_cost: Final = classifier_cost_from_decision(routing_decision)
     return AutoRouterTurnTransaction(
         api_key=api_key,
-        session_id=_bounded_session_id(session_id),
+        session_id=bounded_session_id(session_id),
         router_name=router_name,
         router_type=str(routing_decision.get("router_type") or "unknown"),
         tier=tier_raw if isinstance(tier_raw, str) and tier_raw else None,
+        baseline_model=baseline_raw if isinstance(baseline_raw, str) and baseline_raw else None,
         model=model,
         turn_at=turn_at,
         total_tokens=int(payload.get("prompt_tokens") or 0) + int(payload.get("completion_tokens") or 0),
@@ -253,6 +259,10 @@ _CACHE_TTL: Final = _p("cache_ttl_seconds")
 _TOUCHED: Final = _p("cache_touched")
 _TIER: Final = f"{_p('tier')}::text"
 _TIER_DELTA: Final = f"(CASE WHEN {_TIER} IS NULL THEN '{{}}'::jsonb ELSE jsonb_build_object({_TIER}, 1) END)"
+_BASELINE: Final = f"{_p('baseline_model')}::text"
+_BASELINE_DELTA: Final = (
+    f"(CASE WHEN {_BASELINE} IS NULL THEN '{{}}'::jsonb ELSE jsonb_build_object({_BASELINE}, 1) END)"
+)
 
 _IN_ORDER: Final = f"{_TURN_AT}::timestamp >= t.last_turn_at"
 _SAME: Final = f"{_IN_ORDER} AND t.last_model = {_MODEL}"
@@ -270,7 +280,8 @@ INSERT INTO "LiteLLM_AutoRouterSession" AS t (
     last_model, models, turns, unordered_turns, covered_turns, cache_hits,
     same_model_turns, same_model_hits, first_visit_turns, first_visit_hits,
     return_turns, return_hits, return_expired_misses, return_within_ttl_misses,
-    ttl_5m_turns, ttl_1h_turns, total_tokens, spend, saved_spend, classifier_cost, classifier_cost_recorded_turns, tier_turns
+    ttl_5m_turns, ttl_1h_turns, total_tokens, spend, saved_spend, classifier_cost, classifier_cost_recorded_turns, tier_turns,
+    baseline_models
 )
 VALUES (
     {_p("api_key")}, {_p("session_id")}, {_p("router_name")}, {_p("router_type")}, {_TURN_AT}::timestamp, {_TURN_AT}::timestamp,
@@ -281,7 +292,7 @@ VALUES (
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_5M_SECONDS} THEN 1 ELSE 0 END),
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_1H_SECONDS} THEN 1 ELSE 0 END),
     {_p("total_tokens")}::bigint, {_p("spend")}::float8, {_p("saved_spend")}::float8,
-    {_p("classifier_cost")}::float8, 1, {_TIER_DELTA}
+    {_p("classifier_cost")}::float8, 1, {_TIER_DELTA}, {_BASELINE_DELTA}
 )
 ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
     turns = t.turns + 1,
@@ -317,6 +328,9 @@ ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
     tier_turns = (CASE WHEN {_TIER} IS NOT NULL AND t.router_type = {_p("router_type")}
         THEN t.tier_turns || jsonb_build_object({_TIER}, COALESCE((t.tier_turns ->> {_TIER})::int, 0) + 1)
         ELSE t.tier_turns END),
+    baseline_models = (CASE WHEN {_BASELINE} IS NOT NULL
+        THEN t.baseline_models || jsonb_build_object({_BASELINE}, COALESCE((t.baseline_models ->> {_BASELINE})::int, 0) + 1)
+        ELSE t.baseline_models END),
     first_turn_at = LEAST(t.first_turn_at, EXCLUDED.first_turn_at),
     last_turn_at = GREATEST(t.last_turn_at, EXCLUDED.last_turn_at)
 """
