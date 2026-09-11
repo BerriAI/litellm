@@ -1704,8 +1704,9 @@ async def test_empty_http_event_stream_uses_the_existing_request_deadline() -> N
         "initialize_not_found",
     ),
 )
+@pytest.mark.parametrize("raise_on_error", (False, True))
 async def test_optional_discovery_capabilities_and_errors(
-    method: str, outcome: str, caplog: pytest.LogCaptureFixture
+    method: str, outcome: str, caplog: pytest.LogCaptureFixture, raise_on_error: bool
 ) -> None:
     import logging
     from unittest.mock import Mock
@@ -1783,7 +1784,11 @@ async def test_optional_discovery_capabilities_and_errors(
             "resources/list": client.list_resources,
             "resources/templates/list": client.list_resource_templates,
         }[method]
-        result: Final = await operation()
+        if raise_on_error and outcome in ("internal_error", "unauthorized", "timeout", "initialize_not_found"):
+            with pytest.raises((McpError, httpx.HTTPError)):
+                await operation(raise_on_error=True)
+            return
+        result: Final = await operation(raise_on_error=raise_on_error)
 
     requests: Final = tuple(
         JSONRPCMessage.model_validate_json(call.args[0].content).root
