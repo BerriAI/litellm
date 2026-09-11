@@ -396,7 +396,8 @@ describe("TeamVirtualKeysTable", () => {
         refetch: vi.fn(),
       } as any);
       renderWithProviders(<TeamVirtualKeysTable {...defaultProps} organization={organization} />);
-      return (await screen.findByText(key.key_alias as string)).closest("tr") as HTMLElement;
+      await screen.findByText(key.key_alias as string);
+      return screen.getByRole("row", { name: new RegExp(key.key_alias as string) });
     };
 
     it("points the Organization ID cell at the org's detail page", async () => {
@@ -433,17 +434,18 @@ describe("TeamVirtualKeysTable", () => {
 
     it("leaves the default_user_id placeholder unlinked in the User ID and Created By cells", async () => {
       const placeholder = { user_id: "default_user_id", user_email: "admin@example.com", user_alias: "Proxy Admin" };
-      const row = await renderRow(
-        createMockKey({
-          user_id: placeholder.user_id,
-          user: placeholder,
-          created_by: placeholder.user_id,
-          created_by_user: placeholder,
-        }),
-      );
+      const ownedAndCreatedByPlaceholder = {
+        user_id: placeholder.user_id,
+        user: placeholder,
+        created_by: placeholder.user_id,
+        created_by_user: placeholder,
+      };
+      const row = await renderRow(createMockKey(ownedAndCreatedByPlaceholder));
       expect(within(row).getByText("Default Proxy Admin")).toBeInTheDocument();
       expect(within(row).getByText("Proxy Admin")).toBeInTheDocument();
       expect(within(row).queryByRole("link", { name: "Proxy Admin" })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("link", { name: placeholder.user_email })).not.toBeInTheDocument();
+      expect(within(row).queryByRole("link", { name: "Default Proxy Admin" })).not.toBeInTheDocument();
     });
   });
 });
