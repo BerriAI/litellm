@@ -4,6 +4,7 @@ import importlib.util
 import json
 import re
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import jsonschema
@@ -220,23 +221,47 @@ def test_chat_latest_declares_the_one_effort_openai_accepts(prices: dict):
     assert resolve_supported_reasoning_efforts(prices["chat-latest"], deployment_is_mapped=True) == ("medium",)
 
 
-BEDROCK_OPENAI_XHIGH_MARKERS: Final = ("openai.gpt-5.4", "openai.gpt-5.5", "openai.gpt-5.6", "openai.gpt-6-astra")
+BEDROCK_OPENAI_GPT_MARKERS: Final = ("openai.gpt-5.4", "openai.gpt-5.5", "openai.gpt-5.6", "openai.gpt-6-astra")
 BEDROCK_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse", "bedrock_mantle"))
+BEDROCK_ROW_PREFIXES: Final = ("bedrock_mantle/", "us.", "global.")
+GPT_5_4_BEDROCK_LADDER: Final = ("none", "minimal", "low", "medium", "high", "xhigh")
+GPT_5_6_BEDROCK_LADDER: Final = ("none", "low", "medium", "high", "xhigh", "max")
+GPT_6_ASTRA_BEDROCK_LADDER: Final = ("low", "medium", "high", "xhigh", "max")
+BEDROCK_OPENAI_GPT_LADDERS: Final = MappingProxyType(
+    {
+        "bedrock_mantle/openai.gpt-5.4": GPT_5_4_BEDROCK_LADDER,
+        "bedrock_mantle/openai.gpt-5.5": GPT_5_4_BEDROCK_LADDER,
+        **{
+            f"{prefix}openai.gpt-5.6-{variant}": GPT_5_6_BEDROCK_LADDER
+            for prefix in BEDROCK_ROW_PREFIXES
+            for variant in ("luna", "sol", "terra")
+        },
+        **{f"{prefix}openai.gpt-6-astra": GPT_6_ASTRA_BEDROCK_LADDER for prefix in BEDROCK_ROW_PREFIXES},
+    }
+)
 
 
-def test_bedrock_openai_gpt_rows_mirror_their_openai_twins_effort_ladder(prices: dict):
-    """Bedrock forwards reasoning_effort to these models unchanged, and xhigh is opt-in for the
-    capability resolver, so a row without the flag drops xhigh from every group it belongs to.
-    The OpenAI twins reject minimal, and Bedrock forwards reasoning_effort unchanged."""
-    mismatched = [
+@pytest.mark.parametrize(
+    ("name", "ladder"), tuple(BEDROCK_OPENAI_GPT_LADDERS.items()), ids=tuple(BEDROCK_OPENAI_GPT_LADDERS)
+)
+def test_bedrock_openai_gpt_rows_advertise_the_ladder_bedrock_accepts(prices: dict, name: str, ladder: tuple[str, ...]):
+    """Each ladder is the set of levels the Bedrock Mantle and Converse endpoints answered 200 to
+    for that row on 2026-09-11 (PR #40740), which differs from the direct OpenAI rows in three
+    places: Bedrock gpt-5.6 and gpt-6-astra take max, Bedrock gpt-5.4 and gpt-5.5 take minimal, and
+    gpt-6-astra refuses none. xhigh and max are opt-in for the resolver, so a row missing either
+    flag silently drops that level from every group it belongs to."""
+    assert resolve_supported_reasoning_efforts(prices[name], deployment_is_mapped=True) == ladder
+
+
+def test_every_bedrock_openai_gpt_row_advertises_xhigh(prices: dict):
+    """The GovCloud and gpt-5.6-cyber rows cannot be called from our account, so they carry the
+    family's xhigh flag rather than a measured ladder."""
+    missing: Final = [
         name
         for name, entry in prices.items()
         if isinstance(entry, dict)
         and entry.get("litellm_provider") in BEDROCK_PROVIDERS
-        and any(marker in name for marker in BEDROCK_OPENAI_XHIGH_MARKERS)
-        and (
-            "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
-            or "minimal" in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
-        )
+        and any(marker in name for marker in BEDROCK_OPENAI_GPT_MARKERS)
+        and "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
     ]
-    assert mismatched == []
+    assert missing == []
