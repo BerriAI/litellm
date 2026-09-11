@@ -54,6 +54,7 @@ from litellm.proxy.auth.auth_checks import (
     get_end_user_object,
     get_jwt_key_mapping_object,
     get_object_permission,
+    get_org_object,
     get_project_object,
     get_team_object,
     get_user_object,
@@ -2398,6 +2399,37 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
     return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
 
 
+async def _inherit_org_identity(
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTableCachedObj | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
+        user_api_key_auth_obj.org_id = team_object.organization_id
+    if (
+        user_api_key_auth_obj.org_id is None
+        or user_api_key_auth_obj.organization_alias is not None
+        or prisma_client is None
+    ):
+        return
+    try:
+        org_object: Final = await get_org_object(
+            org_id=user_api_key_auth_obj.org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception:
+        verbose_proxy_logger.debug("org alias lookup failed for org_id=%s", user_api_key_auth_obj.org_id, exc_info=True)
+        return
+    if org_object is not None:
+        user_api_key_auth_obj.organization_alias = org_object.organization_alias
+
+
 @tracer.wrap()
 async def _run_centralized_common_checks(
     user_api_key_auth_obj: UserAPIKeyAuth,
@@ -2622,8 +2654,14 @@ async def _run_centralized_common_checks(
     )
     global_proxy_spend: float | None = None if isinstance(global_spend_result, BaseException) else global_spend_result
 
-    if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
-        user_api_key_auth_obj.org_id = team_object.organization_id
+    await _inherit_org_identity(
+        user_api_key_auth_obj=user_api_key_auth_obj,
+        team_object=cast(LiteLLM_TeamTableCachedObj | None, team_object),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # common_checks identifies admin via user_object, not the token
     # (non_proxy_admin_allowed_routes_check). JWT admin shortcut and

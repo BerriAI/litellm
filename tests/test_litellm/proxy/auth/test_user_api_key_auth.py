@@ -23,6 +23,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    LiteLLM_OrganizationTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -31,7 +32,7 @@ from litellm.proxy._types import (
     JWTRoutingOverride,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
+from litellm.proxy.auth.auth_checks import OrganizationNotFoundError, get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     _check_key_model_budget_with_fallback,
@@ -5288,6 +5289,107 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
         mock_checks.assert_awaited_once()
         assert token.org_id == expected_org_id
         assert org_id_seen_by_common_checks == [expected_org_id]
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_org_id,team_id,team_org_id,existing_alias,lookup_mode,expected_org_id,expected_alias",
+    [
+        (None, "t1", "org-from-team", None, "success", "org-from-team", "acme-org"),
+        ("org-jwt", None, None, None, "success", "org-jwt", "acme-org"),
+        ("org-pinned", None, None, "preset", "success", "org-pinned", "preset"),
+        ("org-missing", None, None, None, "missing", "org-missing", None),
+    ],
+)
+async def test_centralized_common_checks_inherits_org_alias(
+    key_org_id,
+    team_id,
+    team_org_id,
+    existing_alias,
+    lookup_mode,
+    expected_org_id,
+    expected_alias,
+):
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="u",
+        team_id=team_id,
+        org_id=key_org_id,
+        organization_alias=existing_alias,
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    fetched_team = (
+        LiteLLM_TeamTableCachedObj(team_id="t1", organization_id=team_org_id) if team_id is not None else None
+    )
+    organization = LiteLLM_OrganizationTable(
+        organization_id=expected_org_id,
+        organization_alias="acme-org",
+        budget_id="budget-id",
+        models=[],
+        created_by="test",
+        updated_by="test",
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["prisma_client"] = MagicMock()
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        identity_seen_by_common_checks = []
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                return_value=fetched_team,
+            ) as mock_get_team_object,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_org_object",
+                new_callable=AsyncMock,
+                return_value=organization,
+            ) as mock_get_org_object,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+                side_effect=lambda **kw: identity_seen_by_common_checks.append(
+                    (kw["valid_token"].org_id, kw["valid_token"].organization_alias)
+                ),
+            ) as mock_checks,
+        ):
+            if lookup_mode == "missing":
+                mock_get_org_object.side_effect = OrganizationNotFoundError("x")
+
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-4o"},
+                route="/chat/completions",
+            )
+
+        mock_checks.assert_awaited_once()
+        assert token.org_id == expected_org_id
+        assert token.organization_alias == expected_alias
+        assert identity_seen_by_common_checks == [(expected_org_id, expected_alias)]
+        if team_id is None:
+            mock_get_team_object.assert_not_awaited()
+        else:
+            mock_get_team_object.assert_awaited_once()
+        if existing_alias is not None:
+            mock_get_org_object.assert_not_awaited()
+        else:
+            mock_get_org_object.assert_awaited_once()
+            assert mock_get_org_object.await_args.kwargs["org_id"] == expected_org_id
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
