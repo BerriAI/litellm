@@ -447,7 +447,86 @@ class LiteLLMCompletionResponsesConfig:
             )
         )
 
-        return messages
+        return LiteLLMCompletionResponsesConfig._normalize_system_messages(messages)
+
+    @staticmethod
+    def _normalize_system_messages(
+        messages: list[
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+            | Message
+        ],
+    ) -> list[
+        AllMessageValues
+        | GenericChatCompletionMessage
+        | ChatCompletionMessageToolCall
+        | ChatCompletionResponseMessage
+        | Message
+    ]:
+        """
+        Normalize system messages so all system content appears at the beginning.
+
+        If multiple system messages exist, merge their contents into a single leading system message
+        to comply with backend chat templates that require at most one leading system message.
+        """
+
+        def _is_system(msg: object) -> bool:
+            if isinstance(msg, dict):
+                return msg.get("role") == "system"
+            elif hasattr(msg, "role"):
+                return msg.role == "system"
+            return False
+
+        system_messages: list[
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+            | Message
+        ] = [m for m in messages if _is_system(m)]
+        if not system_messages:
+            return messages
+
+        non_system_messages: list[
+            AllMessageValues
+            | GenericChatCompletionMessage
+            | ChatCompletionMessageToolCall
+            | ChatCompletionResponseMessage
+            | Message
+        ] = [m for m in messages if not _is_system(m)]
+
+        if len(system_messages) == 1:
+            if messages and _is_system(messages[0]):
+                return messages
+            return [system_messages[0]] + non_system_messages
+
+        merged_content_parts: list[str] = []
+        for sm in system_messages:
+            raw_content: object = None
+            if isinstance(sm, dict):
+                raw_content = sm.get("content")
+            elif hasattr(sm, "content"):
+                raw_content = sm.content
+
+            if isinstance(raw_content, str):
+                if raw_content:
+                    merged_content_parts.append(raw_content)
+            elif isinstance(raw_content, list):
+                for block in raw_content:
+                    if isinstance(block, str) and block:
+                        merged_content_parts.append(block)
+                    elif isinstance(block, dict):
+                        text = block.get("text")
+                        if isinstance(text, str) and text:
+                            merged_content_parts.append(text)
+
+        merged_system_message = ChatCompletionSystemMessage(
+            role="system",
+            content="\n\n".join(merged_content_parts),
+        )
+        return [merged_system_message] + non_system_messages
 
     @staticmethod
     async def async_responses_api_session_handler(
