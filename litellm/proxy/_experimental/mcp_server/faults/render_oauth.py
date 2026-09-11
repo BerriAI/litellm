@@ -43,6 +43,16 @@ def _registration_refused_description(status_code: int) -> str:
     )
 
 
+def _render_caller_rejected(fault: CallerRejected) -> JSONResponse:
+    content: Final = {
+        "error": fault.code,
+        **({"error_description": fault.description} if fault.description else {}),
+        **({"error_uri": fault.error_uri} if fault.error_uri else {}),
+    }
+    status_code: Final = 401 if fault.code == "invalid_client" else 400
+    return JSONResponse(status_code=status_code, content=content, headers=TOKEN_NO_CACHE_HEADERS)
+
+
 def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
     """RFC 6749 §5.2 response for a token-endpoint fault. Caller-actionable rejections relay the
     upstream's code on the status that code implies (401 for invalid_client per §5.2, else 400);
@@ -50,13 +60,7 @@ def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
     blamed for, or shown the internals of, a failure only the operator can fix."""
     match fault.tag:
         case "caller_rejected":
-            content: Final = {
-                "error": fault.code,
-                **({"error_description": fault.description} if fault.description else {}),
-                **({"error_uri": fault.error_uri} if fault.error_uri else {}),
-            }
-            status_code = 401 if fault.code == "invalid_client" else 400
-            return JSONResponse(status_code=status_code, content=content, headers=TOKEN_NO_CACHE_HEADERS)
+            return _render_caller_rejected(fault)
         case "gateway_rejected":
             return JSONResponse(
                 status_code=502,
@@ -74,7 +78,7 @@ def render_token_fault(fault: UpstreamOAuthFault) -> JSONResponse:
                 headers=TOKEN_NO_CACHE_HEADERS,
             )
         case "upstream_registration_refused":
-            return render_token_fault(
+            return _render_caller_rejected(
                 CallerRejected(
                     code="unauthorized_client",
                     description=_registration_refused_description(fault.status_code),
