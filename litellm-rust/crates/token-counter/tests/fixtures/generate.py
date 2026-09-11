@@ -1,24 +1,27 @@
-"""Pin tiktoken cl100k_base reference counts for the Rust parity tests.
+"""Pin tiktoken reference counts for the Rust parity tests of one encoding.
 
-Run from the repository root with the project environment:
+Run from the repository root with the project environment, once per encoding:
 
-    uv run --no-sync python litellm-rust/crates/token-counter/tests/fixtures/cl100k/generate.py
+    uv run --no-sync python litellm-rust/crates/token-counter/tests/fixtures/generate.py cl100k_base
+    uv run --no-sync python litellm-rust/crates/token-counter/tests/fixtures/generate.py o200k_base
 
-`texts.jsonl` holds `{"text", "tokens", "pieces"}` lines: `tokens` counted with
-`tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=())`, the
-same call `litellm.token_counter` makes, and `pieces` the installed encoding's
-split pattern applied with the `regex` module tiktoken itself uses, so a scanner
-that splits differently fails even where BPE would count the same. `requests.jsonl` holds
-`{"body", "input_tokens"}` lines, `body` being the exact request bytes as a JSON
-string, counted with the proxy's admission counter
-(`_count_input_tokens(body, "gpt-4")`). Every message in the 50k-token body is
-shorter than the Python chunk size so the chunked Python count equals the exact
-whole-text tiktoken count the Rust counter produces.
+`<encoding>/texts.jsonl` holds `{"text", "tokens", "pieces"}` lines: `tokens`
+counted with `tiktoken.get_encoding(name).encode(text, disallowed_special=())`,
+the same call `litellm.token_counter` makes, and `pieces` the installed
+encoding's split pattern applied with the `regex` module tiktoken itself uses,
+so a scanner that splits differently fails even where BPE would count the same.
+`<encoding>/requests.jsonl` holds `{"body", "input_tokens"}` lines, `body` being
+the exact request bytes as a JSON string, counted with the proxy's admission
+counter (`_count_input_tokens(body, model)`) for a model Python counts with that
+encoding. Every message in the 50k-token body is shorter than the Python chunk
+size so the chunked Python count equals the exact whole-text tiktoken count the
+Rust counter produces.
 """
 
 import itertools
 import json
 import random
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
@@ -27,13 +30,19 @@ import regex
 import tiktoken
 
 from litellm.constants import TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
+from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding
 from litellm.proxy.spend_tracking.budget_reservation import _count_input_tokens
 
 HERE: Final = Path(__file__).resolve().parent
-ENCODING: Final = tiktoken.get_encoding("cl100k_base")
+MODELS: Final = {"cl100k_base": "gpt-4", "o200k_base": "gpt-4o"}
+ENCODING_NAME: Final = sys.argv[1]
+MODEL: Final = MODELS[ENCODING_NAME]
+ENCODING: Final = tiktoken.get_encoding(ENCODING_NAME)
+assert openai_tokenizer_encoding(MODEL).name == ENCODING_NAME
 SPLIT_PATTERN: Final = regex.compile(ENCODING._pat_str)  # pyright: ignore[reportPrivateUsage]  # tiktoken has no public accessor
+OUT: Final = HERE / ENCODING_NAME.removesuffix("_base")
 
-# Mirrors ALPHABET in src/byte_level.rs, plus the pieces the cl100k pattern treats differently.
+# Mirrors ALPHABET in src/byte_level.rs, plus the pieces the tiktoken patterns treat differently.
 ALPHABET: Final = (
     "a",
     "Z",
@@ -114,6 +123,24 @@ ALPHABET: Final = (
     "ǅ",
 )
 
+# The pieces the o200k case-shaped letter branch and slash-absorbing symbol branch split differently.
+CASE_ALPHABET: Final = ALPHABET + (
+    "B",
+    "Ab",
+    "aB",
+    "ABC",
+    "ᵃ",
+    "camelCase",
+    "HTTPServer",
+    "iOS",
+    "ǅungla",
+    "/",
+    "\n/",
+    "/\r\n",
+    " \n ",
+    "a/b",
+)
+
 CORPUS: Final = (
     "",
     "Hello, how are you today?",
@@ -159,6 +186,15 @@ CORPUS: Final = (
     "'s't're've'm'll'd 'S'T'RE'VE'M'LL'D ''s '''s",
     "9'9 9's a'9 '9 ' 's' ' 's",
     "١٢٣٤ ½⅓¼ ⅣⅤ 𝟘𝟙𝟚𝟛𝟜𝟝𝟞𝟟𝟠𝟡 ①②③",
+    "camelCase PascalCase ABCdef ABCdeF ABC aB Ab ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzABC",
+    "日本ABC ABC日本 日本語abc abc日本語 漢字Kanji kanji漢字 KANJI漢字kanji مرحباABC ABCمرحبا abcمرحبا",
+    "\u0301ABC \u0301abc \u0301\u0301A A\u0301\u0301 E\u0301A aE\u0301 !!\u0301a \u00a0\u0301A x\u0308Y X\u0308y",
+    "ᵃbc ᵃBC Aᵃbc Aᵃ ᵃ' ᵃ's ǅungla aǅB AǅB Aǅb ǅǅ ǈx İi ΣΊΣΥΦΟΣσ ΣσΣ",
+    "don'tx ABC's abc'S abc'ſ ABC'ſx IT'SOK it'Dbe 'sabc x's 's 'Sx'Tx x’s X'LLx X'Ll",
+    "!ABC !AbC !!abc #camelCase (ABCdef) \u00a0ABC\u00a0abc\u00a0Abc \tABC\tabc",
+    "!!/\n/x a/b !!\n/x  /x  // path/to/file.rs http://x.y/z?a=b/c \\/\\/ //\r\n//\n",
+    "x \n x \r\n \r\n y x \n  a  b   \n\n  c x\t\ty x\t\t end   \n \n",
+    "12345 6 1abc abc1 ABC123abc 123ABC ١٢٣٤٥abc",
 )
 
 WORDS: Final = (
@@ -244,8 +280,8 @@ WORDS: Final = (
 )
 
 
-def random_text(rng: random.Random) -> str:
-    return "".join(rng.choice(ALPHABET) for _ in range(rng.randrange(0, 40)))
+def random_text(rng: random.Random, alphabet: tuple[str, ...]) -> str:
+    return "".join(rng.choice(alphabet) for _ in range(rng.randrange(0, 40)))
 
 
 def paragraph(rng: random.Random, words: int) -> str:
@@ -265,7 +301,7 @@ def chat_body(rng: random.Random, target_tokens: int) -> dict[str, object]:
     turns: Final = next(index for index, total in enumerate(running) if total >= target_tokens) + 1
     contents: Final = candidates[: turns + (turns % 2)]
     return {
-        "model": "gpt-4",
+        "model": MODEL,
         "messages": [
             {"role": "system", "content": "You are a helpful assistant. Answer precisely and cite sources."},
             *(
@@ -305,9 +341,9 @@ TOOLS: Final = [
 ]
 
 SMALL_REQUESTS: Final = (
-    {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello, how are you today?"}]},
+    {"model": MODEL, "messages": [{"role": "user", "content": "Hello, how are you today?"}]},
     {
-        "model": "gpt-4",
+        "model": MODEL,
         "messages": [
             {"role": "system", "content": "You are a terse assistant."},
             {
@@ -322,21 +358,21 @@ SMALL_REQUESTS: Final = (
         ],
     },
     {
-        "model": "gpt-4",
+        "model": MODEL,
         "messages": [{"role": "user", "content": "weather?"}],
         "tools": TOOLS,
         "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
     },
     {
-        "model": "gpt-4",
+        "model": MODEL,
         "messages": [{"role": "system", "content": "sys"}, {"role": "user", "content": "weather?"}],
         "tools": TOOLS,
         "tool_choice": "none",
     },
-    {"model": "gpt-4", "prompt": "Write a haiku about ships."},
-    {"model": "gpt-4", "prompt": ["first prompt", "second prompt"]},
+    {"model": MODEL, "prompt": "Write a haiku about ships."},
+    {"model": MODEL, "prompt": ["first prompt", "second prompt"]},
     {
-        "model": "gpt-4",
+        "model": MODEL,
         "input": [
             {
                 "role": "user",
@@ -348,9 +384,9 @@ SMALL_REQUESTS: Final = (
         ],
         "instructions": "be terse",
     },
-    {"model": "gpt-4", "input": [[101, 2023, 5], [7]], "encoding_format": "float"},
+    {"model": MODEL, "input": [[101, 2023, 5], [7]], "encoding_format": "float"},
     {
-        "model": "gpt-4",
+        "model": MODEL,
         "query": "best harbour",
         "documents": [
             "doc one",
@@ -362,16 +398,22 @@ SMALL_REQUESTS: Final = (
 
 def main() -> None:
     rng: Final = random.Random(2026)
-    texts: Final = tuple(CORPUS) + tuple(random_text(rng) for _ in range(3000))
-    with (HERE / "texts.jsonl").open("w", encoding="utf-8") as handle:
+    case_rng: Final = random.Random(200_000)
+    texts: Final = (
+        tuple(CORPUS)
+        + tuple(random_text(rng, ALPHABET) for _ in range(3000))
+        + tuple(random_text(case_rng, CASE_ALPHABET) for _ in range(1000))
+    )
+    OUT.mkdir(exist_ok=True)
+    with (OUT / "texts.jsonl").open("w", encoding="utf-8") as handle:
         for text in texts:
             tokens = len(ENCODING.encode(text, disallowed_special=()))
             pieces = SPLIT_PATTERN.findall(text)
             handle.write(json.dumps({"text": text, "tokens": tokens, "pieces": pieces}, ensure_ascii=False) + "\n")
     bodies: Final = tuple(SMALL_REQUESTS) + (chat_body(rng, 50_000),)
-    with (HERE / "requests.jsonl").open("w", encoding="utf-8") as handle:
+    with (OUT / "requests.jsonl").open("w", encoding="utf-8") as handle:
         for body in bodies:
-            input_tokens = _count_input_tokens(dict(body), "gpt-4")
+            input_tokens = _count_input_tokens(dict(body), MODEL)
             assert input_tokens is not None
             handle.write(json.dumps({"body": json.dumps(body), "input_tokens": input_tokens}) + "\n")
 

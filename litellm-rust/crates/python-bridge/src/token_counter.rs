@@ -38,6 +38,11 @@ impl TokenCounter {
         Self::load(py, || CoreTokenCounter::from_cl100k_ranks(rank_file))
     }
 
+    #[staticmethod]
+    fn from_o200k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
+        Self::load(py, || CoreTokenCounter::from_o200k_ranks(rank_file))
+    }
+
     fn acount_request<'py>(&self, py: Python<'py>, body: &[u8]) -> PyResult<Bound<'py, PyAny>> {
         let counter = Arc::clone(&self.inner);
         let encode_slots = Arc::clone(&self.encode_slots);

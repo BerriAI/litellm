@@ -8,6 +8,7 @@ cases need the extension and are skipped when it is not built.
 from __future__ import annotations
 
 import json
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -16,6 +17,7 @@ from tokenizers import Tokenizer
 
 import litellm
 from litellm.constants import TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
+from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding
 from litellm.proxy.spend_tracking.budget_reservation import _count_input_tokens
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import token_counter as bridge
@@ -23,6 +25,9 @@ from litellm.utils import claude_json_str
 
 MODEL: Final = "claude-sonnet-4-5-20250929"
 CL100K_MODEL: Final = "gpt-4"
+O200K_MODEL: Final = "gpt-4o"
+TOKENIZERS: Final[tuple[bridge.RustTokenizer, ...]] = ("anthropic", "cl100k_base", "o200k_base")
+RANK_FILE_LINES: Final = MappingProxyType({"cl100k_base": 100_256, "o200k_base": 199_998})
 BODY: Final = json.dumps({"model": MODEL, "messages": [{"role": "user", "content": "hello"}]}).encode()
 
 
@@ -50,7 +55,7 @@ class _RecordingCounter:
 
 
 class _RecordingFactory:
-    """Stands in for the native `TokenCounter` class: callable for tokenizer JSON, `from_cl100k_ranks` for ranks."""
+    """Stands in for the native `TokenCounter` class: callable for tokenizer JSON, `from_*_ranks` for rank files."""
 
     def __init__(self) -> None:
         self.counters: list[_RecordingCounter] = []
@@ -64,6 +69,10 @@ class _RecordingFactory:
     def from_cl100k_ranks(self, rank_file: str) -> _RecordingCounter:
         self.rank_files.append(rank_file)
         return self("cl100k_base")
+
+    def from_o200k_ranks(self, rank_file: str) -> _RecordingCounter:
+        self.rank_files.append(rank_file)
+        return self("o200k_base")
 
 
 class _RaisingCounter:
@@ -86,6 +95,9 @@ class _RaisingFactory:
     def from_cl100k_ranks(self, rank_file: str) -> _RaisingCounter:
         return _RaisingCounter(self.error)
 
+    def from_o200k_ranks(self, rank_file: str) -> _RaisingCounter:
+        return _RaisingCounter(self.error)
+
 
 @pytest.fixture(autouse=True)
 def _reset_bridge(monkeypatch: pytest.MonkeyPatch):
@@ -100,7 +112,7 @@ def _reset_bridge(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tokenizer", ("anthropic", "cl100k_base"))
+@pytest.mark.parametrize("tokenizer", TOKENIZERS)
 async def test_disabled_bridge_never_constructs_a_counter(tokenizer: bridge.RustTokenizer) -> None:
     factory: Final = _RecordingFactory()
     litellm.rust(False)
@@ -127,18 +139,20 @@ async def test_enabled_bridge_returns_typed_count_and_reuses_one_counter() -> No
 
 
 @pytest.mark.asyncio
-async def test_cl100k_counter_is_built_from_the_vendored_rank_file_once() -> None:
+@pytest.mark.parametrize("tokenizer", ("cl100k_base", "o200k_base"))
+async def test_tiktoken_counter_is_built_from_the_vendored_rank_file_once(tokenizer: bridge.RustTokenizer) -> None:
     factory: Final = _RecordingFactory()
     litellm.rust(True)
     bridge.TOKEN_COUNTER.override(factory)
 
-    first: Final = await bridge.count_input_tokens(BODY, "cl100k_base")
-    second: Final = await bridge.count_input_tokens(BODY, "cl100k_base")
+    first: Final = await bridge.count_input_tokens(BODY, tokenizer)
+    second: Final = await bridge.count_input_tokens(BODY, tokenizer)
 
     assert first == second == bridge.InputTokenCount(model=MODEL, input_tokens=42)
     assert len(factory.rank_files) == 1
     assert factory.rank_files[0].startswith("IQ== 0\n")
-    assert factory.rank_files[0].count("\n") == 100_256
+    assert factory.rank_files[0].count("\n") == RANK_FILE_LINES[tokenizer]
+    assert factory.counters[0].tokenizer_json == tokenizer
     assert factory.counters[0].bodies == [BODY, BODY]
 
 
@@ -150,10 +164,12 @@ async def test_each_tokenizer_gets_its_own_cached_counter() -> None:
 
     await bridge.count_input_tokens(BODY, "anthropic")
     await bridge.count_input_tokens(BODY, "cl100k_base")
+    await bridge.count_input_tokens(BODY, "o200k_base")
     await bridge.count_input_tokens(BODY, "anthropic")
+    await bridge.count_input_tokens(BODY, "o200k_base")
 
-    assert [counter.tokenizer_json == "cl100k_base" for counter in factory.counters] == [False, True]
-    assert [len(counter.bodies) for counter in factory.counters] == [2, 1]
+    assert [counter.tokenizer_json for counter in factory.counters][1:] == ["cl100k_base", "o200k_base"]
+    assert [len(counter.bodies) for counter in factory.counters] == [2, 1, 2]
 
 
 @pytest.mark.asyncio
@@ -161,12 +177,11 @@ async def test_missing_native_module_falls_back(monkeypatch: pytest.MonkeyPatch)
     litellm.rust(True)
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
 
-    assert await bridge.count_input_tokens(BODY, "anthropic") is None
-    assert await bridge.count_input_tokens(BODY, "cl100k_base") is None
+    assert [await bridge.count_input_tokens(BODY, tokenizer) for tokenizer in TOKENIZERS] == [None, None, None]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tokenizer", ("anthropic", "cl100k_base"))
+@pytest.mark.parametrize("tokenizer", TOKENIZERS)
 async def test_declined_request_falls_back(tokenizer: bridge.RustTokenizer) -> None:
     litellm.rust(True)
     bridge.TOKEN_COUNTER.override(_RaisingFactory(_FakeDeclined("request has no messages")))
@@ -175,7 +190,7 @@ async def test_declined_request_falls_back(tokenizer: bridge.RustTokenizer) -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tokenizer", ("anthropic", "cl100k_base"))
+@pytest.mark.parametrize("tokenizer", TOKENIZERS)
 async def test_runtime_failure_falls_back(tokenizer: bridge.RustTokenizer) -> None:
     litellm.rust(True)
     bridge.TOKEN_COUNTER.override(_RaisingFactory(RuntimeError("encode failed")))
@@ -197,17 +212,36 @@ async def test_runtime_failure_falls_back(tokenizer: bridge.RustTokenizer) -> No
         ("my-router-alias", "cl100k_base"),
         ("azure/gpt-4o", "cl100k_base"),
         ("command-r-plus", "cl100k_base"),
-        ("gpt-4o", None),
-        ("gpt-4o-mini", None),
-        ("gpt-4.1", None),
-        ("gpt-5", None),
-        ("o3", None),
+        ("gpt-4o", "o200k_base"),
+        ("gpt-4o-mini", "o200k_base"),
+        ("gpt-4o-2024-08-06", "o200k_base"),
+        ("chatgpt-4o-latest", "o200k_base"),
+        ("gpt-4.1", "o200k_base"),
+        ("gpt-5", "o200k_base"),
+        ("gpt-5-mini", "o200k_base"),
+        ("o1", "o200k_base"),
+        ("o3", "o200k_base"),
+        ("o3-mini", "o200k_base"),
+        ("o4-mini", "o200k_base"),
         ("replicate/meta/llama-2-70b-chat", None),
         ("meta-llama/Llama-3-8b", None),
     ),
 )
 def test_rust_tokenizer_mirrors_python_tokenizer_selection(model: str, expected: bridge.RustTokenizer | None) -> None:
     assert bridge.rust_tokenizer(model) == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "python_encoding"),
+    (("text-davinci-003", "p50k_base"), ("gpt-oss-120b", "o200k_harmony")),
+)
+def test_rust_tokenizer_declines_tiktoken_encodings_rust_does_not_have(
+    monkeypatch: pytest.MonkeyPatch, model: str, python_encoding: str
+) -> None:
+    monkeypatch.setattr(litellm, "open_ai_chat_completion_models", litellm.open_ai_chat_completion_models | {model})
+
+    assert openai_tokenizer_encoding(model).name == python_encoding
+    assert bridge.rust_tokenizer(model) is None
 
 
 def test_rust_tokenizer_declines_the_cohere_tokenizer_download(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,18 +267,25 @@ def test_rust_tokenizer_declines_legacy_message_accounting_python_prices_differe
     assert bridge.rust_tokenizer(CL100K_MODEL) == "cl100k_base"
 
 
-@pytest.mark.parametrize("model", (MODEL, "gpt-4", "gpt-4o"))
+@pytest.mark.parametrize("model", (MODEL, CL100K_MODEL, O200K_MODEL, "gpt-5", "o3"))
 def test_rust_tokenizer_names_the_encoding_python_actually_counts_with(model: str) -> None:
-    text: Final = "Hello, world! \u00e9\u00e8 12345 \u3053\u3093\u306b\u3061\u306f <|endoftext|>\r\n" * 10
+    text: Final = (
+        "Hello, world! camelCase ABCdef \u00e9\u00e8 12345 \u3053\u3093\u306b\u3061\u306f <|endoftext|>\r\n" * 9
+    )
     python_count: Final = litellm.token_counter(model=model, text=text)
     cl100k_count: Final = len(tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=()))
+    o200k_count: Final = len(tiktoken.get_encoding("o200k_base").encode(text, disallowed_special=()))
+    assert cl100k_count != o200k_count
     match bridge.rust_tokenizer(model):
         case "cl100k_base":
             assert python_count == cl100k_count
+        case "o200k_base":
+            assert python_count == o200k_count
         case "anthropic":
-            assert python_count == len(Tokenizer.from_str(claude_json_str).encode(text).ids) != cl100k_count
+            assert python_count == len(Tokenizer.from_str(claude_json_str).encode(text).ids)
+            assert python_count not in {cl100k_count, o200k_count}
         case None:
-            assert python_count != cl100k_count
+            pytest.fail(f"{model} must have a Rust tokenizer")
 
 
 def test_disabled_hf_download_routes_anthropic_models_to_cl100k_like_python(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -252,7 +293,7 @@ def test_disabled_hf_download_routes_anthropic_models_to_cl100k_like_python(monk
 
     assert bridge.rust_tokenizer(MODEL) == "cl100k_base"
     assert bridge.rust_tokenizer("meta-llama/Llama-3-8b") == "cl100k_base"
-    assert bridge.rust_tokenizer("gpt-4o") is None
+    assert bridge.rust_tokenizer(O200K_MODEL) == "o200k_base"
 
 
 def test_disabled_token_counter_declines_every_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -260,6 +301,7 @@ def test_disabled_token_counter_declines_every_model(monkeypatch: pytest.MonkeyP
 
     assert bridge.rust_tokenizer(MODEL) is None
     assert bridge.rust_tokenizer(CL100K_MODEL) is None
+    assert bridge.rust_tokenizer(O200K_MODEL) is None
 
 
 PARITY_REQUESTS: Final[tuple[dict[str, object], ...]] = (
@@ -328,6 +370,8 @@ PARITY_REQUESTS: Final[tuple[dict[str, object], ...]] = (
 PARITY_MODELS: Final[tuple[tuple[str, bridge.RustTokenizer], ...]] = (
     (MODEL, "anthropic"),
     (CL100K_MODEL, "cl100k_base"),
+    (O200K_MODEL, "o200k_base"),
+    ("gpt-5", "o200k_base"),
 )
 
 
@@ -351,19 +395,22 @@ async def test_native_count_matches_python_budget_counter(
 
 
 @pytest.mark.asyncio
-async def test_cl100k_counts_long_text_exactly_where_python_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(("model", "tokenizer"), ((CL100K_MODEL, "cl100k_base"), (O200K_MODEL, "o200k_base")))
+async def test_tiktoken_counts_long_text_exactly_where_python_chunks(
+    monkeypatch: pytest.MonkeyPatch, model: str, tokenizer: bridge.RustTokenizer
+) -> None:
     """Python encodes tiktoken text in fixed-size chunks (drift of up to one token per chunk boundary); Rust does not."""
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     litellm.rust(True)
     text: Final = "x " * 20_000
-    body: Final = {"model": CL100K_MODEL, "messages": [{"role": "user", "content": text}]}
-    encoding: Final = tiktoken.get_encoding("cl100k_base")
+    body: Final = {"model": model, "messages": [{"role": "user", "content": text}]}
+    encoding: Final = tiktoken.get_encoding(tokenizer)
     exact: Final = 3 + len(encoding.encode("user")) + len(encoding.encode(text)) + 3
     chunks: Final = -(-len(text) // TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS)
 
-    rust_count: Final = await bridge.count_input_tokens(json.dumps(body).encode(), "cl100k_base")
-    python_count: Final = _count_input_tokens(request_body=body, model=CL100K_MODEL)
+    rust_count: Final = await bridge.count_input_tokens(json.dumps(body).encode(), tokenizer)
+    python_count: Final = _count_input_tokens(request_body=body, model=model)
 
     assert rust_count is not None
     assert rust_count.input_tokens == exact
@@ -385,7 +432,7 @@ DECLINED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tokenizer", ("anthropic", "cl100k_base"))
+@pytest.mark.parametrize("tokenizer", TOKENIZERS)
 @pytest.mark.parametrize("request_body", DECLINED_REQUESTS)
 async def test_native_declines_shapes_python_prices_differently(
     monkeypatch: pytest.MonkeyPatch, request_body: dict[str, object], tokenizer: bridge.RustTokenizer
