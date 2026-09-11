@@ -539,6 +539,81 @@ class TestBedrockMantleServiceTier:
         assert "priority" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleReasoningSummary:
+    @pytest.mark.parametrize("summary", ["concise", "detailed"])
+    def test_unsupported_reasoning_summary_dropped_when_drop_params_true(self, summary):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": summary}},
+            model="openai.gpt-5.6-sol",
+            drop_params=True,
+        )
+        assert params["reasoning"] == {"effort": "medium"}
+
+    def test_reasoning_summary_only_field_drops_reasoning(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"summary": "detailed"}},
+            model="openai.gpt-5.6-sol",
+            drop_params=True,
+        )
+        assert "reasoning" not in params
+
+    @pytest.mark.parametrize("summary", ["concise", "detailed"])
+    def test_unsupported_reasoning_summary_raises_when_drop_params_false(self, summary):
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError) as excinfo:
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium", "summary": summary}},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+        assert summary in str(excinfo.value)
+        assert "reasoning.summary" in str(excinfo.value)
+        assert "drop_params" in str(excinfo.value)
+
+    @pytest.mark.parametrize("drop_params", [True, False])
+    def test_supported_reasoning_summary_kept(self, drop_params):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "auto"}},
+            model="openai.gpt-5.6-sol",
+            drop_params=drop_params,
+        )
+        assert params["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+    def test_reasoning_summary_kept_on_standard_path(self):
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+            model="openai.gpt-oss-120b",
+            drop_params=False,
+        )
+        assert params["reasoning"] == {"effort": "medium", "summary": "detailed"}
+
+    def test_absent_reasoning_untouched(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"stream": True},
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        assert params == {"stream": True}
+
+    def test_drop_logged_at_warning_level(self):
+        from unittest.mock import patch
+
+        cfg = BedrockMantleResponsesAPIConfig()
+        with patch("litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning") as mock_warning:
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+                model="openai.gpt-5.6-sol",
+                drop_params=True,
+            )
+        assert mock_warning.call_count == 1
+        assert "detailed" in str(mock_warning.call_args)
+
+
 class TestBedrockMantleCodexRequestEndToEnd:
     def test_codex_priority_tier_request_becomes_mantle_acceptable(self):
         cfg = BedrockMantleResponsesAPIConfig()
