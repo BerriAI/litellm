@@ -1,4 +1,5 @@
 import asyncio
+import datetime as dt
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -9,9 +10,16 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
+from litellm.types.utils import (
+    Choices,
+    GenericGuardrailAPIInputs,
+    GuardrailTracingDetail,
+    Message,
+    ModelResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2350,11 +2358,6 @@ class TestUndecoratedApplyGuardrailIsLogged:
         """LIT-7608 regression: the auto-wrapped pre_call apply_guardrail copies the request bucket
         into logging_obj.litellm_params["metadata"]. A post_call entry recorded later without the
         decorator (the Bedrock streaming hook) must not be shadowed by that stale copy."""
-        import datetime as dt
-
-        from litellm.litellm_core_utils.litellm_logging import Logging
-        from litellm.types.utils import Choices, Message, ModelResponse
-
         messages: Final = [{"role": "user", "content": "hello there"}]
         litellm_metadata: Final[dict] = {"user_api_key_user_id": "u1"}
         logging_obj: Final = Logging(
