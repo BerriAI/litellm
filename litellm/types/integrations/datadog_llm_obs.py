@@ -87,6 +87,7 @@ class LLMMetrics(TypedDict, total=False):
     cache_write_input_tokens: ReadOnly[float]
     non_cached_input_tokens: ReadOnly[float]
     reasoning_output_tokens: ReadOnly[float]
+    tool_output_tokens: ReadOnly[float]  # tokens in the tool results the request carried, counted before redaction
 
 
 class LLMObsPayload(TypedDict, total=False):
