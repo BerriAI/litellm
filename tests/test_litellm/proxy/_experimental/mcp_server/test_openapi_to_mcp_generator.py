@@ -1378,3 +1378,105 @@ class TestUpstreamStatusIsClassified:
         assert exc.value.status_code == status_code
         assert secret_body not in str(exc.value)
         assert str(exc.value) == f"upstream returned HTTP {status_code}"
+
+class TestBoundedOpenAPISpecLoading:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("max_bytes", [12, 13])
+    async def test_exact_size_and_smaller_specs_load(self, respx_mock, monkeypatch, max_bytes):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        route = respx_mock.get("https://93.184.216.34/spec.json").respond(200, content=b'{"paths":{}}')
+        assert await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=max_bytes) == {"paths": {}}
+        assert route.calls[0].request.headers["accept-encoding"] == "identity"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("headers", [{"content-length": "1000000"}, {"content-encoding": "gzip"}])
+    async def test_unsafe_response_headers_reject_before_reading(self, respx_mock, monkeypatch, headers):
+        import httpx
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            OpenAPISpecProbeLimitError,
+            load_openapi_spec_async,
+        )
+
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        closed = []
+
+        class UnreadableStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                pytest.fail("Oversized or compressed response must not be consumed")
+                yield b""
+
+            async def aclose(self):
+                closed.append(True)
+
+        respx_mock.get("https://93.184.216.34/spec.json").respond(200, headers=headers, stream=UnreadableStream())
+        with pytest.raises(OpenAPISpecProbeLimitError):
+            await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=12)
+        assert closed == [True]
+
+    @pytest.mark.asyncio
+    async def test_chunked_response_is_bounded_and_closed(self, respx_mock, monkeypatch):
+        import httpx
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            OpenAPISpecProbeLimitError,
+            load_openapi_spec_async,
+        )
+
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        consumed = []
+        closed = []
+
+        class ChunkedStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                for index in range(10):
+                    consumed.append(index)
+                    yield b"x" * 65536
+
+            async def aclose(self):
+                closed.append(True)
+
+        respx_mock.get("https://93.184.216.34/spec.json").respond(200, stream=ChunkedStream())
+        with pytest.raises(OpenAPISpecProbeLimitError, match="size limit"):
+            await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=65536)
+        assert consumed == [0, 1]
+        assert closed == [True]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("target", ["https://93.184.216.35/final.json", "http://127.0.0.1/private.json"])
+    async def test_bounded_spec_redirects_preserve_ssrf_protection(self, respx_mock, monkeypatch, target):
+        from litellm.litellm_core_utils.url_utils import SSRFError
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        respx_mock.get("https://93.184.216.34/spec.json").respond(302, headers={"location": target})
+        destination = respx_mock.get(target).respond(200, json={"paths": {}})
+        if "127.0.0.1" in target:
+            with pytest.raises(SSRFError):
+                await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=100)
+            assert not destination.called
+        else:
+            assert await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=100) == {"paths": {}}
+            assert destination.call_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("loop", [False, True])
+    async def test_redirects_are_bounded_when_validation_is_disabled(self, respx_mock, loop):
+        import httpx
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import _BoundedOpenAPIFetcher
+
+        source = respx_mock.get("https://example.com/spec.json").respond(
+            302, headers={"location": "/spec.json" if loop else "/final.json"}
+        )
+        destination = respx_mock.get("https://example.com/final.json").respond(200, json={"paths": {}})
+        async with httpx.AsyncClient() as client:
+            fetcher = _BoundedOpenAPIFetcher(client, 100)
+            if loop:
+                with pytest.raises(ValueError, match="Too many specification redirects"):
+                    await fetcher.get("https://example.com/spec.json", follow_redirects=True)
+                assert source.call_count == 11
+                assert not destination.called
+            else:
+                response = await fetcher.get("https://example.com/spec.json", follow_redirects=True)
+                assert response.json() == {"paths": {}}
+                assert destination.call_count == 1
