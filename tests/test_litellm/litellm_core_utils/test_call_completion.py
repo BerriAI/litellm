@@ -177,14 +177,20 @@ async def test_async_ocr_wrapper_injects_completion_after_fresh_deployment_kwarg
     native_completion: Final = RecordingCompletion()
     original_response: Final = object()
     replacement_response: Final = object()
+    shared_metadata: Final = {"request": "shared"}
+    replacement_kwargs: Final[dict[str, object]] = {"metadata": shared_metadata}
+    hook_input: dict[str, object] | None = None
 
     async def fresh_kwargs(kwargs: dict[str, object], call_type: str) -> dict[str, object]:
-        return {key: value for key, value in kwargs.items() if key != "_litellm_call_completion"}
+        nonlocal hook_input
+        hook_input = kwargs
+        return replacement_kwargs
 
     async def aocr(**kwargs: object) -> object:
         completion = kwargs.get("_litellm_call_completion")
         assert isinstance(completion, CallCompletion)
         assert completion.attach(native_completion)
+        assert kwargs["metadata"] is shared_metadata
         return original_response
 
     async def replace_response(request_data: dict[str, object], response: object, call_type: object) -> object:
@@ -201,6 +207,10 @@ async def test_async_ocr_wrapper_injects_completion_after_fresh_deployment_kwarg
 
     assert result is replacement_response
     assert native_completion.successes == [replacement_response]
+    assert hook_input is not None
+    assert "_litellm_call_completion" not in hook_input
+    assert "_litellm_call_completion" not in replacement_kwargs
+    assert replacement_kwargs["metadata"] is shared_metadata
 
 
 @pytest.mark.asyncio
