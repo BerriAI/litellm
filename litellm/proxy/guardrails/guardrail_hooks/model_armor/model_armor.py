@@ -1245,7 +1245,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             armor_response: Final = await self.make_model_armor_request(
                 content=content, source=source, request_data=request_data
             )
-        except ModelArmorAPIError as e:
+        except (ModelArmorAPIError, httpx.HTTPError) as e:
             error_end_time: Final = time.time()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=str(e),
@@ -1256,7 +1256,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 end_time=error_end_time,
                 duration=error_end_time - start_time,
             )
-            raise
+            return inputs
 
         flagged: Final = self._should_block_content(armor_response, allow_sanitization=False)
         end_time: Final = time.time()
@@ -1269,14 +1269,6 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             end_time=end_time,
             duration=end_time - start_time,
         )
-        if flagged:
-            raise HTTPException(
-                status_code=400,
-                detail=self._build_block_error_detail(
-                    "Response blocked by Model Armor" if input_type == "response" else "Violated content safety policy",
-                    armor_response,
-                ),
-            )
         return inputs
 
     @staticmethod
