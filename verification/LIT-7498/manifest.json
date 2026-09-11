@@ -2,6 +2,7 @@
   "base": "9a715df212d777bbd43f4cab05731978c708ec63",
   "tip": "40f01e2fa5832f14e4afa5ff90a5d3093b39f9fe",
   "files": {
+    "FINAL_VALIDATION.md": "9bc3b1417d95ee12d29c1e0223b1575936405179fa1b1a21df1640d5a0e396cd",
     "after/discovered-register.json": "66e69d402c5e8dfd4f2b1fd1ca4ad4cd1272a6a31c03960e0ffc6c9c0d5b5ba8",
     "after/discovered-register.status": "97a58cc66d1cd6b51466af8ed52d6a38053b5572fee09a0ae8859c26b82bdf67",
     "after/discovered-register.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -46,7 +47,9 @@
     "before-oauth.png": "cd430316414cfdca0df95eeee5f67a38fc1db209d107ee595f80261dbee9e1e4",
     "branch-coverage.json": "ea11f8446dbfad2f58e3c479ca1608689cff767de38fa9dd6789719ff7745646",
     "changed-coverage.json": "30aafe288fffd7c1e689e6e8134fd964cd409993f470af2e24c859a8cafc5304",
+    "codecov-changed-lines.json": "eb927c2c56e8e2d29757a66329a66c30c610d387c18818255a0a54de57b775e1",
     "config.yaml": "5516471e9cbb6516431692cab450b74283a8dd83ea139da9172cb4f2b13b716b",
+    "final-status.json": "739df9c4d8b91d10da87fc5a69511afdd7cfd4b543fb586dccef7bcd90dbea55",
     "lifecycle-after.log": "a95750510cf97ef99b6ff14bb2318fb86646af7915249fd11d9fc4dc63e4dc0a",
     "lifecycle-before.log": "db5a4114b820e8b36f5c9017398419d182311241707c330e5351904225f64be8",
     "lifecycle-live-after.log": "ec11a3f4461d8458755eae3300b21b4bbbb6bdc7e72a33def2dae046f755eaf6",
