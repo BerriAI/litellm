@@ -206,4 +206,4 @@ def test_raise_if_missing_package_is_noop_when_present() -> None:
         raise_if_missing_package,
     )
 
-    raise_if_missing_package()  # must not raise
+    assert raise_if_missing_package() is None
