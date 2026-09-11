@@ -1843,6 +1843,9 @@ def client(original_function):
                 elif _caching_handler_response.embedding_all_elements_cache_hit is True:
                     return _caching_handler_response.final_embedding_cached_response
 
+            if _llm_caching_handler.preset_cache_key is not None:
+                logging_obj.litellm_params["preset_cache_key"] = _llm_caching_handler.preset_cache_key
+
             # CHECK MAX TOKENS
             if (
                 kwargs.get("max_tokens", None) is not None
