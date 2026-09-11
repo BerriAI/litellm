@@ -4,6 +4,8 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
+import hashlib
+import json
 import os
 from collections.abc import Awaitable, Callable, Generator
 from contextlib import AbstractAsyncContextManager
@@ -342,6 +344,22 @@ class MCPClient:
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
+
+    async def discovery_auth_fingerprint(self) -> str:
+        request: Final = httpx.Request("POST", self.server_url or "http://localhost/", headers=self._get_auth_headers())
+        if self._resolved_auth is None:
+            return self._hash_discovery_auth(request)
+        flow: Final = self._resolved_auth.async_auth_flow(request)
+        try:
+            authenticated: Final = await flow.__anext__()
+            return self._hash_discovery_auth(authenticated)
+        finally:
+            await flow.aclose()
+
+    @staticmethod
+    def _hash_discovery_auth(request: httpx.Request) -> str:
+        material: Final = json.dumps((str(request.url), tuple(sorted(request.headers.multi_items()))))
+        return hashlib.sha256(material.encode()).hexdigest()
 
     def _create_transport_context(
         self,
