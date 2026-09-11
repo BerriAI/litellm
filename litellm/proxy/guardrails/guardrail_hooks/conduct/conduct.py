@@ -73,9 +73,7 @@ class ConductGuardrail(_ParentClass):  # type: ignore[valid-type,misc]
     # ``guard_check_response`` (tracked in the plugin repo). Advertising
     # only pre_call today prevents silent bypass of ``during_call``
     # configurations — see veria-ai finding on BerriAI/litellm#38143.
-    SUPPORTED_EVENT_HOOKS: ClassVar[tuple[GuardrailEventHooks, ...]] = (
-        GuardrailEventHooks.pre_call,
-    )
+    SUPPORTED_EVENT_HOOKS: ClassVar[tuple[GuardrailEventHooks, ...]] = (GuardrailEventHooks.pre_call,)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         if _IMPORT_ERROR is not None or _BaseConductGuard is None:
