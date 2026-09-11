@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import litellm
-from litellm.router import Router
+from litellm.router import Router, _has_mcp_tool, _is_silent_experiment_marker
 
 
 class _NonCopyableSpan:
@@ -488,3 +488,20 @@ async def test_silent_experiment_ageneric_error_is_caught():
             original_function=litellm.aresponses,
             silent_kwargs={"input": [{"role": "user", "content": "hi"}]},
         )
+
+
+def test_is_silent_experiment_marker():
+    assert _is_silent_experiment_marker({"is_silent_experiment": True}) is True
+    assert _is_silent_experiment_marker({"is_silent_experiment": False}) is False
+    assert _is_silent_experiment_marker({}) is False
+    assert _is_silent_experiment_marker(None) is False
+    assert _is_silent_experiment_marker("is_silent_experiment") is False
+
+
+def test_has_mcp_tool():
+    assert _has_mcp_tool([{"type": "mcp", "server_label": "x"}]) is True
+    assert _has_mcp_tool([{"type": "web_search"}, {"type": "mcp"}]) is True
+    assert _has_mcp_tool([{"type": "web_search"}]) is False
+    assert _has_mcp_tool([]) is False
+    assert _has_mcp_tool(None) is False
+    assert _has_mcp_tool("mcp") is False
