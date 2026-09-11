@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
@@ -29,6 +30,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
     websocket_passthrough_request,
+    _with_trace_context,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -43,6 +45,15 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 import litellm
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
+
+
+def test_with_trace_context_without_opentelemetry(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(sys.modules, "litellm.integrations.otel.plumbing.context", None)
+
+    headers = _with_trace_context({"authorization": "x"}, {})
+
+    assert headers == {"authorization": "x"}
+    assert "traceparent" not in headers
 
 
 # Test is_multipart

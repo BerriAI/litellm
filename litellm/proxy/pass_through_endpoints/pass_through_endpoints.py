@@ -948,7 +948,6 @@ async def pass_through_request(
             general_settings.pass_through_request_timeout, then 600s.
     """
     from litellm.exceptions import ModifyResponseException
-    from litellm.integrations.otel.plumbing.context import inject_trace_context
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
         PassthroughGuardrailHandler,
@@ -979,7 +978,7 @@ async def pass_through_request(
             headers=headers,
             forward_headers=forward_headers,
         )
-        headers = inject_trace_context(headers, inbound_headers=_safe_get_request_headers(request))
+        headers = _with_trace_context(headers, inbound_headers=_safe_get_request_headers(request))
 
         requested_query_params: dict | None = query_params or dict(request.query_params)
 
@@ -2137,6 +2136,14 @@ def _upstream_close_to_relay(task_results: Iterable[object]) -> Close | None:
 _WEBSOCKET_FORWARDED_HEADERS: Final = frozenset(("authorization", "x-api-key", "x-goog-user-project"))
 
 
+def _with_trace_context(headers: Mapping[str, str], inbound_headers: Mapping[str, str]) -> dict[str, str]:
+    try:
+        from litellm.integrations.otel.plumbing.context import inject_trace_context
+    except ImportError:
+        return dict(headers)  # mutable-ok: matches inject_trace_context's carrier return type
+    return inject_trace_context(headers, inbound_headers=inbound_headers)
+
+
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
@@ -2161,7 +2168,6 @@ async def websocket_passthrough_request(
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
     """
-    from litellm.integrations.otel.plumbing.context import inject_trace_context
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
     from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -2189,7 +2195,7 @@ async def websocket_passthrough_request(
             if forward_headers and header_name.lower() in _WEBSOCKET_FORWARDED_HEADERS
         },
     }
-    upstream_headers: Final = inject_trace_context(forwarded_headers, inbound_headers=incoming_headers)
+    upstream_headers: Final = _with_trace_context(forwarded_headers, inbound_headers=incoming_headers)
 
     # Initialize logging object similar to HTTP passthrough
     team_callbacks: Final = _resolve_team_callback_wiring(
