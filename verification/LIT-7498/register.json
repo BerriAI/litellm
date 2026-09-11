@@ -1,0 +1,1 @@
+{"client_name":"LiteLLM local verification","redirect_uris":["http://localhost:9999/callback"],"grant_types":["authorization_code"],"response_types":["code"],"token_endpoint_auth_method":"none"}

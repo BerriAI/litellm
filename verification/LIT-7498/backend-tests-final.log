@@ -1,0 +1,45 @@
+........................................................................ [  6%]
+........................................................................ [ 13%]
+........................................................................ [ 20%]
+........................................................................ [ 26%]
+........................................................................ [ 33%]
+........................................................................ [ 40%]
+........................................................................ [ 46%]
+........................................................................ [ 53%]
+........................................................................ [ 60%]
+........................................................................ [ 66%]
+........................................................................ [ 73%]
+........................................................................ [ 80%]
+........................................................................ [ 86%]
+........................................................................ [ 93%]
+......................................................................   [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'langfuse_environment' on TypedDict class 'StandardCallbackDynamicParams' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+tests/test_litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py::test_native_client_authorize_without_the_proxy_resource_keeps_the_mcp_flow
+tests/test_litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py::test_native_client_login_walks_discovery_consent_token_refresh_and_revoke
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/jwt/api_jwt.py:147: InsecureKeyLengthWarning: The HMAC key is 25 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    return self._jws.encode(
+
+tests/test_litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py::test_native_client_authorize_without_the_proxy_resource_keeps_the_mcp_flow
+tests/test_litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py::test_native_client_login_walks_discovery_consent_token_refresh_and_revoke
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/jwt/api_jwt.py:368: InsecureKeyLengthWarning: The HMAC key is 25 bytes long, which is below the minimum recommended length of 32 bytes for SHA256. See RFC 7518 Section 3.2.
+    decoded = self.decode_complete(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+
+--------- coverage: platform darwin, python 3.12.13-final-0 ----------
+Coverage XML written to file /Users/jvalluru/LiteLLM-work/lit-7498-verification/coverage.xml
+Coverage JSON written to file /Users/jvalluru/LiteLLM-work/lit-7498-verification/coverage.json
+
+1078 passed, 7 warnings in 206.64s (0:03:26)

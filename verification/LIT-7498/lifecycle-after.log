@@ -1,0 +1,21 @@
+...                                                                      [100%]
+=============================== warnings summary ===============================
+.venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'langfuse_environment' on TypedDict class 'StandardCallbackDynamicParams' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+
+--------- coverage: platform darwin, python 3.12.13-final-0 ----------
+Coverage XML written to file /Users/jvalluru/LiteLLM-work/lit-7498-verification/coverage.xml
+Coverage JSON written to file /Users/jvalluru/LiteLLM-work/lit-7498-verification/coverage.json
+
+3 passed, 588 deselected, 3 warnings in 6.62s

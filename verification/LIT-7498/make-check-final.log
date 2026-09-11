@@ -1,0 +1,64 @@
+uv sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
+Audited 232 packages in 28ms
+uv run --no-sync python scripts/prisma_generate_if_needed.py
+Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
+cd ui/litellm-dashboard && ../../scripts/with_dashboard_node.sh npm install --no-audit --no-fund
+
+up to date in 452ms
+bootstrap: .env left untouched
+bootstrap: done
+./scripts/pre_commit_lint.sh
+check: logging full output to /Users/jvalluru/LiteLLM-work/litellm/.git/worktrees/litellm-lit-7498/pre_commit_lint.log
+check: nothing staged; scoping to the working tree's diff against the merge base with origin/litellm_internal_staging:
+    README.md
+    litellm/proxy/_experimental/mcp_server/faults/__init__.py
+    litellm/proxy/_experimental/mcp_server/faults/classify.py
+    litellm/proxy/_experimental/mcp_server/faults/render_oauth.py
+    litellm/proxy/_experimental/mcp_server/faults/types.py
+    litellm/proxy/_experimental/mcp_server/mcp_server_manager.py
+    tests/test_litellm/proxy/_experimental/mcp_server/faults/test_classify.py
+    tests/test_litellm/proxy/_experimental/mcp_server/faults/test_render_oauth.py
+    tests/test_litellm/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
+    tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+check: linting Python (make lint)
+uv sync --inexact --frozen --group proxy-dev --group e2e-dev
+Audited 205 packages in 3ms
+uv run --no-sync python scripts/prisma_generate_if_needed.py
+Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
+cd litellm && uv run --no-sync ruff check . && cd ..
+uv run --no-sync python scripts/ruff_strict_gate.py --base "origin/litellm_internal_staging"
+uv run --no-sync python scripts/type_discipline_gate.py --base "origin/litellm_internal_staging"
+uv run --no-sync python scripts/test_quality_gate.py --base "origin/litellm_internal_staging"
+uv run --no-sync python scripts/type_check_gate.py --base "origin/litellm_internal_staging"
+uv run --no-sync basedpyright tests/e2e
+cd litellm && uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py && cd ..
+No LiteLLM type hints found.
+All checks passed!
+5 files already formatted
+uv run --no-sync ruff check --config ruff-tests.toml tests
+All checks passed!
+[from litellm import *] OK! no issues!
+OK: every strict rule is within its codebase ceiling (base origin/litellm_internal_staging)
+0 errors, 0 warnings, 0 notes
+OK: every TQ rule is within its test-suite ceiling (base origin/litellm_internal_staging)
+OK: every LIT rule is within its codebase ceiling (base origin/litellm_internal_staging)
+OK: every rule is within its basedpyright limit or no higher than base (138494 errors total)
+check: ruff format --check (scoped litellm files)
+5 files already formatted
+check: checking the lazy OpenAPI snapshot and dashboard API types are in sync (npm run gen:api)
+Prisma client already generated for litellm/proxy/schema.prisma (prisma 0.11.0); skipping prisma generate
+wrote 33 feature fragments to /Users/jvalluru/LiteLLM-work/litellm-lit-7498/litellm/proxy/_lazy_openapi_snapshot.json
+
+> litellm-dashboard@0.1.0 gen:api
+> node scripts/gen-api-types.mjs
+
+✨ openapi-typescript 7.13.0
+🚀 /var/folders/n4/7jf8qfys5256pzfjlkkcmzj80000gn/T/litellm-openapi-aqVeNa/openapi.json → /Users/jvalluru/LiteLLM-work/litellm-lit-7498/ui/litellm-dashboard/src/lib/http/schema.d.ts [538.9ms]
+check: summary
+    ran:     Python lint (make lint)
+    skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)
+    ran:     test-tree lint (ruff-tests.toml + test-quality budget)
+    skipped: dashboard lint (prettier + eslint + lint budgets) (no dashboard files in scope)
+    ran:     dashboard API-type sync (npm run gen:api)
+check: PASS
+check: full log: /Users/jvalluru/LiteLLM-work/litellm/.git/worktrees/litellm-lit-7498/pre_commit_lint.log

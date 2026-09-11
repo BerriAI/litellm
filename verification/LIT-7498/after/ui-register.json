@@ -1,0 +1,1 @@
+{"detail":"the upstream authorization server refused dynamic client registration (HTTP 403). This provider may require a pre-registered OAuth client. Configure client_id and, if required by the provider, client_secret for this MCP server to skip dynamic registration"}

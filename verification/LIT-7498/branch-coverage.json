@@ -1,0 +1,149 @@
+{
+  "tip": "40f01e2fa5832f14e4afa5ff90a5d3093b39f9fe",
+  "base": "9a715df212d777bbd43f4cab05731978c708ec63",
+  "files": [
+    {
+      "file": "litellm/proxy/_experimental/mcp_server/faults/__init__.py",
+      "changed_executable_lines": [],
+      "uncovered_changed_lines": [],
+      "touched_functions": []
+    },
+    {
+      "file": "litellm/proxy/_experimental/mcp_server/faults/classify.py",
+      "changed_executable_lines": [
+        131,
+        132
+      ],
+      "uncovered_changed_lines": [],
+      "touched_functions": [
+        {
+          "function": "classify_upstream_dcr_rejection",
+          "covered_branches": 4,
+          "missing_branches": []
+        }
+      ]
+    },
+    {
+      "file": "litellm/proxy/_experimental/mcp_server/faults/render_oauth.py",
+      "changed_executable_lines": [
+        14,
+        38,
+        39,
+        46,
+        47,
+        52,
+        53,
+        63,
+        80,
+        81,
+        109,
+        110
+      ],
+      "uncovered_changed_lines": [],
+      "touched_functions": [
+        {
+          "function": "_registration_refused_description",
+          "covered_branches": 0,
+          "missing_branches": []
+        },
+        {
+          "function": "_render_caller_rejected",
+          "covered_branches": 0,
+          "missing_branches": []
+        },
+        {
+          "function": "render_token_fault",
+          "covered_branches": 9,
+          "missing_branches": [
+            [
+              87,
+              93
+            ]
+          ]
+        },
+        {
+          "function": "dcr_fault_detail",
+          "covered_branches": 8,
+          "missing_branches": [
+            [
+              105,
+              106
+            ],
+            [
+              111,
+              113
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "file": "litellm/proxy/_experimental/mcp_server/faults/types.py",
+      "changed_executable_lines": [
+        80,
+        81,
+        82,
+        83,
+        86
+      ],
+      "uncovered_changed_lines": [],
+      "touched_functions": []
+    },
+    {
+      "file": "litellm/proxy/_experimental/mcp_server/mcp_server_manager.py",
+      "changed_executable_lines": [
+        258,
+        1951,
+        1952,
+        1953,
+        1967,
+        1973,
+        2065,
+        2070,
+        2100,
+        2127,
+        2133,
+        2145,
+        2146,
+        2147,
+        2148,
+        2149,
+        2150,
+        2151
+      ],
+      "uncovered_changed_lines": [],
+      "touched_functions": [
+        {
+          "function": "_expire_temporary_oauth_discovery",
+          "covered_branches": 2,
+          "missing_branches": []
+        },
+        {
+          "function": "_publish_resolved_oauth_server",
+          "covered_branches": 6,
+          "missing_branches": []
+        },
+        {
+          "function": "_get_or_start_oauth_discovery_task",
+          "covered_branches": 8,
+          "missing_branches": []
+        },
+        {
+          "function": "ensure_oauth_metadata_discovered",
+          "covered_branches": 11,
+          "missing_branches": [
+            [
+              2134,
+              -2100
+            ]
+          ]
+        },
+        {
+          "function": "_rejoin_oauth_metadata_discovery",
+          "covered_branches": 4,
+          "missing_branches": []
+        }
+      ]
+    }
+  ]
+}

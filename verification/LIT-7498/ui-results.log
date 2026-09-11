@@ -1,0 +1,24 @@
+before Callers bring their own upstream token for this auth type, so LiteLLM never stores tokens. To preview tools and configure the tool allowlist, authorize against the upstream here: the token stays in this browser session only and is never saved to LiteLLM. An OAuth app configured below IS saved with the server, so internal users who authorize from the Tools page go through it.
+
+OAuth Client ID (optional)
+
+Set this to make everyone authorize through a specific app; required for upstreams without dynamic client registration (e.g. a pre-registered Slack app).
+
+OAuth Client Secret (optional)
+Gateway-hosted sign-in (DCR bridge)
+Remove the saved OAuth app on save (the server goes back to dynamic client registration)
+Authorize & Fetch Tools (browser-only)
+
+upstream registration failed with HTTP 403
+after onfigure the tool allowlist, authorize against the upstream here: the token stays in this browser session only and is never saved to LiteLLM. An OAuth app configured below IS saved with the server, so internal users who authorize from the Tools page go through it.
+
+OAuth Client ID (optional)
+
+Set this to make everyone authorize through a specific app; required for upstreams without dynamic client registration (e.g. a pre-registered Slack app).
+
+OAuth Client Secret (optional)
+Gateway-hosted sign-in (DCR bridge)
+Remove the saved OAuth app on save (the server goes back to dynamic client registration)
+Authorize & Fetch Tools (browser-only)
+
+the upstream authorization server refused dynamic client registration (HTTP 403). This provider may require a pre-registered OAuth client. Configure client_id and, if required by the provider, client_secret for this MCP server to skip dynamic registration

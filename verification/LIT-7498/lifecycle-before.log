@@ -1,0 +1,49 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_temporary_oauth_discovery_expires_without_more_requests _________
+
+    @pytest.mark.asyncio
+    async def test_temporary_oauth_discovery_expires_without_more_requests() -> None:
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="expiring-session", name="temporary", url="https://idp.example.com/mcp",
+            transport=MCPTransport.http, auth_type=MCPAuth.true_passthrough,
+            authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
+        )
+        manager._set_oauth_discovery_deferred(server.server_id, True)
+        resolved: Final = await manager.ensure_oauth_metadata_discovered(server)
+        assert manager._oauth_discovery_slot(server.server_id) is not None
+        loop: Final = asyncio.get_running_loop()
+        expired: Final = loop.create_future()
+        with patch.object(loop, "time", return_value=loop.time() + 301):
+            loop.call_later(0, expired.set_result, None)
+            await expired
+        assert resolved.authorization_url == server.authorization_url
+>       assert manager._oauth_discovery_slot(server.server_id) is None
+E       AssertionError: assert _OAuthDiscoverySlot(server_id='expiring-session', generation=1, task=<Task finished name='Task-2' coro=<MCPServerManag...erver/mcp_server_manager.py:1959> result=_OAuthDiscove...assthrough'>))>, consecutive_failures=0, retry_not_before=0.0) is None
+E        +  where _OAuthDiscoverySlot(server_id='expiring-session', generation=1, task=<Task finished name='Task-2' coro=<MCPServerManag...erver/mcp_server_manager.py:1959> result=_OAuthDiscove...assthrough'>))>, consecutive_failures=0, retry_not_before=0.0) = _oauth_discovery_slot('expiring-session')
+E        +    where _oauth_discovery_slot = <litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerManager object at 0x119cf1f70>._oauth_discovery_slot
+E        +    and   'expiring-session' = MCPServer(server_id='expiring-session', name='temporary', transport=<MCPTransport.http: 'http'>, auth_type=<MCPAuth.true_passthrough: 'true_passthrough'>).server_id
+
+tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py:12780: AssertionError
+---------------------------- Captured stdout setup -----------------------------
+[conftest] Module setup complete (worker: master)
+--------------------------- Captured stdout teardown ---------------------------
+[conftest] Module teardown complete (worker: master)
+=============================== warnings summary ===============================
+../litellm-lit-7498/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+../litellm-lit-7498/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+../litellm-lit-7498/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480
+  /Users/jvalluru/LiteLLM-work/litellm-lit-7498/.venv/lib/python3.12/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'langfuse_environment' on TypedDict class 'StandardCallbackDynamicParams' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_manager.py::test_temporary_oauth_discovery_expires_without_more_requests
+1 failed, 590 deselected, 3 warnings in 6.94s
