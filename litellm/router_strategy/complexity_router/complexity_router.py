@@ -25,7 +25,7 @@ from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import (
@@ -36,9 +36,11 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    is_codex_user_agent,
 )
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -46,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     request_contains_image_content,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -56,6 +59,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionImageObject,
     ChatCompletionTextObject,
+    ResponsesAPIResponse,
 )
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
@@ -364,7 +368,7 @@ def _parent_session_kwargs(request_kwargs: Mapping[str, Any] | None) -> Mapping[
     return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
 
 
-def _response_cost_or_none(response: ModelResponse) -> float | None:
+def _response_cost_or_none(response: ModelResponse | ResponsesAPIResponse) -> float | None:
     hidden_params: Final = response._hidden_params
     if not isinstance(hidden_params, dict):
         return None
@@ -387,6 +391,13 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | N
 _REMINDER_OPEN: Final = "<system-reminder>"
 _REMINDER_CLOSE: Final = "</system-reminder>"
 _DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
+_CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
+    ("<environment_context>", "</environment_context>"),
+    ("<recommended_plugins>", "</recommended_plugins>"),
+    ("<user_instructions>", "</user_instructions>"),
+    ("<environments_instructions>", "</environments_instructions>"),
+    ("# agents.md instructions for ", "</instructions>"),
+)
 
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
@@ -484,6 +495,42 @@ def _human_text(content: object, marker_pairs: tuple[tuple[str, str], ...] = _DE
     model and therefore the spend. An unclosed tag is not a block and is left intact.
     """
     return _strip_reminder_blocks(_message_text(content), marker_pairs)
+
+
+def _encrypted_classifier_task(
+    request_kwargs: Mapping[str, object] | None,
+    marker_pairs: tuple[tuple[str, str], ...],
+) -> dict[str, object] | None:
+    from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
+
+    raw_input: Final = (request_kwargs or EMPTY_MAPPING).get("input")
+    if not isinstance(raw_input, list) or (request_kwargs or EMPTY_MAPPING).get("messages"):
+        return None
+    try:
+        items: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(raw_input)
+    except ValidationError:
+        return None
+    current: Final = next(
+        (
+            item
+            for item in reversed(items)
+            if (messages := resolve_structured_messages(messages=None, request_kwargs={"input": [item]}))
+            and any(_iter_human_asks_newest_first(messages, marker_pairs))
+        ),
+        None,
+    )
+    if current is None or current.get("type") != "agent_message" or not isinstance(current.get("content"), list):
+        return None
+    try:
+        parts: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(current["content"])
+    except ValidationError:
+        return None
+    if not any(part.get("type") == "encrypted_content" and part.get("encrypted_content") for part in parts):
+        return None
+    return {
+        **current,
+        "content": [part for part in parts if part.get("type") in ("input_text", "encrypted_content")],
+    }
 
 
 def _iter_human_asks_newest_first(
@@ -591,6 +638,18 @@ def _last_human_ask_index(
     )
 
 
+def _is_reminder_only_turn(message: Mapping[str, object], marker_pairs: tuple[tuple[str, str], ...]) -> bool:
+    if message.get("role") != "user":
+        return False
+    content: Final = message.get("content")
+    if not isinstance(content, str) and not (
+        isinstance(content, list) and all(isinstance(part, Mapping) and part.get("type") == "text" for part in content)
+    ):
+        return False
+    text: Final = _message_text(content)
+    return bool(text.strip()) and not _strip_reminder_blocks(text, marker_pairs)
+
+
 def _newest_turn_is_human_ask(
     messages: Sequence[Mapping[str, object]] | None,
     marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS,
@@ -601,21 +660,23 @@ def _newest_turn_is_human_ask(
     Anchored on `_last_human_ask_index` so every surface's plumbing reads as a continuation:
     chat-completions tool turns are role=tool, Messages-surface tool_result turns flatten to empty
     human text, and a hybrid turn carrying an ask alongside a tool_result still counts as an ask.
-    Compared against the newest non-system message rather than the raw tail, because Claude Code
-    appends a system-role reminder after the human turn; that trailing plumbing is neither an ask
-    nor loop traffic and must not turn a fresh ask into a continuation. An unreadable request (no
-    messages) is treated as a continuation: there is no ask to classify, which is the same reading
-    `_extract_current_ask_and_system_prompt` gives it downstream.
+    Trailing system messages and complete text-only reminders do not turn a fresh ask into a
+    continuation. Assistant turns and non-text content, including tool results alongside reminders,
+    still form continuation boundaries. An unreadable request has no ask to classify.
     """
     if not messages:
         return False
-    newest_non_system: Final = next(
-        (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") != "system"),
+    newest_activity: Final = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if messages[index].get("role") != "system" and not _is_reminder_only_turn(messages[index], marker_pairs)
+        ),
         None,
     )
-    if newest_non_system is None:
+    if newest_activity is None:
         return False
-    return _last_human_ask_index(messages, marker_pairs) == newest_non_system
+    return _last_human_ask_index(messages, marker_pairs) == newest_activity
 
 
 def _iter_system_scope_texts(
@@ -1630,6 +1691,10 @@ class ComplexityRouter(CustomLogger):
             return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
+        if self.config.classifier_type in ("heuristic_first", "hybrid") and _encrypted_classifier_task(
+            request_kwargs, self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        ):
+            return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
             return await self._classify_heuristic_first(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type == "hybrid" and self.config.classifier_llm_config is not None:
@@ -1924,16 +1989,12 @@ class ComplexityRouter(CustomLogger):
         Call the configured classifier model with a system/user role split and prior-turn context.
 
         Builds a structured classification prompt with:
-        - System message: the stable classifier rubric AND the caller's own system prompt (task
-          constraints). This is the largest, most repeated part of the call, so keeping it in the
-          system role lets the provider prompt-cache it across a session's classifier calls.
-        - User message: the variable payload -- a few prior user turns for context and the current
-          ask to classify.
+        - System message: the stable classifier rubric.
+        - User message: the caller's system prompt quoted as task context, prior turns, and the current ask.
 
         Args:
             prompt: The current user ask text (already extracted as the real human ask, not tool results)
-            system_prompt: The caller's system prompt (task constraints), always included so later
-                turns never lose it
+            system_prompt: Caller task constraints, omitted from classification for Claude Code requests
             request_kwargs: Request metadata for spend attribution
             messages: Full message history for extracting prior turns and the trajectory signal
         """
@@ -1944,6 +2005,7 @@ class ComplexityRouter(CustomLogger):
             raise ValueError("classifier_llm_config is not set")
 
         include_assistant: Final = self.config.classifier_context_include_assistant_turns
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or {})
         context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
         prior_turns: Final = (
             _extract_prior_turns(
@@ -1953,26 +2015,30 @@ class ComplexityRouter(CustomLogger):
                 budget_chars=self.config.classifier_context_budget_chars,
                 per_turn_chars=self.config.classifier_context_per_turn_chars,
                 include_assistant=include_assistant,
-                marker_pairs=self._reminder_markers,
+                marker_pairs=marker_pairs,
             )
             if context_enabled
             else ()
         )
         has_prior_conversation: Final = (
             context_enabled
-            and len(
-                tuple(
-                    islice(
-                        _iter_context_turns_newest_first(messages or (), include_assistant, self._reminder_markers), 2
-                    )
-                )
-            )
+            and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))
             > 1
         )
 
+        encrypted_task: Final = _encrypted_classifier_task(request_kwargs, marker_pairs)
+        caller_system_prompt: Final = (
+            None
+            if any(
+                is_claude_code_user_agent(user_agent)
+                for metadata in (self._iter_metadata_dicts(request_kwargs) if request_kwargs is not None else ())
+                if isinstance(user_agent := metadata.get("user_agent"), str)
+            )
+            else system_prompt
+        )
         user_payload: Final = self._build_classifier_user_payload(
-            prompt=prompt,
-            system_prompt=system_prompt,
+            prompt="The delegated task in the following agent_message." if encrypted_task is not None else prompt,
+            system_prompt=caller_system_prompt,
             prior_turns=prior_turns,
             messages=messages,
             has_prior_conversation=has_prior_conversation,
@@ -2004,34 +2070,42 @@ class ComplexityRouter(CustomLogger):
         if llm_config.reasoning_effort is not None:
             classifier_call_params = MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
 
+        payload: Final = (
+            self._native_classifier_payload(messages_for_call, response_format, encrypted_task)
+            if encrypted_task is not None
+            else MappingProxyType(
+                {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
+            )
+        )
         proxy_server_request: Final = {
-            "body": {
-                "model": llm_config.model,
-                "messages": messages_for_call,
-                "response_format": response_format,
-                **classifier_call_params,
-            }
+            "originating_request_masked": masked_originating_request(request_kwargs),
+            "body": {"model": llm_config.model, **payload},
         }
+        classify: Final = (
+            self.litellm_router_instance.aresponses
+            if encrypted_task is not None
+            else self.litellm_router_instance.acompletion
+        )
 
         classifier_timeout_s: Final[float] = llm_config.timeout_ms / 1000
-        response: Final[ModelResponse] = await asyncio.wait_for(
-            self.litellm_router_instance.acompletion(
+        response: Final[ModelResponse | ResponsesAPIResponse] = await asyncio.wait_for(
+            classify(
                 model=llm_config.model,
-                messages=messages_for_call,
                 stream=False,
-                response_format=response_format,
                 timeout=classifier_timeout_s,
                 num_retries=0,
                 disable_fallbacks=True,
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
                 turn_off_message_logging=turn_off_message_logging,
-                **classifier_call_params,
+                **payload,
                 **_parent_session_kwargs(request_kwargs),
             ),
             timeout=classifier_timeout_s,
         )
-        content: Final = response.choices[0].message.content
+        content: Final = (
+            response.output_text if isinstance(response, ResponsesAPIResponse) else response.choices[0].message.content
+        )
         if not content:
             raise ValueError("LLM classifier returned empty content")
         raw_tier: Final = _LabeledTierClassification.model_validate_json(content).tier
@@ -2039,6 +2113,33 @@ class ComplexityRouter(CustomLogger):
         if tier is None:
             raise ValueError(f"LLM classifier returned an unrecognized tier: {raw_tier!r}")
         return tier, _response_cost_or_none(response)
+
+    def _native_classifier_payload(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: existing transformation accepts the SDK message list
+        response_format: Mapping[str, object],
+        encrypted_task: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
+
+        transformation: Final = LiteLLMResponsesTransformationHandler()
+        input_items, instructions = transformation.convert_chat_completion_messages_to_responses_api(messages)
+        llm_config: Final = self.config.classifier_llm_config
+        reasoning: Final = (
+            {"reasoning": {"effort": llm_config.reasoning_effort}}
+            if llm_config is not None and llm_config.reasoning_effort is not None
+            else {}
+        )
+        return {
+            "input": [*input_items, encrypted_task],
+            "instructions": instructions,
+            "text": transformation.transform_response_format_to_text_format(dict(response_format)),
+            "store": False,
+            "_require_encrypted_task_support": True,
+            **reasoning,
+        }
 
     @staticmethod
     def _build_classifier_user_payload(
@@ -2427,7 +2528,7 @@ class ComplexityRouter(CustomLogger):
             body if isinstance(body, Mapping) else None,
             resolved_messages,
             tuple(self.config.plan_mode_patterns or ()),
-            self._reminder_markers,
+            self._reminder_markers_for_request(request_kwargs),
         )
 
     def _matched_housekeeping_sentinel(self, newest_ask: str | None) -> str | None:
@@ -2568,14 +2669,14 @@ class ComplexityRouter(CustomLogger):
         """Real-tokenizer count of the resolved messages plus the out-of-band carriers, off the
         event loop; None when counting fails, and the gate then leaves the placement alone."""
         import litellm
-        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.litellm_core_utils.token_counter import offload_token_count
 
         out_of_band: Final = self._out_of_band_request_text(request_kwargs)
         try:
-            counted: Final = await asyncify(litellm.token_counter)(
+            counted: Final = await offload_token_count(litellm.token_counter)(
                 messages=cast(list, resolved_messages)  # cast-ok: token_counter only iterates the sequence
             )
-            return counted + (await asyncify(litellm.token_counter)(text=out_of_band) if out_of_band else 0)
+            return counted + (await offload_token_count(litellm.token_counter)(text=out_of_band) if out_of_band else 0)
         except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
             verbose_router_logger.debug("ComplexityRouter: context-window token count failed. Got - %s", e)
             return None
@@ -3248,6 +3349,18 @@ class ComplexityRouter(CustomLogger):
         """
         return _extract_current_ask_and_system_prompt(messages)
 
+    def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
+        if self.config.reminder_markers is not None:
+            return self._reminder_markers
+        if any(
+            is_codex_user_agent(user_agent)
+            for metadata_key in ("litellm_metadata", "metadata")
+            if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
+            if isinstance(user_agent := metadata.get("user_agent"), str)
+        ):
+            return _CODEX_REMINDER_MARKERS
+        return _DEFAULT_REMINDER_MARKERS
+
     @staticmethod
     def _iter_metadata_dicts(request_kwargs: dict) -> list[dict]:
         """Metadata may land on `metadata` or `litellm_metadata` depending on the
@@ -3349,6 +3462,7 @@ class ComplexityRouter(CustomLogger):
         # chat-completions messages, so it is real work on every non-chat surface, and
         # both the conversation shape and the classifier read the same list.
         resolved_messages: Final = self._resolve_messages(messages, request_kwargs)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs)
         conversation_continuing: Final = _conversation_is_continuing(resolved_messages)
 
         use_session_affinity: Final = self._uses_tier_pin
@@ -3358,7 +3472,7 @@ class ComplexityRouter(CustomLogger):
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
         pin_replay_allowed: Final = bool(self.config.session_affinity) or not _newest_turn_is_human_ask(
-            resolved_messages, self._reminder_markers
+            resolved_messages, marker_pairs
         )
 
         if cache_key is not None and pin_replay_allowed:
@@ -3369,7 +3483,7 @@ class ComplexityRouter(CustomLogger):
                 pin_escalation_keyword: str | None = None
                 if self.escalation_keywords:
                     user_message: Final = (
-                        _newest_turn_ask(resolved_messages, self._reminder_markers) if resolved_messages else None
+                        _newest_turn_ask(resolved_messages, marker_pairs) if resolved_messages else None
                     )
                     if user_message is not None:
                         pin_escalation_keyword = self._matched_escalation_keyword(user_message)
@@ -3557,7 +3671,8 @@ class ComplexityRouter(CustomLogger):
         # Determine whether the original request used messages directly
         has_original_messages: Final = messages is not None and len(messages) > 0
 
-        user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, self._reminder_markers)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs)
+        user_message, system_prompt = _extract_current_ask_and_system_prompt(resolved_messages, marker_pairs)
         classifier_images: Final = self._classifier_image_parts(resolved_messages)
 
         if user_message is None and not classifier_images:
@@ -3591,7 +3706,7 @@ class ComplexityRouter(CustomLogger):
             )
 
         ask: Final = user_message or ""
-        newest_ask: Final = _newest_turn_ask(resolved_messages, self._reminder_markers)
+        newest_ask: Final = _newest_turn_ask(resolved_messages, marker_pairs)
         escalation_keyword: Final = self._matched_escalation_keyword(newest_ask) if newest_ask is not None else None
         # Resolved here rather than beside the classifier because the keyword-override path below
         # returns before any classification runs, and a forced tier gets stuck for the same reason

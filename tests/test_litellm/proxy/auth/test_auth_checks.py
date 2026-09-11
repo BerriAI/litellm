@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 if TYPE_CHECKING:
@@ -37,6 +37,7 @@ from litellm.proxy.auth.auth_checks import (
     _can_object_call_vector_stores,
     _check_end_user_budget,
     _check_team_member_budget,
+    _fetch_key_object_from_db_with_reconnect,
     _get_fuzzy_user_object,
     _get_team_db_check,
     _log_budget_lookup_failure,
@@ -55,6 +56,7 @@ from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    PROXY_DB_LOOKUP_MAX_CONCURRENCY,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
@@ -562,6 +564,43 @@ async def test_get_key_object_should_raise_if_reconnect_fails_on_db_connection_e
         lock_timeout_seconds=0.1,
     )
     assert mock_prisma_client.get_data.await_count == 1
+
+
+class _InFlightCountingPrisma:
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def get_data(
+        self, token: str, table_name: str, parent_otel_span: None, proxy_logging_obj: None
+    ) -> UserAPIKeyAuth:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        await asyncio.sleep(0.001)
+        self.in_flight -= 1
+        return UserAPIKeyAuth(token=token)
+
+
+@pytest.mark.asyncio
+async def test_fetch_key_object_from_db_bounds_in_flight_prisma_requests():
+    prisma: Final = _InFlightCountingPrisma()
+    burst: Final = PROXY_DB_LOOKUP_MAX_CONCURRENCY * 5
+
+    results: Final = await asyncio.gather(
+        *(
+            _fetch_key_object_from_db_with_reconnect(
+                hashed_token=f"hashed-token-{i}",
+                prisma_client=prisma,  # pyright: ignore[reportArgumentType]  # fake stands in for PrismaClient
+                parent_otel_span=None,
+                proxy_logging_obj=None,
+            )
+            for i in range(burst)
+        )
+    )
+
+    assert len(results) == burst
+    assert {r.token for r in results if r is not None} == {f"hashed-token-{i}" for i in range(burst)}
+    assert prisma.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
 
 
 def _fake_redis_cache():
@@ -2372,6 +2411,44 @@ def _mock_prisma_for_team_lookup(find_unique):
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = find_unique
     return mock_prisma_client
+
+
+_TEAM_ALIAS_TABLE_ROW = {"id": 1, "model_aliases": '{"fast": "gpt-4o"}', "created_by": "admin", "updated_by": "admin"}
+
+
+def _prisma_team_row(include):
+    """Mimics Prisma: the `litellm_model_table` relation rides on the row only when the query `include`s it."""
+    columns = {"team_id": "team-aliases", "team_alias": "aliases", "models": ["gpt-4o"]}
+    row = (
+        {**columns, "litellm_model_table": _TEAM_ALIAS_TABLE_ROW}
+        if (include or {}).get("litellm_model_table")
+        else columns
+    )
+    return SimpleNamespace(dict=lambda: row, model_dump=lambda: row)
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_loads_model_aliases_relation():
+    """LIT-5858: the auth path read teams without `include`ing `litellm_model_table`, so every JWT
+    team came back with `model_aliases=None` and alias requests 403'd."""
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.auth.team_grants import team_model_aliases
+
+    async def find_unique(where, include=None):
+        return _prisma_team_row(include)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    team = await get_team_object(
+        team_id="team-aliases",
+        prisma_client=_mock_prisma_for_team_lookup(AsyncMock(side_effect=find_unique)),
+        user_api_key_cache=mock_cache,
+        check_db_only=True,
+    )
+
+    assert team_model_aliases(team) == {"fast": "gpt-4o"}
 
 
 @pytest.mark.asyncio
@@ -6193,6 +6270,32 @@ async def test_get_team_object_by_alias_db_fetch_returns_cached_obj():
     assert result.team_id == "t-9"
     assert result.team_alias == "alias-9"
     assert result.models == ["gpt-4"]
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_by_alias_loads_model_aliases_relation():
+    """LIT-5858: same regression as `test_get_team_object_loads_model_aliases_relation`, for the
+    `team_alias_jwt_field` lookup."""
+    from litellm.proxy.auth.auth_checks import get_team_object_by_alias
+    from litellm.proxy.auth.team_grants import team_model_aliases
+
+    async def find_many(where, include=None):
+        return [_prisma_team_row(include)]
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    team = await get_team_object_by_alias(
+        team_alias="aliases",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+    )
+
+    assert team_model_aliases(team) == {"fast": "gpt-4o"}
 
 
 @pytest.mark.asyncio

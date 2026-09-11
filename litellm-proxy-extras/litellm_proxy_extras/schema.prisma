@@ -282,6 +282,7 @@ model LiteLLM_ObjectPermissionTable {
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
   mcp_tool_search_enabled Boolean?
+  skills                String[]       @default([]) // Claude Code plugin names granted to this key/team beyond the public (enabled) set
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -492,7 +493,7 @@ model LiteLLM_JWTKeyMapping {
     updated_at        DateTime @default(now()) @updatedAt
     updated_by        String?
 
-    litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token])
+    litellm_verification_token LiteLLM_VerificationToken @relation(fields: [token], references: [token], onDelete: Cascade)
 
     @@unique([jwt_claim_name, jwt_claim_value])
     @@index([jwt_claim_name, jwt_claim_value, is_active])

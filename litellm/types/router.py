@@ -4,7 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
 from .utils import (
@@ -288,6 +289,7 @@ class CredentialLiteLLMParams(BaseModel):
     aws_web_identity_token: str | None = None
     aws_sts_endpoint: str | None = None
     aws_external_id: str | None = None
+    aws_session_tags: Sequence[AwsSessionTag] | None = None
     aws_bedrock_runtime_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
@@ -525,6 +527,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     input_cost_per_second: float | None
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
+    output_cost_per_second_720p: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
@@ -609,6 +612,24 @@ class Deployment(BaseModel):
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentModelListingInfo:
+    """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
+
+    ``cost_map_keys`` are the names those deployments' underlying models are known by in
+    ``litellm.model_cost`` (``base_model`` when set, else ``litellm_params.model``), which
+    is what a request actually reaches; the public model name they are listed under is an
+    arbitrary alias and often absent from the cost map. Keys are deduplicated in config
+    order, so the ordinary group -- several interchangeable deployments of one model --
+    carries exactly one. The token limits are the widest explicitly set in any
+    deployment's ``model_info``, which outrank anything the cost map says.
+    """
+
+    cost_map_keys: tuple[str, ...]
+    max_input_tokens: int | None
+    max_output_tokens: int | None
 
 
 class RouterErrors(enum.Enum):

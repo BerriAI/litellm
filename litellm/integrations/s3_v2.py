@@ -10,8 +10,10 @@ import asyncio
 import time
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import quote
+
+import httpx
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -24,7 +26,7 @@ from litellm.integrations.s3 import (
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -34,6 +36,9 @@ from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
+
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
 
 
 class S3Logger(CustomBatchLogger, BaseAWSLLM):
@@ -232,6 +237,26 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             f"{get_aws_dns_suffix(self.s3_region_name)}/{encoded_key}"
         )
 
+    def _sign_put(
+        self, credentials: "Credentials", url: str, json_string: str, headers: Mapping[str, str]
+    ) -> dict[str, str]:  # mutable-ok: [LIT001] AsyncHTTPHandler.put/HTTPHandler.put only accept dict headers
+        """
+        ``RefreshableCredentials`` (IMDS roles) may refresh between the access key, secret and token
+        reads SigV4 performs, producing a mixed-generation signature that S3 rejects with 403.
+        Freezing first makes the three values one atomic snapshot.
+        """
+        from botocore.auth import S3SigV4Auth
+        from botocore.awsrequest import AWSRequest
+        from botocore.credentials import RefreshableCredentials
+
+        frozen: Final = (
+            credentials.get_frozen_credentials() if isinstance(credentials, RefreshableCredentials) else credentials
+        )
+        aws_request: Final = AWSRequest(method="PUT", url=url, data=json_string, headers=dict(headers))
+        aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=self.s3_region_name)
+        S3SigV4Auth(frozen, "s3", aws_region_name).add_auth(aws_request)
+        return dict(aws_request.headers.items())
+
     def _sse_headers(self) -> Mapping[str, str]:
         candidates: Final = {
             "x-amz-server-side-encryption": self.s3_server_side_encryption,
@@ -317,26 +342,12 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         try:
             import base64
             import hashlib
-
-            from botocore.auth import S3SigV4Auth
-            from botocore.awsrequest import AWSRequest
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
 
             asyncified_get_credentials: Final = asyncify(self.get_credentials)
-            credentials: Final = await asyncified_get_credentials(
-                aws_access_key_id=self.s3_aws_access_key_id,
-                aws_secret_access_key=self.s3_aws_secret_access_key,
-                aws_session_token=self.s3_aws_session_token,
-                aws_region_name=self.s3_region_name,
-                aws_session_name=self.s3_aws_session_name,
-                aws_profile_name=self.s3_aws_profile_name,
-                aws_role_name=self.s3_aws_role_name,
-                aws_web_identity_token=self.s3_aws_web_identity_token,
-                aws_sts_endpoint=self.s3_aws_sts_endpoint,
-            )
 
             verbose_logger.debug("s3_v2 logger - uploading data to s3 - %s", batch_logging_element.s3_object_key)
             verbose_logger.debug("s3_v2 logger - s3_verify setting: %s", self.s3_verify)
@@ -363,19 +374,28 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 **self._sse_headers(),
             }
 
-            # Sign the request
-            aws_request: Final = AWSRequest(method="PUT", url=url, data=json_string, headers=headers)
-            aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=self.s3_region_name)
-            S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
+            async def signed_put() -> httpx.Response:
+                credentials: Final = await asyncified_get_credentials(
+                    aws_access_key_id=self.s3_aws_access_key_id,
+                    aws_secret_access_key=self.s3_aws_secret_access_key,
+                    aws_session_token=self.s3_aws_session_token,
+                    aws_region_name=self.s3_region_name,
+                    aws_session_name=self.s3_aws_session_name,
+                    aws_profile_name=self.s3_aws_profile_name,
+                    aws_role_name=self.s3_aws_role_name,
+                    aws_web_identity_token=self.s3_aws_web_identity_token,
+                    aws_sts_endpoint=self.s3_aws_sts_endpoint,
+                )
+                signed_headers: Final = await run_aws_signing(self._sign_put, credentials, url, json_string, headers)
+                try:
+                    return await self.async_httpx_client.put(url, data=json_string, headers=signed_headers)
+                except httpx.HTTPStatusError as error:
+                    return error.response
 
-            # Prepare the signed headers
-            signed_headers: Final = dict(aws_request.headers.items())
-
-            # Make the request with retry for transient S3 errors (500/503)
             max_retries: Final = 3
             for attempt in range(max_retries):
-                response = await self.async_httpx_client.put(url, data=json_string, headers=signed_headers)
-                if response.status_code in (500, 503) and attempt < max_retries - 1:
+                response = await signed_put()
+                if response.status_code in (403, 500, 503) and attempt < max_retries - 1:
                     wait_time = 2**attempt  # 1s, 2s
                     verbose_logger.warning(
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
@@ -479,20 +499,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         try:
             import base64
             import hashlib
-
-            from botocore.auth import S3SigV4Auth
-            from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         try:
             verbose_logger.debug("s3_v2 logger - uploading data to s3 - %s", batch_logging_element.s3_object_key)
-            credentials: Final[Credentials] = self.get_credentials(
-                aws_access_key_id=self.s3_aws_access_key_id,
-                aws_secret_access_key=self.s3_aws_secret_access_key,
-                aws_session_token=self.s3_aws_session_token,
-                aws_region_name=self.s3_region_name,
-            )
 
             url: Final = self._build_object_url(batch_logging_element.s3_object_key)
 
@@ -516,22 +526,24 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 **self._sse_headers(),
             }
 
-            # Sign the request
-            aws_request: Final = AWSRequest(method="PUT", url=url, data=json_string, headers=headers)
-            aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=self.s3_region_name)
-            S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
-
-            # Prepare the signed headers
-            signed_headers: Final = dict(aws_request.headers.items())
-
             httpx_client: Final = _get_httpx_client(
                 params=({"ssl_verify": self.s3_verify} if self.s3_verify is not None else None)
             )
-            # Make the request with retry for transient S3 errors (500/503)
+
+            def signed_put() -> httpx.Response:
+                credentials: Final = self.get_credentials(
+                    aws_access_key_id=self.s3_aws_access_key_id,
+                    aws_secret_access_key=self.s3_aws_secret_access_key,
+                    aws_session_token=self.s3_aws_session_token,
+                    aws_region_name=self.s3_region_name,
+                )
+                signed_headers: Final = self._sign_put(credentials, url, json_string, headers)
+                return httpx_client.put(url, data=json_string, headers=signed_headers)
+
             max_retries: Final = 3
             for attempt in range(max_retries):
-                response = httpx_client.put(url, data=json_string, headers=signed_headers)
-                if response.status_code in (500, 503) and attempt < max_retries - 1:
+                response = signed_put()
+                if response.status_code in (403, 500, 503) and attempt < max_retries - 1:
                     wait_time = 2**attempt  # 1s, 2s
                     verbose_logger.warning(
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
@@ -597,7 +609,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Sign the request
             aws_request: Final = AWSRequest(method="GET", url=url, headers=headers)
-            S3SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+            await run_aws_signing(S3SigV4Auth(credentials, "s3", self.s3_region_name).add_auth, aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())
