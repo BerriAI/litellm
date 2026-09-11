@@ -180,7 +180,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> RerankResponse:
-        request_data = request_data or {}
+        request: Final = request_data or MappingProxyType({})
         try:
             response_json: Final = TypeAdapter(Mapping[str, object]).validate_json(raw_response.content)
         except ValidationError as exc:
@@ -190,9 +190,9 @@ class DashScopeRerankConfig(BaseRerankConfig):
             ) from exc
 
         logging_obj.post_call(
-            input=self._get_request_query(request_data),
+            input=self._get_request_query(request),
             api_key=api_key,
-            additional_args={"complete_input_dict": request_data},
+            additional_args={"complete_input_dict": request},
             original_response=response_json,
         )
 
