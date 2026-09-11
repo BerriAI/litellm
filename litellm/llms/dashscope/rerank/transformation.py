@@ -3,16 +3,16 @@ Transformation logic for DashScope's OpenAI-compatible /v1/reranks API.
 
 Supports
 - qwen3-rerank
+- qwen3.7-text-rerank
 
-(Other DashScope rerankers — gte-rerank-v2 / qwen3-vl-rerank — have not been
-validated against this transformer. Behavior with those models is undefined.)
-
-The native qwen3.7-text-rerank protocol is implemented in native_transformation.py.
+(Other DashScope rerankers — gte-rerank-v2 / qwen3-vl-rerank — share the same
+endpoint but have not been validated against this transformer. Behavior with
+those models is undefined.)
 
 Endpoint
 - https://dashscope.aliyuncs.com/compatible-api/v1/reranks
 
-Note: chat/embed live under `/compatible-mode/v1/`, but qwen3-rerank's
+Note: chat/embed live under `/compatible-mode/v1/`, but DashScope's rerank
 route is exposed under `/compatible-api/v1/reranks` per the docs. A chat-shaped
 `.aliyuncs.com/compatible-mode/v1` base reaching this config (the chat default
 from `get_llm_provider`, or a `DASHSCOPE_API_BASE` env var) is redirected to
@@ -28,12 +28,9 @@ Docs - https://help.aliyun.com/zh/model-studio/text-rerank-api
 """
 
 from collections.abc import Mapping
-from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -41,6 +38,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
+    OptionalRerankParams,
     RerankBilledUnits,
     RerankResponse,
     RerankResponseMeta,
@@ -52,17 +50,12 @@ from ..common_utils import DashScopeError, resolve_dashscope_family_rerank_api_b
 DEFAULT_RERANK_URL: Final = "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
 
 
-class DashScopeRerankUsage(TypedDict, total=False):
-    prompt_tokens: ReadOnly[int | None]
-    total_tokens: ReadOnly[int | None]
-
-
 class DashScopeRerankConfig(BaseRerankConfig):
     """
     Reference: https://help.aliyun.com/zh/model-studio/text-rerank-api
 
-    Targets DashScope's qwen3-rerank model. Request fields: model, query,
-    documents, top_n, return_documents. Response: results[].index,
+    Targets DashScope's qwen3-rerank and qwen3.7-text-rerank models. Request fields:
+    model, query, documents, top_n, return_documents, instruct. Response: results[].index,
     results[].relevance_score, optionally results[].document.text (when
     return_documents=true), plus a top-level usage.total_tokens counter.
     """
@@ -85,7 +78,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: Mapping[str, object] | None = None,
+        optional_params: dict | None = None,
     ) -> str:
         resolved_api_base: Final = self._resolve_rerank_api_base(api_base)
         if resolved_api_base == DEFAULT_RERANK_URL:
@@ -103,12 +96,12 @@ class DashScopeRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: Mapping[str, object],
+        headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: Mapping[str, object] | None = None,
+        optional_params: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict[str, object]:
+    ) -> dict:
         return {
             "Authorization": f"Bearer {self._resolve_api_key(api_key)}",
             "accept": "application/json",
@@ -117,7 +110,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         }
 
     def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
-        return ["query", "documents", "top_n", "return_documents"]
+        return ["query", "documents", "top_n", "return_documents", "instruction"]
 
     def map_cohere_rerank_params(
         self,
@@ -134,17 +127,14 @@ class DashScopeRerankConfig(BaseRerankConfig):
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
     ) -> dict[str, object]:
-        params: Final = MappingProxyType(
-            {
-                "query": query,
-                "documents": documents,
-                "top_n": top_n,
-                "return_documents": return_documents,
-                "instruction": instruction,
-            }
+        params: Final[OptionalRerankParams] = OptionalRerankParams(
+            query=query,
+            documents=documents,
+            top_n=top_n,
+            return_documents=return_documents,
+            instruction=instruction,
         )
-        supported_params: Final = self.get_supported_cohere_rerank_params(model)
-        return {name: value for name, value in params.items() if value is not None and name in supported_params}
+        return {name: value for name, value in params.items() if value is not None}
 
     def transform_rerank_request(
         self,
@@ -158,16 +148,18 @@ class DashScopeRerankConfig(BaseRerankConfig):
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for DashScope rerank")
 
-        request: Final[dict[str, object]] = {
-            "model": model,
-            "query": optional_rerank_params["query"],
-            "documents": optional_rerank_params["documents"],
+        return {
+            name: value
+            for name, value in (
+                ("model", model),
+                ("query", optional_rerank_params["query"]),
+                ("documents", optional_rerank_params["documents"]),
+                ("top_n", optional_rerank_params.get("top_n")),
+                ("return_documents", optional_rerank_params.get("return_documents")),
+                ("instruct", optional_rerank_params.get("instruction")),
+            )
+            if name in ("model", "query", "documents") or value is not None
         }
-        if optional_rerank_params.get("top_n") is not None:
-            request["top_n"] = optional_rerank_params["top_n"]
-        if optional_rerank_params.get("return_documents") is not None:
-            request["return_documents"] = optional_rerank_params["return_documents"]
-        return request
 
     def transform_rerank_response(
         self,
@@ -177,22 +169,24 @@ class DashScopeRerankConfig(BaseRerankConfig):
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         request_data: dict | None = None,
-        optional_params: Mapping[str, object] | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        optional_params: dict | None = None,
+        litellm_params: dict | None = None,
     ) -> RerankResponse:
-        request: Final = request_data or MappingProxyType({})
+        request_data = request_data or {}
+        optional_params = optional_params or {}
+        litellm_params = litellm_params or {}
         try:
-            response_json: Final = TypeAdapter(Mapping[str, object]).validate_json(raw_response.content)
-        except ValidationError as exc:
+            response_json: Final = raw_response.json()
+        except Exception:
             raise DashScopeError(
                 status_code=raw_response.status_code,
                 message=raw_response.text,
-            ) from exc
+            )
 
         logging_obj.post_call(
-            input=self._get_request_query(request),
+            input=request_data.get("query"),
             api_key=api_key,
-            additional_args={"complete_input_dict": request},
+            additional_args={"complete_input_dict": request_data},
             original_response=response_json,
         )
 
@@ -200,26 +194,23 @@ class DashScopeRerankConfig(BaseRerankConfig):
         if "code" in response_json and "results" not in response_json:
             raise DashScopeError(
                 status_code=raw_response.status_code,
-                message=str(response_json.get("message", response_json)),
+                message=response_json.get("message", str(response_json)),
             )
 
-        usage: Final = TypeAdapter(DashScopeRerankUsage).validate_python(
-            response_json.get("usage") or MappingProxyType({})
-        )
-        results, response_id, input_tokens = self._get_response_fields(response_json, usage)
+        results: Final = response_json.get("results")
         if results is None:
             raise DashScopeError(
                 status_code=raw_response.status_code,
                 message=f"No results in DashScope rerank response: {response_json}",
             )
 
-        # Both protocols return:
+        # qwen3-rerank returns:
         #   {"index": int, "relevance_score": float}
         # plus, when return_documents=true was sent:
         #   "document": {"text": "..."}
         # which already matches LiteLLM's RerankResponseDocument shape.
         transformed_results: Final[list[dict]] = []
-        for r in TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(results):
+        for r in results:
             item: dict[str, object] = {
                 "index": r["index"],
                 "relevance_score": r["relevance_score"],
@@ -232,27 +223,17 @@ class DashScopeRerankConfig(BaseRerankConfig):
                 item["document"] = {"text": doc}
             transformed_results.append(item)
 
-        billed_units: Final = RerankBilledUnits(total_tokens=usage.get("total_tokens"))
-        tokens: Final = RerankTokens(input_tokens=input_tokens)
+        usage: Final = response_json.get("usage") or {}
+        total_tokens: Final = usage.get("total_tokens")
+        billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
+        tokens: Final = RerankTokens(input_tokens=total_tokens)
         meta: Final = RerankResponseMeta(billed_units=billed_units, tokens=tokens)
 
-        return RerankResponse.model_validate(
-            MappingProxyType(
-                {
-                    "id": response_id or str(uuid.uuid4()),
-                    "results": transformed_results,
-                    "meta": meta,
-                }
-            )
+        return RerankResponse(
+            id=response_json.get("id") or str(uuid.uuid4()),
+            results=transformed_results,
+            meta=meta,
         )
-
-    def _get_request_query(self, request_data: Mapping[str, object]) -> object:
-        return request_data.get("query")
-
-    def _get_response_fields(
-        self, response_json: Mapping[str, object], usage: DashScopeRerankUsage
-    ) -> tuple[object, object, int | None]:
-        return response_json.get("results"), response_json.get("id"), usage.get("total_tokens")
 
     def get_error_class(
         self,

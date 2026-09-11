@@ -15015,14 +15015,6 @@
             }
         ]
     },
-    "dashscope/qwen3.7-text-rerank": {
-        "litellm_provider": "dashscope",
-        "mode": "rerank",
-        "provider_specific_entry": {
-            "rerank_api": "native"
-        },
-        "source": "https://help.aliyun.com/zh/model-studio/text-rerank-api"
-    },
     "dashscope/qwen-turbo": {
         "input_cost_per_token": 5e-08,
         "litellm_provider": "dashscope",

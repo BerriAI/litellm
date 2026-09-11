@@ -8508,7 +8508,7 @@ class ProviderConfigManager:
                 get_dashscope_family_rerank_config,
             )
 
-            return get_dashscope_family_rerank_config(provider.value, model, api_base)
+            return get_dashscope_family_rerank_config(provider.value)
         return litellm.CohereRerankConfig()
 
     @staticmethod
