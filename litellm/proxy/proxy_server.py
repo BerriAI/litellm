@@ -2744,6 +2744,7 @@ async def _read_spend_counter_estimate(
             entity_id=window_entity_id,
             window_duration=window_duration,
             window_start=window_start,
+            include_logs_floor=True,
         )
         if window_spend is not None:
             return window_spend, True
@@ -3304,7 +3305,7 @@ async def _ensure_window_spend_counter_initialized(
         entity_id=entity_id,
         window_duration=window_duration,
         window_start=window_start,
-        require_cache_warm=True,
+        include_logs_floor=True,
     )
     if window_spend is None:
         verbose_proxy_logger.warning(

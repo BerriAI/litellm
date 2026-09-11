@@ -196,3 +196,36 @@ async def test_flushed_window_counter_with_over_budget_team_spend_still_rejects(
 
     with pytest.raises(litellm.BudgetExceededError):
         await _team_multi_budget_check(team_object=team)
+
+
+@pytest.mark.asyncio
+async def test_flushed_window_counter_flag_off_restores_cumulative_fallback_disabled(monkeypatch):
+    """general_settings.cumulative_window_fallback=false restores the pre-PR
+    degraded-path behavior: with neither counter nor DB readable the window
+    reads 0 instead of the entity's cumulative spend."""
+    _flush_spend_counter(monkeypatch)
+    monkeypatch.setattr(ps, "general_settings", {"cumulative_window_fallback": False})
+
+    token = _make_valid_token(
+        spend=99.0,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 30.0, "reset_at": None}],
+    )
+
+    # Should not raise: the fallback is disabled, so the window reads 0.
+    await _virtual_key_multi_budget_check(valid_token=token)
+
+
+@pytest.mark.asyncio
+async def test_flushed_window_counter_flag_default_on_keeps_the_rejection(monkeypatch):
+    """Default (flag unset) keeps the fix: cumulative spend still drives the
+    rejection when the counter and the DB total are both unreadable."""
+    _flush_spend_counter(monkeypatch)
+    monkeypatch.setattr(ps, "general_settings", {})
+
+    token = _make_valid_token(
+        spend=99.0,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 30.0, "reset_at": None}],
+    )
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await _virtual_key_multi_budget_check(valid_token=token)

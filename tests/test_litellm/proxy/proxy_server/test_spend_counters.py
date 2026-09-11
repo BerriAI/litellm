@@ -402,9 +402,12 @@ async def test_get_current_spend_floors_window_against_logs_when_row_stale(monke
 @pytest.mark.asyncio
 async def test_get_current_spend_cold_window_counter_reseeds_from_db(monkeypatch):
     """Issue #26672: a Redis flush losing a window counter must reseed it from
-    the per-window DB total (maintained row first), so the decision uses the
-    true window spend and later requests hit the re-warmed counter instead of
-    re-deriving it per request."""
+    the per-window DB total, so the decision uses the true window spend and
+    later requests hit the re-warmed counter instead of re-deriving it per
+    request. The reseed floors the maintained row at the spend-logs aggregate:
+    the row lags queued increments by up to one flush interval, and restoring a
+    counter from it alone would admit traffic that already exceeded the
+    budget (Greptile: lagging persisted spend)."""
     from datetime import timezone
     from types import SimpleNamespace
 
@@ -428,9 +431,44 @@ async def test_get_current_spend_cold_window_counter_reseeds_from_db(monkeypatch
         window_start=window_start,
     )
 
-    assert result == 31.0
-    fake_prisma.db.litellm_spendlogs.group_by.assert_not_awaited()
-    fake_cache.redis_cache.async_set_cache.assert_awaited_once_with(key=counter_key, value=31.0, nx=True)
+    # max(row=31, aggregate=100): the aggregate cannot lag what pods already
+    # counted, so it floors the lagging row.
+    assert result == 100.0
+    fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once()
+    fake_cache.redis_cache.async_set_cache.assert_awaited_once_with(key=counter_key, value=100.0, nx=True)
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_cold_window_counter_warm_failure_uses_conservative_fallback(monkeypatch):
+    """Greptile P1 (failed warm loses coordination): the counter cannot be
+    re-warmed (Redis write fails). The DB snapshot never coordinated with
+    concurrent reservations, so it must not be served as an admission value;
+    the read falls back to the caller's conservative cumulative spend."""
+    from datetime import timezone
+    from types import SimpleNamespace
+
+    window_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    fake_prisma = _make_window_spend_prisma(
+        row=SimpleNamespace(window_start=window_start, spend=5.0),
+        spend_logs_total=5.0,
+    )
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_set_cache = AsyncMock(side_effect=RuntimeError("redis down"))
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:tok:window:7d",
+        fallback_spend=99.0,
+        max_budget=30.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_duration="7d",
+        window_start=window_start,
+    )
+
+    # Not 5.0 (the un-coordinated DB snapshot): the conservative fallback wins.
+    assert result == 99.0
 
 
 @pytest.mark.asyncio

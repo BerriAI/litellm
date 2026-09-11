@@ -4916,6 +4916,18 @@ async def _virtual_key_max_budget_check(
             )
 
 
+def _cumulative_window_fallback() -> bool:
+    """Key/team windows fall back to the entity's cumulative spend only when
+    both the window counter and the per-window DB total are unreadable. That
+    changed the degraded-path (DB outage during a window rollover) behavior of
+    existing setups, so it is gated behind a general_settings flag, on by
+    default because the old behavior let a lost counter read as a fresh empty
+    window and bypass the budget (#26672)."""
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("cumulative_window_fallback", True) is not False
+
+
 async def _virtual_key_multi_budget_check(
     valid_token: UserAPIKeyAuth,
 ):
@@ -4936,12 +4948,13 @@ async def _virtual_key_multi_budget_check(
 
     from litellm.proxy.proxy_server import get_current_spend
 
+    fallback_spend: Final = (valid_token.spend or 0.0) if _cumulative_window_fallback() else 0.0
     for window in valid_token.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
         counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
-            fallback_spend=valid_token.spend or 0.0,
+            fallback_spend=fallback_spend,
             max_budget=w["max_budget"],
             window_entity_type="Key",
             window_entity_id=valid_token.token,
@@ -5314,12 +5327,13 @@ async def _team_multi_budget_check(
 
     from litellm.proxy.proxy_server import get_current_spend
 
+    fallback_spend: Final = (team_object.spend or 0.0) if _cumulative_window_fallback() else 0.0
     for window in team_object.budget_limits:
         w: dict = window if isinstance(window, dict) else window.model_dump()
         counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
-            fallback_spend=team_object.spend or 0.0,
+            fallback_spend=fallback_spend,
             max_budget=w["max_budget"],
             window_entity_type="Team",
             window_entity_id=team_object.team_id,
