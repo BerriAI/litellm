@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 
 from litellm.types.mcp import MCPAuth
 
@@ -7148,7 +7149,7 @@ async def _agent_365_gated_prm(scopes):
 @pytest.mark.asyncio
 async def test_agent_365_gated_server_prm_names_the_entra_tenant(agent_365_guardrail):
     response = await _agent_365_gated_prm(scopes=["api://gateway-app/access_as_user"])
-    assert response == {
+    assert jsonable_encoder(response) == {
         "authorization_servers": ["https://login.microsoftonline.com/tenant-abc/v2.0"],
         "resource": "https://litellm.example.com/mcp/tools",
         "scopes_supported": ["api://gateway-app/access_as_user"],
