@@ -234,8 +234,8 @@ database:
   # workers run; the workers connect to the pool over loopback, with no extra
   # network hop. The chart emits LITELLM_PGBOUNCER_ENABLED /
   # LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS / LITELLM_PGBOUNCER_MAX_CLIENT_CONN on
-  # the gateway container only: the backend runs a single worker and the
-  # migrations Job must keep a direct connection. With
+  # the gateway container and its collector sidecar only: the backend runs a
+  # single worker and the migrations Job must keep a direct connection. With
   # `database.writer.useIAMAuth` or `useAzureEntraAuth` the pool mints and
   # renews the database token itself, so the workers never see it. Starting profile for
   # `gateway.numWorkers: 4` is maxDbConnections: 20, so a database with a
