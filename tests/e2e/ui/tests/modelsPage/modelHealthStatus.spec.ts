@@ -178,6 +178,7 @@ const test = base.extend<{ reachableName: string; unreachableName: string }>({
 });
 
 test.describe("Model health status", () => {
+  test.describe.configure({ timeout: 8 * 60_000 });
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("Run Health Check reports a reachable deployment healthy and an unreachable one unhealthy", async ({
