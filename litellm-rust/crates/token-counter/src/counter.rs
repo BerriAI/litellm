@@ -2,8 +2,8 @@ use serde::Serialize;
 
 use crate::Error;
 use crate::byte_level::ByteLevelCounter;
-use crate::cl100k::Cl100kCounter;
 use crate::python_json;
+use crate::scanner::{SplitPattern, TiktokenCounter};
 use crate::tools::format_function_definitions;
 use crate::types::{
     ContentBlock, ContentItem, CountableRequest, Message, MessageContent, TextValue, ToolChoice,
@@ -29,7 +29,7 @@ enum Encoder {
         tokenizer: Box<tokenizers::Tokenizer>,
         byte_level: Option<ByteLevelCounter>,
     },
-    Cl100k(Cl100kCounter),
+    Tiktoken(TiktokenCounter),
 }
 
 /// A loaded tokenizer plus the message accounting Python applies on top of
@@ -57,14 +57,24 @@ impl TokenCounter {
     /// Load tiktoken's `cl100k_base` rank file (`base64(token) rank` lines).
     /// The host reads the file.
     pub fn from_cl100k_ranks(rank_file: &str) -> Result<Self, Error> {
+        Self::from_tiktoken_ranks(SplitPattern::Cl100k, rank_file)
+    }
+
+    /// Load tiktoken's `o200k_base` rank file (`base64(token) rank` lines).
+    /// The host reads the file.
+    pub fn from_o200k_ranks(rank_file: &str) -> Result<Self, Error> {
+        Self::from_tiktoken_ranks(SplitPattern::O200k, rank_file)
+    }
+
+    fn from_tiktoken_ranks(split: SplitPattern, rank_file: &str) -> Result<Self, Error> {
         Ok(Self {
-            encoder: Encoder::Cl100k(Cl100kCounter::from_ranks(rank_file)?),
+            encoder: Encoder::Tiktoken(TiktokenCounter::from_ranks(split, rank_file)?),
         })
     }
 
     pub fn count_text(&self, text: &str) -> Result<usize, Error> {
         match &self.encoder {
-            Encoder::Cl100k(counter) => Ok(counter.count(text)),
+            Encoder::Tiktoken(counter) => Ok(counter.count(text)),
             Encoder::HuggingFace {
                 tokenizer,
                 byte_level,

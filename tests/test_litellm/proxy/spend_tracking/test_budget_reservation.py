@@ -211,9 +211,12 @@ def test_deployment_pricing_update_invalidates_cached_estimate() -> None:
 
 ANTHROPIC_TOKENIZER_MODEL: Final = "claude-sonnet-4-5-20250929"
 CL100K_MODEL: Final = "gpt-4"
+O200K_MODEL: Final = "gpt-4o"
 RUST_COUNTED_BODY: Final = {"model": ANTHROPIC_TOKENIZER_MODEL, "max_tokens": 16, "messages": ANTHROPIC_MESSAGES}
 RUST_INPUT_TOKENS: Final = 4_321
-RUST_INPUT_TOKENS_BY_TOKENIZER: Final = MappingProxyType({"anthropic": RUST_INPUT_TOKENS, "cl100k_base": 1_234})
+RUST_INPUT_TOKENS_BY_TOKENIZER: Final = MappingProxyType(
+    {"anthropic": RUST_INPUT_TOKENS, "cl100k_base": 1_234, "o200k_base": 2_345}
+)
 
 
 class _FakeDeclined(Exception):
@@ -242,7 +245,7 @@ class _RecordingCounter:
 
 
 class _RecordingFactory:
-    """Stands in for the native `TokenCounter` class: called with tokenizer JSON, or `from_cl100k_ranks`."""
+    """Stands in for the native `TokenCounter` class: called with tokenizer JSON, or `from_*_ranks`."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[rust_token_counter.RustTokenizer, bytes]] = []
@@ -252,6 +255,9 @@ class _RecordingFactory:
 
     def from_cl100k_ranks(self, rank_file: str) -> _RecordingCounter:
         return _RecordingCounter(self, "cl100k_base")
+
+    def from_o200k_ranks(self, rank_file: str) -> _RecordingCounter:
+        return _RecordingCounter(self, "o200k_base")
 
 
 class _DecliningCounter:
@@ -264,6 +270,9 @@ class _DecliningFactory:
         return _DecliningCounter()
 
     def from_cl100k_ranks(self, rank_file: str) -> _DecliningCounter:
+        return _DecliningCounter()
+
+    def from_o200k_ranks(self, rank_file: str) -> _DecliningCounter:
         return _DecliningCounter()
 
 
@@ -324,11 +333,35 @@ async def test_tiktoken_cl100k_models_are_counted_by_rust(rust_counter: None, mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", (O200K_MODEL, "gpt-5", "o3", "gpt-4.1", "chatgpt-4o-latest"))
+async def test_tiktoken_o200k_models_are_counted_by_rust(rust_counter: None, model: str) -> None:
+    factory: Final = _RecordingFactory()
+    litellm.rust(True)
+    rust_token_counter.TOKEN_COUNTER.override(factory)
+    body: Final = {"model": model, "messages": ANTHROPIC_MESSAGES}
+    raw_body: Final = json.dumps(body).encode()
+
+    counts: Final = await count_request_input_tokens(
+        request_body=body, route="/v1/chat/completions", llm_router=None, raw_body=raw_body
+    )
+
+    assert dict(counts) == {model: RUST_INPUT_TOKENS_BY_TOKENIZER["o200k_base"]}
+    assert factory.calls == [("o200k_base", raw_body)]
+
+
+@pytest.mark.asyncio
 async def test_multi_model_request_counts_once_per_tokenizer_and_python_for_the_rest(rust_counter: None) -> None:
     factory: Final = _RecordingFactory()
     litellm.rust(True)
     rust_token_counter.TOKEN_COUNTER.override(factory)
-    models: Final = (CL100K_MODEL, ANTHROPIC_TOKENIZER_MODEL, "gemini/gemini-2.5-pro", "gpt-4o")
+    models: Final = (
+        CL100K_MODEL,
+        ANTHROPIC_TOKENIZER_MODEL,
+        "gemini/gemini-2.5-pro",
+        O200K_MODEL,
+        "gpt-5",
+        "replicate/meta/llama-2-70b-chat",
+    )
     body: Final = {"model": list(models), "messages": ANTHROPIC_MESSAGES}
     raw_body: Final = json.dumps(body).encode()
     python_counts: Final = await count_request_input_tokens(
@@ -339,18 +372,20 @@ async def test_multi_model_request_counts_once_per_tokenizer_and_python_for_the_
         request_body=body, route="/v1/chat/completions", llm_router=None, raw_body=raw_body
     )
 
-    assert factory.calls == [("cl100k_base", raw_body), ("anthropic", raw_body)]
+    assert factory.calls == [("cl100k_base", raw_body), ("anthropic", raw_body), ("o200k_base", raw_body)]
     assert dict(counts) == {
         CL100K_MODEL: RUST_INPUT_TOKENS_BY_TOKENIZER["cl100k_base"],
         "gemini/gemini-2.5-pro": RUST_INPUT_TOKENS_BY_TOKENIZER["cl100k_base"],
         ANTHROPIC_TOKENIZER_MODEL: RUST_INPUT_TOKENS,
-        "gpt-4o": python_counts["gpt-4o"],
+        O200K_MODEL: RUST_INPUT_TOKENS_BY_TOKENIZER["o200k_base"],
+        "gpt-5": RUST_INPUT_TOKENS_BY_TOKENIZER["o200k_base"],
+        "replicate/meta/llama-2-70b-chat": python_counts["replicate/meta/llama-2-70b-chat"],
     }
-    assert counts["gpt-4o"] not in RUST_INPUT_TOKENS_BY_TOKENIZER.values()
+    assert counts["replicate/meta/llama-2-70b-chat"] not in RUST_INPUT_TOKENS_BY_TOKENIZER.values()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", (ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL))
+@pytest.mark.parametrize("model", (ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL, O200K_MODEL))
 async def test_rust_decline_falls_back_to_python_count(rust_counter: None, model: str) -> None:
     litellm.rust(True)
     rust_token_counter.TOKEN_COUNTER.override(_DecliningFactory())
@@ -373,7 +408,7 @@ async def test_disabled_rust_never_sees_the_raw_body(rust_counter: None) -> None
     factory: Final = _RecordingFactory()
     litellm.rust(False)
     rust_token_counter.TOKEN_COUNTER.override(factory)
-    body: Final = {"model": [ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL], "messages": ANTHROPIC_MESSAGES}
+    body: Final = {"model": [ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL, O200K_MODEL], "messages": ANTHROPIC_MESSAGES}
 
     counts: Final = await count_request_input_tokens(
         request_body=body,
@@ -383,13 +418,18 @@ async def test_disabled_rust_never_sees_the_raw_body(rust_counter: None) -> None
     )
 
     assert factory.calls == []
-    assert set(counts) == {ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL}
+    assert set(counts) == {ANTHROPIC_TOKENIZER_MODEL, CL100K_MODEL, O200K_MODEL}
     assert not set(counts.values()) & set(RUST_INPUT_TOKENS_BY_TOKENIZER.values())
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ("gpt-4o", "o3", "replicate/meta/llama-2-70b-chat"))
-async def test_models_without_a_rust_tokenizer_stay_in_python(rust_counter: None, model: str) -> None:
+@pytest.mark.parametrize("model", ("replicate/meta/llama-2-70b-chat", "meta-llama/Llama-3-8b", "text-davinci-003"))
+async def test_models_without_a_rust_tokenizer_stay_in_python(
+    rust_counter: None, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(
+        litellm, "open_ai_chat_completion_models", litellm.open_ai_chat_completion_models | {"text-davinci-003"}
+    )
     factory: Final = _RecordingFactory()
     litellm.rust(True)
     rust_token_counter.TOKEN_COUNTER.override(factory)

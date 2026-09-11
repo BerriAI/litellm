@@ -1365,8 +1365,8 @@ async def count_request_input_tokens(
 
     Tokenizing is the reservation path's dominant CPU cost and is O(prompt), so
     counting a large prompt inline stalls every other request on the worker.
-    Models whose tokenizer the Rust bridge ports (Anthropic, tiktoken cl100k_base)
-    are counted from the raw body by the bridge when it is enabled, once per
+    Models whose tokenizer the Rust bridge ports (Anthropic, tiktoken cl100k_base
+    and o200k_base) are counted from the raw body by the bridge when it is enabled, once per
     distinct tokenizer, which parses and tokenizes with the GIL released.
     Everything it declines is counted in Python, large prompts in a worker
     thread. The counts are reused by both the max-cost and the input-cost
