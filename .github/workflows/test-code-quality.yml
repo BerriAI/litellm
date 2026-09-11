@@ -187,3 +187,9 @@ jobs:
 
       - name: Check litellm CLI
         run: uv run --no-sync litellm --version
+
+      - name: Verify MCP timeout fallback and auth retries on Python 3.10
+        run: >-
+          uv run --no-sync pytest --noconftest
+          tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_debug.py
+          -k error_capture -q
