@@ -2,6 +2,7 @@
 from typing import Any, Final
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import CommonProxyErrors
 from litellm.types.guardrails import *
 
@@ -85,7 +86,7 @@ def initialize_lakera_v2(litellm_params: LitellmParams, guardrail: Guardrail):
     return _lakera_v2_callback
 
 
-def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
+def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> tuple[CustomGuardrail, ...]:
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
         _OPTIONAL_PresidioPIIMasking,
     )
@@ -94,7 +95,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
     run_input: Final = filter_scope in ("input", "both")
     run_output: Final = filter_scope in ("output", "both")
 
-    def _make_presidio_callback(**overrides):
+    def _make_presidio_callback(**overrides) -> CustomGuardrail:
         params: Final = dict(
             guardrail_name=guardrail.get("guardrail_name", ""),
             event_hook=litellm_params.mode,
@@ -120,27 +121,27 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
         litellm.logging_callback_manager.add_litellm_callback(callback)
         return callback
 
-    primary_callback = None
-
-    if run_input:
-        primary_callback = _make_presidio_callback()
-
-        if litellm_params.output_parse_pii:
-            _make_presidio_callback(
-                output_parse_pii=True,
-                event_hook=GuardrailEventHooks.post_call.value,
-            )
-
-    if run_output:
-        output_callback: Final = _make_presidio_callback(
+    input_callback: Final = _make_presidio_callback() if run_input else None
+    unmask_output_callback: Final = (
+        _make_presidio_callback(
+            output_parse_pii=True,
+            event_hook=GuardrailEventHooks.post_call.value,
+        )
+        if run_input and litellm_params.output_parse_pii
+        else None
+    )
+    mask_output_callback: Final = (
+        _make_presidio_callback(
             apply_to_output=True,
             event_hook=GuardrailEventHooks.post_call.value,
             output_parse_pii=False,
         )
-        if primary_callback is None:
-            primary_callback = output_callback
-
-    return primary_callback
+        if run_output
+        else None
+    )
+    return tuple(
+        callback for callback in (input_callback, unmask_output_callback, mask_output_callback) if callback is not None
+    )
 
 
 def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail):

@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 from urllib.parse import urlsplit
 
@@ -62,6 +63,31 @@ if TYPE_CHECKING:
 # --- typed sub-structures ---------------------------------------------------- #
 
 
+def _cache_token_value(*values: object) -> int | None:
+    explicit_zero = False
+    invalid_before_zero = False
+    for raw_value in values:
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, bool):
+            parsed = None
+        else:
+            try:
+                parsed = as_int(raw_value)
+            except (OverflowError, ValueError):
+                parsed = None
+        if parsed is None:
+            if not explicit_zero:
+                invalid_before_zero = True
+        elif parsed > 0:
+            return parsed
+        elif parsed == 0:
+            explicit_zero = True
+        elif not explicit_zero:
+            invalid_before_zero = True
+    return 0 if explicit_zero and not invalid_before_zero else None
+
+
 @dataclass(frozen=True)
 class LLMRequestParams:
     temperature: float | None = None
@@ -104,12 +130,25 @@ class LLMUsage:
         metadata: Final[Mapping[str, object]] = payload.get("metadata") or {}
         raw_usage: Final = metadata.get("usage_object")
         usage_object: Final[Mapping[str, object]] = raw_usage if isinstance(raw_usage, Mapping) else {}
+        raw_details: Final = usage_object.get("prompt_tokens_details")
+        prompt_details: Final[Mapping[str, object]] = (
+            raw_details if isinstance(raw_details, Mapping) else MappingProxyType({})
+        )
         return cls(
             input_tokens=as_int(payload.get("prompt_tokens")),
             output_tokens=as_int(payload.get("completion_tokens")),
             total_tokens=as_int(payload.get("total_tokens")),
-            cache_creation_input_tokens=as_int(usage_object.get("cache_creation_input_tokens")),
-            cache_read_input_tokens=as_int(usage_object.get("cache_read_input_tokens")),
+            cache_creation_input_tokens=_cache_token_value(
+                usage_object.get("cache_creation_input_tokens"),
+                prompt_details.get("cache_write_tokens"),
+                prompt_details.get("cache_creation_tokens"),
+                prompt_details.get("cache_creation_input_tokens"),
+            ),
+            cache_read_input_tokens=_cache_token_value(
+                usage_object.get("cache_read_input_tokens"),
+                prompt_details.get("cached_tokens"),
+                usage_object.get("prompt_cache_hit_tokens"),
+            ),
         )
 
 
@@ -347,6 +386,7 @@ class LLMCallSpanData:
     # keeps routes the convention folds into one operation distinguishable.
     output_type: GenAIOutputType | None = None
     call_type: str | None = None
+    request_route: str | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -354,6 +394,7 @@ class LLMCallSpanData:
         payload: StandardLoggingPayload,
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
+        request_route: str | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -394,6 +435,7 @@ class LLMCallSpanData:
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
             output_type=resolve_output_type(call_type),
             call_type=call_type or None,
+            request_route=request_route or context.identity.request_route,
         )
 
 

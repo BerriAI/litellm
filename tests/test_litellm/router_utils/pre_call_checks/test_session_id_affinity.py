@@ -7,7 +7,7 @@ import json
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY
+from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -178,6 +178,47 @@ async def test_async_session_id_affinity_priority_over_user_key():
 
     assert len(filtered) == 1
     assert filtered[0]["model_info"]["id"] == "deployment-2"
+
+
+@pytest.mark.asyncio
+async def test_proxy_generated_session_id_does_not_pin_a_deployment():
+    """A session id the proxy generated for a request that had none is per request, so a
+    pin stored under it must be ignored and none must be written."""
+    cache = DualCache()
+    callback = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=123,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    healthy_deployments = [
+        {"model_name": "model_group", "litellm_params": {"model": "model_1"}, "model_info": {"id": "deployment-1"}},
+        {"model_name": "model_group", "litellm_params": {"model": "model_2"}, "model_info": {"id": "deployment-2"}},
+    ]
+    await cache.async_set_cache(
+        DeploymentAffinityCheck.get_session_affinity_cache_key("model_group", "generated-1", user_key="user1"),
+        {"model_id": "deployment-2"},
+    )
+    request_kwargs = {
+        "metadata": {"user_api_key_hash": "user1", "session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True}
+    }
+
+    filtered = await callback.async_filter_deployments(
+        model="model_group", healthy_deployments=healthy_deployments, messages=[], request_kwargs=request_kwargs
+    )
+    await callback.async_pre_call_deployment_hook(
+        kwargs={
+            "metadata": {**request_kwargs["metadata"], "deployment_model_name": "model_group"},
+            "model_info": {"id": "deployment-1"},
+        },
+        call_type=None,
+    )
+
+    assert len(filtered) == 2
+    assert await cache.async_get_cache(
+        DeploymentAffinityCheck.get_session_affinity_cache_key("model_group", "generated-1", user_key="user1")
+    ) == {"model_id": "deployment-2"}
 
 
 MOCK_RESPONSES_API_RESPONSE = {

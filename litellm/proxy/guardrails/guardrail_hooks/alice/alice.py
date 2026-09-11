@@ -8,6 +8,7 @@
 import json
 import os
 from collections.abc import Mapping
+from itertools import islice
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__; see ruff-strict.toml
@@ -341,19 +342,18 @@ def _json_safe(
     if depth >= _MAX_DEPTH or id(value) in seen:
         return None
 
-    nested: Final = seen | {id(value)}  # mutable-ok: one-shot set literal, unioned into a frozenset immediately
+    nested: Final = seen | frozenset((id(value),))
 
     if isinstance(value, dict):
-        out: dict[str, object] = {}  # mutable-ok: bounded accumulator local to this call, never escapes as-is
-        for key, item in list(value.items())[:_MAX_ITEMS]:  # mutable-ok: list() only to slice an unordered view
-            if isinstance(key, str) and key not in strip_keys:
-                out[key] = _json_safe(item, depth + 1, nested, strip_keys)
-        return out
+        return {
+            key: _json_safe(item, depth + 1, nested, strip_keys)
+            for key, item in islice(value.items(), _MAX_ITEMS)
+            if isinstance(key, str) and key not in strip_keys
+        }
 
     if isinstance(value, (list, tuple, set, frozenset)):
         return [  # mutable-ok: return value is a one-shot list, discarded by the caller after use
-            _json_safe(item, depth + 1, nested, strip_keys)
-            for item in list(value)[:_MAX_ITEMS]  # mutable-ok: list() only to slice an unordered view
+            _json_safe(item, depth + 1, nested, strip_keys) for item in islice(value, _MAX_ITEMS)
         ]
 
     dump: Final = getattr(value, "model_dump", None)

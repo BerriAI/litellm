@@ -59,6 +59,7 @@ vi.mock("../networking", async () => {
       agents: [],
     }),
     getAgentAccessGroups: vi.fn().mockResolvedValue([]),
+    getClaudeCodePluginsList: vi.fn().mockResolvedValue({ plugins: [], count: 0 }),
   };
 });
 
@@ -131,6 +132,14 @@ vi.mock("../agent_management/AgentSelector", () => ({
       onClick={() => onChange?.({ agents: ["agent-1"], accessGroups: [] })}
     >
       pick agent
+    </button>
+  ),
+}));
+
+vi.mock("../skills/SkillSelector", () => ({
+  default: ({ onChange }: { onChange: (selected: string[]) => void }) => (
+    <button type="button" data-testid="skill-selector" onClick={() => onChange(["private-skill"])}>
+      pick skill
     </button>
   ),
 }));
@@ -423,6 +432,22 @@ describe("KeyEditView", () => {
       });
       expect(screen.getByText("Prompts", { selector: "label" })).toBeInTheDocument();
       expect(screen.getByText("Policies")).toBeInTheDocument();
+    });
+
+    it("lists a prompt existing in several environments once in the dropdown", async () => {
+      vi.mocked(getPromptsList).mockResolvedValueOnce({
+        prompts: [
+          { prompt_id: "envgreet", litellm_params: {}, prompt_info: { prompt_type: "db" }, environment: "development" },
+          { prompt_id: "envgreet", litellm_params: {}, prompt_info: { prompt_type: "db" }, environment: "production" },
+        ],
+      });
+
+      renderAs("Admin");
+
+      const prompts = await screen.findByLabelText(/Prompts/);
+      await userEvent.type(prompts, "envgreet");
+
+      expect(await screen.findAllByRole("option", { name: "envgreet" })).toHaveLength(1);
     });
 
     it("should omit both fields and fire neither admin-only request for an internal user", async () => {
@@ -1457,6 +1482,32 @@ describe("KeyEditView", () => {
         expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
       });
     });
+
+    it("submits organization_id as null after the organization is cleared", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, organization_id: "org-1" }}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: null }));
+      });
+      expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toHaveProperty("organization_id", null);
+    });
   });
 
   describe("models dropdown team gating", () => {
@@ -1843,6 +1894,7 @@ describe("KeyEditView", () => {
     key_alias: "asdasdas",
     models: [],
     max_budget: 0,
+    soft_budget: null,
     budget_duration: "30d",
     tpm_limit: 10,
     tpm_limit_type: null,
@@ -1864,6 +1916,7 @@ describe("KeyEditView", () => {
     mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
     mcp_tool_permissions: {},
     agents_and_groups: { agents: [], accessGroups: [] },
+    skills: [],
     organization_id: null,
     team_id: null,
     logging_settings: [],
@@ -2198,6 +2251,36 @@ describe("KeyEditView", () => {
       expect(onSubmitMock.mock.calls[0][0].agents_and_groups.agents).toEqual(["agent-1"]);
     });
 
+    it("carries a picked skill into the payload", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: "pick skill" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].skills).toEqual(["private-skill"]);
+    });
+
+    it("preloads the stored skills into the payload when the selector is left untouched", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, {
+        ...MOCK_KEY_DATA,
+        object_permission: { ...MOCK_KEY_DATA.object_permission, skills: ["stored-skill"] },
+      } as KeyResponse);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0].skills).toEqual(["stored-skill"]);
+    });
+
     it("carries an added logging integration into the payload", async () => {
       const onSubmitMock = vi.fn().mockResolvedValue(undefined);
       renderForPayload(onSubmitMock);
@@ -2258,5 +2341,57 @@ describe("KeyEditView", () => {
       });
       expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("tag_rpm_limit", { "test-tag": 7 });
     });
+
+    const setRpmLimit = (value: string) => {
+      fireEvent.change(screen.getByLabelText("RPM Limit"), { target: { value } });
+    };
+
+    it("carries an edited RPM limit and the key identifier onto the wire", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      setRpmLimit("25");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalledTimes(1);
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({ token: "test-token-123", rpm_limit: "25" });
+    });
+
+    it.fails(
+      "sends max_budget as an explicit null when the field is cleared (expected to fail until the forms revamp, tri-state PATCH tracker: today the view hands KeyInfoView an empty string and handleKeyUpdate maps it to null)",
+      async () => {
+        const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+        renderForPayload(onSubmitMock);
+        await screen.findByRole("button", { name: /save changes/i });
+
+        await userEvent.clear(screen.getByLabelText("Max Budget (USD)"));
+        await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(onSubmitMock).toHaveBeenCalledTimes(1);
+        });
+        expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("max_budget", null);
+      },
+    );
+
+    it.fails(
+      "sends only the key identifier and the edited RPM limit (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+        renderForPayload(onSubmitMock);
+        await screen.findByRole("button", { name: /save changes/i });
+
+        setRpmLimit("25");
+        await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(onSubmitMock).toHaveBeenCalledTimes(1);
+        });
+        expect(onSubmitMock.mock.calls[0][0]).toStrictEqual({ token: "test-token-123", rpm_limit: "25" });
+      },
+    );
   });
 });

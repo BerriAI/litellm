@@ -19,7 +19,10 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
+from litellm.proxy.common_utils.model_listing_utils import (
+    TeamModelNameTranslator,
+    configured_display_names,
+)
 from litellm.proxy.proxy_server import (
     _get_proxy_model_info,
     _translate_model_name_for_response,
@@ -877,7 +880,7 @@ async def test_v1_models_translates_team_model_for_access_group_key(monkeypatch)
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
 
@@ -919,7 +922,7 @@ async def test_v1_models_keeps_internal_names_when_public_name_flag_disabled(
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
 
@@ -954,7 +957,7 @@ async def test_v1_models_translates_team_model_with_metadata(monkeypatch):
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
     router.get_model_group_info.return_value = None
@@ -1000,7 +1003,7 @@ async def test_v1_models_metadata_fallbacks_use_internal_routing_key(monkeypatch
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_dep]
     router.get_model_list.return_value = [team_dep]
     # Fallbacks are keyed on the internal routing name, as the router stores them.
@@ -1057,7 +1060,7 @@ async def test_v1_models_metadata_does_not_leak_other_team_fallbacks(monkeypatch
     router.get_model_names.return_value = ["model_name_teamX_uuid9"]
     router.get_model_access_groups.return_value = {"grp-a": ["model_name_teamX_uuid9"]}
     router.get_fully_blocked_model_names.return_value = set()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     router.model_list = [team_x, team_y]
     router.get_model_list.return_value = [team_x, team_y]
     router.fallbacks = [
@@ -1312,7 +1315,7 @@ def test_translate_team_model_names_for_listing_respects_legacy_flag():
 def _public_named_router(*team_rows: dict) -> MagicMock:
     router = MagicMock()
     router.get_model_list.return_value = list(team_rows)
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
     return router
 
 
@@ -1389,6 +1392,27 @@ def test_resolve_public_name_respects_legacy_flag():
         )
         == "team-claude-sonnet"
     )
+
+
+def test_configured_display_names_keyed_by_response_id():
+    """The map is keyed by the public response id while the router lookup uses
+    the internal routing key, and entries without a configured name are omitted."""
+    router = MagicMock()
+    router.get_configured_display_name = MagicMock(
+        side_effect=lambda model_name: "Team Sonnet" if model_name == "model_name_team-abc-123_4a6b8" else None
+    )
+
+    assert configured_display_names(
+        entries=[
+            ("team-claude-sonnet", "model_name_team-abc-123_4a6b8"),
+            ("gpt-4o", "gpt-4o"),
+        ],
+        llm_router=router,
+    ) == {"team-claude-sonnet": "Team Sonnet"}
+
+
+def test_configured_display_names_empty_without_router():
+    assert configured_display_names(entries=[("gpt-4o", "gpt-4o")], llm_router=None) == {}
 
 
 @pytest.mark.asyncio

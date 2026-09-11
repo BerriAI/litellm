@@ -820,6 +820,94 @@ async def test_should_cap_known_estimate_to_remaining_budget(
 
 
 @pytest.mark.asyncio
+async def test_fail_closed_rejects_known_estimate_exceeding_remaining_budget(
+    spend_counter_state,
+):
+    """LIT-5922: with strict enforcement on, a request whose known estimate does
+    not fit the remaining budget must be rejected before dispatch instead of
+    having its reservation shrunk to the headroom and admitted, and the counter
+    must be restored to the pre-request spend."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-known-estimate-fail-closed",
+        spend=0.9,
+        max_budget=1.0,
+    )
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-budget-known-estimate-fail-closed",
+        value=0.9,
+    )
+
+    with patch(  # test-quality-ok: reserve_budget_for_request takes no estimator, so pinning the estimate needs this attribute
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                fail_closed_budget_enforcement=True,
+            )
+
+    assert exc_info.value.current_cost == pytest.approx(0.9)
+    assert exc_info.value.max_budget == pytest.approx(1.0)
+    assert "Current cost: 0.9, Estimated request cost: 0.6, Max budget: 1.0" in str(exc_info.value)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-known-estimate-fail-closed"
+    ) == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_tolerates_float_noise_when_estimate_exactly_fits(
+    spend_counter_state,
+):
+    """0.1 + 0.2 lands a hair above 0.3 in floating point. Strict enforcement
+    must treat that as fitting the budget, not reject it."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-fail-closed-float-noise",
+        spend=0.1,
+        max_budget=0.3,
+    )
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-budget-fail-closed-float-noise",
+        value=0.1,
+    )
+
+    with patch(  # test-quality-ok: reserve_budget_for_request takes no estimator, so pinning the estimate needs this attribute
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.2,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            fail_closed_budget_enforcement=True,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.2)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-fail-closed-float-noise"
+    ) == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
 async def test_should_clamp_reservation_to_default_when_output_cap_missing(
     spend_counter_state,
 ):
@@ -2107,6 +2195,83 @@ async def test_release_non_numeric_counter_reseeds_from_db(spend_counter_state):
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-budget-nonnumeric-release"
     ) == pytest.approx(0.5)
+    assert reservation["finalized"] is True
+
+
+class _ExpiringRedisCache:
+    def __init__(self) -> None:
+        self.store: dict[str, float] = {}
+
+    async def async_get_cache(self, key: str, *args: object, **kwargs: object) -> float | None:
+        return self.store.get(key)
+
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
+        self.store[key] = self.store.get(key, 0.0) + float(value)
+        return self.store[key]
+
+    async def async_set_max(self, key: str, value: float, **kwargs: object) -> float:
+        self.store[key] = max(self.store.get(key, float("-inf")), float(value))
+        return self.store[key]
+
+    async def async_set_cache(self, key: str, value: float, *args: object, **kwargs: object) -> bool:
+        self.store[key] = float(value)
+        return True
+
+    async def async_delete_cache(self, key: str, *args: object, **kwargs: object) -> None:
+        self.store.pop(key, None)
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        results = []
+        for op in increment_list:
+            results.append(await self.async_increment(op["key"], op["increment_value"]))
+        return results
+
+    def get_ttl(self, **kwargs) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
+    spend_counter_state,
+):
+    """Redis key expired mid-stream while the pod's in-memory copy still holds the
+    reserved value: reconcile must reseed from the DB floor plus the settled cost
+    instead of applying ``actual - reserved`` to the empty key."""
+    import litellm.proxy.proxy_server as ps
+
+    counter_cache, _ = spend_counter_state
+    counter_key = "spend:team_member:user-expiry:team-expiry"
+    redis_cache = _ExpiringRedisCache()
+    counter_cache.redis_cache = redis_cache
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.6)
+
+    reservation = {
+        "reserved_cost": 0.6,
+        "entries": [
+            {
+                "counter_key": counter_key,
+                "entity_type": "TeamMember",
+                "entity_id": "user-expiry:team-expiry",
+                "reserved_cost": 0.6,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    with patch.object(  # test-quality-ok: the reseed reads the DB floor through a Prisma client the test has no seam for
+        ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.3)
+    ):
+        await ps.increment_spend_counters(
+            token="key-expiry",
+            team_id="team-expiry",
+            user_id="user-expiry",
+            response_cost=0.05,
+            budget_reservation=reservation,
+        )
+
+    assert redis_cache.store[counter_key] == pytest.approx(0.35)
+    assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.35)
     assert reservation["finalized"] is True
 
 

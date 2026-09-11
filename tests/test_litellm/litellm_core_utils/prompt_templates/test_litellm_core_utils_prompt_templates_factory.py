@@ -191,8 +191,16 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
         {"type": "thinking", "thinking": "oss reasoning", "signature": None},
         {"type": "thinking", "thinking": "oss reasoning", "signature": ""},
         {"type": "thinking", "thinking": "oss reasoning"},
+        {"type": "thinking", "thinking": "openai reasoning", "signature": "litellm_encrypted_reasoning:gAAAA"},
+        {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:gAAAA"},
     ],
-    ids=["null_signature", "empty_signature", "missing_signature"],
+    ids=[
+        "null_signature",
+        "empty_signature",
+        "missing_signature",
+        "encrypted_reasoning_signature",
+        "encrypted_reasoning_redacted_data",
+    ],
 )
 def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     """Open-source reasoning models (DeepSeek-R1, Qwen, etc.) emit thinking blocks
@@ -219,7 +227,7 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     assistant = next(m for m in result if m["role"] == "assistant")
     content = assistant["content"]
     assert all(
-        block.get("type") != "thinking" for block in content
+        block.get("type") not in ("thinking", "redacted_thinking") for block in content
     ), f"unsignable thinking block must be dropped, got {content!r}"
     assert any(
         block.get("type") == "text" and block.get("text") == "2+2 equals 4."
@@ -2930,6 +2938,28 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
             os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
         else:
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
+
+
+def test_add_cache_point_tool_block_stands_down_for_model_without_prompt_caching(monkeypatch):
+    """A tool carrying cache_control must not become a cachePoint for a Bedrock model
+    whose cost-map entry lacks prompt caching support, since Bedrock rejects the whole
+    request. An unmapped id keeps emitting so ARN deployments do not lose caching."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        add_cache_point_tool_block,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    tool = {"cache_control": {"type": "ephemeral"}}
+
+    assert add_cache_point_tool_block(tool, model="nvidia.nemotron-super-3-120b") is None
+    assert add_cache_point_tool_block(tool, model="us.nvidia.nemotron-super-3-120b") is None
+    assert add_cache_point_tool_block(
+        tool, model="arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+    ) == {"cachePoint": {"type": "default"}}
+    assert add_cache_point_tool_block(tool, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0") == {
+        "cachePoint": {"type": "default"}
+    }
 
 
 def test_bedrock_tools_pt_passes_ttl_for_claude_4_5(monkeypatch):

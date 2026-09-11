@@ -1,6 +1,7 @@
 import asyncio
 import time
 from types import TracebackType
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 
@@ -294,3 +295,39 @@ async def test_azure_health_check_honors_deployment_realtime_protocol():
             model_params={"realtime_protocol": "GA"},
         )
     assert connect.url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?model=gpt-4o-realtime-preview"
+
+
+class _ConnectThatStopsAfterCapturingTheUrl:
+    url: str | None = None
+
+    def __call__(self, url: str, **kwargs: object) -> "_ConnectThatStopsAfterCapturingTheUrl":
+        self.url = url
+        return self
+
+    async def __aenter__(self) -> None:
+        raise RuntimeError("backend url captured, nothing to bridge")
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_arealtime_azure_ai_on_a_foundry_host_connects_to_the_azure_openai_realtime_route():
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="azure_ai/gpt-realtime-mini",
+            websocket=MagicMock(),
+            api_base="https://my-project.services.ai.azure.com",
+            api_key="fake-key",
+            litellm_logging_obj=FakeLogging(),
+        )
+    assert connect.url == (
+        "wss://my-project.services.ai.azure.com/openai/realtime"
+        "?api-version=2024-10-01-preview&deployment=gpt-realtime-mini"
+    )
