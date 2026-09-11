@@ -1,8 +1,9 @@
 #### SPEND MANAGEMENT #####
+import asyncio
 import collections
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
@@ -2821,13 +2822,6 @@ async def ui_view_spend_logs(
                 LIMIT ${p}
             ) AS bounded_matches
         """
-        count_rows: Final[Sequence[_SpendLogsCountRow] | None] = await _query_raw_or_none(
-            prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
-        )
-        raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
-        total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
-        total_records: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
-
         sql_query: Final = (
             f"""
                 SELECT * FROM (
@@ -2850,16 +2844,19 @@ async def ui_view_spend_logs(
             LIMIT ${p} OFFSET ${p + 1}
         """
         )
-        sql_params.extend([page_size, skip])
-
-        data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
+        count_task: Final[Awaitable[Sequence[_SpendLogsCountRow] | None]] = _query_raw_or_none(
+            prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
+        )
+        data_task: Final = prisma_client.db.query_raw(sql_query, *sql_params, page_size, skip)
+        count_rows, data = await asyncio.gather(count_task, data_task)
+        raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
+        total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
+        total_records: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
 
         _hydrate_spend_log_metadata(data)
 
         # Calculate total pages
         total_pages: Final = (total_records + page_size - 1) // page_size
-
-        verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
 
         return await _build_ui_spend_logs_response(
             prisma_client,
@@ -2899,15 +2896,25 @@ async def _fetch_session_representatives(
     next_param_index: int,
     session_keys: Sequence[tuple[str, str]],
 ) -> list[dict[str, object]]:  # mutable-ok: _build_ui_spend_logs_response writes session counts onto each row
-    """Fetch the newest non-MCP row of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
+    """Fetch the newest non-MCP row of each ``(session_key, api_key)`` session, in ``session_keys`` order.
+
+    The SQL matches candidates on the plain ``session_id`` / ``request_id`` /
+    ``api_key`` columns so the ``(startTime, session_id, request_id, api_key)``
+    index applies; a row-tuple ``IN`` on the COALESCE group key forces a full
+    window scan. That predicate admits a superset of the requested pairs (the
+    cross product of session ids and api keys, plus rows whose request_id
+    collides with a requested key), so the exact ``(session_key, api_key)``
+    pairing is restored by the ``rep_by_key`` lookup below.
+    """
     rep_query: Final = f"""
         SELECT * FROM (
             SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
                 {_SPEND_LOG_LIST_COLUMNS}
             FROM "LiteLLM_SpendLogs"
             WHERE {where_clause}
-              AND ({_SESSION_GROUP_KEY_SQL}) IN (
-                  SELECT * FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[])
+              AND (
+                  (session_id = ANY(${next_param_index}::text[]) AND api_key = ANY(${next_param_index + 1}::text[]))
+                  OR request_id = ANY(${next_param_index}::text[])
               )
             ORDER BY {_SESSION_GROUP_KEY_SQL}, call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
         ) AS session_representatives
@@ -2975,18 +2982,6 @@ async def _ui_session_grouped_spend_logs(
         ORDER BY MAX("startTime") {direction}, {_SESSION_KEY_EXPR} {direction}, api_key {direction}
         LIMIT ${limit_index}
     """
-    page_rows: Final[Sequence[_SessionPageRow]] = await _query_raw(
-        prisma_client, page_query, *sql_params, *cursor_params, page_size + 1
-    )
-
-    has_more: Final = len(page_rows) > page_size
-    visible_rows: Final = page_rows[:page_size]
-    next_cursor: Final = (
-        f"{visible_rows[-1]['last_activity']}|{visible_rows[-1]['api_key']}|{visible_rows[-1]['session_key']}"
-        if has_more and visible_rows
-        else None
-    )
-
     count_query: Final = f"""
         SELECT COUNT(*) AS total_count
         FROM (
@@ -2997,8 +2992,20 @@ async def _ui_session_grouped_spend_logs(
             LIMIT ${next_param_index}
         ) AS bounded_sessions
     """
-    count_rows: Final[Sequence[_SpendLogsCountRow]] = await _query_raw(
+    page_rows_task: Final[Awaitable[Sequence[_SessionPageRow]]] = _query_raw(
+        prisma_client, page_query, *sql_params, *cursor_params, page_size + 1
+    )
+    count_rows_task: Final[Awaitable[Sequence[_SpendLogsCountRow]]] = _query_raw(
         prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
+    )
+    page_rows, count_rows = await asyncio.gather(page_rows_task, count_rows_task)
+
+    has_more: Final = len(page_rows) > page_size
+    visible_rows: Final = page_rows[:page_size]
+    next_cursor: Final = (
+        f"{visible_rows[-1]['last_activity']}|{visible_rows[-1]['api_key']}|{visible_rows[-1]['session_key']}"
+        if has_more and visible_rows
+        else None
     )
     raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
     total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
