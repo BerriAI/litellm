@@ -72,12 +72,11 @@ REDIS_PAUSE_MS: Final = int(CHAOS_SECONDS * 1000)
 
 # RSS and CPU are budgeted as a multiple of the same metric in the baseline phase, because both
 # are machine-shaped: RSS scales with worker count and CPU with core count, so a number
-# calibrated on one runner means nothing on another. Calibrated from local runs under CLIENT
-# PAUSE ALL that came in around 1.03x RSS and 4.4x CPU per request, and deliberately loose: the
-# regression these guard against grew memory by an order of magnitude, so catching it does not
-# need a tight bound, and a tight one would flake on a shared CI runner.
-CHAOS_RSS_RATIO_CEILING: Final = 1.5
-CHAOS_CPU_PER_REQUEST_RATIO_CEILING: Final = 6.0
+# calibrated on one runner means nothing on another. RSS moved 0.91x-1.40x across three otherwise
+# identical local runs, so it stays loose; CPU per request held steady at 1.33x-1.36x across the
+# same runs, so it can sit closer to what is actually measured.
+CHAOS_RSS_RATIO_CEILING: Final = 2.0
+CHAOS_CPU_PER_REQUEST_RATIO_CEILING: Final = 4.0
 
 # Latency and log volume get flat ceilings instead, because a ratio cannot bound either one. Once
 # the breaker opens, a request skips Redis rather than waiting on its socket timeout, so the chaos
