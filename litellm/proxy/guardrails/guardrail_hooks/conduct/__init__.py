@@ -66,11 +66,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _conduct_callback
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry: Final = {  # mutable-ok: LiteLLM guardrail registry contract
     SupportedGuardrailIntegrations.CONDUCT.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry: Final = {
+guardrail_class_registry: Final = {  # mutable-ok: LiteLLM guardrail registry contract
     SupportedGuardrailIntegrations.CONDUCT.value: ConductGuardrail,
 }
