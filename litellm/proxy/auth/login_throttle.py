@@ -11,7 +11,7 @@ startup and can be reassigned later.
 
 import asyncio
 import hashlib
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
@@ -60,6 +60,7 @@ def _bounded_store(max_entries: int) -> DualCache:
 _FAILED_LOGIN_USERNAME_CACHE: Final = _bounded_store(_MAX_TRACKED_LOGIN_USERNAMES)
 _FAILED_LOGIN_SOURCE_CACHE: Final = _bounded_store(_MAX_TRACKED_LOGIN_SOURCES)
 _NO_SETTINGS: Final = MappingProxyType({})
+_UNAVAILABLE: Final = object()
 
 _DELAYS_IN_FLIGHT: Final[dict[str, int]] = {}  # mutable-ok: per-source slots taken and released around each held delay
 
@@ -188,16 +189,22 @@ class LoginThrottle:
             return await work
         except Exception as exc:  # noqa: BLE001  # an unreachable cache must never deny a valid credential
             verbose_proxy_logger.warning("login attempt accounting unavailable: %s", exc)
-            return None
+            return _UNAVAILABLE
 
-    async def _failures(self, store: DualCache, key: str) -> int:
-        """The larger of the shared and the process-local count, so a Redis outage degrades
-        to per-worker accounting instead of switching the control off."""
-        local: Final = _as_count(await self._outcome(store.async_get_cache(key=key)))
+    async def _shared(self, work: Callable[[RedisCache], Awaitable[object]]) -> object:
+        """The Redis result, or ``_UNAVAILABLE`` when Redis is not configured or the call raised."""
         redis_cache: Final = self.redis_cache
         if redis_cache is None:
-            return local
-        return max(local, _as_count(await self._outcome(redis_cache.async_get_cache(key))))
+            return _UNAVAILABLE
+        return await self._outcome(work(redis_cache))
+
+    async def _failures(self, store: DualCache, key: str) -> int:
+        """The shared count while Redis answers, so every worker sees one budget; this worker's
+        own count only while it does not, so an outage degrades to per-worker accounting."""
+        shared: Final = await self._shared(lambda redis_cache: redis_cache.async_get_cache(key))
+        if shared is not _UNAVAILABLE:
+            return _as_count(shared)
+        return _as_count(await self._outcome(store.async_get_cache(key=key)))
 
     async def _remaining_window(self, key: str) -> int:
         """Seconds until this counter expires.
@@ -206,13 +213,12 @@ class LoginThrottle:
         was stripped out of band (PERSIST, a restore). It is given the full window again,
         since nothing increments a key once the limit is reached.
         """
-        redis_cache: Final = self.redis_cache
-        if redis_cache is None:
+        if self.redis_cache is None:
             return self.window_seconds
-        ttl: Final = await self._outcome(redis_cache.async_get_ttl(key))
+        ttl: Final = await self._shared(lambda redis_cache: redis_cache.async_get_ttl(key))
         if isinstance(ttl, int) and ttl > 0:
             return min(ttl, self.window_seconds)
-        await self._outcome(redis_cache.async_increment_with_floor(key, 0, self.window_seconds))
+        await self._shared(lambda redis_cache: redis_cache.async_increment_with_floor(key, 0, self.window_seconds))
         return self.window_seconds
 
     def _refused(self, retry_after: int, param: str) -> ProxyException:
@@ -260,16 +266,12 @@ class LoginThrottle:
             )
 
     async def _bump(self, store: DualCache, key: str) -> int:
-        local: Final = _as_count(
-            await self._outcome(store.async_increment_cache(key=key, value=1, ttl=self.window_seconds))
+        shared: Final = await self._shared(
+            lambda redis_cache: redis_cache.async_increment_with_floor(key, 1, self.window_seconds)
         )
-        redis_cache: Final = self.redis_cache
-        if redis_cache is None:
-            return local
-        shared: Final = _as_count(
-            await self._outcome(redis_cache.async_increment_with_floor(key, 1, self.window_seconds))
-        )
-        return max(local, shared)
+        if shared is not _UNAVAILABLE:
+            return _as_count(shared)
+        return _as_count(await self._outcome(store.async_increment_cache(key=key, value=1, ttl=self.window_seconds)))
 
     async def record_failure(self, username: str) -> FailureCounts:
         """Count one rejected credential guess against this username and against this source."""
@@ -331,7 +333,5 @@ class LoginThrottle:
         if not self.enabled:
             return
         key: Final = self._username_key(username)
-        redis_cache: Final = self.redis_cache
-        if redis_cache is not None:
-            await self._outcome(redis_cache.async_delete_cache(key))
+        await self._shared(lambda redis_cache: redis_cache.async_delete_cache(key))
         await self._outcome(self.username_cache.async_delete_cache(key=key))
