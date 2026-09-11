@@ -11,7 +11,7 @@ import pytest_asyncio
 
 import litellm
 from litellm import utils
-from litellm.litellm_core_utils import litellm_logging
+from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.rust_bridge.configuration import (  # pyright: ignore[reportPrivateUsage]  # preserve raw configuration state in test isolation
     _CONFIGURATION,
@@ -77,6 +77,7 @@ async def isolate_ocr_test_state() -> AsyncIterator[None]:
         stack.enter_context(_rebound(_CONFIGURATION, "override", None))
         executor: Final = ThreadPoolExecutor(thread_name_prefix="rust-ocr-test-logging")
         stack.enter_context(_rebound(utils, "executor", executor))
+        stack.enter_context(_rebound(thread_pool_executor, "executor", executor))
         try:
             yield
         finally:

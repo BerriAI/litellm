@@ -3,14 +3,16 @@ import contextvars
 import datetime
 import weakref
 from collections.abc import Callable, Coroutine
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from importlib import import_module
+from threading import get_ident
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import thread_pool_executor
 from litellm.litellm_core_utils.call_completion import CallCompletion, PythonCompletion
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import ocr as rust_ocr_bridge
@@ -126,6 +128,35 @@ def test_python_completion_preserves_sync_context_and_response_identity() -> Non
 
     assert observed == [(response, "request-context")]
     assert len(executor.submissions) == 1
+
+
+def test_sync_wrapper_dispatches_with_logging_executor_and_caller_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    marker: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("wrapper-context", default="missing")
+    marker.set("request-context")
+    caller_thread: Final = get_ident()
+    response: Final = object()
+    observed: Final[list[tuple[object, str, int]]] = []
+    logging_obj: Final = MagicMock()
+
+    def record_success(result: object, start_time: datetime.datetime, end_time: datetime.datetime) -> None:
+        observed.append((result, marker.get(), get_ident()))
+
+    def ocr(**kwargs: object) -> object:
+        return response
+
+    logging_obj.success_handler.side_effect = record_success
+    monkeypatch.setattr("litellm.utils.function_setup", MagicMock(return_value=(logging_obj, {})))
+    monkeypatch.setattr("litellm.utils.load_credentials_from_list", MagicMock())
+    wrapped: Final = client(ocr)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr(thread_pool_executor, "executor", executor)
+        result: Final = wrapped()
+
+    assert result is response
+    assert len(observed) == 1
+    assert observed[0][0] is response
+    assert observed[0][1] == "request-context"
+    assert observed[0][2] != caller_thread
 
 
 @pytest.mark.asyncio
