@@ -64,6 +64,7 @@ from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    EMPTY_MAPPING,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -96,6 +97,7 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -5564,6 +5566,17 @@ def completion(
             gigachat_access_token=kwargs.get("gigachat_access_token"),
             **{key: kwargs[key] for key in FORWARDED_KWARGS_KEYS if key in kwargs},
         )
+        if litellm_params.get("provider_affinity_header") is not None:
+            headers = add_provider_affinity_header(
+                headers=headers or litellm.headers or EMPTY_MAPPING,
+                litellm_params={
+                    "provider_affinity_header": litellm_params["provider_affinity_header"],
+                    "litellm_session_id": kwargs.get("litellm_session_id"),
+                    "session_id": kwargs.get("session_id"),
+                    "metadata": metadata,
+                    "litellm_metadata": kwargs.get("litellm_metadata"),
+                },
+            )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
             user=user,

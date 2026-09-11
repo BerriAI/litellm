@@ -15,6 +15,7 @@ from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_c
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -328,6 +329,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     organization: str | None = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
+    provider_affinity_header: str | None = None
 
     ## LOGGING PARAMS ##
     litellm_trace_id: str | None = None
@@ -398,6 +400,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_ssl: bool | None = None
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
+
+    @field_validator("provider_affinity_header")
+    @classmethod
+    def validate_provider_affinity_header(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_provider_affinity_header_name(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -501,6 +510,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     stream_timeout: float | str | None
     max_retries: int | None
     organization: list | str | None  # for openai orgs
+    provider_affinity_header: ReadOnly[str | None]
     configurable_clientside_auth_params: (
         CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     )

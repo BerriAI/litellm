@@ -70,6 +70,30 @@ class TestUseResponsesApiBridgeFlag:
     @patch.object(
         import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
+    def test_provider_affinity_header_is_forwarded_through_bridge(self, mock_get_config, mock_bridge_handler):
+        mock_get_config.return_value = litellm.OpenAIResponsesAPIConfig()
+        mock_bridge_handler.return_value = MagicMock()
+
+        litellm.responses(
+            model="openai/my-custom-model",
+            input="Hello",
+            use_chat_completions_api=True,
+            litellm_session_id="session-bridge",
+            provider_affinity_header="X-Conversation-Id",
+            extra_headers={"X-Customer-Header": "customer-value"},
+            litellm_logging_obj=MagicMock(),
+        )
+
+        forwarded_headers = mock_bridge_handler.call_args.kwargs["extra_headers"]
+        assert forwarded_headers["X-Conversation-Id"] == "session-bridge"
+        assert forwarded_headers["X-Customer-Header"] == "customer-value"
+
+    @patch.object(
+        import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
+    )
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
+    )
     def test_bridge_used_when_model_uses_chat_completions_prefix(
         self, mock_get_config, mock_bridge_handler
     ):

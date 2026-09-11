@@ -146,3 +146,42 @@ def test_aws_session_tags_round_trip_as_sts_shaped_pairs():
 def test_aws_session_tags_reject_shapes_sts_would_refuse(aws_session_tags):
     with pytest.raises(ValidationError, match="aws_session_tags"):
         LiteLLM_Params(model="bedrock/anthropic.claude-opus-5", aws_session_tags=aws_session_tags)
+
+
+def test_provider_affinity_header_is_normalized():
+    params = LiteLLM_Params(
+        model="openai/gpt-4o-mini",
+        provider_affinity_header="X-Conversation-Id",
+    )
+
+    assert params.provider_affinity_header == "X-Conversation-Id"
+    assert params.model_dump(exclude_none=True)["provider_affinity_header"] == "X-Conversation-Id"
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie",
+        "Set-Cookie",
+        "Host",
+        "Content-Length",
+        "X-API-Key",
+    ],
+)
+def test_provider_affinity_header_rejects_sensitive_or_transport_headers(header: str):
+    with pytest.raises(ValueError, match="provider_affinity_header"):
+        LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            provider_affinity_header=header,
+        )
+
+
+@pytest.mark.parametrize("header", ["", "X Conversation Id", "X-Conversation-Id\r\nInjected: true"])
+def test_provider_affinity_header_rejects_invalid_header_names(header: str):
+    with pytest.raises(ValueError, match="provider_affinity_header"):
+        LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            provider_affinity_header=header,
+        )

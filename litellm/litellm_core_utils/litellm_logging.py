@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.provider_affinity import redact_provider_affinity_header
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
@@ -1229,9 +1230,44 @@ class Logging(LiteLLMLoggingBaseClass):
         Common helper function across the sync + async pre-call function
         """
 
+        litellm_params: Final = self.model_call_details.get("litellm_params")
+        request_headers: Final = additional_args.get("headers")
+        complete_input_dict: Final = additional_args.get("complete_input_dict")
+        should_redact_headers: Final = isinstance(request_headers, Mapping) or (
+            isinstance(complete_input_dict, Mapping) and isinstance(complete_input_dict.get("extra_headers"), Mapping)
+        )
+        logged_additional_args: Final = (
+            {  # mutable-ok: logging callbacks expect a mutable payload copy
+                **additional_args,
+                **(
+                    {  # mutable-ok: merged into the mutable logging callback payload
+                        "headers": redact_provider_affinity_header(request_headers, litellm_params),
+                    }
+                    if isinstance(request_headers, Mapping)
+                    else {}  # mutable-ok: empty override for the mutable logging callback payload
+                ),
+                **(
+                    {  # mutable-ok: merged into the mutable logging callback payload
+                        "complete_input_dict": {  # mutable-ok: logging callbacks may enrich request data
+                            **complete_input_dict,
+                            "extra_headers": redact_provider_affinity_header(
+                                complete_input_dict["extra_headers"],
+                                litellm_params,
+                            ),
+                        },
+                    }
+                    if isinstance(complete_input_dict, Mapping)
+                    and isinstance(complete_input_dict.get("extra_headers"), Mapping)
+                    else {}  # mutable-ok: empty override for the mutable logging callback payload
+                ),
+            }
+            if should_redact_headers
+            else additional_args
+        )
+
         self.model_call_details["input"] = input
         self.model_call_details["api_key"] = api_key
-        self.model_call_details["additional_args"] = additional_args
+        self.model_call_details["additional_args"] = logged_additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"
         if is_classifier_call(self.call_type, self.model_call_details.get("litellm_params") or EMPTY_MAPPING):
             self.classifier_input = (
