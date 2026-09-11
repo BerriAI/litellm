@@ -224,33 +224,31 @@ def _queue_budget_linked_resets(
 
 
 def _queue_enduser_resets(writes: LinkedSpendResetWrites, cascade: "_BudgetCascade") -> None:
-    """End users are matched by id rather than budget link: rows with no
-    budget_id ride the default budget tier (litellm.max_end_user_budget_id).
-    Zero-before-decrement ordering matters here too (see
-    _queue_budget_linked_resets)."""
-    if not cascade.rollover_caps:
-        if cascade.endusers:
-            writes.queue_spend_zero(
-                where={"user_id": {"in": [row.user_id for row in cascade.endusers]}}
-            )  # mutable-ok: prisma where filter must be a dict
+    """End users reset on the budget link like every other gated table, plus a
+    NULL-budget_id branch: rows created implicitly persist no link and ride the
+    default tier (litellm.max_end_user_budget_id).
+
+    Matching on the link rather than enumerating user ids keeps a statement's
+    bind count proportional to the expiring tiers instead of the customer
+    population, which past ~32,700 dependents exceeds PostgreSQL's per-statement
+    bind ceiling and wedges the cascade permanently (#40564).
+    """
+    _queue_budget_linked_resets(writes, cascade, extra=_SPENT_ROWS_WHERE)
+    default_budget_id: Final = litellm.max_end_user_budget_id
+    if default_budget_id is None or default_budget_id not in cascade.budget_ids:
         return
-    tiered: Final = tuple((row.budget_id or litellm.max_end_user_budget_id, row.user_id) for row in cascade.endusers)
-    for budget_id, cap in cascade.rollover_caps.items():
-        if not (
-            user_ids := [uid for bid, uid in tiered if bid == budget_id]
-        ):  # mutable-ok: prisma "in" filter takes a list
-            continue
+    cap: Final = cascade.rollover_caps.get(default_budget_id)
+    if cap is None:
         writes.queue_spend_zero(
-            where={"user_id": {"in": user_ids}, "spend": {"lte": cap}}
+            where={"budget_id": None, **_SPENT_ROWS_WHERE}
         )  # mutable-ok: prisma where filter must be a dict
-        writes.queue_spend_decrement(
-            where={"user_id": {"in": user_ids}, "spend": {"gt": cap}}, amount=cap
-        )  # mutable-ok: prisma where filter must be a dict
-    plain: Final = [
-        uid for bid, uid in tiered if bid is None or bid not in cascade.rollover_caps
-    ]  # mutable-ok: prisma "in" filter takes a list
-    if plain:
-        writes.queue_spend_zero(where={"user_id": {"in": plain}})  # mutable-ok: prisma where filter must be a dict
+        return
+    writes.queue_spend_zero(
+        where={"budget_id": None, "spend": {"gt": 0, "lte": cap}}
+    )  # mutable-ok: prisma where filter must be a dict
+    writes.queue_spend_decrement(
+        where={"budget_id": None, "spend": {"gt": cap}}, amount=cap
+    )  # mutable-ok: prisma where filter must be a dict
 
 
 @dataclass(frozen=True, slots=True)

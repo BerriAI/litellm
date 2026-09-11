@@ -1013,3 +1013,20 @@ async def test_breaker_metrics_track_state_and_failure_class():
     breaker.record_success()
     assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before
     assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before + 1
+
+
+def test_sync_guard_counts_a_timeout_as_a_timeout():
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker_sync
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
+
+    def timing_out_call() -> str:
+        raise RedisTimeoutError("read timed out")
+
+    for _ in range(6):
+        with pytest.raises(RedisTimeoutError):
+            _run_under_circuit_breaker_sync(breaker, "op", timing_out_call)
+
+    assert breaker.is_open() is False

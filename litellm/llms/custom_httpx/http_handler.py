@@ -751,7 +751,9 @@ class AsyncHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        follow_redirects: bool | None = None,
     ):
+        _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -769,22 +771,30 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,
             )
-            response: Final = await self.client.send(req)
+            response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
+                retry_data, retry_content = _prepare_request_data_and_content(data, content)
+                retry: Final = new_client.build_request(
+                    "PUT",
+                    url,
+                    data=retry_data,
                     json=json,
                     params=params,
                     headers=headers,
-                    stream=stream,
+                    timeout=timeout,
+                    content=retry_content,
                 )
+                retried: Final = await new_client.send(retry, stream=stream, follow_redirects=_follow_redirects)
+                try:
+                    retried.raise_for_status()
+                except httpx.HTTPStatusError as retried_error:
+                    await _raise_masked_async_error(retried_error, stream)
+                return retried
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
