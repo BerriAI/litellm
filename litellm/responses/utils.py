@@ -31,7 +31,7 @@ from litellm.types.utils import (
 )
 
 
-def _apply_nested_drop_params(params: dict[str, Any], additional_drop_params: list[str] | None) -> dict[str, Any]:
+def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: list[str] | None) -> dict[str, object]:
     nested_paths: Final = tuple(path for path in additional_drop_params or () if is_nested_path(path))
     return reduce(lambda acc, path: delete_nested_value(acc, path), nested_paths, params)
 
@@ -288,7 +288,7 @@ class ResponsesAPIRequestUtils:
         if "previous_response_id" in non_default_params:
             decoded_previous_response_id: Final = (
                 ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-                    non_default_params["previous_response_id"]
+                    cast(str, non_default_params["previous_response_id"])
                 )
             )
             non_default_params["previous_response_id"] = decoded_previous_response_id
@@ -296,7 +296,9 @@ class ResponsesAPIRequestUtils:
         if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            converted_metadata: Final = add_openai_metadata(non_default_params["metadata"])
+            converted_metadata: Final = add_openai_metadata(
+                cast(Mapping[str, object] | None, non_default_params["metadata"])
+            )
             if converted_metadata is not None:
                 non_default_params["metadata"] = converted_metadata
             else:
