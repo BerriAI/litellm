@@ -1,0 +1,7 @@
+{
+  "method": "Move only VS Code cached created_at into the past, with VS Code stopped; preserve real access/refresh tokens and all server settings",
+  "expires_in": 3600,
+  "changed_field": "created_at",
+  "credentials_unchanged": true,
+  "gateway_source_unchanged": true
+}

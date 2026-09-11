@@ -1,0 +1,1 @@
+INFO:     172.30.0.4:56406 - "POST /register HTTP/1.1" 400 Bad Request

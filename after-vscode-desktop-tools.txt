@@ -1,0 +1,85 @@
+File
+Edit
+Selection
+View
+Go
+Run
+Open in Agents
+Update
+1
+EXPLORER
+WORKSPACE
+.vscode
+OUTLINE
+TIMELINE
+Open Chat
+Ctrl
++
+Alt
++
+I
+Show All Commands
+Ctrl
++
+Shift
++
+P
+Go to File
+Ctrl
++
+P
+PROBLEMS
+OUTPUT
+Git
+GitHub
+GitHub Authentication
+JSON Language Server
+LIT-7449 Verification
+─────────
+Agent Host
+Agent Sessions
+Auth: 127.0.0.1:4000
+Extension Host
+Main
+MCP Gateway
+MCP: lit-7449
+Remote Connections
+Remote Tunnel Service
+Settings Sync
+Shared
+Tasks
+Terminal
+Text Model Changes Reason
+Window
+VS Code discovered 1 matching documentation search tool(s)
+Invoking mcp_litellm-mcp-s_microsoft_learn-microsoft_docs_search through vscode.lm.
+invokeTool
+PASS: actual VS Code MCP tool call returned documentation
+{"results":[{"title":"Manage Azure resource groups by using Azure PowerShell",
+"content":"# Manage Azure resource groups by using Azure PowerShell\nLearn how to use 
+Azure PowerShell with [Azure Resource Manager](https://learn.microsoft.com/azure/
+azure-resource-manager/management/overview) to manage your Azure resource groups.\n## 
+Prerequisites\n1. Azure PowerShell. For more information, see [Install the Azure Az 
+PowerShell module](https://learn.microsoft.com/en-us/powershell/azure/
+install-azure-powershell).\n2. An authenticated account. After installing Azure 
+PowerShell, sign in for the first time. For more information, see [Sign in](https://
+learn.microsoft.com/en-us/powershell/azure/install-az-ps#sign-in).\n## What is a 
+resource group\nA resource group is a container that holds related resources for an 
+CHAT
+Build with Agent
+
+AI responses may be inaccurate
+
+Generate Agent Instructions to onboard AI onto your codebase.
+
+Agent
+Models
+Local
+Default permissions
+ 0 
+ 0
+Info: Authenticating to '127.0.0.1:4000': Complete the authentication in the browser window that has opened.
+2 Results
+Add ServerAdd a new server configuration
+lit-7449Running
+workspace/.vscode/mcp.json

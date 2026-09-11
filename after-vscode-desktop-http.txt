@@ -1,0 +1,16 @@
+INFO:     172.30.0.4:39730 - "POST /mcp HTTP/1.1" 401 Unauthorized
+INFO:     172.30.0.4:39730 - "POST /register HTTP/1.1" 201 Created
+INFO:     172.30.0.4:45766 - "POST /authorize/complete HTTP/1.1" 303 See Other
+INFO:     172.30.0.4:45790 - "POST /token HTTP/1.1" 200 OK
+INFO:     172.30.0.4:45790 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     172.30.0.4:45804 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     172.30.0.4:45790 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     172.30.0.4:45818 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     172.30.0.4:54456 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     172.30.0.4:44832 - "POST /mcp HTTP/1.1" 401 Unauthorized
+INFO:     172.30.0.4:44832 - "POST /token HTTP/1.1" 200 OK
+INFO:     172.30.0.4:44832 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     172.30.0.4:44832 - "POST /mcp HTTP/1.1" 202 Accepted
+INFO:     172.30.0.4:44856 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     172.30.0.4:44866 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     172.30.0.4:43676 - "POST /mcp HTTP/1.1" 200 OK

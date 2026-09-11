@@ -1,0 +1,82 @@
+File
+Edit
+Selection
+View
+Go
+Run
+workspace [Superuser]
+Open in Agents
+Update
+1
+EXPLORER
+WORKSPACE
+.vscode
+OUTLINE
+TIMELINE
+Open Chat
+Ctrl
++
+Alt
++
+I
+Show All Commands
+Ctrl
++
+Shift
++
+P
+Go to File
+Ctrl
++
+P
+PROBLEMS
+OUTPUT
+Git
+GitHub
+GitHub Authentication
+JSON Language Server
+LIT-7449 Verification
+─────────
+Agent Host
+Agent Sessions
+Auth: 127.0.0.1:4000
+Extension Host
+Main
+MCP Gateway
+MCP: lit-7449
+Remote Connections
+Remote Tunnel Service
+Settings Sync
+Shared
+Tasks
+Terminal
+Text Model Changes Reason
+Window
+well-known/oauth-protected-resource/mcp
+2026-09-11 02:53:26.961 [info] Using auth server metadata url: http://127.0.0.1:4000/mcp
+2026-09-11 02:53:26.965 [info] Discovered authorization server metadata at http://127.0.
+0.1:4000/.well-known/oauth-authorization-server/mcp
+2026-09-11 02:53:31.829 [info] Waiting for server to respond to `initialize` request...
+2026-09-11 02:53:36.830 [info] Waiting for server to respond to `initialize` request...
+2026-09-11 02:53:41.830 [info] Waiting for server to respond to `initialize` request...
+2026-09-11 02:53:46.829 [info] Waiting for server to respond to `initialize` request...
+2026-09-11 02:53:51.830 [info] Waiting for server to respond to `initialize` request...
+2026-09-11 02:53:56.830 [info] Waiting for server to respond to `initialize` request...
+2026-09-11 02:54:01.830 [info] Waiting for server to respond to `initialize` request...
+2026-09-11 02:54:06.830 [info] Waiting for server to respond to `initialize` request...
+2026-09-11 02:54:11.582 [info] Discovered 3 tools
+CHAT
+Build with Agent
+
+AI responses may be inaccurate
+
+Generate Agent Instructions to onboard AI onto your codebase.
+
+Agent
+Models
+Local
+Default permissions
+ 0 
+ 0
+Info: Authenticating to '127.0.0.1:4000': Complete the authentication in the browser window that has opened.
+It is not recommended to run Code as root user.
