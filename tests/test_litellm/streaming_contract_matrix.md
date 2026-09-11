@@ -70,7 +70,9 @@ Partial usage is asserted for async failure paths where the SDK supplies it. Syn
 | STREAM-004 | Empty string `mock_response` sends a provider request |
 | STREAM-005 | Exact cold native sync/async text OpenAI/Pydantic `MockValSer` serialization error |
 
-Each exclusion is reached only at the affected assertion or exact exception. Other assertions execute first where the stream can complete. STREAM-005 can interrupt the stream, so later assertions in that occurrence remain unexecuted. Its attribution to a particular package is unresolved. No production workaround or schema warming is performed
+Each exclusion is reached only at the affected assertion or exact exception. STREAM-002 accepts only the observed recount for this fixture: a zero prompt count becomes 8, a zero output count becomes 2, and total usage remains their sum. Nonzero counts must remain unchanged. Both caller-visible and callback usage must match either the correct tuple or that exact known tuple before the expected failure is recorded
+
+Other assertions execute first where the stream can complete. STREAM-005 can interrupt the stream, so later assertions in that occurrence remain unexecuted. Its attribution to a particular package is unresolved. No production workaround or schema warming is performed
 
 These cases must not be reported as fully protected. Use the verbose test report or JUnit output to see exact affected combinations. The findings and local mutation evidence are provided separately from the implementation diff
 

@@ -301,14 +301,26 @@ async def test_success(
             field(events[0].response.get("usage"), key)
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")
         )
-        if (prompt_tokens == 0 or output_tokens == 0) and not recounted and callback_usage != expected:
-            pytest.xfail("STREAM-002: provider authoritative zero usage is recounted")
-        assert callback_usage == expected
-        if visible:
-            assert (
-                tuple(field(visible_usage[0], key) for key in ("prompt_tokens", "completion_tokens", "total_tokens"))
-                == expected
+        observed_usages: Final = (callback_usage,) + (
+            tuple(
+                tuple(field(item, key) for key in ("prompt_tokens", "completion_tokens", "total_tokens"))
+                for item in visible_usage
             )
+            if visible
+            else ()
+        )
+        known_recounted: Final = (
+            8 if prompt_tokens == 0 else prompt_tokens,
+            2 if output_tokens == 0 else output_tokens,
+        )
+        allowed_usages: Final = (
+            (expected, (*known_recounted, sum(known_recounted)))
+            if (prompt_tokens == 0 or output_tokens == 0) and not recounted
+            else (expected,)
+        )
+        assert all(usage in allowed_usages for usage in observed_usages), observed_usages
+        if any(usage != expected for usage in observed_usages):
+            pytest.xfail("STREAM-002: provider authoritative zero usage is recounted")
 
 
 @pytest.mark.asyncio
