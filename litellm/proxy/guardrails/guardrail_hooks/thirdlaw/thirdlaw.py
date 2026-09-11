@@ -60,10 +60,8 @@ _ENDPOINT_PATH: Final = "/guardrails/litellm/v2"
 
 _UNREACHABLE_STATUS_CODES: Final = frozenset({502, 503, 504})
 
-# LiteLLM bookkeeping and transport-credential keys that ride along in ``request_data``
-# but are not part of the provider request body. ``secret_fields`` holds plaintext
-# Authorization values and ``api_key`` can carry a client-forwarded provider key, so
-# neither may leave the proxy; ``proxy_server_request`` is self-referential.
+# Not part of the provider request body. ``secret_fields`` holds plaintext Authorization
+# values and ``api_key`` can carry a client-forwarded provider key, so neither may leave the proxy.
 _BODY_STRIP_KEYS: Final = frozenset(
     {
         "api_key",
@@ -84,9 +82,8 @@ _BODY_STRIP_KEYS: Final = frozenset(
     }
 )
 
-# Keys a modify_request decision may never write back. Beyond the stripped keys:
-# ``guardrails`` gates which guardrails run, ``model`` was authorized against the
-# key/team before this hook, ``stream`` changes the wire protocol mid-request.
+# Never writable by modify_request: ``guardrails`` gates which guardrails run, ``model`` was
+# authorized against the key/team before this hook, ``stream`` changes the wire protocol mid-request.
 _WRITE_BACK_DENY_KEYS: Final = _BODY_STRIP_KEYS | frozenset({"model", "policies", "stream", "user"})
 
 _USER_METADATA_FIELDS: Final = (

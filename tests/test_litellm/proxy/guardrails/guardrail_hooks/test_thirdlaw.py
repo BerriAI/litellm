@@ -1,5 +1,6 @@
 import json
-from typing import Any
+from collections.abc import AsyncIterator, Sequence
+from typing import TypeAlias
 from unittest.mock import AsyncMock
 
 import httpx
@@ -37,11 +38,13 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 
+JsonDict: TypeAlias = dict[str, object]
+
 _API_BASE = "https://thirdlaw.test"
 _ENDPOINT = "https://thirdlaw.test/guardrails/litellm/v2"
 
 
-def _decision_response(body: dict, status_code: int = 200) -> httpx.Response:
+def _decision_response(body: JsonDict, status_code: int = 200) -> httpx.Response:
     return httpx.Response(
         status_code=status_code,
         json=body,
@@ -49,11 +52,11 @@ def _decision_response(body: dict, status_code: int = 200) -> httpx.Response:
     )
 
 
-def _make_guardrail(*, decisions: list[httpx.Response] | None = None, **overrides) -> ThirdlawGuardrail:
+def _make_guardrail(*, decisions: list[httpx.Response] | None = None, **overrides: object) -> ThirdlawGuardrail:
     handler = AsyncMock(spec=AsyncHTTPHandler)
     if decisions is not None:
         handler.post.side_effect = decisions
-    kwargs: dict[str, Any] = {
+    kwargs: dict[str, object] = {
         "api_base": _API_BASE,
         "api_key": "thirdlaw_secret",
         "guardrail_name": "thirdlaw-guard",
@@ -65,7 +68,7 @@ def _make_guardrail(*, decisions: list[httpx.Response] | None = None, **override
     return ThirdlawGuardrail(**kwargs)
 
 
-def _request_data() -> dict:
+def _request_data() -> JsonDict:
     body = {
         "model": "gpt-5.6",
         "messages": [{"role": "user", "content": "my api key is sk-user-secret"}],
@@ -81,7 +84,7 @@ def _request_data() -> dict:
         ],
         "temperature": 0.2,
     }
-    data: dict = {
+    data: JsonDict = {
         **body,
         "litellm_call_id": "call-123",
         "metadata": {
@@ -158,11 +161,11 @@ def _responses_api_response() -> ResponsesAPIResponse:
     )
 
 
-def _sent_payload(guardrail: ThirdlawGuardrail) -> dict:
+def _sent_payload(guardrail: ThirdlawGuardrail) -> JsonDict:
     return guardrail.async_handler.post.call_args.kwargs["json"]
 
 
-async def _run_pre_call(guardrail: ThirdlawGuardrail, data: dict) -> dict:
+async def _run_pre_call(guardrail: ThirdlawGuardrail, data: JsonDict) -> JsonDict:
     return await guardrail.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         cache=DualCache(),
@@ -605,12 +608,12 @@ def _stream_chunks() -> list[ModelResponseStream]:
     ]
 
 
-async def _aiter(items: list) -> Any:
+async def _aiter(items: Sequence[object]) -> AsyncIterator[object]:
     for item in items:
         yield item
 
 
-async def _collect(agen: Any) -> list:
+async def _collect(agen: AsyncIterator[object]) -> list[object]:
     return [item async for item in agen]
 
 
@@ -677,7 +680,7 @@ async def test_streaming_buffered_block_raises_streaming_callback_error():
 async def test_streaming_buffered_holds_chunks_until_decision():
     call_order: list[str] = []
 
-    async def _recording_stream() -> Any:
+    async def _recording_stream() -> AsyncIterator[object]:
         for chunk in _stream_chunks():
             call_order.append("chunk_consumed")
             yield chunk
@@ -844,7 +847,7 @@ async def test_unscannable_stream_passes_through_when_opted_into_fail_open():
 )
 async def test_block_never_travels_as_a_success_status(service_status, expected_status):
     """A block is a refusal, so a success status from the service must not reach the caller."""
-    body: dict[str, Any] = {"action": "block", "message": "nope"}
+    body: JsonDict = {"action": "block", "message": "nope"}
     if service_status is not None:
         body["response_status"] = service_status
     g = _make_guardrail(decisions=[_decision_response(body)])
