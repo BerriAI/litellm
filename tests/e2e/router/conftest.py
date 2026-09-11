@@ -10,12 +10,10 @@ proxy does not already list it (compose has it in static config; stage does not)
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 
 import pytest
 from complexity_router_client import ComplexityRouterClient, build_client
-from e2e_config import REDIS_TIMEOUT_OPT_IN_ENV
 from e2e_http import NoBody, Success
 from lifecycle import ResourceManager
 from models import (
@@ -44,16 +42,6 @@ ROUTER_PARAMS = LiteLLMParamsBody(
 )
 # Key must be allowed to call the virtual router and both tier backends.
 ROUTER_KEY_MODELS = [ROUTER_MODEL, "gpt-5.5", "claude-haiku-4-5"]
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    if os.environ.get(REDIS_TIMEOUT_OPT_IN_ENV):
-        return
-    deselected = [item for item in items if item.get_closest_marker("redis_timeout") is not None]
-    if not deselected:
-        return
-    config.hook.pytest_deselected(items=deselected)
-    items[:] = [item for item in items if item.get_closest_marker("redis_timeout") is None]
 
 
 @pytest.fixture(scope="session")
