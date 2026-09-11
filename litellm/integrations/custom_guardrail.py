@@ -438,7 +438,18 @@ class CustomGuardrail(CustomLogger):
         """
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+    def _incremental_scan_policy_fingerprint(self) -> str:
+        """Identity of the rules the scan enforces; empty leaves the cache key as before.
+
+        A guardrail that returns a hash of its effective rules starts a fresh per-session
+        cache whenever those rules change under the same guardrail name.
+        """
+        return ""
+
     def _scanned_texts_cache_key(self, session_id: str) -> str:
+        fingerprint: Final = self._incremental_scan_policy_fingerprint()
+        if fingerprint:
+            return f"guardrail_scanned_texts:{self.guardrail_name}:{fingerprint}:{session_id}"
         return f"guardrail_scanned_texts:{self.guardrail_name}:{session_id}"
 
     @staticmethod

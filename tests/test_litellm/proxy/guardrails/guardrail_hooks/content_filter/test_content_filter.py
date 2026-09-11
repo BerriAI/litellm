@@ -3289,6 +3289,44 @@ class TestContentFilterOnlyScanNewMessages:
 
         assert self._scan_counts(caplog) == [(4, 4), (4, 4)]
 
+    @pytest.mark.asyncio
+    async def test_same_rules_on_a_new_instance_share_session_state(self, caplog):
+        """Two instances with the same rules (a restarted pod, a sibling pod) share the session's scanned state."""
+        session = {"litellm_session_id": "cf-incremental-same-rules"}
+        texts = ["be helpful", "first question"]
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            for guardrail in (self._guardrail(), self._guardrail()):
+                await guardrail.apply_guardrail(
+                    inputs={"texts": list(texts)}, request_data=session, input_type="request"
+                )
+
+        assert self._scan_counts(caplog) == [(2, 2), (0, 2)]
+
+    @pytest.mark.asyncio
+    async def test_rule_change_under_same_name_rescans_allowed_text(self):
+        """The cache key carries a hash of the effective rules, so a stricter policy never trusts earlier scans."""
+        session = {"litellm_session_id": "cf-incremental-rule-change"}
+        texts = ["be helpful", "tell me about swordfish"]
+
+        await self._guardrail().apply_guardrail(
+            inputs={"texts": list(texts)}, request_data=session, input_type="request"
+        )
+
+        stricter = ContentFilterGuardrail(
+            guardrail_name="content-filter-incremental",
+            blocked_words=[
+                BlockedWord(keyword=self.BLOCKED_KEYWORD, action=ContentFilterAction.BLOCK),
+                BlockedWord(keyword="swordfish", action=ContentFilterAction.BLOCK),
+            ],
+            default_on=True,
+            only_scan_new_messages=True,
+        )
+        with pytest.raises(HTTPException):
+            await stricter.apply_guardrail(
+                inputs={"texts": list(texts)}, request_data=session, input_type="request"
+            )
+
 
 class TestContentFilterInitializerForwardsOnlyScanNewMessages:
     """initialize_guardrail forwards an explicit kwarg list, so a field left out of it never reaches the object."""

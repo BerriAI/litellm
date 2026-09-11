@@ -6,6 +6,7 @@ to detect and block/mask sensitive content.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -239,6 +240,11 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         # Competitor intent checker (optional; airline uses major_airlines.json, generic requires competitors)
         self._competitor_intent_checker: BaseCompetitorIntentChecker | None = None
+        self._competitor_intent_config: Final = (
+            competitor_intent_config
+            if competitor_intent_config and isinstance(competitor_intent_config, dict)
+            else None
+        )
         if competitor_intent_config and isinstance(competitor_intent_config, dict):
             self._init_competitor_intent_checker(competitor_intent_config)
 
@@ -288,6 +294,9 @@ class ContentFilterGuardrail(CustomGuardrail):
                 self.guardrail_name,
             )
             self.only_scan_new_messages = False
+
+        # Rule stores are written only here and a DB update rebuilds the instance, so hash the policy once
+        self._policy_fingerprint: Final = self._compute_policy_fingerprint()
 
         verbose_proxy_logger.debug(
             "ContentFilterGuardrail initialized with %s patterns and %s blocked words",
@@ -354,6 +363,57 @@ class ContentFilterGuardrail(CustomGuardrail):
                 )
             )
         )
+
+    def _incremental_scan_policy_fingerprint(self) -> str:
+        return self._policy_fingerprint
+
+    def _compute_policy_fingerprint(self) -> str:
+        """Hash of every rule the scan enforces, so a changed rule set never reuses a session's scanned-text state."""
+        policy: Final = (
+            tuple(
+                (
+                    entry["pattern_name"],
+                    entry["action"].value,
+                    entry["regex"].pattern,
+                    entry["regex"].flags,
+                    entry["keyword_regex"].pattern if entry["keyword_regex"] else None,
+                    entry["allow_word_numbers"],
+                )
+                for entry in self.compiled_patterns
+            ),
+            tuple(
+                sorted((word, action.value, description) for word, (action, description) in self.blocked_words.items())
+            ),
+            tuple(
+                sorted((word, cat, sev, action.value) for word, (cat, sev, action) in self.category_keywords.items())
+            ),
+            tuple(
+                sorted(
+                    (word, cat, sev, action.value)
+                    for word, (cat, sev, action) in self.always_block_category_keywords.items()
+                )
+            ),
+            tuple(
+                (name, tuple(cfg["identifier_words"]), tuple(cfg["block_words"]), cfg["action"].value, cfg["severity"])
+                for name, cfg in sorted(self.conditional_categories.items())
+            ),
+            tuple(
+                (
+                    name,
+                    category.default_action.value,
+                    tuple(category.keywords),
+                    tuple(category.exceptions),
+                    tuple(category.identifier_words),
+                    tuple(category.always_block_keywords),
+                    category.inherit_from,
+                    tuple(category.additional_block_words),
+                    tuple(source for source, _ in category.phrase_patterns),
+                )
+                for name, category in sorted(self.loaded_categories.items())
+            ),
+            self._competitor_intent_config,
+        )
+        return hashlib.sha256(json.dumps(policy, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
 
     @staticmethod
     def _category_config_view(cat_config: ContentFilterCategoryConfig) -> _CategoryConfigView:
