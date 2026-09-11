@@ -7,8 +7,6 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
-from fakeredis import FakeAsyncRedis, FakeRedis, FakeServer
 
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
@@ -19,51 +17,6 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
-
-
-@pytest_asyncio.fixture(loop_scope="function")
-async def isolated_legacy_redis():
-    server = FakeServer()
-    client = FakeRedis(server=server)
-    async with FakeAsyncRedis(server=server) as async_client:
-        with (
-            patch("redis.Redis", autospec=True, return_value=client),
-            patch("redis.asyncio.BlockingConnectionPool", autospec=True, return_value=async_client.connection_pool),
-            patch("redis.asyncio.Redis", autospec=True, return_value=async_client),
-        ):
-            yield RedisCache(host="fake-legacy-redis", namespace="legacy-test")
-    client.close()
-
-
-@pytest.mark.asyncio
-async def test_concurrent_realtime_releases_update_redis_without_lost_decrement(isolated_legacy_redis):
-    remote = isolated_legacy_redis
-    first_cache, second_cache = DualCache(redis_cache=remote), DualCache(redis_cache=remote)
-    first, second = (_PROXY_MaxParallelRequestsHandler(InternalUsageCache(c)) for c in (first_cache, second_cache))
-    auth = UserAPIKeyAuth(api_key="concurrent-key", max_parallel_requests=2)
-    first_data, second_data = {"model": "test"}, {"model": "test"}
-    first.begin_realtime_attachment(first_data)
-    second.begin_realtime_attachment(second_data)
-    await first.async_pre_call_hook(auth, first_cache, first_data, "_arealtime")
-    await second.async_pre_call_hook(auth, second_cache, second_data, "_arealtime")
-    key = f"concurrent-key::{datetime.now().strftime('%Y-%m-%d-%H-%M')}::request_count"
-    counter = {"current_requests": 2, "current_rpm": 2, "current_tpm": 17}
-    await first_cache.async_set_cache(key, counter)
-    await second_cache.async_set_cache(key, counter, local_only=True)
-    remote.redis_client.pexpire(remote.check_and_fix_namespace(key), 15000)
-    await asyncio.gather(
-        first.async_release_realtime_attachment(first_data, auth),
-        second.async_release_realtime_attachment(second_data, auth),
-    )
-    expected = {"current_requests": 0, "current_rpm": 2, "current_tpm": 17}
-    assert await remote.async_get_cache(key) == expected
-    assert 0 < remote.redis_client.pttl(remote.check_and_fix_namespace(key)) <= 15000
-    assert await first_cache.async_get_cache(key) == expected
-    assert await second_cache.async_get_cache(key) == expected
-    await first_cache.async_set_cache("missing", counter, local_only=True)
-    await first._release_realtime_counter("missing")
-    assert await remote.async_get_cache("missing") is None
-    assert await first_cache.async_get_cache("missing", local_only=True) is None
 
 
 @pytest.mark.asyncio

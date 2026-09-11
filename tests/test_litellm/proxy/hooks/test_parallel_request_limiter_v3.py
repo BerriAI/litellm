@@ -141,28 +141,6 @@ async def test_realtime_lease_renewal_preserves_quota_past_ttl_and_does_not_resu
         await handler.async_pre_call_hook(auth, cache, {"model": "gpt-3.5-turbo"}, "arealtime_calls")
 
 
-@pytest.mark.asyncio
-async def test_realtime_lease_redis_renewal_is_atomic_and_does_not_resurrect():
-    from fakeredis import FakeAsyncRedis
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import PARALLEL_RENEW_SCRIPT
-
-    async with FakeAsyncRedis() as client:
-        now = (await client.time())[0]
-        await client.zadd("first", {"owner": now - 10, "other": now})
-        await client.zadd("second", {"owner": now - PARALLEL_REQUEST_SLOT_TTL_SECONDS})
-        renew = client.register_script(PARALLEL_RENEW_SCRIPT)
-        assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [0]
-        assert await client.zscore("first", "owner") == now - 10
-        await client.zadd("second", {"owner": now - 10})
-        assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [1]
-        assert await client.zscore("first", "owner") >= now
-        assert await client.ttl("first") > PARALLEL_REQUEST_SLOT_TTL_SECONDS - 10
-        await client.zrem("second", "owner")
-        assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [0]
-        assert await client.zscore("second", "owner") is None
-        assert await client.zscore("first", "other") == now
-
-
 @pytest.fixture
 def time_controller(monkeypatch):
     controller = TimeController()

@@ -9282,13 +9282,13 @@ class ProviderConfigManager:
     def get_provider_realtime_handler(
         provider: LlmProviders,
         params: GenericLiteLLMParams,
-        headers: Mapping[str, str],
+        get_headers: Callable[[], Mapping[str, str]],
         extra_headers: Mapping[str, object] | None = None,
     ) -> OpenAIRealtime | None:
         if provider == LlmProviders.CHATGPT:
             from litellm.llms.chatgpt.realtime import ChatGPTRealtime
 
-            return ChatGPTRealtime(params, headers, extra_headers)
+            return ChatGPTRealtime(params, get_headers(), extra_headers)
         return None
 
     @staticmethod

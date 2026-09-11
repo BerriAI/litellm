@@ -133,6 +133,7 @@ jobs:
               tests/test_litellm/proxy/hooks
               tests/test_litellm/proxy/policy_engine
               tests/test_litellm/proxy/client
+              tests/local_testing/test_realtime_call_redis.py
             workers: 2
             reruns: 2
             timeout-minutes: 20

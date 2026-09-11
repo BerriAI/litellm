@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from types import TracebackType
 from typing import Final
@@ -15,6 +16,42 @@ from litellm.realtime_api.main import _with_resolved_session_model
 class FakeLogging:
     def update_from_kwargs(self, **kwargs):
         pass
+
+
+@pytest.mark.parametrize("provider", [litellm.LlmProviders.XAI, litellm.LlmProviders.OPENAI, litellm.LlmProviders.GEMINI])
+def test_realtime_handler_factory_does_not_read_headers_without_a_handler(provider):
+    from litellm.types.router import GenericLiteLLMParams
+
+    read_headers = MagicMock(side_effect=AssertionError("Headers must not be read"))
+    assert realtime_main.ProviderConfigManager.get_provider_realtime_handler(
+        provider, GenericLiteLLMParams(), read_headers
+    ) is None
+    read_headers.assert_not_called()
+
+
+def test_realtime_handler_factory_passes_actual_chatgpt_headers(tmp_path, monkeypatch):
+    from litellm.llms.chatgpt.realtime import ChatGPTRealtime
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", "auth.json")
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"access_token": "factory-test-token", "account_id": "factory-account", "expires_at": time.time() + 3600})
+    )
+    params = GenericLiteLLMParams(litellm_session_id="factory-session")
+    headers = {"openai-alpha": "quicksilver=v2"}
+    extra_headers = {"x-gateway-route": "required"}
+    read_headers = MagicMock(return_value=headers)
+    result = realtime_main.ProviderConfigManager.get_provider_realtime_handler(
+        litellm.LlmProviders.CHATGPT, params, read_headers, extra_headers
+    )
+    assert isinstance(result, ChatGPTRealtime)
+    read_headers.assert_called_once_with()
+    outgoing_headers = result._get_additional_headers("unused")
+    assert outgoing_headers["openai-alpha"] == headers["openai-alpha"]
+    assert outgoing_headers["x-gateway-route"] == extra_headers["x-gateway-route"]
+    assert outgoing_headers["session_id"] == "factory-session"
+    assert outgoing_headers["Authorization"] == "Bearer factory-test-token"
 
 
 def test_resolves_top_level_session_model():
