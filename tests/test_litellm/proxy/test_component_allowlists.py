@@ -26,6 +26,8 @@ RDS IAM token when ``IAM_TOKEN_DB_AUTH`` is set).
 import os
 import sys
 
+import pytest
+
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
 # reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
 # runners don't set these. We pin throwaway values before the import so the
@@ -41,8 +43,10 @@ _PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
 for _key, _value in _THROWAWAY_ENV.items():
     os.environ.setdefault(_key, _value)
 
+from fastapi import FastAPI
 from fastapi.routing import Mount
 from prometheus_client import make_asgi_app
+from starlette.routing import Route
 
 # gateway/ and backend/ live at the repo root, not inside litellm/.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -58,7 +62,9 @@ from gateway.routes.allowlist import (
     GATEWAY_EXACT_PATHS,
     GATEWAY_MOUNT_PATHS,
     GATEWAY_PATH_PREFIXES,
+    parse_gateway_workload,
 )
+from litellm.proxy._lazy_features import LAZY_FEATURES, disable_lazy_features
 from litellm.proxy.proxy_server import app
 
 for _key, _previous in _PRE_EXISTING_ENV.items():
@@ -79,7 +85,7 @@ _DB_ENV_KEYS = (
 )
 _PRE_DB_ENV = {_key: os.environ.pop(_key, None) for _key in _DB_ENV_KEYS}
 _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
-from gateway.main import _is_gateway_route
+from gateway.main import _is_gateway_route, _keeps_lazy_feature
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
 for _key, _previous in _PRE_DB_ENV.items():
@@ -108,12 +114,8 @@ def test_gateway_plus_backend_covers_full_app():
         for r in app.router.routes
         if not isinstance(r, Mount) and getattr(r, "path", None) is not None
     }
-    gateway_paths = _component_paths(
-        app.router.routes, GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
-    )
-    backend_paths = _component_paths(
-        app.router.routes, BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
-    )
+    gateway_paths = _component_paths(app.router.routes, GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES)
+    backend_paths = _component_paths(app.router.routes, BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES)
 
     uncovered = all_paths - (gateway_paths | backend_paths)
 
@@ -126,16 +128,15 @@ def test_gateway_plus_backend_covers_full_app():
 
 def test_backend_mount_paths_defined():
     """BACKEND_MOUNT_PATHS constant must exist and be a frozenset."""
-    assert isinstance(BACKEND_MOUNT_PATHS, frozenset), \
+    assert isinstance(BACKEND_MOUNT_PATHS, frozenset), (
         f"BACKEND_MOUNT_PATHS must be a frozenset, got {type(BACKEND_MOUNT_PATHS)}"
-    assert len(BACKEND_MOUNT_PATHS) > 0, \
-        "BACKEND_MOUNT_PATHS must contain at least one Mount path"
+    )
+    assert len(BACKEND_MOUNT_PATHS) > 0, "BACKEND_MOUNT_PATHS must contain at least one Mount path"
 
 
 def test_swagger_mount_in_backend_allowlist():
     """The /swagger Mount must be in BACKEND_MOUNT_PATHS."""
-    assert "/swagger" in BACKEND_MOUNT_PATHS, \
-        "/swagger Mount path must be in BACKEND_MOUNT_PATHS"
+    assert "/swagger" in BACKEND_MOUNT_PATHS, "/swagger Mount path must be in BACKEND_MOUNT_PATHS"
 
 
 def test_backend_keeps_swagger_mount():
@@ -145,32 +146,31 @@ def test_backend_keeps_swagger_mount():
         for r in app.router.routes
         if isinstance(r, Mount) and getattr(r, "path", None) in BACKEND_MOUNT_PATHS
     }
-    assert "/swagger" in backend_mounts, \
+    assert "/swagger" in backend_mounts, (
         "/swagger Mount is expected on the proxy app and should be in BACKEND_MOUNT_PATHS"
+    )
 
 
 def test_backend_drops_non_allowlisted_mounts():
     """Verify that Mounts NOT in BACKEND_MOUNT_PATHS would be dropped from backend."""
     all_mounts = {
-        getattr(r, "path")
-        for r in app.router.routes
-        if isinstance(r, Mount) and getattr(r, "path", None) is not None
+        getattr(r, "path") for r in app.router.routes if isinstance(r, Mount) and getattr(r, "path", None) is not None
     }
     non_backend_mounts = all_mounts - BACKEND_MOUNT_PATHS
 
-    assert len(non_backend_mounts) > 0, \
+    assert len(non_backend_mounts) > 0, (
         "Expected at least one non-backend Mount (e.g., /ui, /_next) to verify filtering logic"
+    )
     for mount_path in non_backend_mounts:
-        assert mount_path not in BACKEND_MOUNT_PATHS, \
-            f"Mount {mount_path} should not be in BACKEND_MOUNT_PATHS"
+        assert mount_path not in BACKEND_MOUNT_PATHS, f"Mount {mount_path} should not be in BACKEND_MOUNT_PATHS"
 
 
 def test_gateway_mount_paths_defined():
     """GATEWAY_MOUNT_PATHS constant must exist and expose /metrics."""
-    assert isinstance(GATEWAY_MOUNT_PATHS, frozenset), \
+    assert isinstance(GATEWAY_MOUNT_PATHS, frozenset), (
         f"GATEWAY_MOUNT_PATHS must be a frozenset, got {type(GATEWAY_MOUNT_PATHS)}"
-    assert "/metrics" in GATEWAY_MOUNT_PATHS, \
-        "/metrics Mount path must be in GATEWAY_MOUNT_PATHS"
+    )
+    assert "/metrics" in GATEWAY_MOUNT_PATHS, "/metrics Mount path must be in GATEWAY_MOUNT_PATHS"
 
 
 def test_gateway_trim_keeps_metrics_mount():
@@ -185,15 +185,15 @@ def test_gateway_trim_keeps_metrics_mount():
     metrics_mount = Mount("/metrics", app=make_asgi_app())
     routes = [*app.router.routes, metrics_mount]
     trimmed = [r for r in routes if _is_gateway_route(r)]
-    assert metrics_mount in trimmed, \
-        "/metrics Mount must survive the gateway route trim"
+    assert metrics_mount in trimmed, "/metrics Mount must survive the gateway route trim"
 
 
 def test_gateway_drops_ui_and_swagger_mounts():
     """UI static and swagger Mounts must still be trimmed from the gateway."""
     for path in ("/ui", "/_next", "/litellm-asset-prefix/_next", "/swagger"):
-        assert not _is_gateway_route(Mount(path, app=make_asgi_app())), \
+        assert not _is_gateway_route(Mount(path, app=make_asgi_app())), (
             f"Mount {path} must not be served by the gateway"
+        )
 
 
 def test_every_app_mount_is_assigned_to_a_component():
@@ -221,3 +221,92 @@ def test_every_app_mount_is_assigned_to_a_component():
         f"Add them to GATEWAY_MOUNT_PATHS, BACKEND_MOUNT_PATHS, or serve them "
         f"from the UI container:\n  " + "\n  ".join(sorted(unassigned))
     )
+
+
+async def _noop() -> None:
+    return None
+
+
+_WORKLOAD_PROBES = {
+    "llm": ("/v1/chat/completions", "/v1/embeddings", "/anthropic/v1/messages", "/v1/models"),
+    "mcp": ("/mcp", "/mcp/proxy", "/toolset/{toolset_name}/mcp", "/{mcp_server_name}/mcp"),
+    "agent": ("/a2a/{agent_id}", "/a2a/{agent_id}/message/send", "/v1/a2a/discover"),
+}
+_OPS_PROBES = ("/health/readiness", "/health/liveliness", "/routes", "/metrics")
+_BACKEND_ONLY_PROBES = ("/key/generate", "/v1/mcp/server", "/v1/agents", "/user/info")
+
+
+def test_workload_probes_are_real_proxy_routes():
+    """Guard the probe paths below against drift: each is a static route or a lazy feature prefix."""
+    static = {getattr(r, "path") for r in app.router.routes if not isinstance(r, Mount)}
+    for path in (*(p for paths in _WORKLOAD_PROBES.values() for p in paths), *_OPS_PROBES[:3], *_BACKEND_ONLY_PROBES):
+        assert path in static or any(feat.matches(path) for feat in LAZY_FEATURES), f"{path} is not a proxy route"
+
+
+@pytest.mark.parametrize("workload", ["llm", "mcp", "agent"])
+def test_dedicated_workload_serves_only_its_own_routes(workload):
+    for owner, paths in _WORKLOAD_PROBES.items():
+        for path in paths:
+            assert _is_gateway_route(Route(path, _noop), workload) is (owner == workload), (
+                f"{workload} gateway must {'serve' if owner == workload else 'drop'} {path}"
+            )
+    for path in (*_OPS_PROBES, *GATEWAY_EXACT_PATHS):
+        assert _is_gateway_route(Route(path, _noop), workload), f"{workload} gateway must keep ops path {path}"
+    for path in _BACKEND_ONLY_PROBES:
+        assert not _is_gateway_route(Route(path, _noop), workload), f"{workload} gateway must not serve {path}"
+
+
+def test_all_workload_serves_every_workload_route():
+    for paths in _WORKLOAD_PROBES.values():
+        for path in paths:
+            assert _is_gateway_route(Route(path, _noop), "all"), f"default gateway must serve {path}"
+    for path in _BACKEND_ONLY_PROBES:
+        assert not _is_gateway_route(Route(path, _noop), "all")
+
+
+@pytest.mark.parametrize(
+    "workload,keeps_mcp",
+    [("all", True), ("mcp", True), ("llm", False), ("agent", False)],
+)
+def test_mcp_mount_follows_the_mcp_workload(workload, keeps_mcp):
+    assert _is_gateway_route(Mount("/mcp", app=make_asgi_app()), workload) is keeps_mcp
+    assert _is_gateway_route(Mount("/metrics", app=make_asgi_app()), workload)
+    assert not _is_gateway_route(Mount("/swagger", app=make_asgi_app()), workload)
+
+
+@pytest.mark.parametrize(
+    "workload,kept,dropped",
+    [
+        (
+            "llm",
+            {"anthropic_passthrough", "realtime", "vector_stores", "langfuse_passthrough"},
+            {"mcp_app", "mcp_rest", "a2a", "a2a_registration"},
+        ),
+        ("mcp", {"mcp_app", "mcp_rest"}, {"anthropic_passthrough", "realtime", "a2a", "a2a_registration"}),
+        ("agent", {"a2a", "a2a_registration"}, {"mcp_app", "mcp_rest", "anthropic_passthrough", "realtime"}),
+    ],
+)
+def test_dedicated_workload_disables_foreign_lazy_features(workload, kept, dropped):
+    """Lazy routers register on first request, after the trim, so the workload must refuse to load foreign ones."""
+    names = {feat.name for feat in LAZY_FEATURES}
+    assert (kept | dropped) <= names, f"stale feature names in test: {(kept | dropped) - names}"
+    disabled = disable_lazy_features(FastAPI(), lambda feat: _keeps_lazy_feature(feat, workload))
+    assert kept.isdisjoint(disabled), f"{workload} gateway must keep {kept & disabled}"
+    assert dropped <= disabled, f"{workload} gateway must disable {dropped - disabled}"
+    assert "guardrails" in disabled, "management-only lazy features never load on a dedicated workload"
+
+
+def test_all_workload_keeps_every_lazy_feature():
+    assert disable_lazy_features(FastAPI(), lambda feat: _keeps_lazy_feature(feat, "all")) == frozenset()
+
+
+@pytest.mark.parametrize(
+    "raw,expected", [(None, "all"), ("", "all"), (" MCP ", "mcp"), ("llm", "llm"), ("Agent", "agent")]
+)
+def test_parse_gateway_workload_accepts_known_values(raw, expected):
+    assert parse_gateway_workload(raw) == expected
+
+
+def test_parse_gateway_workload_rejects_unknown_value():
+    with pytest.raises(ValueError, match="LITELLM_GATEWAY_WORKLOAD='backend' is not one of agent, all, llm, mcp"):
+        parse_gateway_workload("backend")

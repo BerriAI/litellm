@@ -1,4 +1,9 @@
-{{- if and .Values.gateway.enabled .Values.gateway.serviceMonitor.enabled }}
+{{- if .Values.gateway.enabled }}
+{{- include "litellm.gateway.renderPerWorkload" (dict "root" $ "template" "litellm.gateway.serviceMonitor") }}
+{{- end }}
+
+{{- define "litellm.gateway.serviceMonitor" -}}
+{{- if .Values.gateway.serviceMonitor.enabled }}
 {{- if not .Values.gateway.metricsServer.enabled }}
 {{- fail "gateway.serviceMonitor.enabled requires gateway.metricsServer.enabled: the http port serves /metrics/ behind virtual-key auth, so an unauthenticated scrape gets 401" }}
 {{- end }}
@@ -26,3 +31,4 @@ spec:
       scrapeTimeout: {{ .Values.gateway.serviceMonitor.scrapeTimeout }}
       scheme: http
 {{- end }}
+{{- end -}}

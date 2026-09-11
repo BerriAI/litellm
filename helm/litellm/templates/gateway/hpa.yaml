@@ -1,4 +1,9 @@
-{{- if and .Values.gateway.enabled .Values.gateway.hpa.enabled }}
+{{- if .Values.gateway.enabled }}
+{{- include "litellm.gateway.renderPerWorkload" (dict "root" $ "template" "litellm.gateway.hpa") }}
+{{- end }}
+
+{{- define "litellm.gateway.hpa" -}}
+{{- if .Values.gateway.hpa.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -63,3 +68,4 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 {{- end }}
+{{- end -}}

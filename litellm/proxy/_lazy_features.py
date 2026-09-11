@@ -8,7 +8,7 @@ omits each feature's routes until the feature is warmed.
 
 import asyncio
 import importlib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
@@ -280,12 +280,7 @@ class LazyFeatureMiddleware:
         from litellm.proxy.utils import get_server_root_path
 
         self._root_path = get_server_root_path().rstrip("/")
-        # Loaded set / per-feature locks live on app.state so the warm endpoint
-        # and the middleware share them — preventing duplicate registrations
-        # when both paths fire for the same feature.
-        if not hasattr(fastapi_app.state, "lazy_loaded"):
-            fastapi_app.state.lazy_loaded = set()
-            fastapi_app.state.lazy_locks = {}
+        _loaded_features(fastapi_app)
 
     @property
     def _loaded(self) -> set:
@@ -315,12 +310,19 @@ class LazyFeatureMiddleware:
         await self.app(scope, receive, send)
 
 
-async def _force_load(app: "FastAPI", feat: LazyFeature) -> bool:
-    """Import + register a lazy feature exactly once per (app, module).
-    Shared by the middleware and the /lazy/warm endpoint."""
+def _loaded_features(app: "FastAPI") -> set[str]:
+    """Loaded set / per-feature locks live on app.state so the warm endpoint,
+    the middleware and workload trimming share them."""
     if not hasattr(app.state, "lazy_loaded"):
         app.state.lazy_loaded = set()
         app.state.lazy_locks = {}
+    return app.state.lazy_loaded
+
+
+async def _force_load(app: "FastAPI", feat: LazyFeature) -> bool:
+    """Import + register a lazy feature exactly once per (app, module).
+    Shared by the middleware and the /lazy/warm endpoint."""
+    _loaded_features(app)
     lock: Final = app.state.lazy_locks.setdefault(feat.module_path, asyncio.Lock())
     async with lock:
         if feat.module_path in app.state.lazy_loaded:
@@ -355,6 +357,18 @@ async def _force_load(app: "FastAPI", feat: LazyFeature) -> bool:
 def attach_lazy_features(app: "FastAPI") -> None:
     app.include_router(_make_warmup_router(app))
     app.add_middleware(LazyFeatureMiddleware, fastapi_app=app)
+
+
+def disable_lazy_features(
+    app: "FastAPI",
+    keep: Callable[[LazyFeature], bool],
+    features: Sequence[LazyFeature] = LAZY_FEATURES,
+) -> frozenset[str]:
+    """Mark the features ``keep`` rejects as already loaded so neither the
+    middleware nor /lazy/warm ever registers them. Returns their names."""
+    disabled: Final = tuple(feat for feat in features if not keep(feat))
+    _loaded_features(app).update(feat.module_path for feat in disabled)
+    return frozenset(feat.name for feat in disabled)
 
 
 def _make_warmup_router(app: "FastAPI") -> "APIRouter":

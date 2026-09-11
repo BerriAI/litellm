@@ -274,6 +274,20 @@ redis:
 gateway:
   enabled: true
   logLevel: INFO
+  # One gateway Deployment + Service per entry, named <gateway>-<name> and run
+  # with LITELLM_GATEWAY_WORKLOAD=<name> (all | llm | mcp | agent). Other keys
+  # on an entry override gateway.* for that workload only; `config` is shared.
+  # Empty renders the single gateway that serves every data-plane route.
+  # The ingress routes MCP by the /mcp and /toolset prefixes, so once split,
+  # address a named server as /mcp/<server> rather than /<server>/mcp: an
+  # Ingress path cannot match a leading wildcard segment, so the latter falls
+  # to the backend catch-all.
+  #   workloads:
+  #     - name: llm
+  #     - name: mcp
+  #       hpa: { minReplicas: 1, maxReplicas: 3 }
+  #     - name: agent
+  workloads: []
   # Number of uvicorn worker processes per gateway pod. Sets NUM_WORKERS,
   # consumed by the gateway image entrypoint. Default is 1.
   numWorkers: 1

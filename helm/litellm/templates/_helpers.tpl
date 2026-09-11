@@ -15,8 +15,75 @@ Common naming + label helpers shared by gateway, backend, and ui templates.
 {{- end -}}
 {{- end -}}
 
-{{- define "litellm.gateway.fullname" -}}
+{{- define "litellm.gateway.baseName" -}}
 {{- printf "%s-gateway" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+Name of the gateway Deployment/Service for one workload. The base is cut so
+the workload suffix always fits under the 63 char limit, otherwise every
+workload would truncate to the same name. Invoke with a dict:
+  (dict "root" $ "workload" "llm")
+*/}}
+{{- define "litellm.gateway.workloadName" -}}
+{{- $suffix := printf "-%s" .workload -}}
+{{- $base := include "litellm.gateway.baseName" .root | trunc (int (sub 63 (len $suffix))) | trimSuffix "-" -}}
+{{- printf "%s%s" $base $suffix -}}
+{{- end -}}
+
+{{/*
+Name of one gateway Deployment/Service. `.Values.gateway.workload` is only set
+inside "litellm.gateway.renderPerWorkload", where each gateway.workloads
+entry renders its own copy of the gateway templates.
+*/}}
+{{- define "litellm.gateway.fullname" -}}
+{{- with .Values.gateway.workload -}}
+{{- include "litellm.gateway.workloadName" (dict "root" $ "workload" .) -}}
+{{- else -}}
+{{- include "litellm.gateway.baseName" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.workloadNames" -}}all llm mcp agent{{- end -}}
+
+{{/*
+Render `.template` once per gateway.workloads entry (or once with the plain
+gateway values when the list is empty). Each entry's keys override
+.Values.gateway for that copy, except `config`, which stays one shared
+ConfigMap, and `enabled` / `workloads`.
+
+Invoke with a dict: (dict "root" $ "template" "litellm.gateway.deployment")
+*/}}
+{{- define "litellm.gateway.renderPerWorkload" -}}
+{{- $root := .root -}}
+{{- $seen := list -}}
+{{- range $idx, $wl := $root.Values.gateway.workloads -}}
+{{- if not (kindIs "map" $wl) -}}
+{{- fail (printf "gateway.workloads[%d] must be a map with a name key, got %v" $idx $wl) -}}
+{{- end -}}
+{{- if not (has $wl.name (splitList " " (include "litellm.gateway.workloadNames" $root))) -}}
+{{- fail (printf "gateway.workloads[%d].name %v must be one of %s" $idx $wl.name (include "litellm.gateway.workloadNames" $root)) -}}
+{{- end -}}
+{{- if has $wl.name $seen -}}
+{{- fail (printf "gateway.workloads: %s is listed more than once" $wl.name) -}}
+{{- end -}}
+{{- $seen = append $seen $wl.name -}}
+{{- range $key := list "config" "enabled" "workloads" -}}
+{{- if hasKey $wl $key -}}
+{{- fail (printf "gateway.workloads[%d] (%s): %s is shared by every gateway workload, set gateway.%s instead" $idx $wl.name $key $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $wl := $root.Values.gateway.workloads | default (list (dict)) -}}
+{{- $gateway := mergeOverwrite (deepCopy $root.Values.gateway) (omit $wl "name") -}}
+{{- with $wl.name -}}
+{{- $_ := set $gateway "workload" . -}}
+{{- end -}}
+{{- $values := set (deepCopy $root.Values) "gateway" $gateway -}}
+{{- $ctx := dict "Values" $values "Chart" $root.Chart "Release" $root.Release "Capabilities" $root.Capabilities "Template" $root.Template "Files" $root.Files }}
+---
+{{ include $.template $ctx }}
+{{- end }}
 {{- end -}}
 
 {{- define "litellm.backend.fullname" -}}
@@ -92,6 +159,9 @@ Per-component selector labels — used in both Service selectors and Deployment 
 app.kubernetes.io/name: {{ include "litellm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: gateway
+{{- with .Values.gateway.workload }}
+litellm.ai/gateway-workload: {{ . }}
+{{- end }}
 {{- end -}}
 
 {{- define "litellm.backend.selectorLabels" -}}
@@ -116,7 +186,7 @@ is false the chart uses the provided name, or the namespace `default` SA.
 */}}
 {{- define "litellm.gateway.serviceAccountName" -}}
 {{- if .Values.serviceAccounts.gateway.create -}}
-{{ default (include "litellm.gateway.fullname" .) .Values.serviceAccounts.gateway.name }}
+{{ default (include "litellm.gateway.baseName" .) .Values.serviceAccounts.gateway.name }}
 {{- else -}}
 {{ default "default" .Values.serviceAccounts.gateway.name }}
 {{- end -}}

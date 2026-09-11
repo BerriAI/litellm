@@ -1,5 +1,5 @@
 {{- if .Values.ingress.enabled -}}
-{{- $gatewayName := include "litellm.gateway.fullname" . -}}
+{{- $gatewayName := include "litellm.gateway.baseName" . -}}
 {{- $backendName := include "litellm.backend.fullname" . -}}
 {{- $uiName := include "litellm.ui.fullname" . -}}
 {{- $gatewayPort := .Values.gateway.service.port -}}
@@ -10,10 +10,32 @@
 {{- fail (printf "ingress.controller: unknown controller %q, expected one of alb, nginx" $controller) }}
 {{- end }}
 {{/*
+  Gateway Service per workload group. Without gateway.workloads every group is
+  the single gateway Service. With it, a group goes to its own workload's
+  Service, falling back to an "all" workload; operational paths (/health,
+  /metrics, /test, extraPaths with service: gateway) go to the first workload
+  listed, since every workload serves them.
+*/}}
+{{- $workloadServices := dict "llm" $gatewayName "mcp" $gatewayName "agent" $gatewayName "ops" $gatewayName -}}
+{{- with .Values.gateway.workloads }}
+{{- $names := list }}
+{{- range . }}{{ $names = append $names .name }}{{ end }}
+{{- range $group := list "llm" "mcp" "agent" }}
+{{- if has $group $names }}
+{{- $_ := set $workloadServices $group (include "litellm.gateway.workloadName" (dict "root" $ "workload" $group)) }}
+{{- else if has "all" $names }}
+{{- $_ := set $workloadServices $group (include "litellm.gateway.workloadName" (dict "root" $ "workload" "all")) }}
+{{- else }}
+{{- fail (printf "ingress: no gateway workload serves %s paths, add an entry named %s or all to gateway.workloads" $group $group) }}
+{{- end }}
+{{- end }}
+{{- $_ := set $workloadServices "ops" (include "litellm.gateway.workloadName" (dict "root" $ "workload" (first $names))) }}
+{{- end }}
+{{/*
   Backends addressable from ingress.extraPaths, keyed by the `service` field.
 */}}
 {{- $extraPathBackends := dict
-    "gateway" (dict "name" $gatewayName "port" $gatewayPort)
+    "gateway" (dict "name" $workloadServices.ops "port" $gatewayPort)
     "backend" (dict "name" $backendName "port" $backendPort)
     "ui" (dict "name" $uiName "port" $uiPort)
 -}}
@@ -54,14 +76,14 @@
   /v2/user/info, /v2/team/list, /v2/model/info, /v2/login, /v2/guardrails/*,
   /v1/mcp/*) onto the gateway via a broad /v1 or /v2 prefix.
 */}}
-{{- $gatewayPrefixes := list
+{{- $llmPrefixes := list
     "/v1/chat" "/chat" "/v1/completions" "/completions" "/v1/embeddings" "/embeddings"
     "/v1/moderations" "/moderations" "/v1/audio" "/audio" "/v1/images" "/images"
     "/v1/files" "/files" "/v1/batches" "/batches" "/v1/fine_tuning" "/fine_tuning"
     "/v1/fine-tuning" "/fine-tuning" "/v1/responses" "/responses" "/v1/threads" "/threads"
     "/v1/assistants" "/assistants" "/v1/vector_stores" "/vector_stores" "/v1/indexes"
     "/v1/models" "/models" "/openai" "/engines"
-    "/v1/messages" "/messages" "/v1/skills" "/v1/a2a" "/a2a"
+    "/v1/messages" "/messages" "/v1/skills"
     "/v1/rerank" "/v2/rerank" "/rerank" "/v1/ocr" "/ocr" "/v1/rag" "/rag"
     "/v1/video" "/v1/videos" "/video" "/videos" "/v1/search" "/search"
     "/v1/containers" "/containers" "/v1/evals" "/v1/memory" "/queue/chat"
@@ -69,10 +91,30 @@
     "/anthropic" "/azure" "/azure_ai" "/aws" "/bedrock" "/comprehendmedical" "/cohere" "/gemini" "/google"
     "/vertex_ai" "/vertex-ai" "/assemblyai" "/eu.assemblyai" "/langfuse" "/vllm"
     "/mistral" "/groq" "/voyage" "/cursor" "/milvus" "/openai_passthrough"
-    "/toolset"
     "/v1/realtime" "/realtime"
-    "/health" "/metrics"
 -}}
+{{/*
+  /mcp stays on the backend catch-all unless gateway.workloads is set: the
+  single default gateway has never taken MCP transport traffic, and moving it
+  is what the operator asks for by splitting workloads. The /{server}/mcp form
+  has no prefix to route on: ALB orders ImplementationSpecific patterns after
+  every Prefix path, so a leading-wildcard pattern would sit behind the /
+  catch-all, and ingress-nginx reads ImplementationSpecific as a literal
+  prefix. Named servers reach the mcp workload as /mcp/{server}.
+*/}}
+{{- $mcpPrefixes := list "/toolset" -}}
+{{- if .Values.gateway.workloads }}
+{{- $mcpPrefixes = prepend $mcpPrefixes "/mcp" }}
+{{- end }}
+{{- $agentPrefixes := list "/v1/a2a" "/a2a" -}}
+{{- $opsPrefixes := list "/health" "/metrics" -}}
+{{- $groupPrefixes := dict "llm" $llmPrefixes "mcp" $mcpPrefixes "agent" $agentPrefixes "ops" $opsPrefixes -}}
+{{- $gatewayPaths := list -}}
+{{- range $group := list "llm" "mcp" "agent" "ops" }}
+{{- range get $groupPrefixes $group }}
+{{- $gatewayPaths = append $gatewayPaths (dict "path" . "service" (get $workloadServices $group)) }}
+{{- end }}
+{{- end -}}
 {{/*
   /test is gateway-only as an EXACT path (GATEWAY_EXACT_PATHS), but its
   children /test/connection and /test/tools/list are MCP-server management
@@ -133,17 +175,17 @@ spec:
             pathType: Exact
             backend:
               service:
-                name: {{ $gatewayName }}
+                name: {{ $workloadServices.ops }}
                 port:
                   number: {{ $gatewayPort }}
-          {{- range $gatewayPrefixes }}
-          {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" . "pathType" "Prefix") }}
-          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" . $pathType) }}
-          - path: {{ . }}
+          {{- range $gatewayPaths }}
+          {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" .path "pathType" "Prefix") }}
+          {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" .path $pathType) }}
+          - path: {{ .path }}
             pathType: {{ $pathType }}
             backend:
               service:
-                name: {{ $gatewayName }}
+                name: {{ .service }}
                 port:
                   number: {{ $gatewayPort }}
           {{- end }}

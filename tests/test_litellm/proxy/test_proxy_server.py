@@ -9506,6 +9506,47 @@ class TestLazyFeatureMiddleware:
             f"failing register_fn should be invoked once, not on every request; got {attempts}"
         )
 
+    @pytest.mark.asyncio
+    async def test_disabled_feature_never_registers_even_when_its_path_is_hit(self):
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import (
+            LazyFeature,
+            LazyFeatureMiddleware,
+            disable_lazy_features,
+        )
+
+        loads = []
+
+        def make_feature(name: str, module_path: str) -> LazyFeature:
+            return LazyFeature(
+                name=name,
+                module_path=module_path,
+                path_prefixes=(f"/{name}",),
+                register_fn=lambda app, module: loads.append(name),
+            )
+
+        kept, dropped = make_feature("kept", "json"), make_feature("decoder", "json.decoder")
+
+        async def downstream(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(downstream, fastapi_app=target_app, features=(kept, dropped))
+        disabled = disable_lazy_features(target_app, lambda feat: feat is kept, features=(kept, dropped))
+        assert disabled == frozenset({"decoder"})
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            pass
+
+        for path in ("/decoder/x", "/kept/x", "/decoder/y"):
+            await mw({"type": "http", "path": path, "method": "GET", "headers": []}, receive, send)
+        assert loads == ["kept"], f"disabled feature must never register; got {loads}"
+
 
 class TestInjectLazyStubs:
     """Stub injection keys off the app-tracked loaded set, never sys.modules:

@@ -2,7 +2,9 @@ LiteLLM componentized — release {{ .Release.Name }} in namespace {{ .Release.N
 
 Components:
 {{- if .Values.gateway.enabled }}
-  - gateway  : Service {{ include "litellm.gateway.fullname" . }} on port {{ .Values.gateway.service.port }}
+{{- range .Values.gateway.workloads | default (list (dict)) }}
+  - gateway  : Service {{ include "litellm.gateway.baseName" $ }}{{ with .name }}-{{ . }}{{ end }} on port {{ $.Values.gateway.service.port }}{{ with .name }} (workload {{ . }}){{ end }}
+{{- end }}
 {{- end }}
 {{- if .Values.backend.enabled }}
   - backend  : Service {{ include "litellm.backend.fullname" . }} on port {{ .Values.backend.service.port }}
@@ -12,7 +14,7 @@ Components:
 {{- end }}
 
 Port-forward examples:
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.gateway.fullname" . }} {{ .Values.gateway.service.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.gateway.baseName" . }}{{ with .Values.gateway.workloads }}-{{ (first .).name }}{{ end }} {{ .Values.gateway.service.port }}
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.backend.fullname" . }} {{ .Values.backend.service.port }}
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.ui.fullname" . }} {{ .Values.ui.service.port }}
 

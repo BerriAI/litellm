@@ -1,4 +1,9 @@
-{{- if and .Values.gateway.enabled .Values.gateway.metricsServer.enabled }}
+{{- if .Values.gateway.enabled }}
+{{- include "litellm.gateway.renderPerWorkload" (dict "root" $ "template" "litellm.gateway.serviceMetrics") }}
+{{- end }}
+
+{{- define "litellm.gateway.serviceMetrics" -}}
+{{- if .Values.gateway.metricsServer.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -16,3 +21,4 @@ spec:
   selector:
     {{- include "litellm.gateway.selectorLabels" . | nindent 4 }}
 {{- end }}
+{{- end -}}

@@ -1,4 +1,8 @@
 {{- if .Values.gateway.enabled }}
+{{- include "litellm.gateway.renderPerWorkload" (dict "root" $ "template" "litellm.gateway.deployment") }}
+{{- end }}
+
+{{- define "litellm.gateway.deployment" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -53,6 +57,10 @@ spec:
               protocol: TCP
           env:
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
+            {{- with .Values.gateway.workload }}
+            - name: LITELLM_GATEWAY_WORKLOAD
+              value: {{ . | quote }}
+            {{- end }}
             {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH
               value: /app/config/config.yaml
@@ -203,7 +211,7 @@ spec:
         {{- if .Values.gateway.config.create }}
         - name: gateway-config
           configMap:
-            name: {{ include "litellm.gateway.fullname" . }}-config
+            name: {{ include "litellm.gateway.baseName" . }}-config
         {{- end }}
         {{- if .Values.gateway.metricsServer.enabled }}
         - name: prometheus-multiproc
@@ -241,4 +249,4 @@ spec:
       {{- if not (or (kindIs "invalid" $gracePeriod) (eq (printf "%v" $gracePeriod) "")) }}
       terminationGracePeriodSeconds: {{ $gracePeriod }}
       {{- end }}
-{{- end }}
+{{- end -}}

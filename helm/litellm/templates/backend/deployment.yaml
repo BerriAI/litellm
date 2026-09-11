@@ -103,7 +103,7 @@ spec:
         {{- if .Values.gateway.config.create }}
         - name: gateway-config
           configMap:
-            name: {{ include "litellm.gateway.fullname" . }}-config
+            name: {{ include "litellm.gateway.baseName" . }}-config
         {{- end }}
         {{- if .Values.billingMetrics.enabled }}
         {{- include "litellm.billingMetricsVolumes" . | nindent 8 }}

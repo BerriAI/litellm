@@ -1,4 +1,8 @@
 {{- if .Values.gateway.enabled }}
+{{- include "litellm.gateway.renderPerWorkload" (dict "root" $ "template" "litellm.gateway.service") }}
+{{- end }}
+
+{{- define "litellm.gateway.service" -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -15,4 +19,4 @@ spec:
       name: http
   selector:
     {{- include "litellm.gateway.selectorLabels" . | nindent 4 }}
-{{- end }}
+{{- end -}}

@@ -1,0 +1,478 @@
+suite: test gateway.workloads
+templates:
+  - gateway/configmap.yaml
+  - gateway/deployment.yaml
+  - gateway/service.yaml
+  - gateway/service-metrics.yaml
+  - gateway/servicemonitor.yaml
+  - gateway/hpa.yaml
+  - gateway/poddisruptionbudget.yaml
+  - backend/deployment.yaml
+  - ingress.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders one unsplit gateway with no workload env or label when workloads is empty
+    set:
+      gateway.hpa.enabled: true
+      gateway.pdb.enabled: true
+      ingress.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: gateway/deployment.yaml
+      - hasDocuments:
+          count: 1
+        template: gateway/service.yaml
+      - hasDocuments:
+          count: 1
+        template: gateway/hpa.yaml
+      - hasDocuments:
+          count: 1
+        template: gateway/poddisruptionbudget.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway
+        template: gateway/deployment.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway
+        template: gateway/service.yaml
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_WORKLOAD
+          any: true
+        template: gateway/deployment.yaml
+      - isNull:
+          path: spec.selector.matchLabels["litellm.ai/gateway-workload"]
+        template: gateway/deployment.yaml
+      - isNull:
+          path: spec.selector["litellm.ai/gateway-workload"]
+        template: gateway/service.yaml
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: RELEASE-NAME-litellm-gateway-config
+        template: gateway/deployment.yaml
+      - notContains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+        template: ingress.yaml
+
+  - it: renders one Deployment and Service per workload, each pinned by LITELLM_GATEWAY_WORKLOAD and its own selector
+    set:
+      gateway.workloads:
+        - name: llm
+        - name: mcp
+        - name: agent
+    asserts:
+      - hasDocuments:
+          count: 3
+        template: gateway/deployment.yaml
+      - hasDocuments:
+          count: 3
+        template: gateway/service.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway-llm
+        documentIndex: 0
+        template: gateway/deployment.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway-mcp
+        documentIndex: 1
+        template: gateway/deployment.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway-agent
+        documentIndex: 2
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_WORKLOAD
+            value: llm
+        documentIndex: 0
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_WORKLOAD
+            value: mcp
+        documentIndex: 1
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_GATEWAY_WORKLOAD
+            value: agent
+        documentIndex: 2
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.selector.matchLabels["litellm.ai/gateway-workload"]
+          value: mcp
+        documentIndex: 1
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.metadata.labels["litellm.ai/gateway-workload"]
+          value: mcp
+        documentIndex: 1
+        template: gateway/deployment.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway-mcp
+        documentIndex: 1
+        template: gateway/service.yaml
+      - equal:
+          path: spec.selector["litellm.ai/gateway-workload"]
+          value: mcp
+        documentIndex: 1
+        template: gateway/service.yaml
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: gateway
+        documentIndex: 1
+        template: gateway/service.yaml
+
+  - it: keeps workload names distinct and under 63 chars for a long release, with ingress pointing at the same names
+    release:
+      name: a-very-long-release-name-for-the-litellm-gateway-xy
+    set:
+      ingress.enabled: true
+      gateway.workloads:
+        - name: llm
+        - name: mcp
+        - name: agent
+    asserts:
+      - equal:
+          path: metadata.name
+          value: a-very-long-release-name-for-the-litellm-gateway-xy-litellm-llm
+        documentIndex: 0
+        template: gateway/service.yaml
+      - equal:
+          path: metadata.name
+          value: a-very-long-release-name-for-the-litellm-gateway-xy-litellm-mcp
+        documentIndex: 1
+        template: gateway/service.yaml
+      - equal:
+          path: metadata.name
+          value: a-very-long-release-name-for-the-litellm-gateway-xy-litel-agent
+        documentIndex: 2
+        template: gateway/service.yaml
+      - equal:
+          path: metadata.name
+          value: a-very-long-release-name-for-the-litellm-gateway-xy-litel-agent
+        documentIndex: 2
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.selector.matchLabels["litellm.ai/gateway-workload"]
+          value: agent
+        documentIndex: 2
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /v1/chat
+            pathType: Prefix
+            backend:
+              service:
+                name: a-very-long-release-name-for-the-litellm-gateway-xy-litellm-llm
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: a-very-long-release-name-for-the-litellm-gateway-xy-litellm-mcp
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /a2a
+            pathType: Prefix
+            backend:
+              service:
+                name: a-very-long-release-name-for-the-litellm-gateway-xy-litel-agent
+                port:
+                  number: 4000
+        template: ingress.yaml
+
+  - it: keeps one shared ConfigMap and ServiceAccount that every workload and the backend mount
+    set:
+      serviceAccounts.gateway.create: true
+      gateway.workloads:
+        - name: llm
+        - name: mcp
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: gateway/configmap.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway-config
+        template: gateway/configmap.yaml
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: RELEASE-NAME-litellm-gateway-config
+        documentIndex: 1
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: RELEASE-NAME-litellm-gateway
+        documentIndex: 1
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: RELEASE-NAME-litellm-gateway-config
+        template: backend/deployment.yaml
+
+  - it: applies per-workload overrides to that workload only, including turning its HPA off
+    set:
+      gateway.hpa.enabled: true
+      gateway.pdb.enabled: true
+      gateway.metricsServer.enabled: true
+      gateway.serviceMonitor.enabled: true
+      gateway.image.tag: v1.101.0
+      gateway.workloads:
+        - name: llm
+        - name: mcp
+          numWorkers: 3
+          hpa:
+            enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NUM_WORKERS
+            value: "1"
+        documentIndex: 0
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: NUM_WORKERS
+            value: "3"
+        documentIndex: 1
+        template: gateway/deployment.yaml
+      - hasDocuments:
+          count: 1
+        template: gateway/hpa.yaml
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: RELEASE-NAME-litellm-gateway-llm
+        template: gateway/hpa.yaml
+      - hasDocuments:
+          count: 2
+        template: gateway/poddisruptionbudget.yaml
+      - equal:
+          path: spec.selector.matchLabels["litellm.ai/gateway-workload"]
+          value: mcp
+        documentIndex: 1
+        template: gateway/poddisruptionbudget.yaml
+      - hasDocuments:
+          count: 2
+        template: gateway/service-metrics.yaml
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm-gateway-mcp-metrics
+        documentIndex: 1
+        template: gateway/service-metrics.yaml
+      - equal:
+          path: spec.selector["litellm.ai/gateway-workload"]
+          value: mcp
+        documentIndex: 1
+        template: gateway/service-metrics.yaml
+      - hasDocuments:
+          count: 2
+        template: gateway/servicemonitor.yaml
+      - equal:
+          path: spec.selector.matchLabels["litellm.ai/gateway-workload"]
+          value: llm
+        documentIndex: 0
+        template: gateway/servicemonitor.yaml
+
+  - it: routes each ingress path group to its workload Service and sends /mcp to the gateway once split
+    set:
+      ingress.enabled: true
+      gateway.workloads:
+        - name: llm
+        - name: mcp
+        - name: agent
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /v1/chat
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-llm
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-mcp
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /toolset
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-mcp
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /a2a
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-agent
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-llm
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /test
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-llm
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - equal:
+          path: spec.rules[0].http.paths[-1].backend.service.name
+          value: RELEASE-NAME-litellm-backend
+        template: ingress.yaml
+
+  - it: falls back to an all workload for groups without a dedicated one and points extraPaths gateway at the first entry
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /watsonx
+      gateway.workloads:
+        - name: all
+        - name: mcp
+    asserts:
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /v1/chat
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-all
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-mcp
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /a2a
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-all
+                port:
+                  number: 4000
+        template: ingress.yaml
+      - equal:
+          path: spec.rules[0].http.paths[-2]
+          value:
+            path: /watsonx
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway-all
+                port:
+                  number: 4000
+        template: ingress.yaml
+
+  - it: fails when the ingress has no workload for a path group
+    set:
+      ingress.enabled: true
+      gateway.workloads:
+        - name: llm
+    asserts:
+      - failedTemplate:
+          errorPattern: no gateway workload serves mcp paths
+        template: ingress.yaml
+
+  - it: fails on an unknown workload name
+    set:
+      gateway.workloads:
+        - name: inference
+    asserts:
+      - failedTemplate:
+          errorPattern: must be one of all llm mcp agent
+        template: gateway/servicemonitor.yaml
+
+  - it: fails when a workload is listed twice
+    set:
+      gateway.workloads:
+        - name: llm
+        - name: llm
+    asserts:
+      - failedTemplate:
+          errorPattern: llm is listed more than once
+        template: gateway/servicemonitor.yaml
+
+  - it: fails when a workload entry tries to override the shared config
+    set:
+      gateway.workloads:
+        - name: llm
+          config:
+            create: false
+    asserts:
+      - failedTemplate:
+          errorPattern: config is shared by every gateway workload
+        template: gateway/servicemonitor.yaml

@@ -1,6 +1,12 @@
+{{- if .Values.gateway.enabled }}
+{{- include "litellm.gateway.renderPerWorkload" (dict "root" $ "template" "litellm.gateway.pdb") }}
+{{- end }}
+
+{{- define "litellm.gateway.pdb" -}}
 {{- include "litellm.pdb" (dict
   "root" $
   "component" .Values.gateway
   "componentName" "gateway"
   "fullname" (include "litellm.gateway.fullname" .)
   "selectorLabels" (include "litellm.gateway.selectorLabels" .)) }}
+{{- end -}}
