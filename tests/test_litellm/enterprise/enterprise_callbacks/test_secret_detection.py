@@ -126,6 +126,8 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         ("DB_PASSWORD = Zx4Kp9Lm2Qr7Ns3Vt; systemctl restart app", "Zx4Kp9Lm2Qr7Ns3Vt"),
         ("DB_PASSWORD = Zx4Kp9Lm2Qr7Ns3Vt \\", "Zx4Kp9Lm2Qr7Ns3Vt"),
         ("DB_PASSWORD = Zx4Kp9Lm2Qr7Ns3Vt DB_HOST=db.internal", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("DB_PASSWORD = Zx4Kp9Lm2Qr7Ns3Vt --db-host=db.internal", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("DB_PASSWORD = Zx4Kp9Lm2Qr7Ns3Vt DEBUG=", "Zx4Kp9Lm2Qr7Ns3Vt"),
     ],
     ids=[
         "env-password",
@@ -165,6 +167,8 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         "spaced-assignment-then-a-shell-command",
         "spaced-assignment-then-a-line-continuation",
         "spaced-assignment-then-a-second-assignment",
+        "spaced-assignment-then-a-dashed-flag",
+        "spaced-assignment-then-an-empty-assignment",
     ],
 )
 def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, secret):

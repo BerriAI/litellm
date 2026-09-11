@@ -455,7 +455,7 @@ _SHELL_ASSIGNMENT: Final = re.compile(r"(?P<key>[^\s\[#;:=](?:[^:=]*[^\s:=])?)=(
 
 _SHELL_OPERATORS: Final = ";&|"
 
-_SHELL_TRAILER: Final = re.compile(r"\\|#.*|\w[\w.-]*=\S*")
+_SHELL_TRAILER: Final = re.compile(r"\\|#.*|-*\w[\w.-]*=\S*")
 
 _SCAN_SUFFIX: Final = ".py"
 
