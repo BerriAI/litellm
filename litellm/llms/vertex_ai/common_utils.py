@@ -728,6 +728,7 @@ def _convert_consts_to_enums(
         schema.get("prefixItems"),
         schema.get("anyOf"),
         schema.get("oneOf"),
+        schema.get("allOf"),
     ):
         if not isinstance(schema_list, list):
             continue
