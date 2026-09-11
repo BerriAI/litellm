@@ -1,15 +1,20 @@
 """Tests for the Requesty provider (OpenAI-compatible gateway)."""
 
+import pytest
+
 import litellm
 from litellm import get_llm_provider
-from litellm.llms.requesty.chat.transformation import RequestyConfig
+from litellm.llms.openrouter.common_utils import OpenRouterException
+from litellm.llms.requesty.chat.transformation import (
+    RequestyChatCompletionStreamingHandler,
+    RequestyConfig,
+)
+from litellm.llms.requesty.common_utils import RequestyException
 
 
 def test_get_llm_provider_resolves_requesty():
     """requesty/<provider>/<model> routes to the requesty provider + base URL."""
-    model, custom_llm_provider, _dynamic_api_key, api_base = get_llm_provider(
-        model="requesty/openai/gpt-4o-mini"
-    )
+    model, custom_llm_provider, _dynamic_api_key, api_base = get_llm_provider(model="requesty/openai/gpt-4o-mini")
     assert custom_llm_provider == "requesty"
     assert model == "openai/gpt-4o-mini"
     assert api_base == "https://router.requesty.ai/v1"
@@ -59,3 +64,86 @@ def test_transform_request_extra_body_cannot_override_protected_fields():
     assert result["messages"] == messages
     # Non-protected extension params still pass through.
     assert result["custom_flag"] is True
+
+
+def test_reasoning_model_registered_under_requesty_gets_reasoning_params(monkeypatch):
+    """A model known only under litellm_provider="requesty" must still unlock reasoning params.
+
+    The parent OpenRouter config checks supports_reasoning with provider "openrouter",
+    which never matches models registered under "requesty".
+    """
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "requesty/acme/thinker-1",
+        {"litellm_provider": "requesty", "mode": "chat", "supports_reasoning": True},
+    )
+
+    supported_params = RequestyConfig().get_supported_openai_params(model="acme/thinker-1")
+
+    assert "reasoning_effort" in supported_params
+    assert "thinking" in supported_params
+    assert supported_params.count("reasoning_effort") == 1
+    assert "temperature" in supported_params
+
+
+def test_non_reasoning_model_does_not_get_reasoning_params(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "requesty/acme/plain-1",
+        {"litellm_provider": "requesty", "mode": "chat", "supports_reasoning": False},
+    )
+
+    supported_params = RequestyConfig().get_supported_openai_params(model="acme/plain-1")
+
+    assert "reasoning_effort" not in supported_params
+    assert "thinking" not in supported_params
+
+
+def test_get_model_response_iterator_returns_requesty_handler():
+    handler = RequestyConfig().get_model_response_iterator(streaming_response=iter(()), sync_stream=True)
+
+    assert isinstance(handler, RequestyChatCompletionStreamingHandler)
+
+
+class TestRequestyChatCompletionStreamingHandler:
+    def test_chunk_parser_successful(self):
+        handler = RequestyChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+        chunk = {
+            "id": "chunk-1",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            "choices": [{"index": 0, "delta": {"content": "hello", "reasoning": "thinking"}}],
+        }
+
+        result = handler.chunk_parser(chunk)
+
+        assert result.id == "chunk-1"
+        assert result.object == "chat.completion.chunk"
+        assert result.created == 1234567890
+        assert result.model == "openai/gpt-4o-mini"
+        assert result.usage.total_tokens == 30
+        assert len(result.choices) == 1
+        assert result.choices[0]["delta"]["content"] == "hello"
+        assert result.choices[0]["delta"]["reasoning_content"] == "thinking"
+
+    def test_chunk_parser_error_response_raises_requesty_exception(self):
+        handler = RequestyChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+        error_chunk = {"error": {"message": "rate limited", "code": 429, "metadata": {"headers": {"Retry-After": "1"}}}}
+
+        with pytest.raises(RequestyException) as exc_info:
+            handler.chunk_parser(error_chunk)
+
+        assert not isinstance(exc_info.value, OpenRouterException)
+        assert "rate limited" in str(exc_info.value)
+        assert exc_info.value.status_code == 429
+
+    def test_chunk_parser_malformed_chunk_raises_requesty_exception(self):
+        handler = RequestyChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+
+        with pytest.raises(RequestyException) as exc_info:
+            handler.chunk_parser({"incomplete": "data"})
+
+        assert not isinstance(exc_info.value, OpenRouterException)
+        assert "KeyError" in str(exc_info.value)
+        assert exc_info.value.status_code == 400

@@ -9,29 +9,49 @@ naming convention as OpenRouter, so this config mirrors the OpenRouter one.
 Docs: https://docs.requesty.ai
 """
 
-from typing import List, Optional, Tuple, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import Final
 
 import httpx
 
+import litellm
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse, ModelResponseStream, StreamingChoices
 
 from ...openrouter.chat.transformation import OpenrouterConfig
 from ..common_utils import RequestyException
 
+REQUESTY_REASONING_PARAMS: Final = ("reasoning_effort", "thinking")
+
 
 class RequestyConfig(OpenrouterConfig):
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "requesty"
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("REQUESTY_API_BASE") or "https://router.requesty.ai/v1"
-        dynamic_api_key = api_key or get_secret_str("REQUESTY_API_KEY")
-        return api_base, dynamic_api_key
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
+        resolved_api_base: Final = api_base or get_secret_str("REQUESTY_API_BASE") or "https://router.requesty.ai/v1"
+        dynamic_api_key: Final = api_key or get_secret_str("REQUESTY_API_KEY")
+        return resolved_api_base, dynamic_api_key
+
+    def _supports_reasoning(self, model: str) -> bool:
+        try:
+            return litellm.supports_reasoning(
+                model=model, custom_llm_provider="requesty"
+            ) or litellm.supports_reasoning(model=model)
+        except Exception:
+            return False
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        supported_params: Final[list[str]] = super(OpenrouterConfig, self).get_supported_openai_params(model=model)
+        if not self._supports_reasoning(model):
+            return supported_params
+        return list(dict.fromkeys((*supported_params, *REQUESTY_REASONING_PARAMS)))
 
     def map_openai_params(
         self,
@@ -40,39 +60,86 @@ class RequestyConfig(OpenrouterConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        if non_default_params.get("reasoning_effort") == "max":
-            non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
-
-        return super(OpenrouterConfig, self).map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_params: Final = (
+            {**non_default_params, "reasoning_effort": "xhigh"}
+            if non_default_params.get("reasoning_effort") == "max"
+            else non_default_params
+        )
+        return super(OpenrouterConfig, self).map_openai_params(mapped_params, optional_params, model, drop_params)
 
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        if self._supports_cache_control_in_content(model):
-            messages = self._move_cache_control_to_content(messages)
+        transformed_messages: Final = (
+            self._move_cache_control_to_content(messages)
+            if self._supports_cache_control_in_content(model)
+            else messages
+        )
 
-        extra_body = optional_params.pop("extra_body", {})
-        response = super(OpenrouterConfig, self).transform_request(
-            model, messages, optional_params, litellm_params, headers
+        extra_body: Final = optional_params.pop("extra_body", {})
+        response: Final = super(OpenrouterConfig, self).transform_request(
+            model, transformed_messages, optional_params, litellm_params, headers
         )
         # `extra_body` is client-controlled. Do not let it overwrite the canonical
         # request fields that have already been resolved and authorized (e.g. `model`,
         # `messages`), otherwise a caller could route to an unauthorized model after
         # model-authorization and request-inspection checks have run.
-        protected_fields = {"model", "messages"}
-        response.update({key: value for key, value in extra_body.items() if key not in protected_fields})
-        return response
+        protected_fields: Final = frozenset({"model", "messages"})
+        return {**response, **{key: value for key, value in extra_body.items() if key not in protected_fields}}
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return RequestyException(
             message=error_message,
             status_code=status_code,
             headers=headers,
         )
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> BaseModelResponseIterator:
+        return RequestyChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class RequestyChatCompletionStreamingHandler(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        try:
+            if "error" in chunk:
+                error_chunk: Final = chunk["error"]
+                raise RequestyException(
+                    message="Message: {}, Metadata: {}".format(error_chunk["message"], error_chunk.get("metadata", {})),
+                    status_code=error_chunk["code"],
+                    headers=error_chunk.get("metadata", {}).get("headers", {}),
+                )
+
+            choices: Final = [
+                StreamingChoices(
+                    **{**choice, "delta": {**choice["delta"], "reasoning_content": choice["delta"].get("reasoning")}}
+                )
+                for choice in chunk["choices"]
+            ]
+            return ModelResponseStream(
+                id=chunk["id"],
+                object="chat.completion.chunk",
+                created=chunk["created"],
+                usage=chunk.get("usage"),
+                model=chunk["model"],
+                choices=choices,
+            )
+        except KeyError as e:
+            raise RequestyException(
+                message=f"KeyError: {e}, Got unexpected response from Requesty: {chunk}",
+                status_code=400,
+                headers={"Content-Type": "application/json"},
+            )
