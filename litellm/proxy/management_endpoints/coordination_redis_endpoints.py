@@ -140,7 +140,7 @@ def _merge_over_saved(
 def _validated_params(settings: Mapping[str, object]) -> CoordinationRedisParams:
     """Validate settings the way startup does: resolve env refs, then require a connection target."""
     try:
-        params: Final = CoordinationRedisParams(**_resolve_env_refs(settings))
+        params: Final = CoordinationRedisParams.model_validate(_resolve_env_refs(settings))
     except ValidationError as e:
         invalid_fields: Final = sorted({str(error["loc"][0]) for error in e.errors() if error["loc"]})
         raise HTTPException(

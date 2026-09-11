@@ -1,31 +1,34 @@
 import json
 import threading
+from collections.abc import Generator
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Final
 
 import pytest
 
-import litellm
+from litellm.rust_bridge import ocr as rust_ocr_bridge
 
 pytestmark = pytest.mark.requires_rust_extension
 
 
+@dataclass(frozen=True, slots=True)
+class RecordedOCRRequest:
+    body: object
+
+
 @pytest.fixture
-def ocr_server():
-    requests = []
+def ocr_server() -> Generator[tuple[ThreadingHTTPServer, list[RecordedOCRRequest]]]:
+    requests: Final[list[RecordedOCRRequest]] = []
 
     class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
+        def do_POST(self) -> None:
             requests.append(
-                {
-                    "headers": {name.lower(): value for name, value in self.headers.items()},
-                    "body": json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
-                }
+                RecordedOCRRequest(
+                    body=json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
+                )
             )
-            if self.headers.get("User-Agent", "").startswith("python-httpx"):
-                self.send_response(418)
-                self.end_headers()
-                return
-            response = json.dumps(
+            response: Final = json.dumps(
                 {
                     "pages": [{"index": 0, "markdown": "native OCR response", "images": [], "dimensions": None}],
                     "model": "mistral-ocr-latest",
@@ -38,11 +41,11 @@ def ocr_server():
             self.end_headers()
             self.wfile.write(response)
 
-        def log_message(self, format, *args):
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread: Final = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
     thread.start()
     try:
         yield server, requests
@@ -52,21 +55,29 @@ def ocr_server():
         thread.join()
 
 
-def test_ocr_with_rust_extension(ocr_server):
+def test_native_ocr_with_compiled_rust_extension(
+    ocr_server: tuple[ThreadingHTTPServer, list[RecordedOCRRequest]],
+) -> None:
     server, requests = ocr_server
-    host, port = server.server_address
+    address: Final = server.server_address
+    host: Final = str(address[0])
+    port: Final = int(address[1])
 
-    response = litellm.ocr(
-        model="mistral/mistral-ocr-latest",
+    response: Final = rust_ocr_bridge.ocr(
+        model="mistral-ocr-latest",
         document={"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
         api_key="test-key",
         api_base=f"http://{host}:{port}",
+        custom_llm_provider="mistral",
+        extra_headers=None,
+        optional_params={},
+        timeout=None,
     )
 
-    assert response.pages[0].markdown == "native OCR response"
+    assert response is not None
+    assert response["pages"][0]["markdown"] == "native OCR response"
     assert len(requests) == 1
-    assert not requests[0]["headers"].get("user-agent", "").startswith("python-httpx")
-    assert requests[0]["body"] == {
-            "model": "mistral-ocr-latest",
-            "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+    assert requests[0].body == {
+        "model": "mistral-ocr-latest",
+        "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
     }

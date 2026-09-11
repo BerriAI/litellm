@@ -1,9 +1,42 @@
-//! Header and upstream-body helpers shared by every route module.
-
 use serde_json::{Map, Value};
 
 use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;
 use crate::error::{Error, json_type_name};
+
+#[allow(
+    dead_code,
+    reason = "used by the OCR architecture in the next stacked PR"
+)]
+pub(crate) enum HeaderPolicy<'a> {
+    All,
+    Only(&'a [&'a str]),
+    Except(&'a [&'a str]),
+}
+
+#[allow(
+    dead_code,
+    reason = "used by the OCR architecture in the next stacked PR"
+)]
+pub(crate) fn with_headers(
+    builder: reqwest::RequestBuilder,
+    headers: &[(String, String)],
+    policy: HeaderPolicy<'_>,
+) -> reqwest::RequestBuilder {
+    headers
+        .iter()
+        .filter(|(name, _)| match policy {
+            HeaderPolicy::All => true,
+            HeaderPolicy::Only(names) => names
+                .iter()
+                .any(|allowed| name.eq_ignore_ascii_case(allowed)),
+            HeaderPolicy::Except(names) => !names
+                .iter()
+                .any(|excluded| name.eq_ignore_ascii_case(excluded)),
+        })
+        .fold(builder, |builder, (name, value)| {
+            builder.header(name, value)
+        })
+}
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn http_request(
@@ -12,8 +45,6 @@ pub async fn http_request(
     request.send().await
 }
 
-/// Bound an upstream error body before it crosses a host boundary, so provider
-/// bodies stay data-minimized.
 pub fn truncate_error_body(body: &str) -> String {
     if body.chars().count() <= UPSTREAM_ERROR_BODY_MAX_CHARS {
         return body.to_string();
@@ -61,10 +92,76 @@ pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
     })
 }
 
+#[allow(
+    dead_code,
+    reason = "used by the OCR architecture in the next stacked PR"
+)]
+pub(crate) fn deserialize_optional_param<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[rstest::rstest]
+    #[case(HeaderPolicy::All, true, true)]
+    #[case(HeaderPolicy::Only(&["authorization"]), true, false)]
+    #[case(HeaderPolicy::Except(&["authorization"]), false, true)]
+    fn forwarding_policy_preserves_matching_headers_and_duplicates(
+        #[case] policy: HeaderPolicy<'_>,
+        #[case] auth: bool,
+        #[case] trace: bool,
+    ) {
+        let request = with_headers(
+            reqwest::Client::new().get("https://example.com"),
+            &[
+                ("AuThOrIzAtIoN".into(), "Bearer token".into()),
+                ("X-Trace".into(), "first".into()),
+                ("x-trace".into(), "second".into()),
+            ],
+            policy,
+        )
+        .build()
+        .unwrap();
+        assert_eq!(request.headers().contains_key("authorization"), auth);
+        let traces: Vec<_> = request.headers().get_all("x-trace").iter().collect();
+        if trace {
+            assert_eq!(traces, ["first", "second"]);
+        } else {
+            assert!(traces.is_empty());
+        }
+    }
+
+    #[test]
+    fn multipart_policy_leaves_content_headers_to_reqwest() {
+        let request = with_headers(
+            reqwest::Client::new()
+                .post("https://example.com")
+                .multipart(reqwest::multipart::Form::new().text("file", "abc")),
+            &[
+                ("Content-Type".into(), "application/json".into()),
+                ("CONTENT-LENGTH".into(), "0".into()),
+            ],
+            HeaderPolicy::Except(&["content-type", "content-length"]),
+        )
+        .build()
+        .unwrap();
+        assert!(
+            request.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("multipart/form-data; boundary=")
+        );
+        assert_ne!(request.headers()["content-length"], "0");
+    }
 
     #[test]
     fn truncate_leaves_short_bodies_untouched() {

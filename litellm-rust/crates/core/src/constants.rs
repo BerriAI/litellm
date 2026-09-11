@@ -43,3 +43,6 @@ pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
 
 pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
+pub(crate) const OCR_HTTP_TIMEOUT_SECS: u64 = 600;
+pub(crate) const OCR_CONNECT_TIMEOUT_SECS: u64 = 10;
+pub(crate) const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";

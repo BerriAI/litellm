@@ -1,15 +1,22 @@
 """`lite configure claude` and `lite unconfigure claude`: persistent Claude Code wiring, undoable."""
 
 import os
-import re
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import click
 from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
+
+from litellm.proxy.common_utils.model_listing_utils import (
+    CLAUDE_CODE_CLIENT,
+    CLAUDE_CODE_PICKER_PATTERN,
+    GATEWAY_CLIENT_HEADER,
+)
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key
 from .claude_settings import (
@@ -30,14 +37,16 @@ from .claude_settings import (
     settings_file_owners,
     unconfigure_claude_settings,
 )
-from .pi import ListingFailure, PiSyncError, fetch_model_ids
+from .pi import ListedModel, ListingFailure, PiSyncError, fetch_model_listing
 from .up import ensure_fresh_login
 
 _LISTED_MODELS_SHOWN: Final = 20
 _CLAUDE_TARGET: Final = "claude"
 _TARGETS: Final = ((_CLAUDE_TARGET, "Claude Code (CLI)"),)
 _KEEP_DEFAULT_MODEL: Final = "Keep Claude Code's own default"
-_CLAUDE_CODE_PICKER_FILTER: Final = re.compile(r"claude|anthropic", re.IGNORECASE)
+_CLAUDE_CODE_VIEW: Final = MappingProxyType(
+    {"anthropic-version": "2023-06-01", GATEWAY_CLIENT_HEADER: CLAUDE_CODE_CLIENT}
+)
 _MODEL_OPTION_HELP: Final = (
     f"Proxy model to set as {STARTING_MODEL_ROLE}. Must be listed on /v1/models for the key; without it, "
     "Claude Code keeps its own default and a pin an earlier configure made is let go of. Nothing pins Claude "
@@ -65,7 +74,16 @@ def resolve_credential(ctx: click.Context, api_key: str | None) -> tuple[ClaudeC
     return ApiKeyHelper(resolve_api_key_helper(base_url)), stored
 
 
-def _start(ctx: click.Context, api_key: str | None) -> tuple[ClaudeCredential, tuple[str, ...]]:
+@dataclass(frozen=True, slots=True)
+class _Listing:
+    models: tuple[ListedModel, ...]
+
+    @property
+    def ids(self) -> tuple[str, ...]:
+        return tuple(model.id for model in self.models)
+
+
+def _start(ctx: click.Context, api_key: str | None) -> tuple[ClaudeCredential, _Listing]:
     """Every configure path begins the same way: the local ownership check first, so a `lite up`
     session is refused before any login prompt or request, then the credential, then the listing."""
     settings_path: Final = claude_settings_path(os.environ)
@@ -88,21 +106,28 @@ def _listing_error(base_url: str, error: PiSyncError) -> str:
     return f"{error.message} The proxy at {base_url} answered, so check that it is a LiteLLM proxy and is healthy."
 
 
-def _listed_models(base_url: str, key: str) -> tuple[str, ...]:
-    listed: Final = fetch_model_ids(base_url, key)
+def _listed_models(base_url: str, key: str) -> _Listing:
+    listed: Final = fetch_model_listing(base_url, key, headers=_CLAUDE_CODE_VIEW)
     if isinstance(listed, PiSyncError):
         raise click.ClickException(_listing_error(base_url, listed))
-    return listed
+    return _Listing(listed)
+
+
+def _starting_model(model: str, listing: _Listing) -> str | None:
+    source: Final = next((listed.id for listed in listing.models if listed.source_model == model), None)
+    return source or next((listed.id for listed in listing.models if listed.id == model), None)
 
 
 def _model_choice(model: str | None) -> ModelChoice:
     return StartOn(model) if model is not None else UnpinModel()
 
 
-def _apply_claude(ctx: click.Context, credential: ClaudeCredential, listed: Sequence[str], model: str | None) -> None:
+def _apply_claude(ctx: click.Context, credential: ClaudeCredential, listing: _Listing, model: str | None) -> None:
     ctx_obj: Final[CliContextObj] = ctx.obj
     base_url: Final = ctx_obj["base_url"]
-    if model is not None and model not in listed:
+    listed: Final = listing.ids
+    starting: Final = _starting_model(model, listing) if model is not None else None
+    if model is not None and starting is None:
         shown: Final = ", ".join(listed[:_LISTED_MODELS_SHOWN])
         more: Final = f", and {len(listed) - _LISTED_MODELS_SHOWN} more" if len(listed) > _LISTED_MODELS_SHOWN else ""
         raise click.ClickException(
@@ -113,29 +138,32 @@ def _apply_claude(ctx: click.Context, credential: ClaudeCredential, listed: Sequ
         configure_claude_settings(
             base_url,
             credential,
-            _model_choice(model),
+            _model_choice(starting),
             settings_path,
             configure_state_path(settings_path),
             settings_file_owners(settings_path),
         )
     except ClaudeSettingsError as e:
         raise click.ClickException(str(e))
-    in_picker: Final = sum(1 for listed_model in listed if _CLAUDE_CODE_PICKER_FILTER.search(listed_model))
+    in_picker: Final = sum(1 for listed_model in listed if CLAUDE_CODE_PICKER_PATTERN.search(listed_model))
     click.echo(f"Configured Claude Code: {settings_path} now routes through {base_url}.")
+
     click.echo(
         "Credential: your virtual key, stored in the file as ANTHROPIC_AUTH_TOKEN."
         if isinstance(credential, StaticToken)
         else "Credential: your `lite login`, read through apiKeyHelper on every request, so a later login renews it."
     )
     click.echo(
-        f"Starting model: {model} ({STARTING_MODEL_ROLE}); switch any time with /model."
-        if model is not None
+        f"Starting model: {starting} ({STARTING_MODEL_ROLE}); switch any time with /model."
+        if starting is not None
         else "Starting model: not pinned (Claude Code's default, or a model you set yourself); switch with /model, or "
         "pass --model to start on a proxy model."
     )
     click.echo(
-        f"/model will list {in_picker} of the proxy's {len(listed)} models (Claude Code shows only ids containing "
-        "'claude' or 'anthropic')."
+        f"/model will list all {len(listed)} of the proxy's models."
+        if in_picker == len(listed)
+        else f"/model will list {in_picker} of the proxy's {len(listed)} models: Claude Code shows only ids containing "
+        "'claude' or 'anthropic', and this proxy does not list the rest under such names."
     )
     click.echo("Start `claude` from any terminal. Undo with `lite unconfigure claude`.")
     if isinstance(credential, StaticToken) and settings_path.is_symlink():
@@ -173,8 +201,10 @@ def interactive_configure(
     targets: Final = pick_targets()
     if _CLAUDE_TARGET not in targets:
         return
-    credential, listed = _start(ctx, None)
-    _apply_claude(ctx, credential, listed, pick_model(listed))
+    credential, listing = _start(ctx, None)
+    _apply_claude(
+        ctx, credential, listing, pick_model(tuple(model.source_model or model.id for model in listing.models))
+    )
 
 
 @click.group(name="configure", invoke_without_command=True)
@@ -218,8 +248,8 @@ def configure_claude(ctx: click.Context, api_key: str | None, model: str | None)
     setting is kept, and what changed is recorded so `lite unconfigure claude` can put it back.
     Assumes the proxy is already running.
     """
-    credential, listed = _start(ctx, api_key)
-    _apply_claude(ctx, credential, listed, model)
+    credential, listing = _start(ctx, api_key)
+    _apply_claude(ctx, credential, listing, model)
 
 
 @unconfigure_group.command(name="claude")

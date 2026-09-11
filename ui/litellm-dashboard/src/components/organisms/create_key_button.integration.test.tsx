@@ -84,6 +84,13 @@ vi.mock("../networking", async (importOriginal) => {
     getPossibleUserRoles: vi.fn().mockResolvedValue({}),
     userFilterUICall: vi.fn().mockResolvedValue([]),
     getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
+    getClaudeCodePluginsList: vi.fn().mockResolvedValue({
+      plugins: [
+        { name: "public-skill", enabled: true },
+        { name: "private-skill", enabled: false },
+      ],
+      count: 2,
+    }),
     getPassThroughEndpointsCall: vi.fn().mockResolvedValue({ endpoints: [] }),
     vectorStoreListCall: vi.fn().mockResolvedValue({ data: [] }),
     listMCPTools: vi.fn().mockResolvedValue(emptyMcpTools),
@@ -109,6 +116,7 @@ const OPENAPI_SCHEMA = {
 const SECTIONS = {
   mcp: /MCP Settings/i,
   agent: /Agent Settings/i,
+  skill: /Skill Settings/i,
   logging: /Logging Settings/i,
   router: /Router Settings/i,
   aliases: /Model Aliases/i,
@@ -164,6 +172,7 @@ const ROUTER_SETTINGS_DEFAULT = {
 const SECTION_PAYLOAD_ADDITIONS: Record<keyof typeof SECTIONS, Record<string, unknown>> = {
   mcp: { allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] } },
   agent: { allowed_agents_and_groups: undefined },
+  skill: {},
   logging: {},
   router: { router_settings: ROUTER_SETTINGS_DEFAULT },
   aliases: {},
@@ -327,6 +336,21 @@ describe("CreateKey", () => {
 
       const serialised = JSON.parse(JSON.stringify(await createdPayload())) as Record<string, unknown>;
       expect(Object.keys(serialised).sort()).toStrictEqual([...wireKeys].sort());
+    });
+
+    it("moves a picked private skill under object_permission.skills and off the top level", async () => {
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.skill);
+      await userEvent.click(await screen.findByRole("combobox", { name: "Select skills (optional)" }));
+      await userEvent.click(await screen.findByRole("option", { name: "private-skill (private)" }));
+      await userEvent.keyboard("{Escape}");
+      await submit();
+
+      const payload = await createdPayload();
+      expect(payload.object_permission).toStrictEqual({ skills: ["private-skill"] });
+      expect(payload).not.toHaveProperty("allowed_skills");
     });
 
     it("omits a budget typed into a section the user closed again, rather than sending it as null", async () => {
