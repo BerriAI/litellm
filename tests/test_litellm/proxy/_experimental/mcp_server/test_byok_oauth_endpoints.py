@@ -142,6 +142,43 @@ def test_byok_challenge_preserves_external_base(monkeypatch, base_url, root_path
     assert get_byok_www_authenticate() == f'Bearer resource_metadata="{expected}"'
 
 
+def test_byok_discovery_preserves_per_request_prefixes(monkeypatch):
+    from fastapi import FastAPI
+
+    from litellm.proxy._experimental.mcp_server.server import _check_byok_credential
+    from litellm.proxy.middleware.per_request_root_path_middleware import PerRequestRootPathMiddleware
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setenv("SERVER_ROOT_PATHS", "/tenant-a,/tenant-b")
+    app = FastAPI()
+    app.include_router(router)
+    app.add_middleware(PerRequestRootPathMiddleware, root_paths=("/tenant-a", "/tenant-b"))
+    server = MCPServer(server_id="byok-prefix", name="byok-prefix", transport=MCPTransport.http, is_byok=True)
+
+    @app.get("/challenge")
+    async def challenge():
+        await _check_byok_credential(server, None)
+
+    with TestClient(app) as client:
+        for prefix in ("/tenant-a", "/tenant-b", ""):
+            challenge_response = client.get(f"{prefix}/challenge")
+            assert challenge_response.status_code == 401
+            metadata_path = f"{prefix}/v1/mcp/oauth/protected-resource"
+            assert challenge_response.headers["www-authenticate"] == f'Bearer resource_metadata="{metadata_path}"'
+            prm = client.get(metadata_path)
+            assert prm.status_code == 200
+            issuer = f"http://testserver{prefix}/v1/mcp/oauth"
+            assert prm.json()["authorization_servers"] == [issuer]
+            asm = client.get(f"/.well-known/oauth-authorization-server{prefix}/v1/mcp/oauth")
+            assert asm.status_code == 200
+            assert asm.json()["issuer"] == issuer
+            assert asm.json()["authorization_endpoint"] == f"{issuer}/authorize"
+            assert asm.json()["token_endpoint"] == f"{issuer}/token"
+        assert client.get("/.well-known/oauth-authorization-server/unknown/v1/mcp/oauth").status_code == 404
+
+
 def test_oauth_authorization_server_metadata(client):
     resp = client.get("/.well-known/oauth-authorization-server")
     assert resp.status_code == 200

@@ -16,6 +16,7 @@ from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     normalize_token_endpoint_auth_method,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.middleware.per_request_root_path_middleware import get_request_root_path
 
 if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -130,7 +131,7 @@ BYOK_RESOURCE_METADATA_PATH: Final = "/v1/mcp/oauth/protected-resource"
 
 
 def get_byok_www_authenticate() -> str:
-    base_url: Final = _resolve_proxy_base_url_env() or well_known_root_suffix()
+    base_url: Final = _resolve_proxy_base_url_env() or get_request_root_path().rstrip("/")
     return f'Bearer resource_metadata="{base_url}{BYOK_RESOURCE_METADATA_PATH}"'
 
 
