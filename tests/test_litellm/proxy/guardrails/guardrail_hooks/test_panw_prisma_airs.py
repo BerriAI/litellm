@@ -5051,12 +5051,14 @@ class TestPanwAirsLatestRoleMessageOnlyOpenAIShape:
 
     @pytest.mark.asyncio
     async def test_flag_true_count_mismatch_falls_back_to_role_filter(self):
-        """OpenAI shape + flag True + texts/messages count mismatch: safety fallback.
+        """OpenAI shape + flag True + request_data["messages"] mismatch:
+        structured_messages carries the scope.
 
         When request_data["messages"] does not walk to the same text count as
         the flattened texts (e.g. a message was scoped out upstream),
-        _get_latest_user_text_indices returns None and the existing role-filter
-        scan over structured_messages must engage.
+        structured_messages is the source that stays aligned with `texts`, so
+        latest-only scanning still engages through it rather than degrading to
+        a full-history scan.
         """
         handler = make_handler(experimental_use_latest_role_message_only=True)
 
@@ -5091,10 +5093,11 @@ class TestPanwAirsLatestRoleMessageOnlyOpenAIShape:
                 input_type="request",
             )
 
-            # Fallback role-filter scan: all system/user texts scanned
-            assert mock_api.call_count == 3
+            # structured_messages aligns with texts, so only the latest user
+            # message is scanned - no degradation to a full-history scan.
+            assert mock_api.call_count == 1
             scanned = [call.kwargs["content"] for call in mock_api.call_args_list]
-            assert scanned == ["system text", "user one", "user two"]
+            assert scanned == ["user two"]
 
     @pytest.mark.asyncio
     async def test_flag_true_no_user_message_falls_back(self):
@@ -5242,6 +5245,116 @@ class TestPanwAirsLatestRoleMessageOnlyOpenAIShape:
             assert result["texts"] == ["response text one", "response text two"]
             # Both response texts scanned; scope filtering is request-side only
             assert mock_api.call_count == 2
+
+
+class TestPanwAirsLatestRoleMessageOnlyResponsesShape:
+    """/v1/responses requests carry `input`, not `messages`, so request_data has no
+    messages list. structured_messages is the only aligned source there."""
+
+    @pytest.mark.asyncio
+    async def test_responses_shape_scans_latest_user_only(self):
+        handler = make_handler(experimental_use_latest_role_message_only=True)
+
+        inputs: GenericGuardrailAPIInputs = {
+            "texts": ["first user turn", "first assistant turn", "latest user turn"],
+            "structured_messages": [
+                {"role": "user", "content": "first user turn"},
+                {"role": "assistant", "content": "first assistant turn"},
+                {"role": "user", "content": "latest user turn"},
+            ],
+        }
+        # No "messages" key - this is what a Responses request looks like.
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gpt-4.1",
+            "input": "latest user turn",
+            "proxy_server_request": {"url": "http://localhost:4000/v1/responses"},
+        }
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            await handler.apply_guardrail(
+                inputs=inputs, request_data=request_data, input_type="request"
+            )
+
+            assert mock_api.call_count == 1
+            scanned = [c.kwargs["content"] for c in mock_api.call_args_list]
+            assert scanned == ["latest user turn"]
+
+    @pytest.mark.asyncio
+    async def test_responses_shape_full_history_when_flag_unset(self):
+        handler = make_handler()
+
+        inputs: GenericGuardrailAPIInputs = {
+            "texts": ["first user turn", "latest user turn"],
+            "structured_messages": [
+                {"role": "user", "content": "first user turn"},
+                {"role": "user", "content": "latest user turn"},
+            ],
+        }
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gpt-4.1",
+            "input": "latest user turn",
+            "proxy_server_request": {"url": "http://localhost:4000/v1/responses"},
+        }
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            result = await handler.apply_guardrail(
+                inputs=inputs, request_data=request_data, input_type="request"
+            )
+
+            # Unset default is unchanged for non-Anthropic shapes: every user turn
+            # is sent for scanning, and all texts pass through on allow.
+            scanned = [c.kwargs["content"] for c in mock_api.call_args_list]
+            assert scanned == ["first user turn", "latest user turn"]
+            assert result["texts"] == ["first user turn", "latest user turn"]
+
+    @pytest.mark.asyncio
+    async def test_both_sources_mismatch_falls_back_to_role_filter(self):
+        """When neither message source walks to the same text count, the existing
+        role-filter scan engages - the original safety fallback."""
+        handler = make_handler(experimental_use_latest_role_message_only=True)
+
+        inputs: GenericGuardrailAPIInputs = {
+            "texts": ["system text", "user one", "user two"],
+            "structured_messages": [
+                {"role": "system", "content": "system text"},
+                {"role": "user", "content": "user one"},
+                {"role": "user", "content": "user two"},
+                {"role": "user", "content": "extra, not in texts"},
+            ],
+        }
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "model": "gemini-2.5-flash",
+            "messages": [
+                {"role": "system", "content": "system text"},
+                {"role": "user", "content": "user one"},
+                {"role": "user", "content": "user two"},
+                {"role": "user", "content": "also not in texts"},
+            ],
+        }
+
+        with patch.object(
+            handler, "_call_panw_api", new_callable=AsyncMock
+        ) as mock_api:
+            mock_api.return_value = {"action": "allow", "category": "benign"}
+
+            await handler.apply_guardrail(
+                inputs=inputs, request_data=request_data, input_type="request"
+            )
+
+            assert mock_api.call_count == 3
+            scanned = [c.kwargs["content"] for c in mock_api.call_args_list]
+            assert scanned == ["system text", "user one", "user two"]
 
 
 class TestPanwAirsLatestRoleMessageOnlyStartupWarning:
