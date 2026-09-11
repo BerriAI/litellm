@@ -1,5 +1,5 @@
-"""Tests for ``LangfuseOpenTelemetryV2``: the root observation's input and output are stamped from the
-request-task hooks, while the root span is still recording, so Langfuse can show them on the trace."""
+"""Tests for the Langfuse OTel v2 loggers: the trace name and the root observation's input and output are
+stamped from the request task while the root span is still recording, so Langfuse can show them on the trace."""
 
 import asyncio
 import json
@@ -41,6 +41,7 @@ from litellm.types.utils import (  # noqa: E402
 
 INPUT_ATTR: Final = "langfuse.observation.input"
 OUTPUT_ATTR: Final = "langfuse.observation.output"
+TRACE_NAME_ATTR: Final = "langfuse.trace.name"
 CHAT_DATA: Final = {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "ping"}]}
 
 
@@ -304,6 +305,69 @@ def test_unrenderable_output_never_raises_into_the_request():
 
     attrs = _root_attrs(exporter)
     assert INPUT_ATTR not in attrs and OUTPUT_ATTR not in attrs
+
+
+def _run_named_request(logger, exporter, litellm_params: dict) -> tuple[dict, dict]:
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
+    root = _start_root(logger)
+    logger.log_pre_api_call(
+        model="gpt-5.4-mini", messages=[], kwargs={"litellm_call_id": "call_1", "litellm_params": litellm_params}
+    )
+    root.end()
+    payload = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-5.4-mini",
+        "messages": CHAT_DATA["messages"],
+        "response": response.model_dump(),
+        "status": "success",
+        "litellm_call_id": "call_1",
+        "metadata": {},
+        "hidden_params": {},
+    }
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": payload, "litellm_params": litellm_params}, response, None, None
+        )
+    )
+    generation = next(span for span in exporter.get_finished_spans() if span.name != LITELLM_PROXY_REQUEST_SPAN_NAME)
+    return _root_attrs(exporter), dict(generation.attributes or {})
+
+
+@pytest.mark.parametrize("capture", ["span_only", "no_content"])
+def test_langfuse_trace_name_header_names_the_root_and_the_generation_over_body_metadata(capture):
+    logger, exporter = _logger(capture=capture)
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger,
+        exporter,
+        {
+            "metadata": {"trace_name": "from-body"},
+            "proxy_server_request": {"headers": {"langfuse_trace_name": "from-header"}},
+        },
+    )
+
+    assert root_attrs[TRACE_NAME_ATTR] == "from-header"
+    assert generation_attrs[TRACE_NAME_ATTR] == "from-header"
+
+
+def test_body_metadata_trace_name_names_the_root_and_the_generation():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger, exporter, {"metadata": {"trace_name": "from-body"}, "proxy_server_request": {"headers": {}}}
+    )
+
+    assert root_attrs[TRACE_NAME_ATTR] == "from-body"
+    assert generation_attrs[TRACE_NAME_ATTR] == "from-body"
+
+
+def test_unnamed_request_leaves_the_trace_name_off_both_spans():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(logger, exporter, {"proxy_server_request": {"headers": {}}})
+
+    assert TRACE_NAME_ATTR not in root_attrs and TRACE_NAME_ATTR not in generation_attrs
 
 
 @pytest.mark.parametrize(
