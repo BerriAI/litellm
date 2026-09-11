@@ -213,6 +213,18 @@ async def _read_request_body(request: Request | None) -> dict:
         return {}
 
 
+async def read_raw_json_body(request: Request | None) -> bytes | None:
+    if request is None or _safe_get_request_parsed_body(request=request) is None:
+        return None
+    content_type: Final = _safe_get_request_headers(request=request).get("content-type", "")
+    if _is_form_content_type(content_type):
+        return None
+    try:
+        return await request.body()
+    except RuntimeError:
+        return None
+
+
 def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
     if request is None:
         return None

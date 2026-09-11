@@ -4474,6 +4474,116 @@ class TestMCPServerManager:
         assert result[0].name == "github_tool_1"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.oauth2])
+    @pytest.mark.parametrize("is_byok", [False, True])
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    async def test_openapi_health_loads_spec_without_mcp_handshake(self, respx_mock, monkeypatch, auth_type, is_byok, scheme):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-health",
+            name="openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=f"{scheme}://93.184.216.34/openapi.json",
+            auth_type=auth_type,
+            is_byok=is_byok,
+            authentication_token=None if is_byok else "shared-secret",
+            static_headers={"Authorization": "Bearer static-secret"},
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).respond(200, json={"openapi": "3.0.0", "paths": {}})
+        result = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+        assert result.last_health_check is not None
+        assert result.spec_path == server.spec_path
+        assert route.call_count == 1
+        assert "authorization" not in route.calls[0].request.headers
+        assert "x-api-key" not in route.calls[0].request.headers
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [MCPAuth.none, MCPAuth.bearer_token])
+    @pytest.mark.parametrize("spec_path", ["/config/openapi.json", "relative/openapi.json"])
+    async def test_openapi_local_spec_health_is_unknown(self, respx_mock, auth_type, spec_path):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="local-openapi-health",
+            name="local-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path=spec_path,
+            auth_type=auth_type,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        result = await manager.health_check_server(server.server_id)
+        assert result.status == "unknown"
+        assert result.health_check_error == "OpenAPI servers have no protocol-level health probe"
+        assert result.last_health_check is not None
+        assert not respx_mock.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "expected_status", "expected_error"),
+        [
+            (httpx.Response(401, text="secret response content"), "unhealthy", "OpenAPI specification request failed (HTTP 401)"),
+            (httpx.Response(404), "unhealthy", "OpenAPI specification request failed (HTTP 404)"),
+            (httpx.Response(500), "unhealthy", "OpenAPI specification request failed (HTTP 500)"),
+            (httpx.ConnectError("secret network details"), "unhealthy", "OpenAPI specification could not be loaded (ConnectError)"),
+            (httpx.Response(200, text="secret invalid JSON body"), "unhealthy", "OpenAPI specification could not be loaded (JSONDecodeError)"),
+        ],
+    )
+    async def test_openapi_health_reports_safe_failures(self, respx_mock, monkeypatch, failure, expected_status, expected_error):
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="failed-openapi-health",
+            name="failed-openapi-health",
+            transport=MCPTransport.http,
+            url="https://rest.example.com",
+            spec_path="https://93.184.216.34/key-secret?token=query-secret",
+            auth_type=MCPAuth.bearer_token,
+            is_byok=True,
+        )
+        manager.registry = {server.server_id: server}
+        route = respx_mock.get(server.spec_path).mock(side_effect=[failure])
+        result = await manager.health_check_server(server.server_id)
+        assert result.status == expected_status
+        assert result.health_check_error == expected_error
+        assert result.last_health_check is not None
+        assert route.call_count == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancel", [False, True])
+    async def test_openapi_health_timeout_and_cancellation_cleanup(self, respx_mock, monkeypatch, cancel):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_spec_health
+
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def slow_load(request):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        respx_mock.get("https://93.184.216.34/slow.json").mock(side_effect=slow_load)
+        task = asyncio.create_task(_openapi_spec_health("https://93.184.216.34/slow.json", timeout=0.1))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        if cancel:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            status, error = await task
+            assert status == "unhealthy"
+            assert error == "OpenAPI specification check timed out after 0.1 seconds"
+        assert cancelled.is_set()
+
+    @pytest.mark.asyncio
     async def test_health_check_server_healthy(self):
         """Test health check for a healthy server"""
         manager = MCPServerManager()
@@ -12676,3 +12786,118 @@ async def test_debug_reports_legacy_signing_and_non_http_transport(transport: Li
             assert "Credential=AKIDEXAMPLE/" in request.headers["Authorization"]
     finally:
         request_ctx.reset(token)
+
+@pytest.mark.asyncio
+async def test_openapi_health_coalesces_concurrent_checks_and_reuses_results(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="coalesced",
+        name="coalesced",
+        transport=MCPTransport.http,
+        spec_path="https://93.184.216.34/coalesced.json",
+        auth_type=MCPAuth.none,
+    )
+    manager.registry = {server.server_id: server}
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def serve(request):
+        started.set()
+        await release.wait()
+        return httpx.Response(200, json={"paths": {}})
+
+    route = respx_mock.get(server.spec_path).mock(side_effect=serve)
+    tasks = [asyncio.create_task(manager.health_check_server(server.server_id)) for _ in range(4)]
+    await asyncio.wait_for(started.wait(), timeout=1)
+    release.set()
+    results = await asyncio.gather(*tasks)
+    cached = await manager.health_check_server(server.server_id)
+    assert [result.status for result in results] == ["healthy"] * 4
+    assert cached.status == "healthy"
+    assert {result.last_health_check for result in [*results, cached]} == {results[0].last_health_check}
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_openapi_health_cache_expires_at_thirty_seconds(respx_mock, monkeypatch):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _OpenAPIHealthProbe
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    clock = iter([0.0, 29.0, 30.0, 30.0])
+    probe = _OpenAPIHealthProbe("https://93.184.216.34/expiry.json", clock=clock.__next__)
+    route = respx_mock.get(probe.spec_path).mock(
+        side_effect=[
+            httpx.Response(200, json={"paths": {}}),
+            httpx.Response(503),
+        ]
+    )
+    first = await probe.check()
+    assert first[0] == "healthy"
+    assert await probe.check() == first
+    refreshed = await probe.check()
+    assert refreshed[0] == "unhealthy"
+    assert refreshed[1] == "OpenAPI specification request failed (HTTP 503)"
+    assert refreshed[2] >= first[2]
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_openapi_health_reports_size_limit_as_unknown_and_caches_failure(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="oversized",
+        name="oversized",
+        transport=MCPTransport.http,
+        spec_path="https://93.184.216.34/large.json",
+        auth_type=MCPAuth.none,
+    )
+    manager.registry = {server.server_id: server}
+    route = respx_mock.get(server.spec_path).respond(200, headers={"content-length": str(12 * 1024 * 1024)})
+    result = await manager.health_check_server(server.server_id)
+    cached = await manager.health_check_server(server.server_id)
+    assert result.status == "unknown"
+    assert result.health_check_error == "OpenAPI specification probe refused: Response exceeds the configured size limit"
+    assert cached.health_check_error == result.health_check_error
+    assert cached.last_health_check == result.last_health_check
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_waiting", [False, True])
+async def test_openapi_health_cancellation_does_not_poison_cache(respx_mock, monkeypatch, already_waiting):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="cancelled-cache", name="cancelled-cache", transport=MCPTransport.http,
+        spec_path="https://93.184.216.34/cancelled-cache.json", auth_type=MCPAuth.none,
+    )
+    manager.registry = {server.server_id: server}
+    started = asyncio.Event()
+    attempts = []
+
+    async def serve(request):
+        attempts.append(request.url)
+        if not started.is_set():
+            started.set()
+            await asyncio.Event().wait()
+        return httpx.Response(200, json={"paths": {}})
+
+    route = respx_mock.get(server.spec_path).mock(side_effect=serve)
+    leader = asyncio.create_task(manager.health_check_server(server.server_id))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    follower = asyncio.create_task(manager.health_check_server(server.server_id)) if already_waiting else None
+    await asyncio.sleep(0)
+    leader.cancel()
+    cancelled = await leader
+    assert cancelled.status == "unknown"
+    assert cancelled.health_check_error == "OpenAPI specification check was cancelled"
+    recovered = await follower if follower is not None else await manager.health_check_server(server.server_id)
+    assert recovered.status == "healthy"
+    assert recovered.health_check_error is None
+    cached = await manager.health_check_server(server.server_id)
+    assert cached.last_health_check == recovered.last_health_check
+    assert cached.status == "healthy"
+    assert len(attempts) == 2
+    assert route.call_count == 1
