@@ -2718,13 +2718,30 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
 
-    common_key_access_checks(
-        user_api_key_dict=user_api_key_dict,
-        data=data,
-        user_id=existing_key_row.user_id,
-        llm_router=llm_router,
-        premium_user=premium_user,
+    _caller_is_key_owner: Final = (
+        existing_key_row.user_id is None or existing_key_row.user_id == user_api_key_dict.user_id
     )
+    if _is_proxy_admin or _caller_is_key_owner or existing_key_row.team_id is None:
+        common_key_access_checks(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            user_id=existing_key_row.user_id,
+            llm_router=llm_router,
+            premium_user=premium_user,
+        )
+    else:
+        await _check_key_admin_access(
+            user_api_key_dict=user_api_key_dict,
+            hashed_token=existing_key_row.token,
+            prisma_client=checked_prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            route="/key/update",
+        )
+        _check_model_access_group(
+            models=data.models,
+            llm_router=llm_router,
+            premium_user=premium_user,
+        )
 
     await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
         user_api_key_dict=user_api_key_dict,
