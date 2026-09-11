@@ -84,11 +84,11 @@ CHAOS_CPU_PER_REQUEST_RATIO_CEILING: Final = 2.0
 # the breaker opens, a request skips Redis rather than waiting on its socket timeout, so the chaos
 # phase can come in faster than baseline (local runs measured p90 at 0.61x) and a ratio passes on a
 # phase that was never slow. What a user actually cares about is the wall-clock number, which these
-# hold directly. Calibrated from local runs whose worst chaos phase was p50 0.66s, p90 0.74s, p99
-# 1.20s and 3.4 KB of log per request, then left roughly 3x loose for a shared CI runner.
-CHAOS_P50_LATENCY_CEILING_SECONDS: Final = 2.0
-CHAOS_P90_LATENCY_CEILING_SECONDS: Final = 3.0
-CHAOS_P99_LATENCY_CEILING_SECONDS: Final = 5.0
+# hold directly. Calibrated from local runs whose worst chaos phase was p50 0.19s, p90 0.23s, p99
+# 0.69s and 3.5 KB of log per request, with several times that left as slack for a shared CI runner.
+CHAOS_P50_LATENCY_CEILING_SECONDS: Final = 1.0
+CHAOS_P90_LATENCY_CEILING_SECONDS: Final = 2.0
+CHAOS_P99_LATENCY_CEILING_SECONDS: Final = 3.0
 CHAOS_LOG_BYTES_PER_REQUEST_CEILING: Final = 12_000.0
 
 DRAIN_TIMEOUT_SECONDS: Final = 30.0
