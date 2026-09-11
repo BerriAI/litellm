@@ -8,6 +8,7 @@ use super::handler::perform_ocr_request;
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
 use super::wire::{DecodedOcrResponse, decode_response};
 use crate::Error;
+use crate::auth::vertex::VertexAuth;
 use crate::constants::OCR_CONNECT_TIMEOUT_SECS;
 use crate::error::TransportError;
 use crate::media::MediaFetcher;
@@ -17,6 +18,7 @@ pub struct OcrClient {
     provider_http: reqwest::Client,
     polling_http: reqwest::Client,
     document_fetcher: MediaFetcher,
+    vertex_auth: VertexAuth,
 }
 
 impl OcrClient {
@@ -26,6 +28,7 @@ impl OcrClient {
             provider_http,
             polling_http: no_redirect_http()?,
             document_fetcher,
+            vertex_auth: VertexAuth::default(),
         })
     }
 
@@ -51,12 +54,17 @@ impl OcrClient {
         &self.document_fetcher
     }
 
+    pub(crate) fn vertex_auth(&self) -> &VertexAuth {
+        &self.vertex_auth
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
         Self {
             provider_http,
             polling_http: no_redirect_http().expect("test polling client builds"),
             document_fetcher: MediaFetcher::for_test(document_http),
+            vertex_auth: VertexAuth::default(),
         }
     }
 }

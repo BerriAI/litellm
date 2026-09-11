@@ -29,3 +29,6 @@ pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "../../tests/ocr.rs"]
 pub(crate) mod tests;
+#[cfg(test)]
+#[path = "../../tests/vertex_ai_ocr.rs"]
+mod vertex_ai_tests;

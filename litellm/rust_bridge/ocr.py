@@ -179,10 +179,19 @@ def _optional_params(request: LiteLLMOcrRequest, resolve_secret: Callable[[str],
         or resolve_secret("VERTEXAI_LOCATION")
         or resolve_secret("VERTEX_LOCATION")
     )
+    credentials: Final = (
+        request.kwargs.get("vertex_credentials")
+        or request.kwargs.get("vertex_ai_credentials")
+        or resolve_secret("VERTEXAI_CREDENTIALS")
+    )
     vertex_params: Final = MappingProxyType(
         {
             name: value
-            for name, value in (("vertex_project", project), ("vertex_location", location))
+            for name, value in (
+                ("vertex_project", project),
+                ("vertex_location", location),
+                ("vertex_credentials", credentials),
+            )
             if value is not None
         }
     )
