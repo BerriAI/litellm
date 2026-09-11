@@ -792,8 +792,11 @@ OPENAI_TRANSCRIPTION_PARAMS: Final = [
 
 OPENAI_EMBEDDING_PARAMS: Final = ["dimensions", "encoding_format", "user"]
 
-# openai-python request-option kwargs: transport-level, never provider request body content
-OPENAI_SDK_TRANSPORT_PARAMS: Final = frozenset({"extra_headers", "extra_query", "timeout"})
+# openai-python request-option kwargs that already reach the provider through a working
+# path outside extra_body, so they must never also be captured as extra_body content.
+# Deliberately excludes extra_query: no such path exists for it yet, so it stays in
+# extra_body rather than trading its loud failure for a silent no-op.
+OPENAI_SDK_TRANSPORT_PARAMS: Final = frozenset({"extra_headers", "timeout"})
 
 DEFAULT_EMBEDDING_PARAM_VALUES: Final = {
     **{k: None for k in OPENAI_EMBEDDING_PARAMS},
