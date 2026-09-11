@@ -734,15 +734,16 @@ def agent_365_authorization_servers(server: MCPServer, user_api_key_auth: "UserA
     """Entra issuers an MCP client signs in with before calling ``server`` through an Agent 365 guardrail.
 
     Empty unless the admin advertised the server's ``scopes`` (the audience the client requests), the gateway
-    would otherwise own sign-in for the server, and an Agent 365 guardrail applies: every registered one for the
-    anonymous discovery fetch, otherwise those the caller's key, team, or policies select.
+    would otherwise own sign-in for the server, and an On-Behalf-Of Agent 365 guardrail applies: every registered
+    one for the anonymous discovery fetch, otherwise those the caller's key, team, or policies select. Agent
+    identity guardrails never read the caller's bearer, so they neither advertise nor challenge.
     """
     if not server.scopes or server.auth_type == MCPAuth.oauth2 or not server.advertises_gateway_authorization_server:
         return ()
     registered: Final = tuple(
         callback
         for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(Agent365Guardrail)
-        if isinstance(callback, Agent365Guardrail)
+        if isinstance(callback, Agent365Guardrail) and callback.agent_identity is None
     )
     applicable: Final = (
         registered

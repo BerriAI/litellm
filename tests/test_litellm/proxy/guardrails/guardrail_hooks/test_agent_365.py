@@ -1197,6 +1197,19 @@ class TestAgent365AuthorizationServers:
     def test_silent_when_no_guardrail_is_registered(self):
         assert agent_365_authorization_servers(_mcp_server(scopes=[GATEWAY_SCOPE]), None) == ()
 
+    def test_agent_identity_guardrail_never_challenges_for_a_caller_bearer(self):
+        guardrail: Final = _make_guardrail(FakeHandler([]), agent_identity=AGENT_IDENTITY)
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        server: Final = _mcp_server(scopes=[GATEWAY_SCOPE])
+        signed_in_key: Final = UserAPIKeyAuth(api_key="sk-any", user_id="u-1")
+        try:
+            assert agent_365_authorization_servers(server, None) == ()
+            assert agent_365_authorization_servers(server, signed_in_key) == ()
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
     @pytest.mark.parametrize(
         "server",
         [
