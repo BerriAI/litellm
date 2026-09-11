@@ -2633,6 +2633,62 @@ async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: py
     assert not_their_team.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_dry_runs_admit_a_member_whose_team_grants_auto_router_management(monkeypatch: pytest.MonkeyPatch):
+    """The dry runs rehearse a complexity-router write, so the member permission that opens
+    that write opens both dry runs too, and only that permission does."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.auto_router_endpoints import (
+        preview_auto_router_routing,
+        validate_complexity_router_config,
+    )
+    from litellm.types.management_endpoints.auto_router_endpoints import (
+        AutoRouterRoutingTestRequest,
+        ComplexityRouterConfigValidationRequest,
+    )
+
+    def _team_prisma(permissions: list[str]) -> MagicMock:
+        row_data = {
+            "team_id": "team-1",
+            "members_with_roles": [{"role": "admin", "user_id": "team-admin"}, {"role": "user", "user_id": "member"}],
+            "team_member_permissions": permissions,
+            "models": ["cheap-model", "mid-model", "big-model"],
+        }
+        team_row = MagicMock()
+        team_row.model_dump.return_value = row_data
+        team_row.dict.return_value = row_data
+        prisma = MagicMock()
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        return prisma
+
+    member: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-member", user_id="member")
+    config: Final = {"tiers": TIERS, "classifier_type": "heuristic"}
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma(["/key/generate"]))
+    with pytest.raises(HTTPException) as ungranted:
+        await validate_complexity_router_config(
+            ComplexityRouterConfigValidationRequest(complexity_router_config=config, team_id="team-1"), member
+        )
+    assert ungranted.value.status_code == 403
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma(["/model/auto_router_management"]))
+    verdict = await validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(complexity_router_config=config, team_id="team-1"), member
+    )
+    assert verdict.valid is True
+    # The rehearsed create carries no name, so the same member who may not edit a teammate's
+    # router still gets the dry run for a router of their own, whatever names the proxy serves.
+    routed = await preview_auto_router_routing(
+        AutoRouterRoutingTestRequest.model_validate(
+            {"prompt": "what is 2+2", "complexity_router_config": config, "team_id": "team-1"}
+        ),
+        member,
+    )
+    assert routed.routed_model == "cheap-model"
+
+
 def test_every_shadow_eval_sql_constant_speaks_naive_utc():
     """The tables store naive UTC wall time (prisma's convention), so SQL-side time must be
     NOW() AT TIME ZONE 'utc' and python-side params must cast ::timestamp; a bare NOW() or a

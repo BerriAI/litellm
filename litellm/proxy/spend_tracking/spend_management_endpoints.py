@@ -4590,7 +4590,7 @@ async def _can_team_member_view_log(
     """
     from litellm.proxy.management_endpoints.common_utils import (
         _is_user_team_admin,
-        _team_member_has_permission,
+        team_member_has_permission,
     )
 
     if team_id is None:
@@ -4601,7 +4601,7 @@ async def _can_team_member_view_log(
     team_obj: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
     if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
         return True
-    return _team_member_has_permission(
+    return team_member_has_permission(
         user_api_key_dict=user_api_key_dict,
         team_obj=team_obj,
         permission=KeyManagementRoutes.SPEND_LOGS.value,
@@ -4669,7 +4669,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     from litellm.proxy.auth.auth_checks import get_user_object
     from litellm.proxy.management_endpoints.common_utils import (
         _is_user_team_admin,
-        _team_member_has_permission,
+        team_member_has_permission,
     )
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
@@ -4688,7 +4688,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     permitted: Final[list[str]] = []
     for team_row in team_rows:
         team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or _team_member_has_permission(
+        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or team_member_has_permission(
             user_api_key_dict=user_api_key_dict,
             team_obj=team_obj,
             permission=KeyManagementRoutes.SPEND_LOGS.value,

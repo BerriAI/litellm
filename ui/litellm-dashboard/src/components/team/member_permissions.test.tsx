@@ -95,6 +95,22 @@ describe("MemberPermissions", () => {
     });
   });
 
+  it("renders the auto-router management permission the server now advertises", async () => {
+    vi.mocked(networking.getTeamPermissionsCall).mockResolvedValue({
+      all_available_permissions: ["/key/generate", "/model/auto_router_management"],
+      team_member_permissions: [],
+    });
+
+    renderWithProviders(<MemberPermissions teamId="team-123" accessToken="token-123" canEditTeam={true} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("/model/auto_router_management")).toBeInTheDocument();
+      expect(
+        screen.getByText("Member can create, edit and delete this team's auto-routers (not other models)"),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("should render team daily activity permission with correct method and description", async () => {
     vi.mocked(networking.getTeamPermissionsCall).mockResolvedValue({
       all_available_permissions: ["/key/generate", "/team/daily/activity"],

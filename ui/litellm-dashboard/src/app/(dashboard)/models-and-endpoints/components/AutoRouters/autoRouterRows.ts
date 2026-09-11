@@ -106,7 +106,13 @@ export const toAutoRouterRow = (
   const name = deployment.model_name ?? "";
   const strategy = autoRouterStrategy(params);
   const { canEdit, canDelete, editBlockedReason } = autoRouterCapabilities(params, info);
-  const mayActOnRow = canModifyModel(actor, teams, { teamId: info.team_id, isDbModel: info.db_model === true });
+  const origin = {
+    teamId: info.team_id,
+    isDbModel: info.db_model === true,
+    isAutoRouter: true,
+    createdBy: info.created_by,
+  };
+  const mayActOnRow = canModifyModel(actor, teams, origin);
 
   return {
     id: info.id ?? `${name}-${index}`,

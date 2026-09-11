@@ -169,10 +169,13 @@ export default function ModelInfoView({
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
 
-  const canEditModel = canModifyModel({ userRole, userID, isViewOnly }, teams ?? null, {
+  const rowOrigin = {
     teamId: modelData?.model_info?.team_id,
     isDbModel: modelData?.model_info?.db_model === true,
-  });
+    isAutoRouter: isAutoRouterDeployment(modelData?.litellm_params),
+    createdBy: modelData?.model_info?.created_by,
+  };
+  const canEditModel = canModifyModel({ userRole, userID, isViewOnly }, teams ?? null, rowOrigin);
   const isAdmin = userRole === "Admin";
   // Editor-aware on purpose: an adaptive or quality router must not offer Edit Auto Router.
   const isAutoRouterModel = hasAutoRouterEditor(modelData?.litellm_params);

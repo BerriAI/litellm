@@ -176,7 +176,7 @@ async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_ob
     return False
 
 
-def _team_member_has_permission(
+def team_member_has_permission(
     user_api_key_dict: UserAPIKeyAuth,
     team_obj: LiteLLM_TeamTable,
     permission: str,
