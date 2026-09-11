@@ -888,10 +888,8 @@ async def _openapi_spec_health(
     spec_path: str, *, timeout: float
 ) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None]:
     """Check specification availability, not upstream operations or user credentials."""
-    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-        OpenAPISpecProbeLimitError,
-        load_openapi_spec_async,
-    )
+    from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
 
     if not spec_path.startswith(("http://", "https://")):
         return "unknown", "OpenAPI servers have no protocol-level health probe"
@@ -903,8 +901,8 @@ async def _openapi_spec_health(
         return "unknown", "OpenAPI specification check was cancelled"
     except HTTPStatusError as exc:
         return "unhealthy", f"OpenAPI specification request failed (HTTP {exc.response.status_code})"
-    except OpenAPISpecProbeLimitError as exc:
-        return "unknown", str(exc)
+    except HTTPResponseLimitError as exc:
+        return "unknown", f"OpenAPI specification probe refused: {exc}"
     except (httpx.RequestError, ValueError, OSError) as exc:
         return "unhealthy", f"OpenAPI specification could not be loaded ({type(exc).__name__})"
     return "healthy", None
