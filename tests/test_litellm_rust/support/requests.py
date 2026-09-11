@@ -36,11 +36,32 @@ async def call_aocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
 
 
 def call_native_ocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
-    return native_ocr.ocr(ocr_arguments(server, **kwargs))
+    assert native_ocr.load_rust_ocr() is not None
+    litellm.rust(True)
+    assert_native_supported(server, **kwargs)
+    return call_ocr(server, **kwargs)
 
 
 async def call_native_aocr(server: RecordingServer, **kwargs: object) -> OCRResponse:
-    return await native_ocr.aocr(ocr_arguments(server, **kwargs))
+    assert native_ocr.load_rust_aocr() is not None
+    litellm.rust(True)
+    assert_native_supported(server, **kwargs)
+    return await call_aocr(server, **kwargs)
+
+
+def assert_native_supported(server: RecordingServer, **kwargs: object) -> None:
+    arguments: Final = ocr_arguments(server, **kwargs)
+    request: Final = native_ocr.LiteLLMOcrRequest(
+        model=arguments["model"],
+        document=arguments["document"],
+        api_key=arguments["api_key"],
+        api_base=arguments["api_base"],
+        timeout=arguments.get("timeout"),
+        custom_llm_provider=arguments.get("custom_llm_provider"),
+        extra_headers=arguments.get("extra_headers"),
+        kwargs=arguments,
+    )
+    assert native_ocr.supported(request), "test requires native OCR support, not Python fallback"
 
 
 def request_body(kwargs: dict[str, object]) -> dict[str, object]:

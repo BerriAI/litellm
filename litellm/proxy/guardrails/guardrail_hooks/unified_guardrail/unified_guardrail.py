@@ -19,6 +19,7 @@ from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.guardrail_call_context import guardrail_call_type
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
@@ -307,8 +308,9 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         verbose_proxy_logger.debug("async_post_call_success_hook response: %s", response)
 
-        call_type: CallTypesLiteral | None = None
-        if user_api_key_dict.request_route is not None:
+        context: Final = guardrail_call_type.get()
+        call_type: CallTypesLiteral | None = context.value if context is not None else None
+        if call_type is None and user_api_key_dict.request_route is not None:
             call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
             if call_types is not None and len(call_types) > 0:
                 call_type = call_types[0]

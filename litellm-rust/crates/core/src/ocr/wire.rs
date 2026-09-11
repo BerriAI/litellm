@@ -73,6 +73,7 @@ pub fn decode_request(wire: OcrWireRequest) -> Result<LiteLLMOcrRequest, Error> 
         wire.optional_params,
     )?;
     let connection = OcrConnection {
+        token_provider: None,
         api_key: nonblank(wire.api_key),
         api_key_source,
         api_base: nonblank(wire.api_base),
@@ -150,7 +151,7 @@ pub fn decode_pre_call_result(
     let changed: Changed = decode_request_value(value, "guardrail")?;
     Ok(OcrPreCallRequest {
         document: changed.document,
-        optional_params: Value::Object(changed.optional_params),
+        optional_params: changed.optional_params,
         ..original
     })
 }

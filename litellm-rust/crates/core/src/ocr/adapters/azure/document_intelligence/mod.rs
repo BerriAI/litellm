@@ -32,11 +32,14 @@ impl OcrAdapter for AzureDocumentIntelligenceAdapter {
         client: &OcrClient,
     ) -> Result<reqwest::Request, OcrError> {
         let params = map_ocr_params(request)?;
-        let config = AzureAuthInputs::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )
-        .map_err(Error::from)?;
+        let config = AzureAuthInputs {
+            azure_ad_token_provider: request.connection.token_provider.clone(),
+            ..AzureAuthInputs::from_sourced_optional_params(
+                &request.optional_params,
+                &request.input_sources,
+            )
+            .map_err(Error::from)?
+        };
         let headers = validate_environment(&request.connection, &config, &credential_env).await?;
         let endpoint = nonblank(request.connection.api_base.clone())
             .or_else(|| nonblank(credential_env(AZURE_DI_ENDPOINT_ENV)))

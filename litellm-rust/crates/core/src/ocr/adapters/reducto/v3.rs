@@ -32,7 +32,7 @@ impl OcrAdapter for ReductoV3Adapter {
             super::prepare_document(client, document, &request.connection, &headers).await?;
         let body = reducto::transform_v3_ocr_request(&request.model, document, &params)?;
         let body = merge_extra_params(&body, extra_params)?;
-        build_http_request(client, request, &url, &headers, &body)
+        build_http_request(client, request, &url, &headers, &body).await
     }
 
     fn transform_ocr_response(

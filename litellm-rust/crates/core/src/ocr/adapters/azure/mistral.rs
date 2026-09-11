@@ -33,13 +33,16 @@ impl OcrAdapter for AzureMistralAdapter {
             known: params,
             extra_params: _extra_params,
         } = _prepare_ocr_request::<MistralOcrParams>(request)?;
-        let config = AzureAuthInputs::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )
-        .map_err(Error::from)?;
-        let headers = validate_environment(&request.connection, &config, &credential_env).await?;
+        let config = AzureAuthInputs {
+            azure_ad_token_provider: request.connection.token_provider.clone(),
+            ..AzureAuthInputs::from_sourced_optional_params(
+                &request.optional_params,
+                &request.input_sources,
+            )
+            .map_err(Error::from)?
+        };
         let url = get_complete_url(request.connection.api_base.as_deref(), &credential_env)?;
+        let headers = validate_environment(&request.connection, &config, &credential_env).await?;
         let document = inline_remote_document(
             client.document_fetcher(),
             request.document.clone(),
@@ -88,7 +91,9 @@ async fn validate_environment(
     config: &AzureAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, OcrError> {
-    if crate::http_utils::has_header(&connection.extra_headers, "authorization") {
+    if config.azure_ad_token_provider.is_none()
+        && crate::http_utils::has_header(&connection.extra_headers, "authorization")
+    {
         super::validate_destination(connection, connection.extra_headers_source)?;
         return Ok(connection.extra_headers.clone());
     }

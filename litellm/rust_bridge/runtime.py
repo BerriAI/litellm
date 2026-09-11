@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
 from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import native_exception_types
+from litellm.rust_bridge.bindings import native_exception_types, upstream_error_details
 
 NativeT = TypeVar("NativeT")
 ResultT = TypeVar("ResultT")
@@ -137,13 +137,9 @@ def _required_reason(result: RustDeclined | RustUnavailable) -> str:
 
 
 def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
-    args: Final[tuple[object, ...]] = error.args
-    status_value: Final = args[0] if args else 0
-    message_value: Final = args[1] if len(args) > 1 else str(error)
-    status: Final = status_value if isinstance(status_value, int) else 0
-    message: Final = message_value if isinstance(message_value, str) else str(message_value)
+    status, message = upstream_error_details(error)
     raise APIError(
-        status_code=status or 500,
+        status_code=status,
         message=f"litellm rust {context.route}: {message}",
         llm_provider=context.provider,
         model=context.model,

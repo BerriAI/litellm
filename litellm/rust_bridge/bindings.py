@@ -47,3 +47,12 @@ def native_exception_types() -> tuple[type[BaseException], type[BaseException]] 
     if not isinstance(declined, type) or not isinstance(upstream, type):
         return None
     return declined, upstream
+
+
+def upstream_error_details(error: BaseException) -> tuple[int, str]:
+    args: Final[tuple[object, ...]] = error.args
+    status_value: Final = args[0] if args else 0
+    message_value: Final = args[1] if len(args) > 1 else str(error)
+    status: Final = status_value if isinstance(status_value, int) else 0
+    message: Final = message_value if isinstance(message_value, str) else str(message_value)
+    return status or 500, message

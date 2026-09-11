@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -14,7 +15,7 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.call_completion import CallCompletion
 from litellm.llms.azure_ai.ocr.common_utils import is_azure_cohere_parse_model
 from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
-from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
+from litellm.rust_bridge.bindings import NativeBinding, native_exception_types, upstream_error_details
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager
@@ -69,6 +70,9 @@ class RustOcr(Protocol):
         optional_params: dict[str, object],
         input_sources: dict[str, str],
         timeout_seconds: float | None,
+        logging_obj: _OCRLogging | None,
+        callback_loop: asyncio.AbstractEventLoop | None,
+        token_provider: object,
     ) -> dict[str, object]:
         raise NotImplementedError
 
@@ -85,6 +89,9 @@ class RustAocr(Protocol):
         optional_params: dict[str, object],
         input_sources: dict[str, str],
         timeout_seconds: float | None,
+        logging_obj: _OCRLogging | None,
+        callback_loop: asyncio.AbstractEventLoop | None,
+        token_provider: object,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
 
@@ -147,7 +154,6 @@ def supported(request: LiteLLMOcrRequest) -> bool:
     if request_provider == "azure_ai":
         return (
             not is_azure_cohere_parse_model(request.model)
-            and not callable(request.kwargs.get("azure_ad_token_provider"))
             and request.kwargs.get("azure_username") is None
             and request.kwargs.get("azure_password") is None
         )
@@ -160,7 +166,8 @@ def _optional_params(request: LiteLLMOcrRequest, resolve_secret: Callable[[str],
             name: value
             for name, value in request.kwargs.items()
             if (name not in GenericLiteLLMParams.model_fields or name in _RUST_OCR_CONFIG_FIELDS)
-            and name not in ("litellm_logging_obj", "aocr", "litellm_call_id", "proxy_server_request")
+            and name
+            not in ("litellm_logging_obj", "aocr", "litellm_call_id", "proxy_server_request", "azure_ad_token_provider")
         }
     )
     request_provider: Final = provider(request)
@@ -266,26 +273,13 @@ def _marshal(
     )
     logging_obj.update_from_kwargs(
         kwargs=dict(logged_kwargs),  # mutable-ok: legacy logging mutates its kwargs copy
-        model=request.model,
+        model=request.model.removeprefix(f"{request_provider}/"),
         optional_params=dict(logged_optional_params),  # mutable-ok: legacy logging requires concrete dict params
         litellm_params={  # mutable-ok: legacy logging requires a concrete params dict
             "litellm_call_id": request.kwargs.get("litellm_call_id"),
             "api_base": request.api_base,
         },
         custom_llm_provider=request_provider,
-    )
-    logging_obj.pre_call(
-        input="OCR document processing",
-        api_key=api_key,
-        additional_args={  # mutable-ok: pre_call mutates the additional_args dict
-            "complete_input_dict": {  # mutable-ok: callbacks consume a JSON-serializable request dict
-                "model": request.model,
-                "document": document,
-                **logged_optional_params,
-            },
-            "api_base": request.api_base or "",
-            "headers": request.extra_headers or {},  # mutable-ok: logging callbacks consume a concrete headers dict
-        },
     )
     return LiteLLMOcrRequest(
         model=request.model,
@@ -313,17 +307,13 @@ def _map_error(error: Exception, request: LiteLLMOcrRequest) -> Exception:
     )
     if provider_config is None:
         return error
-    error_args: Final = cast(  # cast-ok: BaseException.args exposes Any while native errors carry scalar args
-        tuple[object, ...], error.args
-    )
-    status: Final = error_args[0] if error_args and isinstance(error_args[0], int) else 500
-    message: Final = str(error_args[1]) if len(error_args) > 1 else str(error)
+    status, message = upstream_error_details(error)
     error_factory: Final = cast(  # cast-ok: legacy provider error factories have untyped callable parameters
         Callable[..., Exception], provider_config.get_error_class
     )
     return error_factory(
         error_message=message,
-        status_code=status or 500,
+        status_code=status,
         headers={},  # mutable-ok: provider error factories require a concrete headers dict
     )
 
@@ -349,7 +339,7 @@ def run(
     try:
         response: Final = ocr(
             model=marshalled.model,
-            document=dict(marshalled.document),  # mutable-ok: PyO3 OCR binding requires a concrete dict
+            document=cast(dict[str, object], marshalled.document),  # cast-ok: _marshal validates the document dict
             api_key=marshalled.api_key,
             api_base=marshalled.api_base,
             custom_llm_provider=marshalled.custom_llm_provider,
@@ -357,9 +347,16 @@ def run(
             optional_params=dict(marshalled.kwargs),  # mutable-ok: PyO3 OCR binding requires a concrete dict
             input_sources=marshalled.input_sources,
             timeout=marshalled.timeout,
+            logging_obj=cast(
+                _OCRLogging, request.kwargs["litellm_logging_obj"]
+            ),  # cast-ok: client decorator injects Logging
+            token_provider=request.kwargs.get("azure_ad_token_provider"),
         )
     except Exception as error:
-        raise _map_error(error, request) from error
+        mapped: Final = _map_error(error, request)
+        if mapped is error:
+            raise
+        raise mapped from error
     return _response(response) if response is not None else None
 
 
@@ -374,7 +371,7 @@ async def arun(
     try:
         response: Final = await aocr(
             model=marshalled.model,
-            document=dict(marshalled.document),  # mutable-ok: PyO3 OCR binding requires a concrete dict
+            document=cast(dict[str, object], marshalled.document),  # cast-ok: _marshal validates the document dict
             api_key=marshalled.api_key,
             api_base=marshalled.api_base,
             custom_llm_provider=marshalled.custom_llm_provider,
@@ -382,9 +379,16 @@ async def arun(
             optional_params=dict(marshalled.kwargs),  # mutable-ok: PyO3 OCR binding requires a concrete dict
             input_sources=marshalled.input_sources,
             timeout=marshalled.timeout,
+            logging_obj=cast(
+                _OCRLogging, request.kwargs["litellm_logging_obj"]
+            ),  # cast-ok: client decorator injects Logging
+            token_provider=request.kwargs.get("azure_ad_token_provider"),
         )
     except Exception as error:
-        raise _map_error(error, request) from error
+        mapped: Final = _map_error(error, request)
+        if mapped is error:
+            raise
+        raise mapped from error
     return _response(response) if response is not None else None
 
 
@@ -399,6 +403,8 @@ def ocr(
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
     input_sources: Mapping[str, str] | None = None,
+    logging_obj: _OCRLogging | None = None,
+    token_provider: object = None,
 ) -> dict[str, object] | None:
     rust_ocr: Final = load_rust_ocr()
     if rust_ocr is None:
@@ -413,6 +419,9 @@ def ocr(
         optional_params=optional_params,
         input_sources=dict(input_sources or {}),  # mutable-ok: native boundary requires a concrete dict
         timeout_seconds=_timeout_to_seconds(timeout),
+        logging_obj=logging_obj,
+        callback_loop=None,
+        token_provider=token_provider,
     )
 
 
@@ -427,6 +436,8 @@ async def aocr(
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
     input_sources: Mapping[str, str] | None = None,
+    logging_obj: _OCRLogging | None = None,
+    token_provider: object = None,
 ) -> dict[str, object] | None:
     rust_aocr: Final = load_rust_aocr()
     if rust_aocr is None:
@@ -441,4 +452,7 @@ async def aocr(
         optional_params=optional_params,
         input_sources=dict(input_sources or {}),  # mutable-ok: native boundary requires a concrete dict
         timeout_seconds=_timeout_to_seconds(timeout),
+        logging_obj=logging_obj,
+        callback_loop=asyncio.get_running_loop(),
+        token_provider=token_provider,
     )

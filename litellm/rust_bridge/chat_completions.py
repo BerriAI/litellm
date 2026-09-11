@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
+from litellm.rust_bridge.bindings import native_exception_types, upstream_error_details
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -274,18 +275,6 @@ def rust_chat_completions_accepts(
     return True
 
 
-def _rust_bridge_exceptions() -> tuple[type[BaseException], type[BaseException]] | None:
-    """`(declined, upstream_failed)` from the native module, or None when absent."""
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    declined: Final = getattr(native_bridge, "RustBridgeDeclined", None)
-    upstream: Final = getattr(native_bridge, "RustUpstreamError", None)
-    if declined is None or upstream is None:
-        return None
-    return declined, upstream
-
-
 def _reraise_or_decline(
     rust_error: BaseException,
     *,
@@ -299,20 +288,14 @@ def _reraise_or_decline(
     second attempt bills for it twice. Those surface as an `APIError` carrying
     the upstream status, which LiteLLM's exception mapping already understands.
     """
-    exceptions: Final = _rust_bridge_exceptions()
+    exceptions: Final = native_exception_types()
     if exceptions is None:
-        verbose_logger.debug(
-            "Rust chat completions bridge raised %s; falling back to Python path",
-            type(rust_error).__name__,
-        )
-        return
+        raise rust_error
     declined, upstream_failed = exceptions
     if isinstance(rust_error, upstream_failed):
-        args: Final = rust_error.args
-        status: Final = args[0] if args else 0
-        message: Final = args[1] if len(args) > 1 else ""
+        status, message = upstream_error_details(rust_error)
         raise APIError(
-            status_code=int(status) or 500,
+            status_code=status,
             message=f"litellm rust chat completions: {message}",
             llm_provider=custom_llm_provider or "",
             model=model,

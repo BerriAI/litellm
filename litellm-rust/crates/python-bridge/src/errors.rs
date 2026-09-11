@@ -16,24 +16,44 @@ pyo3::create_exception!(
     "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
 );
 
-pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
-    match err {
-        Error::Auth(message) => PyValueError::new_err(message),
-        Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_) => PyValueError::new_err(err.to_string()),
-        other => PyRuntimeError::new_err(other.to_string()),
+#[derive(Debug)]
+pub(crate) enum BridgeError {
+    InvalidArgument(String),
+    Declined(String),
+    Upstream {
+        status: Option<u16>,
+        message: String,
+    },
+    Internal(String),
+    Host(PyErr),
+}
+
+impl From<BridgeError> for PyErr {
+    fn from(error: BridgeError) -> Self {
+        match error {
+            BridgeError::InvalidArgument(message) => PyValueError::new_err(message),
+            BridgeError::Declined(reason) => RustBridgeDeclined::new_err(reason),
+            BridgeError::Upstream { status, message } => {
+                RustUpstreamError::new_err((status.unwrap_or(0), message))
+            }
+            BridgeError::Internal(message) => PyRuntimeError::new_err(message),
+            BridgeError::Host(error) => error,
+        }
     }
 }
 
-/// Map a core error for a route whose host keeps a Python implementation.
-///
-/// The distinction the host needs is whether the provider was already called.
-/// Everything raised before the request goes out is safe for the host to retry
-/// on its own path; anything after it is not, because the provider has already
-/// done the work and billed for it.
-pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
+pub(crate) fn required_route_error(err: Error) -> BridgeError {
+    match err {
+        Error::Auth(message) => BridgeError::InvalidArgument(message),
+        Error::InvalidProvider(_)
+        | Error::InvalidRequest(_)
+        | Error::InvalidType { .. }
+        | Error::MissingField(_) => BridgeError::InvalidArgument(err.to_string()),
+        other => BridgeError::Internal(other.to_string()),
+    }
+}
+
+pub(crate) fn fallback_route_error(err: Error) -> BridgeError {
     match err {
         Error::Unsupported(_)
         | Error::Auth(_)
@@ -46,15 +66,15 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
         | Error::MissingAzureDocumentIntelligenceCredentials
         | Error::MissingReductoApiKey
         | Error::Routing(_)
-        // Nothing reached the provider, so serving it on Python cannot double
-        // bill and is the only way the caller gets an answer at all.
-        | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
-        Error::Http { status, body } => {
-            RustUpstreamError::new_err((status, format!("{status}: {body}")))
-        }
-        Error::Network(message) | Error::InvalidResponse(message) => {
-            RustUpstreamError::new_err((0u16, message))
-        }
+        | Error::Connect(_) => BridgeError::Declined(err.to_string()),
+        Error::Http { status, body } => BridgeError::Upstream {
+            status: Some(status),
+            message: format!("{status}: {body}"),
+        },
+        Error::Network(message) | Error::InvalidResponse(message) => BridgeError::Upstream {
+            status: None,
+            message,
+        },
     }
 }
 
@@ -64,13 +84,16 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
 }
 
-pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
+pub(crate) fn ocr_route_error(err: Error) -> BridgeError {
     match err {
         Error::MissingField("document_url" | "image_url") => {
-            PyValueError::new_err("Document URL is required")
+            BridgeError::InvalidArgument("Document URL is required".into())
         }
-        Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
-        other => core_error_to_pyerr(other),
+        Error::Http { status, .. } => BridgeError::Upstream {
+            status: Some(status),
+            message: "OCR provider request failed".into(),
+        },
+        other => required_route_error(other),
     }
 }
 
@@ -79,25 +102,71 @@ mod ocr_error_tests {
     use super::*;
 
     #[test]
-    fn ocr_errors_preserve_python_validation_and_provider_details() {
+    fn fallback_policy_never_declines_possible_dispatch() {
+        for error in [
+            Error::Network("timeout".into()),
+            Error::InvalidResponse("malformed".into()),
+            Error::Http {
+                status: 429,
+                body: "limited".into(),
+            },
+        ] {
+            assert!(matches!(
+                fallback_route_error(error),
+                BridgeError::Upstream { .. }
+            ));
+        }
+        for error in [
+            Error::Connect("offline".into()),
+            Error::Unsupported("shape"),
+            Error::MissingApiKey { provider: "test" },
+        ] {
+            assert!(matches!(
+                fallback_route_error(error),
+                BridgeError::Declined(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn conversion_preserves_absent_status_and_host_exception_identity() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error: PyErr = BridgeError::Upstream {
+                status: None,
+                message: "timeout".into(),
+            }
+            .into();
+            let args: (u16, String) = error.value(py).getattr("args").unwrap().extract().unwrap();
+            assert_eq!(args, (0, "timeout".into()));
+            let original = PyValueError::new_err("host exception");
+            let retained = original.value(py).clone();
+            let mapped: PyErr = BridgeError::Host(original).into();
+            assert!(mapped.value(py).is(&retained));
+        });
+    }
+
+    #[test]
+    fn ocr_errors_preserve_status_without_provider_body() {
         Python::initialize();
         Python::attach(|py| {
             for field in ["document_url", "image_url"] {
-                let mapped = ocr_error_to_pyerr(Error::MissingField(field));
+                let mapped: PyErr = ocr_route_error(Error::MissingField(field)).into();
                 assert!(mapped.is_instance_of::<PyValueError>(py));
                 assert_eq!(mapped.value(py).to_string(), "Document URL is required");
             }
-            let mapped = ocr_error_to_pyerr(Error::Http {
+            let mapped: PyErr = ocr_route_error(Error::Http {
                 status: 429,
                 body: r#"{"message":"rate limited"}"#.to_string(),
-            });
+            })
+            .into();
             assert!(mapped.is_instance_of::<RustUpstreamError>(py));
             let args: (u16, String) = mapped
                 .value(py)
                 .getattr("args")
                 .and_then(|args| args.extract())
                 .expect("OCR failures retain status and unprefixed provider message");
-            assert_eq!(args, (429, r#"{"message":"rate limited"}"#.to_string()));
+            assert_eq!(args, (429, "OCR provider request failed".to_string()));
         });
     }
 }

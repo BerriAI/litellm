@@ -207,11 +207,11 @@ mod tests {
             }
         }
 
-        fn map_error(error: Error) -> PyErr {
+        fn map_error(error: Error) -> crate::errors::BridgeError {
             if matches!(&error, Error::InvalidRequest(message) if message == "panic in mapper") {
                 panic!("synthetic mapper panic")
             }
-            PyLookupError::new_err(error.to_string())
+            crate::errors::BridgeError::Host(PyLookupError::new_err(error.to_string()))
         }
     }
 
@@ -225,7 +225,7 @@ mod tests {
                 (
                     "ocr",
                     "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None)",
+                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None, logging_obj=None, callback_loop=None, token_provider=None)",
                 ),
                 (
                     "transcription",

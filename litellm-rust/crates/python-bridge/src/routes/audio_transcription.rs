@@ -7,7 +7,7 @@ use litellm_core::audio_transcription::{
 use pyo3::prelude::*;
 use serde_json::Value;
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::required_route_error;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
 fn prepare_transcription(
@@ -67,5 +67,5 @@ bridge_route! {
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_transcription,
-    errors = core_error_to_pyerr,
+    errors = required_route_error,
 }

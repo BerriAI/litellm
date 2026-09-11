@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use super::hooks::{NoopOcrHooks, OcrHooks};
 use super::registry::{OcrAdapterKind, resolve_wire_adapter};
 use crate::Error;
-use crate::auth::InputSource;
+use crate::auth::{InputSource, TokenProviderHandle};
 use crate::constants::OCR_HTTP_TIMEOUT_SECS;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -60,6 +60,7 @@ pub enum OcrResponseFormat {
 
 #[derive(Clone)]
 pub struct OcrConnection {
+    pub token_provider: Option<TokenProviderHandle>,
     pub api_key: Option<String>,
     pub api_key_source: InputSource,
     pub api_base: Option<String>,
@@ -74,6 +75,7 @@ pub struct OcrConnection {
 impl Default for OcrConnection {
     fn default() -> Self {
         Self {
+            token_provider: None,
             api_key: None,
             api_key_source: InputSource::Deployment,
             api_base: None,

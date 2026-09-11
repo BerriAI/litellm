@@ -361,15 +361,14 @@ async fn pre_call_guardrail_receives_caller_pages_before_mapping() {
 
     struct RewritePages;
     impl OcrHooks for RewritePages {
-        fn has_guardrails(&self) -> bool {
-            true
-        }
-
         fn pre_call(&self, request: OcrPreCallRequest) -> OcrHookFuture<'_, OcrPreCallRequest> {
             Box::pin(async move {
                 assert_eq!(request.optional_params["pages"], json!([0, 2]));
                 Ok(OcrPreCallRequest {
-                    optional_params: json!({"pages": [1]}),
+                    optional_params: serde_json::Map::from_iter([(
+                        "pages".to_string(),
+                        json!([1]),
+                    )]),
                     ..request
                 })
             })

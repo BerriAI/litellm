@@ -6,13 +6,12 @@ use litellm_python_interop::release_gil;
 use litellm_token_counter::{
     CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
 };
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use tokio::sync::Semaphore;
 
 use crate::constants::TOKEN_COUNT_FALLBACK_PARALLELISM;
-use crate::errors::RustBridgeDeclined;
+use crate::errors::BridgeError;
 use crate::execution::run_async;
 
 /// Counts the input tokens of a raw request body off the Python event loop with
@@ -31,7 +30,7 @@ impl TokenCounter {
     #[new]
     fn new(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
         let inner = release_gil(py, || CoreTokenCounter::from_json(tokenizer_json))
-            .map_err(token_count_error_to_pyerr)?;
+            .map_err(token_count_error)?;
         Ok(Self {
             inner: Arc::new(inner),
             encode_slots: Arc::new(Semaphore::new(encode_parallelism())),
@@ -53,7 +52,7 @@ impl TokenCounter {
                     .await
                     .map_err(|error| Error::Task(error.to_string()))?
             },
-            token_count_error_to_pyerr,
+            token_count_error,
         )
     }
 }
@@ -67,18 +66,18 @@ fn count_body(counter: &CoreTokenCounter, body: &[u8]) -> Result<InputTokenCount
     counter.count_request(&request)
 }
 
-fn token_count_error_to_pyerr(error: Error) -> PyErr {
+fn token_count_error(error: Error) -> BridgeError {
     let message = error.to_string();
     match error {
-        Error::Load(_) => PyValueError::new_err(message),
+        Error::Load(_) => BridgeError::InvalidArgument(message),
         Error::RequestParse(_)
         | Error::MissingInput
         | Error::FloatText
         | Error::ContentBlock
         | Error::ArrayItems
         | Error::JsonSerialization(_)
-        | Error::JsonUtf8(_) => RustBridgeDeclined::new_err(message),
-        Error::Encode(_) | Error::Task(_) => PyRuntimeError::new_err(message),
+        | Error::JsonUtf8(_) => BridgeError::Declined(message),
+        Error::Encode(_) | Error::Task(_) => BridgeError::Internal(message),
     }
 }
 

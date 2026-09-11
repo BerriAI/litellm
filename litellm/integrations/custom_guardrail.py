@@ -851,6 +851,9 @@ class CustomGuardrail(CustomLogger):
             return None
 
         target: Final = self._deployment_hook_target()
+        from litellm.litellm_core_utils.guardrail_call_context import guardrail_call_type
+
+        context_token: Final = guardrail_call_type.set(call_type)
         try:
             if target is not self:
                 request_data["guardrail_to_apply"] = self  # rebind-ok: dispatch consumes this key
@@ -866,6 +869,7 @@ class CustomGuardrail(CustomLogger):
                 response=response,
             )
         finally:
+            guardrail_call_type.reset(context_token)
             if target is not self:
                 request_data.pop("guardrail_to_apply", None)
 

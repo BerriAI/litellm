@@ -2,6 +2,7 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
+use crate::errors::BridgeError;
 use futures_util::FutureExt;
 use litellm_python_interop::{Pythonized, panic_to_pyerr, release_gil};
 use pyo3::exceptions::PyRuntimeError;
@@ -13,7 +14,7 @@ use tokio::time::{self, MissedTickBehavior};
 pub(crate) fn run_sync<T, E, F>(
     py: Python<'_>,
     future: F,
-    map_error: fn(E) -> PyErr,
+    map_error: fn(E) -> BridgeError,
 ) -> PyResult<Py<PyAny>>
 where
     T: Serialize + Send + 'static,
@@ -32,14 +33,14 @@ fn run_sync_on<T, E, F>(
     py: Python<'_>,
     runtime: &Runtime,
     future: F,
-    map_error: fn(E) -> PyErr,
+    map_error: fn(E) -> BridgeError,
 ) -> PyResult<Py<PyAny>>
 where
     T: Serialize + Send + 'static,
     E: Send + 'static,
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
-    if Handle::try_current().is_ok() {
+    if Handle::try_current().is_ok() && !litellm_python_interop::in_callback() {
         return Err(PyRuntimeError::new_err(
             "synchronous native routes cannot run from a Tokio context; use the async route",
         ));
@@ -53,7 +54,7 @@ where
 pub(crate) fn run_async<T, E, F>(
     py: Python<'_>,
     future: F,
-    map_error: fn(E) -> PyErr,
+    map_error: fn(E) -> BridgeError,
 ) -> PyResult<Bound<'_, PyAny>>
 where
     T: Serialize + Send + 'static,
@@ -67,12 +68,13 @@ where
     })
 }
 
-fn map_core_result<T, E>(result: Result<T, E>, map_error: fn(E) -> PyErr) -> PyResult<T> {
+fn map_core_result<T, E>(result: Result<T, E>, map_error: fn(E) -> BridgeError) -> PyResult<T> {
     match result {
         Ok(value) => Ok(value),
         Err(error) => Err(
             std::panic::catch_unwind(AssertUnwindSafe(|| map_error(error)))
-                .map_err(panic_to_pyerr)?,
+                .map_err(panic_to_pyerr)?
+                .into(),
         ),
     }
 }
@@ -124,11 +126,11 @@ mod tests {
 
     use super::*;
 
-    fn runtime_error(error: Error) -> PyErr {
-        PyRuntimeError::new_err(error.to_string())
+    fn runtime_error(error: Error) -> BridgeError {
+        BridgeError::Internal(error.to_string())
     }
 
-    fn panicking_error_mapper(_error: Error) -> PyErr {
+    fn panicking_error_mapper(_error: Error) -> BridgeError {
         panic!("error mapper panicked")
     }
 

@@ -33,3 +33,17 @@ def test_binding_validates_native_attribute(
     binding: Final = bindings.NativeBinding("route", validate=lambda item: item if isinstance(item, int) else None)
 
     assert binding.load() == expected
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ((429, "limited"), (429, "limited")),
+        ((0, "offline"), (500, "offline")),
+        ((None, "offline"), (500, "offline")),
+        (("429", 42), (500, "42")),
+        ((), (500, "")),
+    ],
+)
+def test_upstream_error_details_preserves_protocol(arguments, expected) -> None:
+    assert bindings.upstream_error_details(Exception(*arguments)) == expected

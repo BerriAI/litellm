@@ -2,11 +2,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use serde::Serialize;
+use serde_json::{Map, Value};
+
 use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrDocument};
 use crate::Error;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use serde::Serialize;
-use serde_json::Value;
 
 pub type OcrHookFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 pub type OcrLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
@@ -16,7 +17,7 @@ pub struct OcrPreCallRequest {
     pub model: String,
     pub custom_llm_provider: String,
     pub document: OcrDocument,
-    pub optional_params: Value,
+    pub optional_params: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -27,9 +28,19 @@ pub struct OcrDuringCallRequest {
     pub body: Value,
 }
 
+pub struct OcrPreparedRequest {
+    pub model: String,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Value,
+}
+
 pub trait OcrHooks: Send + Sync {
-    fn has_guardrails(&self) -> bool {
-        false
+    fn prepared_request(
+        &self,
+        request: OcrPreparedRequest,
+    ) -> OcrHookFuture<'_, OcrPreparedRequest> {
+        Box::pin(async move { Ok(request) })
     }
     fn pre_call(&self, request: OcrPreCallRequest) -> OcrHookFuture<'_, OcrPreCallRequest> {
         Box::pin(async move { Ok(request) })
@@ -69,10 +80,22 @@ pub(crate) struct OcrLifecycleHooks {
 impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse>
     for OcrLifecycleHooks
 {
-    type PreCallFuture<'a> = OcrHookFuture<'a, LiteLLMOcrRequest>;
-    type DuringCallFuture<'a> = OcrHookFuture<'a, LiteLLMOcrRequest>;
-    type SuccessFuture<'a> = OcrLogFuture<'a>;
-    type FailureFuture<'a> = OcrLogFuture<'a>;
+    type PreCallFuture<'a>
+        = OcrHookFuture<'a, LiteLLMOcrRequest>
+    where
+        Self: 'a;
+    type DuringCallFuture<'a>
+        = OcrHookFuture<'a, LiteLLMOcrRequest>
+    where
+        Self: 'a;
+    type SuccessFuture<'a>
+        = OcrLogFuture<'a>
+    where
+        Self: 'a;
+    type FailureFuture<'a>
+        = OcrLogFuture<'a>
+    where
+        Self: 'a;
 
     fn async_pre_call_hook<'a>(
         &'a self,
@@ -80,27 +103,18 @@ impl CallLifecycleHooks<LiteLLMOcrRequest, LiteLLMOcrRequest, LiteLLMOcrResponse
         request: LiteLLMOcrRequest,
     ) -> Self::PreCallFuture<'a> {
         Box::pin(async move {
-            if !self.hooks.has_guardrails() {
-                return Ok(request);
-            }
             let changed = self
                 .hooks
                 .pre_call(OcrPreCallRequest {
                     model: request.model.clone(),
                     custom_llm_provider: self.provider_name.clone(),
                     document: request.document,
-                    optional_params: Value::Object(request.optional_params),
+                    optional_params: request.optional_params,
                 })
                 .await?;
-            let Value::Object(optional_params) = changed.optional_params else {
-                return Err(super::error::OcrRequestError::RequestField {
-                    path: "guardrail.optional_params".into(),
-                }
-                .into());
-            };
             Ok(LiteLLMOcrRequest {
                 document: changed.document,
-                optional_params,
+                optional_params: changed.optional_params,
                 ..request
             })
         })
