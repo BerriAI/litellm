@@ -193,7 +193,7 @@ async def test_chat_completion_bad_model_with_spend_logs():
 
         # Verify the structure of the log entry
         assert log_entry["request_id"] == litellm_call_id
-        assert log_entry["model"] == "non-existent-model"
+        assert log_entry["model"] == "unknown-model"
         assert log_entry["model_group"] in ("", "non-existent-model")
         assert log_entry["spend"] == 0.0
         assert log_entry["total_tokens"] == 0

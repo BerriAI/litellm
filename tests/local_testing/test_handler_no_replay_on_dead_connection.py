@@ -1,29 +1,11 @@
-"""``AsyncHTTPHandler`` must not replay a request whose connection died.
+"""One call into an ``AsyncHTTPHandler`` method issues exactly one httpx send.
 
-``post``, ``put``, ``patch`` and ``delete`` each used to catch
-``(httpx.RemoteProtocolError, httpx.ConnectError)`` and re-send the request. A
-dead pooled keep-alive produces those errors, but so does an upstream that read
-the request in full, ran the work, and then died before answering. The two are
-the same exception, so a replay could re-run billed work just as readily as it
-could rescue a connection that never carried the request, and nothing available
-to the client separates the two. The replay carried no header delta, no log
-line and no counter, so neither the operator nor the upstream could tell it
-from a genuine second call.
+A connection error does not say whether the upstream ran the request, so the
+handler must not re-send on one. These tests count httpx sends rather than
+server-side requests, because aiohttp retries PUT and DELETE underneath httpx
+and the server sees a second request either way.
 
-RFC 9110 section 9.2.2 describes exactly that heuristic, calls it riskier, and
-then says a proxy MUST NOT automatically retry non-idempotent requests. aiohttp,
-which is litellm's default transport, implements the retry one layer below httpx
-and deliberately scopes POST and PATCH out of it
-(``IDEMPOTENT_METHODS`` in ``aiohttp/client.py``). Above this layer the Router
-already retries at its default ``num_retries``, where the retry is counted,
-configurable, and free to pick a different deployment.
-
-So the specification these tests pin is one line: **one call into a handler
-method issues exactly one httpx send.** Counting sends rather than server-side
-requests is what makes that checkable, because aiohttp retries PUT and DELETE
-underneath httpx and the server therefore sees a second request either way.
-
-The tests drive a real loopback server (``_StaleKeepAliveServer``) rather than
+They drive a real loopback server (``_StaleKeepAliveServer``) rather than
 monkeypatching ``client.send``, because a mocked transport has no connection
 pool of its own to poison, and the pool is the thing under test. The server
 binds ``127.0.0.1:0``, so it reaches no network and needs no credentials.

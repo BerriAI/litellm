@@ -39,7 +39,7 @@ def _is_form_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
 
 
-def _is_json_content_type(content_type: str) -> bool:
+def is_json_content_type(content_type: str) -> bool:
     """True iff the body should be parsed as JSON."""
     return _normalize_media_type(content_type) == "application/json"
 
@@ -211,6 +211,18 @@ async def _read_request_body(request: Request | None) -> dict:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
+
+
+async def read_raw_json_body(request: Request | None) -> bytes | None:
+    if request is None or _safe_get_request_parsed_body(request=request) is None:
+        return None
+    content_type: Final = _safe_get_request_headers(request=request).get("content-type", "")
+    if _is_form_content_type(content_type):
+        return None
+    try:
+        return await request.body()
+    except RuntimeError:
+        return None
 
 
 def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
@@ -406,7 +418,7 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     """
     if request.method == "POST":
         content_type: Final = request.headers.get("content-type", "")
-        if _is_json_content_type(content_type):
+        if is_json_content_type(content_type):
             return await _read_request_body(request)
         elif _is_form_content_type(content_type):
             return await get_form_data(request)

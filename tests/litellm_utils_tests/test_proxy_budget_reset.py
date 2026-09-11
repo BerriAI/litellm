@@ -401,7 +401,7 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance()
 
     enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
-    assert enduser_writes[0]["where"]["user_id"]["in"] == [f"user{i}" for i in range(1, 7)]
+    assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
     budget_writes = [c for c in batch_calls if c["table"] == "budget"]
@@ -602,7 +602,7 @@ async def test_reset_budget_continues_other_categories_on_failure():
     assert len([c for c in batch_calls if c["table"] == "team_membership"]) == 1
     enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
-    assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1"]}}
+    assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
 
     # Check the new batch write path: 2 keys + 1 user (user1 failed) + 2 teams.
@@ -1031,7 +1031,7 @@ async def test_service_logger_endusers_success():
 
     enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
-    assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1", "user2"]}}
+    assert enduser_writes[0]["where"] == {"budget_id": {"in": ["budget1"]}, "spend": {"gt": 0}}
 
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_called_once()
     (
