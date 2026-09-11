@@ -13090,6 +13090,22 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "cerebras/qwen-3.8-27b": {
+        "input_cost_per_token": 9.9e-07,
+        "litellm_provider": "cerebras",
+        "max_input_tokens": 65536,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.49e-06,
+        "source": "https://api.cerebras.ai/public/v1/models/qwen-3.8-27b",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "cerebras/zai-glm-4.6": {
         "deprecation_date": "2026-01-20",
         "input_cost_per_token": 2.25e-06,
