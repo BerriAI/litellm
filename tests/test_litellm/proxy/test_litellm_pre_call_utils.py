@@ -294,6 +294,109 @@ async def test_stamped_auth_object_reflects_header_derived_identity():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        ("key_alias", "team-a-key"),
+        ("team_alias", "team-a"),
+        ("key_name", "sk-...abc"),
+        ("user_id", "u-1"),
+    ],
+)
+async def test_default_end_user_from_key_populates_user(source, expected):
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        key_alias="team-a-key",
+        team_alias="team-a",
+        key_name="sk-...abc",
+        user_id="u-1",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"default_end_user_from": source},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == expected
+    assert updated_data["metadata"]["user_api_key_end_user_id"] == expected
+    assert user_api_key_dict.end_user_id == expected
+
+
+@pytest.mark.asyncio
+async def test_default_end_user_from_key_explicit_user_wins():
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", key_alias="team-a-key", metadata={}, team_metadata={})
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo", "user": "explicit"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"default_end_user_from": "key_alias"},
+        version="test-version",
+    )
+
+    assert updated_data["user"] == "explicit"
+    assert user_api_key_dict.end_user_id is None
+
+
+@pytest.mark.asyncio
+async def test_default_end_user_from_key_existing_end_user_id_wins():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key", key_alias="team-a-key", end_user_id="hdr-user", metadata={}, team_metadata={}
+    )
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"default_end_user_from": "key_alias"},
+        version="test-version",
+    )
+
+    assert "user" not in updated_data
+    assert user_api_key_dict.end_user_id == "hdr-user"
+
+
+@pytest.mark.asyncio
+async def test_default_end_user_from_key_empty_field_leaves_user_unset():
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", key_alias=None, metadata={}, team_metadata={})
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-3.5-turbo"},
+        request=_make_chat_request_mock(),
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={"default_end_user_from": "key_alias"},
+        version="test-version",
+    )
+
+    assert "user" not in updated_data
+    assert user_api_key_dict.end_user_id is None
+
+
+@pytest.mark.asyncio
+async def test_default_end_user_from_key_invalid_source_raises():
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata={})
+
+    with pytest.raises(PydanticValidationError):
+        await add_litellm_data_to_request(
+            data={"model": "gpt-3.5-turbo"},
+            request=_make_chat_request_mock(),
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=MagicMock(),
+            general_settings={"default_end_user_from": "team_id"},
+            version="test-version",
+        )
+
+
+@pytest.mark.asyncio
 async def test_arrival_time_prefers_litellm_received_at_over_time_time():
     """LIT-6012: by the time this function runs, auth has already completed, so
     time.time() here would silently exclude the whole auth phase from the

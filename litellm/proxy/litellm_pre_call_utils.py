@@ -7,7 +7,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, assert_never, cast
 
 from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.url_utils import (
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
+    DefaultEndUserSource,
     LitellmDataForBackendLLMCall,
     LiteLLMRoutes,
     LitellmUserRoles,
@@ -1339,6 +1340,27 @@ class LiteLLMProxyRequestSetup:
         return user
 
     @staticmethod
+    def get_default_end_user_from_key(user_api_key_dict: UserAPIKeyAuth, general_settings: dict | None) -> str | None:
+        if general_settings is None:
+            return None
+        source: Final = general_settings.get("default_end_user_from")
+        if source is None:
+            return None
+        validated: Final = TypeAdapter(DefaultEndUserSource).validate_python(source)
+        match validated:
+            case "key_alias":
+                value = user_api_key_dict.key_alias
+            case "team_alias":
+                value = user_api_key_dict.team_alias
+            case "key_name":
+                value = user_api_key_dict.key_name
+            case "user_id":
+                value = user_api_key_dict.user_id
+            case _:
+                assert_never(validated)
+        return value if value else None
+
+    @staticmethod
     def get_openai_org_id_from_headers(headers: dict, general_settings: dict | None = None) -> str | None:
         """
         Get the OpenAI Org ID from the headers.
@@ -2064,6 +2086,14 @@ async def add_litellm_data_to_request(
             user_api_key_dict.end_user_id = user
         if "user" not in data:
             data["user"] = user
+
+    if user_api_key_dict.end_user_id is None and "user" not in data:
+        default_end_user: Final = LiteLLMProxyRequestSetup.get_default_end_user_from_key(
+            user_api_key_dict, general_settings
+        )
+        if default_end_user is not None:
+            user_api_key_dict.end_user_id = default_end_user
+            data["user"] = default_end_user
 
     if litellm.overwrite_user_with_key_hash is True:
         stampable_hash: Final = _stampable_key_hash(user_api_key_dict)

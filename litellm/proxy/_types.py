@@ -2389,6 +2389,8 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
 
 UserMCPManagementMode = Literal["restricted", "view_all"]
 
+DefaultEndUserSource = Literal["key_alias", "team_alias", "key_name", "user_id"]
+
 
 class PluginConfig(LiteLLMPydanticObjectBase):
     """A single external service registered as an embeddable UI plugin."""
@@ -2721,6 +2723,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="[DEPRECATED] Use 'user_header_mappings' instead. When set, the header value is treated as the end user id unless overridden by user_header_mappings.",
     )
     user_header_mappings: list[UserHeaderMapping] | None = None
+    default_end_user_from: DefaultEndUserSource | None = Field(
+        None,
+        description="Populate the end user (request `user` and SpendLogs `end_user`) from this field of the authenticated virtual key when the request carries no end user id. Explicit `user`, customer headers and user_header_mappings always win.",
+    )
     supported_db_objects: list[SupportedDBObjectType] | None = Field(
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map', 'tools', 'config_overrides'. If not set, all objects are loaded (default behavior).",
