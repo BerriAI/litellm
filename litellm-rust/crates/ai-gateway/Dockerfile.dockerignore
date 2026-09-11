@@ -36,6 +36,8 @@ litellm/proxy/_experimental/out/
 # Tests, logs, and local scratch.
 **/tests/
 **/test/
+!litellm-rust/crates/tests/
+!litellm-rust/crates/tests/**
 *.log
 log.txt
 *.tgz
