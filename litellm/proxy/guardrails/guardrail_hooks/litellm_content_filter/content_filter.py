@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from collections.abc import AsyncGenerator, Coroutine, Mapping, Sequence
 from datetime import datetime
 from re import Pattern
@@ -1700,6 +1701,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         detections: list[ContentFilterDetection],
         status: "GuardrailStatus",
         start_time: datetime,
+        duration: float,
         masked_entity_count: dict[str, int],
         exception_str: str,
     ) -> None:
@@ -1711,6 +1713,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             detections: List of detection dictionaries
             status: Guardrail status
             start_time: Start time of guardrail execution
+            duration: Seconds spent in the guardrail's own work
             masked_entity_count: Count of masked entities by type
             exception_str: Exception string if guardrail failed
         """
@@ -1741,7 +1744,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             guardrail_status=status,
             start_time=start_time.timestamp(),
             end_time=datetime.now().timestamp(),
-            duration=(datetime.now() - start_time).total_seconds(),
+            duration=duration,
             masked_entity_count=masked_entity_count,
             tracing_detail=GuardrailTracingDetail(**tracing_kw),
         )
@@ -1943,6 +1946,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 detections=detections,
                 status=status,
                 start_time=start_time,
+                duration=(datetime.now() - start_time).total_seconds(),
                 masked_entity_count=masked_entity_count,
                 exception_str=exception_str,
             )
@@ -1971,6 +1975,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         buffer_size: Final = 50  # Increased buffer to catch patterns split across many chunks
 
         start_time: Final = datetime.now()
+        scan_seconds = 0.0  # rebind-ok: accumulates per-chunk scan time across the stream
         detections: list[ContentFilterDetection] = []
         masked_entity_count: Final[dict[str, int]] = {}
         status: GuardrailStatus = "success"
@@ -2008,6 +2013,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                         text_to_scan = text_to_check + (" " if is_final else "")
                         choice_detections: list[ContentFilterDetection] = []
 
+                        scan_started = time.perf_counter()  # rebind-ok: reset per chunk scan
                         try:
                             # _filter_single_text scans the whole accumulated
                             # choice buffer every chunk, so previous-chunk
@@ -2024,6 +2030,8 @@ class ContentFilterGuardrail(CustomGuardrail):
                         except Exception as e:
                             verbose_proxy_logger.error("ContentFilterGuardrail: Error in masking: %s", e)
                             masked_text = text_to_scan  # Fallback to current text
+                        finally:
+                            scan_seconds += time.perf_counter() - scan_started
 
                         # Determine how much can be safely yielded
                         if is_final:
@@ -2072,6 +2080,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 detections=detections,
                 status=status,
                 start_time=start_time,
+                duration=scan_seconds,
                 masked_entity_count=masked_entity_count,
                 exception_str=exception_str,
             )

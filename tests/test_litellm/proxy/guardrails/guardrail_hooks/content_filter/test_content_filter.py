@@ -2,13 +2,12 @@
 Tests for the Content Filter Guardrail
 """
 
+import asyncio
 import json
 import os
 from unittest.mock import MagicMock
 
 import pytest
-
-
 from fastapi import HTTPException
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
@@ -751,6 +750,73 @@ class TestContentFilterGuardrail:
         entry = entries[0]
         assert entry["guardrail_name"] == "test-streaming-logging-block"
         assert entry["guardrail_status"] == "guardrail_intervened"
+        assert isinstance(entries[0]["duration"], float)
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_duration_excludes_upstream_wait(self):
+        """
+        Regression: the streaming hook's logged duration must only cover the
+        guardrail's own scan work, not time spent waiting on upstream chunks.
+        With 0.2s sleeps between chunks the wall-clock window still spans the
+        stream, but duration stays below one sleep interval.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-duration",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        chunks = [
+            ModelResponseStream(
+                id=f"chunk{i}",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content=text),
+                        index=0,
+                        finish_reason="stop" if i == 2 else None,
+                    )
+                ],
+                model="gpt-4",
+            )
+            for i, text in enumerate(["Hello ", "there, ", "friend"])
+        ]
+
+        async def mock_stream():
+            for i, chunk in enumerate(chunks):
+                if i > 0:
+                    await asyncio.sleep(0.2)
+                yield chunk
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            pass
+
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert isinstance(entry["duration"], float)
+        assert entry["duration"] < 0.2
+        assert entry["end_time"] - entry["start_time"] >= 0.4
 
     @pytest.mark.asyncio
     async def test_streaming_hook_logs_no_duplicate_detections_across_chunks(self):
