@@ -170,6 +170,9 @@ spec:
             - name: CONFIG_FILE_PATH
               value: /app/config/config.yaml
             {{- end }}
+            {{- if .Values.database.connectionPool.enabled }}
+            {{- include "litellm.connectionPoolEnv" $ | nindent 12 }}
+            {{- end }}
             {{- include "litellm.gateway.collectorEnv" . | nindent 12 }}
             - name: LITELLM_JOB_ROLE
               value: collector
