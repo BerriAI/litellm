@@ -29,16 +29,16 @@ tests:
           value: Resource
         template: gateway/hpa.yaml
 
-  - it: runs the collector as a sidecar sharing env, config and a unix socket emptyDir, and scales on the gateway container only
+  - it: runs the collector as a sidecar sharing env, config, the pod pool and a unix socket emptyDir, and scales on the gateway container only
     set:
       gateway.collector.enabled: true
       gateway.collector.bufferSize: 250
       gateway.collector.onUnavailable: drop
       gateway.image.tag: v1.102.0
       gateway.numWorkers: 4
-      gateway.extraEnv:
-        - name: LITELLM_PGBOUNCER_ENABLED
-          value: "true"
+      database.connectionPool.enabled: true
+      database.connectionPool.maxDbConnections: 8
+      database.connectionPool.maxClientConn: 250
       gateway.envSecrets:
         - litellm-license
       gateway.volumes:
@@ -106,6 +106,18 @@ tests:
           content:
             name: LITELLM_PGBOUNCER_ENABLED
             value: "true"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "8"
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+            value: "250"
         template: gateway/deployment.yaml
       - contains:
           path: spec.template.spec.containers[1].env
