@@ -3,7 +3,7 @@ stamped from the request task while the root span is still recording, so Langfus
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 
 import pytest
@@ -14,7 +14,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import litellm  # noqa: E402
 from litellm.caching.dual_cache import DualCache  # noqa: E402
-from litellm.integrations.otel.logger import build_otel_v2_logger  # noqa: E402
+from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger  # noqa: E402
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config, is_otel_v2_enabled  # noqa: E402
 from litellm.integrations.otel.model.spans import LITELLM_PROXY_REQUEST_SPAN_NAME, SpanRole  # noqa: E402
 from litellm.integrations.otel.plumbing import context as otel_context  # noqa: E402
@@ -307,14 +307,16 @@ def test_unrenderable_output_never_raises_into_the_request():
     assert INPUT_ATTR not in attrs and OUTPUT_ATTR not in attrs
 
 
-def _run_named_request(logger, exporter, litellm_params: dict) -> tuple[dict, dict]:
-    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
-    root = _start_root(logger)
+def _run_named_request(
+    logger: OpenTelemetryV2, exporter: InMemorySpanExporter, litellm_params: Mapping[str, object]
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
+    root: Final = _start_root(logger)
     logger.log_pre_api_call(
         model="gpt-5.4-mini", messages=[], kwargs={"litellm_call_id": "call_1", "litellm_params": litellm_params}
     )
     root.end()
-    payload = {
+    payload: Final = {
         "call_type": "acompletion",
         "custom_llm_provider": "openai",
         "model": "gpt-5.4-mini",
@@ -330,7 +332,9 @@ def _run_named_request(logger, exporter, litellm_params: dict) -> tuple[dict, di
             {"standard_logging_object": payload, "litellm_params": litellm_params}, response, None, None
         )
     )
-    generation = next(span for span in exporter.get_finished_spans() if span.name != LITELLM_PROXY_REQUEST_SPAN_NAME)
+    generation: Final = next(
+        span for span in exporter.get_finished_spans() if span.name != LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
     return _root_attrs(exporter), dict(generation.attributes or {})
 
 
