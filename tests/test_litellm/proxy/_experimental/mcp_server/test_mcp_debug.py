@@ -557,3 +557,15 @@ def test_failure_diagnostics_omit_credential_bearing_url_paths(path):
     assert "credential-path-value" not in diagnostic
     assert "POST https://upstream.example/ -> HTTP 401" in diagnostic
     assert "access_denied" in diagnostic
+
+
+def test_deep_request_omits_response_when_credentials_cannot_be_inspected():
+    from litellm.proxy._experimental.mcp_server.utils import MAX_STRUCTURED_CONTENT_SCAN_DEPTH
+
+    raw = "[" * (MAX_STRUCTURED_CONTENT_SCAN_DEPTH + 1) + '{"client_secret":"nested-credential"}' + "]" * (MAX_STRUCTURED_CONTENT_SCAN_DEPTH + 1)
+    request = httpx.Request("POST", "https://upstream/token", content=raw, headers={"Content-Type": "application/json"})
+    response = httpx.Response(401, request=request, json={"error_description": "Rejected nested-credential"})
+    detail = describe_upstream_http_failure(httpx.HTTPStatusError("failed", request=request, response=response))
+    assert detail is not None and "HTTP 401" in detail
+    assert "response body: (omitted: request credentials unavailable)" in detail
+    assert "nested-credential" not in detail
