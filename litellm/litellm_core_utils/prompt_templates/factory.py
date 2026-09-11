@@ -4372,9 +4372,6 @@ class BedrockConverseMessagesProcessor:
                                 )
                                 _parts.append(_part)
                             elif element["type"] == "video_url":
-                                # see the sync path: video shares the image
-                                # processor, which keys the block type off the
-                                # mime type.
                                 video_element = element["video_url"]
                                 if isinstance(video_element, dict):
                                     video_url = video_element["url"]
@@ -4760,10 +4757,6 @@ def _bedrock_converse_messages_pt(
                             )
                             _parts.append(_part)
                         elif element["type"] == "video_url":
-                            # OpenAI `video_url` parts must reach Converse as
-                            # video blocks too. `process_image_sync` picks the
-                            # block type from the mime type (video/* -> video,
-                            # image/* -> image), so a video shares this path.
                             video_element = element["video_url"]
                             if isinstance(video_element, dict):
                                 video_url = video_element["url"]
