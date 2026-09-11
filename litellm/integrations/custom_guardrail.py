@@ -441,6 +441,23 @@ class CustomGuardrail(CustomLogger):
     def _scanned_texts_cache_key(self, session_id: str) -> str:
         return f"guardrail_scanned_texts:{self.guardrail_name}:{session_id}"
 
+    @staticmethod
+    def _incremental_scan_cache() -> DualCache:
+        """Resolve the cache used to remember which segments a session already scanned.
+
+        Prefers the proxy's shared cache (``internal_usage_cache.dual_cache``), which is
+        backed by Redis when the deployment configures it, so incremental state is shared
+        across proxy instances. Falls back to a process-local ``DualCache`` singleton when
+        the proxy is not running (e.g. unit tests), where sharing does not apply.
+        """
+        try:
+            from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging
+        except Exception:  # noqa: BLE001  # proxy not importable outside the server; use local fallback
+            return dc
+        if _proxy_logging is not None:
+            return _proxy_logging.internal_usage_cache.dual_cache
+        return dc
+
     async def filter_new_texts_for_session(
         self,
         texts: list[str] | None,

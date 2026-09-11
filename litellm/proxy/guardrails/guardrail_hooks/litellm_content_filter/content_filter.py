@@ -280,6 +280,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         if blocked_words_file:
             self._load_blocked_words_file(blocked_words_file)
 
+        # Every rule store is fully populated by this point, so the mask gate is evaluated
+        # once here rather than per request: skipping an already-seen text under a MASK rule
+        # would forward it to the provider unmasked.
+        if self.only_scan_new_messages and self._has_mask_action():
+            verbose_proxy_logger.warning(
+                "ContentFilterGuardrail '%s': only_scan_new_messages is not supported with MASK actions "
+                "(skipped text cannot be masked); scanning the full context on every request.",
+                self.guardrail_name,
+            )
+            self.only_scan_new_messages = False
+
         verbose_proxy_logger.debug(
             "ContentFilterGuardrail initialized with %s patterns and %s blocked words",
             len(self.compiled_patterns),
@@ -331,6 +342,20 @@ class ContentFilterGuardrail(CustomGuardrail):
                 else:
                     result.append(word)
         return result
+
+    def _has_mask_action(self) -> bool:
+        """Whether any configured rule rewrites text rather than blocking it."""
+        return (
+            any(entry["action"] == ContentFilterAction.MASK for entry in self.compiled_patterns)
+            or any(action == ContentFilterAction.MASK for action, _ in self.blocked_words.values())
+            or any(
+                action == ContentFilterAction.MASK
+                for _, _, action in (
+                    *self.category_keywords.values(),
+                    *self.always_block_category_keywords.values(),
+                )
+            )
+        )
 
     @staticmethod
     def _category_config_view(cat_config: ContentFilterCategoryConfig) -> _CategoryConfigView:
@@ -1864,6 +1889,16 @@ class ContentFilterGuardrail(CustomGuardrail):
             if filtered_arguments != arguments:
                 self._set_tool_call_arguments(tool_call, filtered_arguments)
 
+    async def _filter_new_request_texts(self, texts: list[str], request_data: dict) -> list[str] | None:
+        return await self.filter_new_texts_for_session(
+            texts=texts, request_data=request_data, cache=self._incremental_scan_cache()
+        )
+
+    async def _mark_request_texts_scanned(self, texts: list[str], request_data: dict) -> None:
+        await self.mark_texts_scanned(
+            texts=texts, request_data=request_data, cache=self._incremental_scan_cache()
+        )
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -1902,11 +1937,20 @@ class ContentFilterGuardrail(CustomGuardrail):
             # Process images if present
             await self._process_images(images, detections)
 
+            new_texts: Final = (
+                await self._filter_new_request_texts(texts=texts, request_data=request_data)
+                if self.only_scan_new_messages and input_type == "request"
+                else None
+            )
+            texts_to_scan: Final = texts if new_texts is None else new_texts
+
             # Process texts
-            verbose_proxy_logger.debug("ContentFilterGuardrail: Applying guardrail to %s text(s)", len(texts))
+            verbose_proxy_logger.debug(
+                "ContentFilterGuardrail: Applying guardrail to %s of %s text(s)", len(texts_to_scan), len(texts)
+            )
 
             processed_texts: Final = []
-            for text in texts:
+            for text in texts_to_scan:
                 # Competitor intent check first (optional; may refuse/reframe)
                 if self._competitor_intent_checker and text:
                     intent_result = self._competitor_intent_checker.run(text)
@@ -1916,7 +1960,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 processed_texts.append(filtered_text)
 
             verbose_proxy_logger.debug("ContentFilterGuardrail: Guardrail applied successfully")
-            inputs["texts"] = processed_texts
+            if new_texts is None:
+                inputs["texts"] = processed_texts
+            else:
+                # Incremental path: inputs["texts"] must keep its original length and order --
+                # the handlers write the returned texts back positionally. Masking is gated off
+                # at init when this path is live, so the scan is identity-or-raise.
+                await self._mark_request_texts_scanned(texts=texts, request_data=request_data)
 
             self._scan_tool_call_arguments(inputs=inputs, detections=detections)
 

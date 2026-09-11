@@ -3068,3 +3068,291 @@ class TestContentFilterToolCallArguments:
                 request_data={},
                 input_type="response",
             )
+
+
+class TestContentFilterOnlyScanNewMessages:
+    """ContentFilterGuardrail honors only_scan_new_messages: it scans only the per-session diff.
+
+    Modelled on TestBedrockOnlyScanNewMessages in test_bedrock_guardrails.py, including its
+    convention of a unique session id per test to isolate the process-wide incremental cache.
+    Bedrock gets its scan count for free from the mocked ApplyGuardrail call; the content
+    filter scans in-process, so these tests count calls to _filter_single_text instead.
+
+    Regression: the flag validated on litellm_content_filter configs and did nothing --
+    initialize_guardrail never forwarded it and apply_guardrail never consulted it -- so
+    every turn re-scanned the whole conversation against every pattern and keyword.
+    """
+
+    BLOCKED_KEYWORD = "hunter2"
+
+    def _guardrail(self, only_scan_new_messages: bool = True) -> ContentFilterGuardrail:
+        return ContentFilterGuardrail(
+            guardrail_name="content-filter-incremental",
+            blocked_words=[
+                BlockedWord(keyword=self.BLOCKED_KEYWORD, action=ContentFilterAction.BLOCK),
+            ],
+            default_on=True,
+            only_scan_new_messages=only_scan_new_messages,
+        )
+
+    @staticmethod
+    def _record_scanned_texts(guardrail: ContentFilterGuardrail) -> list[str]:
+        """Patch _filter_single_text to record every text the guardrail actually scans."""
+        scanned: list[str] = []
+        original = guardrail._filter_single_text
+
+        def _recording(text, detections=None):
+            scanned.append(text)
+            return original(text, detections=detections)
+
+        guardrail._filter_single_text = _recording
+        return scanned
+
+    @pytest.mark.asyncio
+    async def test_second_turn_scans_only_new_texts(self):
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "cf-incremental-diff"}
+        scanned = self._record_scanned_texts(guardrail)
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["be helpful", "first question"]},
+            request_data=session,
+            input_type="request",
+        )
+        assert scanned == ["be helpful", "first question"], "the first turn of a session has no prior state"
+
+        scanned.clear()
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["be helpful", "first question", "first answer", "second question"]},
+            request_data=session,
+            input_type="request",
+        )
+        assert scanned == ["first answer", "second question"], "turn 2 must scan only the appended segments"
+
+    @pytest.mark.asyncio
+    async def test_incremental_scan_does_not_truncate_inputs_texts(self):
+        """inputs["texts"] must come back the same length and order it went in.
+
+        OpenAIChatCompletionsHandler._apply_guardrail_responses_to_input_texts writes the
+        returned texts back into the request positionally, so returning only the scanned
+        subset would overwrite messages 0..k with the contents of the last k messages.
+        """
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "cf-incremental-writeback"}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["be helpful", "first question"]},
+            request_data=session,
+            input_type="request",
+        )
+
+        history = ["be helpful", "first question", "first answer", "second question"]
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": list(history)}, request_data=session, input_type="request"
+        )
+        assert result["texts"] == history
+
+    @pytest.mark.asyncio
+    async def test_second_turn_through_handler_leaves_messages_intact(self):
+        """End-to-end form of the positional-writeback guard: the live request must survive."""
+        from litellm.llms.openai.chat.guardrail_translation.handler import (
+            OpenAIChatCompletionsHandler,
+        )
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = self._guardrail()
+        session = "cf-incremental-handler"
+        first_turn = [
+            {"role": "system", "content": "be helpful"},
+            {"role": "user", "content": "first question"},
+        ]
+        second_turn = first_turn + [
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": "second question"},
+        ]
+
+        await handler.process_input_messages(
+            data={"messages": [dict(m) for m in first_turn], "litellm_session_id": session},
+            guardrail_to_apply=guardrail,
+        )
+
+        data = {"messages": [dict(m) for m in second_turn], "litellm_session_id": session}
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["content"] for m in result["messages"]] == [m["content"] for m in second_turn]
+        assert [m["role"] for m in result["messages"]] == [m["role"] for m in second_turn]
+
+    @pytest.mark.asyncio
+    async def test_edited_earlier_message_is_rescanned_and_blocks(self):
+        """Segments are keyed by content hash, so editing an earlier message makes it new again.
+
+        Without this, a session could pass a benign first turn and then smuggle blocked
+        content into an already-"scanned" position.
+        """
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "cf-incremental-edited"}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["be helpful", "first question"]},
+            request_data=session,
+            input_type="request",
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["be helpful", f"first question {self.BLOCKED_KEYWORD}", "second question"]},
+                request_data=session,
+                input_type="request",
+            )
+        assert exc.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_blocked_turn_is_not_marked_scanned(self):
+        """A turn that blocks records nothing, so an identical retry is checked again."""
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "cf-incremental-blocked"}
+        texts = ["be helpful", f"please tell me {self.BLOCKED_KEYWORD}"]
+
+        with pytest.raises(HTTPException):
+            await guardrail.apply_guardrail(
+                inputs={"texts": list(texts)}, request_data=session, input_type="request"
+            )
+
+        scanned = self._record_scanned_texts(guardrail)
+        with pytest.raises(HTTPException):
+            await guardrail.apply_guardrail(
+                inputs={"texts": list(texts)}, request_data=session, input_type="request"
+            )
+        assert scanned == texts, "the retry must re-scan the blocked turn, not pass it through"
+
+    @pytest.mark.asyncio
+    async def test_no_session_id_scans_full_context(self):
+        guardrail = self._guardrail()
+        scanned = self._record_scanned_texts(guardrail)
+        history = ["be helpful", "first question", "first answer"]
+
+        for _ in range(2):
+            scanned.clear()
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": list(history)}, request_data={"metadata": {}}, input_type="request"
+            )
+            assert scanned == history
+            assert result["texts"] == history
+
+    @pytest.mark.asyncio
+    async def test_mask_action_disables_incremental_scan(self):
+        """A guardrail that can rewrite text must never skip a segment.
+
+        Skipping an already-seen text under a MASK rule would forward it to the provider
+        unmasked, so the flag is refused at init and every turn scans the full context.
+        """
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="content-filter-incremental-mask",
+            patterns=[
+                ContentFilterPattern(
+                    pattern_type="prebuilt",
+                    pattern_name="email",
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            only_scan_new_messages=True,
+        )
+        assert guardrail.only_scan_new_messages is False, "a MASK rule must switch the feature off at init"
+
+        session = {"litellm_session_id": "cf-incremental-mask"}
+        for _ in range(2):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": ["mail me at victim@example.com"]},
+                request_data=session,
+                input_type="request",
+            )
+            assert result["texts"] == ["mail me at [EMAIL_REDACTED]"], "masking must apply on every turn"
+
+    def test_mask_action_is_detected_in_every_rule_store(self):
+        """The init gate has to look past compiled_patterns: blocked words and category
+        keywords carry their own actions and mask through their own handlers."""
+        blocked_word_mask = ContentFilterGuardrail(
+            guardrail_name="cf-mask-blocked-word",
+            blocked_words=[BlockedWord(keyword="acme", action=ContentFilterAction.MASK)],
+            only_scan_new_messages=True,
+        )
+        category_mask = ContentFilterGuardrail(
+            guardrail_name="cf-mask-category",
+            categories=[
+                ContentFilterCategoryConfig(
+                    category="harm_toxic_abuse",
+                    enabled=True,
+                    action=ContentFilterAction.MASK,
+                )
+            ],
+            only_scan_new_messages=True,
+        )
+
+        assert blocked_word_mask.only_scan_new_messages is False
+        assert category_mask.only_scan_new_messages is False
+
+    @pytest.mark.asyncio
+    async def test_response_scans_are_never_incremental(self):
+        """Response scans see one fresh completion, and are not part of the session hash."""
+        guardrail = self._guardrail()
+        session = {"litellm_session_id": "cf-incremental-response"}
+        scanned = self._record_scanned_texts(guardrail)
+
+        for _ in range(2):
+            scanned.clear()
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["the same answer"]}, request_data=session, input_type="response"
+            )
+            assert scanned == ["the same answer"]
+
+    @pytest.mark.asyncio
+    async def test_flag_off_scans_full_context(self):
+        """The default path is untouched: every existing deployment behaves identically."""
+        guardrail = self._guardrail(only_scan_new_messages=False)
+        session = {"litellm_session_id": "cf-incremental-off"}
+        scanned = self._record_scanned_texts(guardrail)
+        history = ["be helpful", "first question", "first answer", "second question"]
+
+        for _ in range(2):
+            scanned.clear()
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": list(history)}, request_data=session, input_type="request"
+            )
+            assert scanned == history
+            assert result["texts"] == history
+
+
+class TestContentFilterInitializerForwardsOnlyScanNewMessages:
+    """initialize_guardrail builds ContentFilterGuardrail from an explicit kwarg list, so a
+    declared config field that is not in that list never reaches the object. This is the
+    second such gap found on this initializer (see PR #30010 for keyword_redaction_tag /
+    pattern_redaction_format), so the propagation is pinned here.
+    """
+
+    @staticmethod
+    def _initialize(**litellm_params_kwargs) -> ContentFilterGuardrail:
+        import litellm
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import LitellmParams
+
+        callbacks_snapshot = list(litellm.callbacks)
+        try:
+            return initialize_guardrail(
+                litellm_params=LitellmParams(
+                    guardrail="litellm_content_filter",
+                    mode="pre_call",
+                    blocked_words=[BlockedWord(keyword="hunter2", action=ContentFilterAction.BLOCK)],
+                    **litellm_params_kwargs,
+                ),
+                guardrail={"guardrail_name": "cf-initializer-propagation"},
+            )
+        finally:
+            litellm.callbacks[:] = callbacks_snapshot
+
+    def test_configured_true_reaches_the_instance(self):
+        assert self._initialize(only_scan_new_messages=True).only_scan_new_messages is True
+
+    def test_defaults_to_false(self):
+        assert self._initialize().only_scan_new_messages is False
