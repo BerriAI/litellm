@@ -15,6 +15,7 @@ from jsonschema import validate
 
 import litellm
 from litellm._internal_context import is_internal_call
+from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm._logging import (
     CorrelationContextFilter,
     JsonFormatter,
@@ -6208,3 +6209,92 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
         "api_key": "sk-from-db",
     }
     assert _credential_warnings(caplog) == []
+
+
+_MOCK_STREAM_ID: Final = "chatcmpl-mock-stream"
+_ChunkSnapshot = tuple[str, tuple[str | None, ...], Usage | None]
+
+
+def _snapshot(chunk: ModelResponseStream) -> _ChunkSnapshot:
+    return chunk.id, tuple(choice.delta.content for choice in chunk.choices), getattr(chunk, "usage", None)
+
+
+def _mock_stream_snapshots(mock_response: object, prompt_tokens: int | None) -> list[_ChunkSnapshot]:
+    from litellm.utils import mock_completion_streaming_obj
+
+    return [
+        _snapshot(chunk)
+        for chunk in mock_completion_streaming_obj(
+            ModelResponseStream(id=_MOCK_STREAM_ID, model="gpt-5.4-mini"),
+            mock_response=mock_response,
+            model="gpt-5.4-mini",
+            prompt_tokens=prompt_tokens,
+        )
+    ]
+
+
+async def _async_mock_stream_snapshots(mock_response: object, prompt_tokens: int | None) -> list[_ChunkSnapshot]:
+    from litellm.utils import async_mock_completion_streaming_obj
+
+    return [
+        _snapshot(chunk)
+        async for chunk in async_mock_completion_streaming_obj(
+            ModelResponseStream(id=_MOCK_STREAM_ID, model="gpt-5.4-mini"),
+            mock_response=mock_response,
+            model="gpt-5.4-mini",
+            prompt_tokens=prompt_tokens,
+        )
+    ]
+
+
+_CONTENT_SNAPSHOTS: Final = [(_MOCK_STREAM_ID, (content,), None) for content in ("hel", "lo ", "wor", "ld")]
+
+
+def _assert_trailing_usage_chunk(snapshots: list[_ChunkSnapshot], prompt_tokens: int) -> None:
+    assert snapshots[:-1] == _CONTENT_SNAPSHOTS
+    chunk_id, choices, usage = snapshots[-1]
+    assert chunk_id == _MOCK_STREAM_ID
+    assert choices == ()
+    assert usage is not None
+    assert usage.prompt_tokens == prompt_tokens
+    assert usage.completion_tokens == DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
+    assert usage.total_tokens == prompt_tokens + usage.completion_tokens
+
+
+@pytest.mark.parametrize("prompt_tokens", (51234, 0))
+def test_mock_completion_streaming_obj_emits_usage_chunk_with_admission_prompt_tokens(prompt_tokens: int) -> None:
+    _assert_trailing_usage_chunk(_mock_stream_snapshots("hello world", prompt_tokens), prompt_tokens)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_tokens", (51234, 0))
+async def test_async_mock_completion_streaming_obj_emits_usage_chunk_with_admission_prompt_tokens(
+    prompt_tokens: int,
+) -> None:
+    _assert_trailing_usage_chunk(await _async_mock_stream_snapshots("hello world", prompt_tokens), prompt_tokens)
+
+
+def test_mock_completion_streaming_obj_emits_no_usage_chunk_without_admission_prompt_tokens() -> None:
+    assert _mock_stream_snapshots("hello world", None) == _CONTENT_SNAPSHOTS
+
+
+@pytest.mark.asyncio
+async def test_async_mock_completion_streaming_obj_emits_no_usage_chunk_without_admission_prompt_tokens() -> None:
+    assert await _async_mock_stream_snapshots("hello world", None) == _CONTENT_SNAPSHOTS
+
+
+def test_mock_completion_streaming_obj_passes_prebuilt_stream_chunk_through_without_usage_chunk() -> None:
+    prebuilt: Final = ModelResponseStream(
+        model="gpt-5.4-mini", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="prebuilt"))]
+    )
+
+    assert _mock_stream_snapshots(prebuilt, 51234) == [(prebuilt.id, ("prebuilt",), None)]
+
+
+@pytest.mark.asyncio
+async def test_async_mock_completion_streaming_obj_raises_mock_exception_before_usage_chunk() -> None:
+    mock_exception: Final = litellm.MockException(
+        status_code=500, message="boom", llm_provider="openai", model="gpt-5.4-mini"
+    )
+    with pytest.raises(litellm.MockException):
+        await _async_mock_stream_snapshots(mock_exception, 51234)
