@@ -3485,7 +3485,7 @@ def test_root_protected_resource_discovers_gateway(monkeypatch, server_count, by
         assert authorization.status_code == 200
         metadata = authorization.json()
         assert metadata["issuer"] == response.json()["authorization_servers"][0]
-        assert metadata["authorization_endpoint"] == f"{base_url}/authorize"
+        assert metadata["authorization_endpoint"] == f"{base_url}/authorize/mcp-session"
         assert metadata["token_endpoint"] == f"{base_url}/token"
         assert metadata["registration_endpoint"] == f"{base_url}/register"
         aggregate = client.get("/.well-known/oauth-protected-resource/mcp")
@@ -3508,8 +3508,8 @@ async def test_unnamed_protected_resource_builder_uses_gateway_origin(monkeypatc
     response = await _build_oauth_protected_resource_response(request, None, False)
     assert response == {
         "resource": "https://gateway.example.com",
-        "authorization_servers": ["https://gateway.example.com/mcp"],
-        "scopes_supported": [],
+        "authorization_servers": ("https://gateway.example.com/mcp",),
+        "scopes_supported": (),
     }
 
 
@@ -4170,9 +4170,9 @@ async def test_discovery_root_does_not_expose_private_server_for_external_client
         assert "/test_oauth/" not in authorization_response["authorization_endpoint"]
         assert "/test_oauth/" not in authorization_response["token_endpoint"]
         assert authorization_response["scopes_supported"] == []
-        assert resource_response["authorization_servers"] == ["https://llm.example.com/mcp"]
+        assert tuple(resource_response["authorization_servers"]) == ("https://llm.example.com/mcp",)
         assert resource_response["resource"] == "https://llm.example.com"
-        assert resource_response["scopes_supported"] == []
+        assert not resource_response["scopes_supported"]
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -9048,7 +9048,7 @@ def test_aggregate_wellknown_routes_serve_gateway_metadata():
 
     assert asm.status_code == 200
     assert asm.json()["issuer"] == "http://testserver/mcp"
-    assert asm.json()["authorization_endpoint"] == "http://testserver/authorize"
+    assert asm.json()["authorization_endpoint"] == "http://testserver/authorize/mcp-session"
     assert "none" in asm.json()["token_endpoint_auth_methods_supported"]
 
 
@@ -9137,7 +9137,7 @@ async def test_root_resource_uses_gateway_without_changing_authorization_relay()
         )
         assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
         assert authorization_response["issuer"] == "https://llm.example.com"
-        assert resource_response["authorization_servers"] == ["https://llm.example.com/mcp"]
+        assert tuple(resource_response["authorization_servers"]) == ("https://llm.example.com/mcp",)
         assert resource_response["resource"] == "https://llm.example.com"
     finally:
         global_mcp_server_manager.registry.clear()
@@ -10670,7 +10670,7 @@ class TestPerRequestRootPathDiscovery:
 
         assert asm.status_code == 200
         assert asm.json()["issuer"] == "http://testserver/tenant-a/mcp"
-        assert asm.json()["authorization_endpoint"] == "http://testserver/tenant-a/authorize"
+        assert asm.json()["authorization_endpoint"] == "http://testserver/tenant-a/authorize/mcp-session"
 
         # The prefixed authorize URL routes to the real handler (not 404):
         # under per-request root_path the whole app is reachable per-prefix,
@@ -10827,6 +10827,68 @@ def _consent_flow_handle(page: str) -> str:
     match = re.search(r'name="flow" value="([^"]+)"', page)
     assert match is not None, page
     return match.group(1)
+
+
+@pytest.mark.parametrize("redirect_uri", ["http://127.0.0.1:51234/callback", "https://client.example.com/callback"])
+@pytest.mark.parametrize("signed_in", [True, False])
+def test_root_discovery_origin_authorizes_mcp_session(monkeypatch, redirect_uri, signed_in):
+    from urllib.parse import parse_qs, urlparse
+
+    client, session_cookie, minted = _native_client_app(monkeypatch)
+    root = client.get("/.well-known/oauth-protected-resource")
+    assert root.status_code == 200
+    assert root.json()["resource"] == "http://testserver"
+    authorization = client.get("/.well-known/oauth-authorization-server/mcp")
+    assert authorization.status_code == 200
+    metadata = authorization.json()
+    registered = client.post(metadata["registration_endpoint"], json={"redirect_uris": [redirect_uri]})
+    assert registered.status_code == 201
+    if signed_in:
+        client.cookies.set("token", session_cookie)
+    response = client.get(
+        metadata["authorization_endpoint"],
+        params={
+            "response_type": "code",
+            "client_id": registered.json()["client_id"],
+            "redirect_uri": redirect_uri,
+            "state": "mcp-state",
+            "code_challenge": _s256("v" * 43),
+            "code_challenge_method": "S256",
+            "resource": root.json()["resource"],
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    target = urlparse(response.headers["location"])
+    assert target.path == ("/ui/connect" if signed_in else "/sso/key/generate")
+    if signed_in:
+        flow = parse_qs(target.query)["connect_flow"][0]
+        described = client.get("/authorize/flow", params={"flow": flow})
+        assert described.status_code == 200
+        assert described.json()["state"] == "unscoped"
+    assert minted == []
+
+
+@pytest.mark.parametrize("valid_client", [True, False])
+def test_mcp_session_authorize_rejects_invalid_registration_or_pkce(monkeypatch, valid_client):
+    client, session_cookie, minted = _native_client_app(monkeypatch)
+    redirect_uri = "https://client.example.com/callback"
+    registered = client.post("/register", json={"redirect_uris": [redirect_uri]})
+    assert registered.status_code == 201
+    client.cookies.set("token", session_cookie)
+    response = client.get(
+        "/authorize/mcp-session",
+        params={
+            "client_id": registered.json()["client_id"] if valid_client else "unknown-client",
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == ("invalid_request" if valid_client else "invalid_client")
+    assert "location" not in response.headers
+    assert minted == []
 
 
 def test_native_client_login_walks_discovery_consent_token_refresh_and_revoke(monkeypatch):

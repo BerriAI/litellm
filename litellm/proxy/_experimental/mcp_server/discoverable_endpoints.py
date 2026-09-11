@@ -1842,6 +1842,30 @@ async def register_client_with_server(
     return JSONResponse(token_response)
 
 
+@router.get("/authorize/mcp-session")
+async def authorize_mcp_session(
+    request: Request,
+    redirect_uri: str,
+    client_id: str,
+    state: str = "",
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+    response_type: str | None = None,
+    resource: str | None = None,
+) -> Response:
+    return aggregate_authorize(
+        request=request,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        state=state,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        response_type=response_type,
+        session_user_id=_session_cookie_user_id(request),
+        resource=resource,
+    )
+
+
 @router.get("/{mcp_server_name}/authorize")
 @router.get("/authorize")
 async def authorize(
@@ -2538,13 +2562,13 @@ def _jwt_auth_issuers() -> list:
 
 
 @router.get("/.well-known/oauth-protected-resource")
-def oauth_protected_resource_root(request: Request) -> dict[str, str | list[str]]:
+def oauth_protected_resource_root(request: Request) -> dict[str, str | tuple[str, ...]]:
     request_base_url: Final = get_request_base_url(request)
     parsed: Final = urlparse(request_base_url)
     return {
         "resource": f"{parsed.scheme}://{parsed.netloc}",
-        "authorization_servers": [f"{request_base_url}/mcp"],
-        "scopes_supported": [],
+        "authorization_servers": (f"{request_base_url}/mcp",),
+        "scopes_supported": (),
     }
 
 
@@ -2574,14 +2598,14 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
     The issuer is ``{base}/mcp`` and must stay equal to the value the
     aggregate protected-resource document advertises: spec clients verify the
     issuer in the metadata matches the one that derived the well-known URL.
-    Advertises the root /authorize, /token, and /register endpoints and
+    Advertises the MCP session authorize endpoint, root /token and /register endpoints, and
     ``token_endpoint_auth_methods_supported: ["none", ...]`` because DCR
     clients (Claude Desktop, MCP Inspector) register as public clients; PKCE
     S256 is mandatory in the gateway's authorize flow."""
     request_base_url: Final = get_request_base_url(request)
     return {
         "issuer": f"{request_base_url}/mcp",
-        "authorization_endpoint": f"{request_base_url}/authorize",
+        "authorization_endpoint": f"{request_base_url}/authorize/mcp-session",
         "token_endpoint": f"{request_base_url}/token",
         "introspection_endpoint": f"{request_base_url}/introspect",
         "registration_endpoint": f"{request_base_url}/register",
