@@ -16,7 +16,7 @@ import inspect
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -328,16 +328,26 @@ def _redis_timeout_error_types() -> tuple[type, ...]:
     return (RedisTimeoutError, TimeoutError)
 
 
+_MAX_EXCEPTION_CAUSE_DEPTH: Final = 20
+
+
+def _explicit_causes(exc: BaseException) -> Iterator[BaseException]:
+    current = exc  # rebind-ok: advances one link per iteration of the bounded walk
+    for _ in range(_MAX_EXCEPTION_CAUSE_DEPTH):
+        yield current
+        if current.__cause__ is None:
+            return
+        current = current.__cause__
+
+
 def _is_redis_timeout_failure(exc: BaseException) -> bool:
     """True when ``exc`` or any exception it was explicitly raised ``from`` is a timeout.
 
     redis-py's blocking pool reports a pool wait timeout as ``ConnectionError`` chained from
     ``asyncio.TimeoutError``, which is a busy pool rather than an unreachable Redis.
     """
-    if isinstance(exc, _redis_timeout_error_types()):
-        return True
-    cause: Final = exc.__cause__
-    return cause is not None and _is_redis_timeout_failure(cause)
+    timeout_types: Final = _redis_timeout_error_types()
+    return any(isinstance(link, timeout_types) for link in _explicit_causes(exc))
 
 
 class _BreakerMetrics:
