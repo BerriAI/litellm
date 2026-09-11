@@ -897,8 +897,6 @@ async def _openapi_spec_health(
         await asyncio.wait_for(load_openapi_spec_async(spec_path, max_bytes=10 * 1024 * 1024), timeout=timeout)
     except asyncio.TimeoutError:
         return "unhealthy", f"OpenAPI specification check timed out after {timeout} seconds"
-    except asyncio.CancelledError:
-        return "unknown", "OpenAPI specification check was cancelled"
     except HTTPStatusError as exc:
         return "unhealthy", f"OpenAPI specification request failed (HTTP {exc.response.status_code})"
     except HTTPResponseLimitError as exc:
@@ -920,7 +918,14 @@ class _OpenAPIHealthProbe:
         async with self.lock:
             if self.result is not None and self.clock() - self.checked_at < 30.0:
                 return self.result
-            status, error = await _openapi_spec_health(self.spec_path, timeout=MCP_HEALTH_CHECK_TIMEOUT)
+            try:
+                status, error = await _openapi_spec_health(self.spec_path, timeout=MCP_HEALTH_CHECK_TIMEOUT)
+            except asyncio.CancelledError:
+                return (
+                    "unknown",
+                    "OpenAPI specification check was cancelled",
+                    datetime.datetime.now(datetime.timezone.utc),
+                )
             self.result = (status, error, datetime.datetime.now(datetime.timezone.utc))
             self.checked_at = self.clock()
             return self.result
