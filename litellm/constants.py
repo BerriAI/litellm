@@ -792,6 +792,9 @@ OPENAI_TRANSCRIPTION_PARAMS: Final = [
 
 OPENAI_EMBEDDING_PARAMS: Final = ["dimensions", "encoding_format", "user"]
 
+# openai-python request-option kwargs: transport-level, never provider request body content
+OPENAI_SDK_TRANSPORT_PARAMS: Final = frozenset({"extra_headers", "extra_query", "timeout"})
+
 DEFAULT_EMBEDDING_PARAM_VALUES: Final = {
     **{k: None for k in OPENAI_EMBEDDING_PARAMS},
     "model": None,

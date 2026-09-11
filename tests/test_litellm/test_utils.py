@@ -437,6 +437,31 @@ def test_get_optional_params_image_gen_filters_empty_values():
     assert optional_params == {}
 
 
+def test_get_optional_params_image_gen_excludes_extra_headers_from_extra_body():
+    """https://github.com/BerriAI/litellm/issues/40628
+
+    extra_headers/extra_query are openai-python SDK transport options, routed as
+    an actual HTTP request, not model input. GPTImageGenerationConfig's supported
+    params list has no notion of them, so before the fix they fell into extra_body
+    pass-through, which the SDK serializes into the JSON body, producing an
+    "Unknown parameter: 'extra_headers'" 400 from OpenAI.
+    """
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_image_generation_config(
+        model="gpt-image-1", provider=LlmProviders("openai")
+    )
+    optional_params = get_optional_params_image_gen(
+        model="gpt-image-1",
+        custom_llm_provider="openai",
+        provider_config=provider_config,
+        drop_params=True,
+        extra_headers={"cf-aig-authorization": "Bearer cfut_REDACTED"},
+        extra_query={"foo": "bar"},
+    )
+    assert optional_params == {}
+
+
 def test_gpt_image_provider_detection_covers_existing_family():
     for image_model in ("gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"):
         model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=image_model)
@@ -3727,6 +3752,63 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         # All params should be present when additional_drop_params is empty
         assert result.get("prompt_cache_key") == "test_key"
         assert result.get("custom_param") == "value"
+
+
+class TestSdkTransportParamsExcludedFromExtraBody:
+    """
+    Fixes https://github.com/BerriAI/litellm/issues/40628.
+
+    extra_headers/extra_query/timeout are openai-python SDK transport options,
+    routed as an actual HTTP request, not provider request-body content. A caller
+    whose openai_params list is scoped to provider content params only (image
+    generation, audio transcription) rather than the full chat-completion param
+    set previously folded them into extra_body pass-through, which the SDK
+    serializes into the JSON body.
+    """
+
+    def test_excluded_for_openai_family_while_unknown_params_still_pass_through(self):
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        passed_params = {
+            "extra_headers": {"cf-aig-authorization": "Bearer token"},
+            "extra_query": {"foo": "bar"},
+            "timeout": 30,
+            "unknown_param": "kept-in-extra-body",
+        }
+        # mirrors GPTImageGenerationConfig.get_supported_openai_params(), which has
+        # no notion of SDK transport options
+        openai_params = ["background", "moderation", "n", "size"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params={},
+            passed_params=passed_params,
+            custom_llm_provider="openai",
+            openai_params=openai_params,
+            additional_drop_params=None,
+        )
+
+        assert result == {"extra_body": {"unknown_param": "kept-in-extra-body"}}
+
+    def test_excluded_for_non_openai_family_while_unknown_params_still_pass_through(self):
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        passed_params = {
+            "extra_headers": {"x-custom": "value"},
+            "extra_query": {"foo": "bar"},
+            "timeout": 30,
+            "custom_param": "keep_me",
+        }
+        openai_params = ["temperature"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params={},
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=None,
+        )
+
+        assert result == {"custom_param": "keep_me"}
 
 
 class TestDropParamsWithPromptCacheKey:
