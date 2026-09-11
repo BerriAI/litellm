@@ -11,7 +11,7 @@ use crate::ocr::prepare::{
 };
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection};
-use crate::providers::azure_ai::auth::{AzureAuthInputs, AzureAuthService};
+use crate::providers::azure_ai::auth::AzureAuthInputs;
 use crate::url_utils::ApiUrl;
 
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";

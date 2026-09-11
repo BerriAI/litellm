@@ -4,11 +4,11 @@ mod mistral;
 use std::sync::OnceLock;
 
 use crate::Error;
-use crate::auth::azure::{AzureAuthInputs, AzureAuthService};
 use crate::auth::error::AuthConfigurationError;
 use crate::auth::{InputSource, Sourced};
 use crate::ocr::error::OcrError;
 use crate::ocr::types::OcrConnection;
+use crate::providers::azure_ai::auth::{AzureAuthInputs, AzureAuthService};
 
 pub(crate) use document_intelligence::AzureDocumentIntelligenceAdapter;
 pub(crate) use mistral::AzureMistralAdapter;
