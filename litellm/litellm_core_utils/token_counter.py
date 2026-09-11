@@ -46,6 +46,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionDocumentObject,
     ChatCompletionNamedToolChoiceParam,
+    ChatCompletionReasoningItem,
     ChatCompletionToolParam,
     OpenAIMessageContentListBlock,
 )
@@ -846,6 +847,7 @@ def _count_content_list(
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
+        | ChatCompletionReasoningItem
     ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
@@ -893,6 +895,10 @@ def _count_content_list(
                 thinking_text = str(c.get("thinking", ""))
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
+            elif c["type"] == "reasoning":
+                num_tokens += sum(
+                    count_function(text) for summary in c.get("summary", ()) if (text := summary.get("text"))
+                )
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
                 # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
@@ -909,7 +915,7 @@ def _count_content_list(
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, tool_reference)."
+                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, reasoning, tool_reference)."
                 )
         return num_tokens
     except Exception as e:
