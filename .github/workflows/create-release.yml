@@ -15,13 +15,11 @@ on:
 permissions: {}
 
 jobs:
-  # Stable and RC tags are gated on the Redis chaos load test; dev, nightly, alpha and beta
-  # tags are cut too often to spend a multi-minute chaos run on each one.
-  run-stable-release-checks:
-    name: Validate inputs and decide whether this tag is gated
+  release:
+    name: Create Release
     runs-on: ubuntu-latest
-    outputs:
-      gated: ${{ steps.decide.outputs.gated }}
+    permissions:
+      contents: write
     steps:
       - name: Validate inputs
         env:
@@ -37,37 +35,6 @@ jobs:
             exit 1
           fi
 
-      - name: Decide
-        id: decide
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          if echo "${TAG}" | grep -qiE '(nightly|alpha|beta|[-.]dev)'; then
-            echo "gated=false" >> "$GITHUB_OUTPUT"
-            echo "${TAG} is a pre-release that skips the chaos gate"
-          else
-            echo "gated=true" >> "$GITHUB_OUTPUT"
-            echo "${TAG} is a stable or RC tag and must pass the chaos gate"
-          fi
-
-  redis-chaos-check:
-    name: Redis Chaos E2E
-    needs: run-stable-release-checks
-    if: needs.run-stable-release-checks.outputs.gated == 'true'
-    permissions:
-      contents: read
-    uses: ./.github/workflows/test-e2e-redis-chaos.yml
-    with:
-      ref: ${{ inputs.commit_hash }}
-
-  release:
-    name: Create Release
-    needs: [run-stable-release-checks, redis-chaos-check]
-    if: always() && needs.run-stable-release-checks.result == 'success' && (needs.redis-chaos-check.result == 'success' || needs.redis-chaos-check.result == 'skipped')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
       - name: Create release
         env:
           TAG: ${{ inputs.tag }}

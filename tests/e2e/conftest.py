@@ -61,7 +61,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
-        "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
+        "gateway/redis_chaos_ci_config.yml on the same host",
     )
 
 

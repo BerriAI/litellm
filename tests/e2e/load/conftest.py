@@ -3,15 +3,11 @@ from __future__ import annotations
 import os
 
 import pytest
-
-from e2e_config import REDIS_CHAOS_OPT_IN_ENV, WEEKLY_ANOMALY_OPT_IN_ENV
+from e2e_config import WEEKLY_ANOMALY_OPT_IN_ENV
 from load_client import LoadClient, build_client
 from proxy_client import ProxyClient
 
-_OPT_IN_MARKERS = (
-    ("weekly", WEEKLY_ANOMALY_OPT_IN_ENV),
-    ("redis_chaos", REDIS_CHAOS_OPT_IN_ENV),
-)
+_OPT_IN_MARKERS = (("weekly", WEEKLY_ANOMALY_OPT_IN_ENV),)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
