@@ -133,6 +133,11 @@ PCM16_BYTES_PER_SAMPLE: Final = 2
 # native default stands, which bounds how far a bogus rate can move a bill.
 MIN_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ: Final = 8000
 MAX_ACCEPTED_INPUT_AUDIO_SAMPLE_RATE_HZ: Final = 48000
+# The beta session shape has no rate field, but its ``input_audio_format`` codec name carries one
+# by definition. LiteLLM's own type stub for it says pcm16 input "must be 16-bit PCM at a 24kHz
+# sample rate" (``OpenAIRealtimeSession.input_audio_format`` in litellm/types/llms/openai.py), and
+# the beta-to-GA converter in realtime_streaming.py already expands the name to that rate.
+BETA_PCM16_INPUT_AUDIO_SAMPLE_RATE_HZ: Final = 24000
 
 
 def _base64_decoded_byte_count(data: str) -> int:
@@ -468,30 +473,55 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
         return setup
 
+    @staticmethod
+    def _declared_rate_from_ga_shape(session_payload: Mapping[str, object]) -> object:
+        """Read ``audio.input.format.rate`` out of the GA nested session shape."""
+        audio = session_payload.get("audio")
+        if not isinstance(audio, dict):
+            return None
+        audio_input = audio.get("input")
+        if not isinstance(audio_input, dict):
+            return None
+        audio_format = audio_input.get("format")
+        if not isinstance(audio_format, dict):
+            return None
+        return audio_format.get("rate")
+
+    @staticmethod
+    def _declared_rate_from_beta_shape(session_payload: Mapping[str, object]) -> object:
+        """Read the rate implied by the flat beta ``input_audio_format`` codec name.
+
+        Only pcm16 is mapped. ``get_audio_mime_type`` labels every append as pcm16, so a rate
+        lifted from a g711 name would describe bytes with a codec they are not in.
+        """
+        if session_payload.get("input_audio_format") == "pcm16":
+            return BETA_PCM16_INPUT_AUDIO_SAMPLE_RATE_HZ
+        return None
+
     def _record_input_audio_sample_rate(self, session_payload: Mapping[str, object]) -> None:
         """
         Remember the input sample rate the client declared on session.update.
 
         The rate reaches Gemini only through the per-blob MIME type, and the server resamples
         against whatever that MIME type claims, so it has to describe the bytes actually sent.
-        Only the GA session shape carries a rate (``audio.input.format.rate``); the beta shape's
-        ``input_audio_format`` is a bare codec name with no rate, and leaves the 16kHz default
-        in place.
+
+        Both session shapes can declare a rate. The GA shape states it outright in
+        ``audio.input.format.rate``. The beta shape has no rate field, but its
+        ``input_audio_format`` codec name implies one, and pcm16 is specified as 24kHz. Both are
+        read here because which shape reaches this method is decided upstream by the
+        ``OpenAI-Beta`` header: without it, ``RealTimeStreaming._remap_beta_session_to_ga``
+        rewrites the flat payload into the GA shape and supplies that same 24kHz for pcm16; with
+        it, the flat payload arrives untouched. Reading only the GA shape would label one
+        client's audio 24kHz and an identical client's 16kHz over a header that says nothing
+        about sample rates.
 
         A change here only affects audio that arrives after it: already-buffered audio was
         converted to seconds at the rate in force when it was appended, so a mid-stream
         redeclaration cannot retroactively reprice it.
         """
-        audio = session_payload.get("audio")
-        if not isinstance(audio, dict):
-            return
-        audio_input = audio.get("input")
-        if not isinstance(audio_input, dict):
-            return
-        audio_format = audio_input.get("format")
-        if not isinstance(audio_format, dict):
-            return
-        rate = audio_format.get("rate")
+        rate = self._declared_rate_from_ga_shape(session_payload)
+        if rate is None:
+            rate = self._declared_rate_from_beta_shape(session_payload)
         # bool is an int subclass, so exclude it explicitly.
         if isinstance(rate, bool) or not isinstance(rate, int):
             return

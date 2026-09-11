@@ -2058,9 +2058,7 @@ def _session_update_message(session: dict) -> str:
 
 def _sent_audio_mime_type(config, raw_byte_count: int = 32000) -> str:
     """Round-trips one input_audio_buffer.append and returns the mimeType actually put on the wire."""
-    sent = config.transform_realtime_request(
-        _input_audio_append_message(raw_byte_count), "gemini-3.5-transcribe-live"
-    )
+    sent = config.transform_realtime_request(_input_audio_append_message(raw_byte_count), "gemini-3.5-transcribe-live")
     return json.loads(sent[0])["realtimeInput"]["audio"]["mimeType"]
 
 
@@ -2115,18 +2113,73 @@ def test_client_declared_input_audio_rate_is_honored_on_the_wire():
         {"audio": {"input": {"format": {"type": "audio/pcm", "rate": 100_000_000}}}},
         {"audio": {"input": {"format": {"type": "audio/pcm", "rate": "24000"}}}},
         {"audio": {"input": {"format": {"type": "audio/pcm", "rate": True}}}},
-        {"input_audio_format": "pcm16"},
+        {"input_audio_format": "g711_ulaw"},
     ],
 )
 def test_malformed_or_absent_declared_rate_keeps_the_native_default(session):
-    """Anything that is not a plausible PCM rate, including the rate-less beta shape, a bool (which
-    is an int subclass), and rates outside 8000-48000, must leave the 16kHz default alone. The
-    out-of-range cases matter because the rate feeds the spend estimate: an unclamped 100MHz
-    declaration would bill a long session as a few milliseconds."""
+    """Anything that is not a plausible PCM rate, including a bool (which is an int subclass) and
+    rates outside 8000-48000, must leave the 16kHz default alone. The out-of-range cases matter
+    because the rate feeds the spend estimate: an unclamped 100MHz declaration would bill a long
+    session as a few milliseconds. A beta codec name other than pcm16 is also left alone, because
+    ``get_audio_mime_type`` labels every append pcm16 regardless."""
     from typing import Final
 
     config: Final = GeminiRealtimeConfig()
     config.transform_realtime_request(_session_update_message(session), "gemini-3.5-transcribe-live")
+    assert _sent_audio_mime_type(config) == "audio/pcm;rate=16000"
+
+
+def test_beta_input_audio_format_declares_its_specified_24khz_rate():
+    """The beta shape has no rate field, but pcm16 is specified as 24kHz, so a client that sends
+    the flat codec name has declared 24kHz audio and the MIME label has to say so."""
+    from typing import Final
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(
+        _session_update_message({"input_audio_format": "pcm16"}), "gemini-3.5-transcribe-live"
+    )
+    assert _sent_audio_mime_type(config) == "audio/pcm;rate=24000"
+
+
+def test_beta_session_reaches_the_same_rate_through_the_ga_remap():
+    """The proxy only forwards the flat beta shape untouched when the client sent the OpenAI-Beta
+    header. Without it, RealTimeStreaming rewrites the payload into the GA shape first. Driving the
+    real converter rather than hand-building the GA dict is what makes this able to fail: both
+    routes must land on the same rate, or an identical audio stream gets labelled 16kHz or 24kHz
+    depending on a header that says nothing about sample rates."""
+    from typing import Final
+
+    from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+
+    remapped: Final = RealTimeStreaming._remap_beta_session_to_ga({"input_audio_format": "pcm16"})
+    assert remapped["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
+
+    via_remap: Final = GeminiRealtimeConfig()
+    via_remap.transform_realtime_request(_session_update_message(remapped), "gemini-3.5-transcribe-live")
+
+    passthrough: Final = GeminiRealtimeConfig()
+    passthrough.transform_realtime_request(
+        _session_update_message({"input_audio_format": "pcm16"}), "gemini-3.5-transcribe-live"
+    )
+
+    assert _sent_audio_mime_type(via_remap) == _sent_audio_mime_type(passthrough) == "audio/pcm;rate=24000"
+
+
+def test_ga_declared_rate_wins_over_the_beta_codec_name():
+    """A session carrying both shapes has stated a rate outright; the name-implied one is a
+    fallback for when it has not."""
+    from typing import Final
+
+    config: Final = GeminiRealtimeConfig()
+    config.transform_realtime_request(
+        _session_update_message(
+            {
+                "input_audio_format": "pcm16",
+                "audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000}}},
+            }
+        ),
+        "gemini-3.5-transcribe-live",
+    )
     assert _sent_audio_mime_type(config) == "audio/pcm;rate=16000"
 
 
