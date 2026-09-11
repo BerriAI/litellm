@@ -5,6 +5,7 @@ builders, and the registry validator's failure paths. Needs the OTel SDK."""
 import json
 import threading
 from collections.abc import Iterator
+from contextvars import Context as ContextVarContext
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
@@ -15,6 +16,8 @@ pytest.importorskip("opentelemetry")
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: E402
     ExportTraceServiceRequest,
 )
+from opentelemetry import baggage  # noqa: E402
+from opentelemetry.context import attach, detach  # noqa: E402
 from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
 from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
@@ -26,7 +29,10 @@ from opentelemetry.sdk.trace.export import (  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
-from opentelemetry.trace import SpanKind  # noqa: E402
+from opentelemetry.trace import SpanKind, get_current_span  # noqa: E402
+from opentelemetry.trace.propagation.tracecontext import (  # noqa: E402
+    TraceContextTextMapPropagator,
+)
 
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
@@ -462,6 +468,79 @@ def test_extract_traceparent():
     valid = {"traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}
     assert ctx_mod.extract_traceparent(valid) is not None
     assert ctx_mod.extract_traceparent({"x": "y"}) is None
+
+
+def _test_tracer():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider.get_tracer("test")
+
+
+def test_inject_trace_context_prefers_request_root_span():
+    def run():
+        tracer = _test_tracer()
+        with tracer.start_as_current_span("root") as root:
+            ctx_mod.set_request_root_span(root)
+            result = ctx_mod.inject_trace_context(
+                {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
+            )
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return result, root, propagated
+
+    result, root, propagated = ContextVarContext().run(run)
+    assert result["traceparent"] != "00-11111111111111111111111111111111-2222222222222222-01"
+    assert propagated.get_span_context().trace_id == root.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == root.get_span_context().span_id
+
+
+def test_inject_trace_context_uses_ambient_span_without_request_root():
+    def run():
+        tracer = _test_tracer()
+        with tracer.start_as_current_span("ambient") as ambient:
+            result = ctx_mod.inject_trace_context({})
+            propagated = get_current_span(TraceContextTextMapPropagator().extract(result))
+            return ambient, propagated
+
+    ambient, propagated = ContextVarContext().run(run)
+    assert propagated.get_span_context().trace_id == ambient.get_span_context().trace_id
+    assert propagated.get_span_context().span_id == ambient.get_span_context().span_id
+
+
+def test_inject_trace_context_forwards_valid_inbound_context_without_span():
+    inbound = {"traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}
+
+    def run():
+        result = ctx_mod.inject_trace_context({}, inbound_headers=inbound)
+        return get_current_span(TraceContextTextMapPropagator().extract(result))
+
+    propagated = ContextVarContext().run(run)
+    assert propagated.get_span_context().trace_id == int("0af7651916cd43dd8448eb211c80319c", 16)
+    assert propagated.get_span_context().span_id == int("b7ad6b7169203331", 16)
+
+
+def test_inject_trace_context_returns_headers_unchanged_without_context():
+    headers = {"x-custom": "value"}
+
+    result = ContextVarContext().run(lambda: ctx_mod.inject_trace_context(headers))
+
+    assert result == headers
+    assert "traceparent" not in result
+    assert result is not headers
+
+
+def test_inject_trace_context_does_not_forward_baggage():
+    def run():
+        tracer = _test_tracer()
+        with tracer.start_as_current_span("ambient"):
+            token = attach(baggage.set_baggage("litellm.team.id", "team"))
+            try:
+                return ctx_mod.inject_trace_context({})
+            finally:
+                detach(token)
+
+    result = ContextVarContext().run(run)
+    assert "baggage" not in result
 
 
 def test_set_request_baggage_empty_returns_context():
