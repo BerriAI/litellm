@@ -539,6 +539,56 @@ class TestBedrockMantleServiceTier:
         assert "priority" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleReasoningSummary:
+    """Mantle rejects any Responses request carrying `reasoning.summary` with 400
+    unsupported_parameter. Codex CLI always sends reasoning={effort, summary}, so
+    every value must be stripped while `reasoning.effort` survives (LIT-7523)."""
+
+    @pytest.mark.parametrize("drop_params", [True, False])
+    @pytest.mark.parametrize("summary", ["auto", "concise", "detailed", "none", None])
+    def test_reasoning_summary_stripped_effort_kept(self, summary, drop_params):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "high", "summary": summary}},
+            model="openai.gpt-5.5",
+            drop_params=drop_params,
+        )
+        assert params["reasoning"] == {"effort": "high"}
+
+    def test_reasoning_removed_when_summary_was_its_only_key(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"summary": "auto"}},
+            model="openai.gpt-5.5",
+            drop_params=False,
+        )
+        assert "reasoning" not in params
+
+    def test_reasoning_without_summary_untouched(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model="openai.gpt-5.5",
+            drop_params=False,
+        )
+        assert params["reasoning"] == {"effort": "medium"}
+
+    def test_strip_logged_at_warning_level(self):
+        from unittest.mock import patch
+
+        cfg = BedrockMantleResponsesAPIConfig()
+        with patch(
+            "litellm.llms.bedrock_mantle.responses.transformation.verbose_logger.warning"
+        ) as mock_warning:
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "high", "summary": "auto"}},
+                model="openai.gpt-5.5",
+                drop_params=False,
+            )
+        assert mock_warning.call_count == 1
+        assert "reasoning.summary" in str(mock_warning.call_args)
+
+
 class TestBedrockMantleCodexRequestEndToEnd:
     def test_codex_priority_tier_request_becomes_mantle_acceptable(self):
         cfg = BedrockMantleResponsesAPIConfig()
@@ -549,6 +599,7 @@ class TestBedrockMantleCodexRequestEndToEnd:
                 "store": False,
                 "tool_choice": "auto",
                 "parallel_tool_calls": False,
+                "reasoning": {"effort": "medium", "summary": "auto"},
                 "tools": [_codex_exec_tool(), _codex_wait_tool()],
             },
             model="openai.gpt-5.5",
@@ -568,6 +619,7 @@ class TestBedrockMantleCodexRequestEndToEnd:
             headers={},
         )
         assert "service_tier" not in body
+        assert body["reasoning"] == {"effort": "medium"}
         assert [tool["name"] for tool in body["tools"]] == ["exec", "wait"]
         assert body["stream"] is True
         assert body["tool_choice"] == "auto"

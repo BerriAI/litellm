@@ -187,6 +187,25 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         )
         return {key: value for key, value in params.items() if key != "service_tier"}
 
+    @staticmethod
+    def _strip_unsupported_reasoning_summary(params: dict) -> dict:
+        """Mantle 400s any request carrying `reasoning.summary` ("unsupported_parameter:
+        'reasoning.summary' is not supported with the ... model"); no value is accepted,
+        so strip the key unconditionally. Codex CLI always sends reasoning={effort, summary}.
+        """
+        reasoning: Final = params.get("reasoning")
+        if not isinstance(reasoning, dict) or "summary" not in reasoning:
+            return params
+        verbose_logger.warning(
+            "Bedrock Mantle Responses API: dropping reasoning.summary=%r (Mantle rejects the parameter; "
+            "reasoning.effort is forwarded unchanged).",
+            reasoning.get("summary"),
+        )
+        remaining_reasoning: Final = {key: value for key, value in reasoning.items() if key != "summary"}
+        if remaining_reasoning:
+            return {**params, "reasoning": remaining_reasoning}
+        return {key: value for key, value in params.items() if key != "reasoning"}
+
     def transform_responses_api_request(
         self,
         model: str,
@@ -343,13 +362,15 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         model: str,
         drop_params: bool,
     ) -> dict:
-        params: Final = self._handle_unsupported_service_tier(
-            super().map_openai_params(
-                response_api_optional_params=response_api_optional_params,
-                model=model,
+        params: Final = self._strip_unsupported_reasoning_summary(
+            self._handle_unsupported_service_tier(
+                super().map_openai_params(
+                    response_api_optional_params=response_api_optional_params,
+                    model=model,
+                    drop_params=drop_params,
+                ),
                 drop_params=drop_params,
-            ),
-            drop_params=drop_params,
+            )
         )
 
         tools: Final = params.get("tools")
