@@ -518,7 +518,7 @@ async def test_token_exchange_failure_diagnostics(mode, monkeypatch, caplog):
         assert not caplog.text
     elif mode in {"timeout", "connect"}:
         assert isinstance(result, TokenEndpointUnreachable)
-        assert "POST https://idp/token failed" in caplog.text
+        assert "POST https://idp/ failed" in caplog.text
     else:
-        assert "POST https://idp/token -> HTTP" in caplog.text
+        assert "POST https://idp/ -> HTTP" in caplog.text
         assert {"denied":"denied", "invalid":"invalid response", "missing":"no access token"}[mode] in caplog.text

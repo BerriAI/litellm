@@ -410,7 +410,7 @@ def _safe_text(value: str, limit: int = _BODY_PREVIEW_CHARS) -> str:
 
 
 def safe_upstream_url(url: httpx.URL) -> str:
-    return _safe_text(str(url.copy_with(username="", password="", query=None, fragment=None)))
+    return _safe_text(str(url.copy_with(username="", password="", path="/", query=None, fragment=None)))
 
 
 def _sensitive_field(key: str) -> bool:
