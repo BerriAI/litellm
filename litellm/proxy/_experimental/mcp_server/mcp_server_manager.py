@@ -10,6 +10,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import time
@@ -26,8 +27,9 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import ParseResult, urlparse
 
 import anyio
@@ -1677,6 +1679,91 @@ def _record_mcp_guardrail_evaluations(
         verbose_logger.warning("Failed to record MCP guardrail evaluation for logging: %s", e)
 
 
+_DiscoveryItem = TypeVar("_DiscoveryItem", bound=BaseModel)
+_DiscoveryKey: TypeAlias = tuple[str, str | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _DiscoveryEntry(Generic[_DiscoveryItem]):
+    expires_at: float
+    items: tuple[_DiscoveryItem, ...]
+
+
+class _DiscoveryCache(Generic[_DiscoveryItem]):
+    def __init__(self, ttl: float, clock: Callable[[], float]) -> None:
+        self._ttl = ttl
+        self._clock = clock
+        self._entries: Mapping[_DiscoveryKey, _DiscoveryEntry[_DiscoveryItem]] = MappingProxyType({})
+        self._pending: Mapping[_DiscoveryKey, asyncio.Task[list[_DiscoveryItem]]] = MappingProxyType({})
+
+    def invalidate(self, server_id: str) -> None:
+        self._entries = MappingProxyType({key: entry for key, entry in self._entries.items() if key[0] != server_id})
+        self._pending = MappingProxyType({key: task for key, task in self._pending.items() if key[0] != server_id})
+
+    @staticmethod
+    def _observe_completion(task: asyncio.Task[list[_DiscoveryItem]]) -> None:
+        if not task.cancelled():
+            task.exception()
+
+    async def get(
+        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[list[_DiscoveryItem]]]
+    ) -> tuple[_DiscoveryItem, ...]:
+        if self._ttl <= 0:
+            return tuple(await fetch())
+        entry: Final = self._entries.get(key)
+        if entry is not None and entry.expires_at > self._clock():
+            return tuple(item.model_copy(deep=True) for item in entry.items)
+        pending: Final = self._pending.get(key)
+        if pending is not None:
+            return tuple(item.model_copy(deep=True) for item in await asyncio.shield(pending))
+        task: Final = asyncio.create_task(self._fetch(key, fetch))
+        self._pending = MappingProxyType({**self._pending, key: task})
+        task.add_done_callback(self._observe_completion)
+        return tuple(item.model_copy(deep=True) for item in await asyncio.shield(task))
+
+    async def _fetch(
+        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[list[_DiscoveryItem]]]
+    ) -> list[_DiscoveryItem]:
+        try:
+            items: Final = await fetch()
+            if self._pending.get(key) is asyncio.current_task():
+                now: Final = self._clock()
+                live_entries: Final = tuple(
+                    (entry_key, entry) for entry_key, entry in self._entries.items() if entry.expires_at > now
+                )
+                self._entries = MappingProxyType(
+                    {
+                        entry_key: entry
+                        for entry_key, entry in (
+                            *live_entries[-1023:],
+                            (
+                                key,
+                                _DiscoveryEntry(now + self._ttl, tuple(item.model_copy(deep=True) for item in items)),
+                            ),
+                        )
+                    }
+                )
+            return items
+        finally:
+            if self._pending.get(key) is asyncio.current_task():
+                self._pending = MappingProxyType(
+                    {entry_key: task for entry_key, task in self._pending.items() if entry_key != key}
+                )
+
+
+def _mcp_discovery_cache_ttl() -> float:
+    raw: Final = os.environ.get("LITELLM_MCP_DISCOVERY_CACHE_TTL", "60")
+    try:
+        ttl: Final = float(raw)
+    except ValueError:
+        verbose_logger.warning("Invalid LITELLM_MCP_DISCOVERY_CACHE_TTL; using 60 seconds")
+        return 60.0
+    if not math.isfinite(ttl) or ttl < 0:
+        verbose_logger.warning("Invalid LITELLM_MCP_DISCOVERY_CACHE_TTL; using 60 seconds")
+        return 60.0
+    return ttl
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -1793,6 +1880,7 @@ class MCPServerManager:
         cred_provider: UpstreamCredentialProvider | None = None,
         per_user_oauth_token_store: InvalidatableOAuthTokenStore | None = None,
         per_user_token_cache: MCPPerUserTokenCache | None = None,
+        discovery_clock: Callable[[], float] = time.monotonic,
     ):
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
@@ -1802,6 +1890,10 @@ class MCPServerManager:
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
         )
+        discovery_ttl: Final = _mcp_discovery_cache_ttl()
+        self._prompt_discovery_cache = _DiscoveryCache[Prompt](discovery_ttl, discovery_clock)
+        self._resource_discovery_cache = _DiscoveryCache[Resource](discovery_ttl, discovery_clock)
+        self._template_discovery_cache = _DiscoveryCache[ResourceTemplate](discovery_ttl, discovery_clock)
         self.registry: dict[str, MCPServer] = {}
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
@@ -2529,6 +2621,7 @@ class MCPServerManager:
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
             _warn_config_id_jag_server_outruns_sso(new_server)
+            self._invalidate_discovery_lists(server_id)
             self.config_mcp_servers[server_id] = new_server
             self._set_oauth_discovery_deferred(
                 server_id,
@@ -2730,6 +2823,7 @@ class MCPServerManager:
             global_mcp_tool_registry,
         )
 
+        self._invalidate_discovery_lists(server.server_id)
         prefix_root: Final = normalize_server_name(get_server_prefix(server))
         if server.spec_path and prefix_root:
             openapi_key_prefix: Final = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
@@ -3106,6 +3200,7 @@ class MCPServerManager:
                 # env_vars_are_encrypted=False.
                 new_server: Final = await self.build_mcp_server_from_table(mcp_server, env_vars_are_encrypted=False)
                 self._assign_unique_short_prefix(new_server)
+                self._invalidate_discovery_lists(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 self.prime_oauth_metadata_discovery(new_server)
@@ -3142,6 +3237,7 @@ class MCPServerManager:
                     previous_server=self.registry[mcp_server.server_id],
                 )
                 self._assign_unique_short_prefix(new_server)
+                self._invalidate_discovery_lists(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 self.prime_oauth_metadata_discovery(new_server)
@@ -4375,6 +4471,38 @@ class MCPServerManager:
             )
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
+    def _invalidate_discovery_lists(self, server_id: str) -> None:
+        self._prompt_discovery_cache.invalidate(server_id)
+        self._resource_discovery_cache.invalidate(server_id)
+        self._template_discovery_cache.invalidate(server_id)
+
+    def _discovery_key(
+        self,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | dict[str, str] | None,
+        extra_headers: dict[str, str] | None,
+        stdio_env: dict[str, str] | None,
+        subject_token: str | None,
+    ) -> _DiscoveryKey:
+        per_user: Final = (
+            server.requires_per_user_auth
+            or self._references_per_user_env_var(server)
+            or server.delegate_auth_to_upstream
+            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
+        )
+        if not (per_user or mcp_auth_header or extra_headers or stdio_env or subject_token):
+            return server.server_id, None
+        identity: Final = (
+            (user_api_key_auth.user_id, user_api_key_auth.api_key)
+            if per_user and user_api_key_auth is not None
+            else None
+        )
+        material: Final = json.dumps(
+            (identity, mcp_auth_header, extra_headers, stdio_env, subject_token), sort_keys=True, separators=(",", ":")
+        )
+        return server.server_id, hashlib.sha256(material.encode()).hexdigest()
+
     async def get_prompts_from_server(
         self,
         server: MCPServer,
@@ -4384,47 +4512,36 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
     ) -> list[Prompt]:
-        """
-        Helper method to get prompts from a single MCP server with prefixed names.
-
-        Args:
-            server (MCPServer): The server to query prompts from
-            mcp_auth_header: Optional auth header for MCP server
-
-        Returns:
-            List[Prompt]: List of prompts available on the server with prefixed names
-        """
-
-        verbose_logger.debug("Connecting to url: %s", server.url)
-        verbose_logger.info("get_prompts_from_server for %s...", server.name)
-
-        client = None
-
         try:
-            if server.static_headers:
-                if extra_headers is None:
-                    extra_headers = {}
-                extra_headers.update(server.static_headers)
-
+            headers: Final = (
+                dict(
+                    chain(
+                        extra_headers.items() if extra_headers else (),
+                        server.static_headers.items() if server.static_headers else (),
+                    )
+                )
+                or None
+            )
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
-
-            client = await self._create_mcp_client(
-                server=server,
-                mcp_auth_header=mcp_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
+            key: Final = self._discovery_key(
+                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token
             )
 
-            prompts: Final = await client.list_prompts()
+            async def fetch() -> list[Prompt]:
+                client: Final = await self._create_mcp_client(
+                    server=server,
+                    mcp_auth_header=mcp_auth_header,
+                    extra_headers=headers,
+                    stdio_env=stdio_env,
+                    subject_token=subject_token,
+                )
+                return await client.list_prompts(raise_on_error=True)
 
-            prefixed_or_original_prompts: Final = self._create_prefixed_prompts(prompts, server, add_prefix=add_prefix)
-
-            return prefixed_or_original_prompts
-
-        except Exception as e:
-            verbose_logger.warning("Failed to get prompts from server %s: %s", server.name, e)
+            items: Final = await self._prompt_discovery_cache.get(key, fetch)
+            return self._create_prefixed_prompts(items, server, add_prefix=add_prefix)
+        except Exception as error:
+            verbose_logger.warning("Failed to get prompts from server %s: %s", server.name, error)
             return []
 
     async def get_resources_from_server(
@@ -4436,38 +4553,36 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
     ) -> list[Resource]:
-        """Fetch available resources from a single MCP server."""
-
-        verbose_logger.debug("Connecting to url: %s", server.url)
-        verbose_logger.info("get_resources_from_server for %s...", server.name)
-
-        client = None
-
         try:
-            if server.static_headers:
-                if extra_headers is None:
-                    extra_headers = {}
-                extra_headers.update(server.static_headers)
-
+            headers: Final = (
+                dict(
+                    chain(
+                        extra_headers.items() if extra_headers else (),
+                        server.static_headers.items() if server.static_headers else (),
+                    )
+                )
+                or None
+            )
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
-
-            client = await self._create_mcp_client(
-                server=server,
-                mcp_auth_header=mcp_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
+            key: Final = self._discovery_key(
+                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token
             )
 
-            resources: Final = await client.list_resources()
+            async def fetch() -> list[Resource]:
+                client: Final = await self._create_mcp_client(
+                    server=server,
+                    mcp_auth_header=mcp_auth_header,
+                    extra_headers=headers,
+                    stdio_env=stdio_env,
+                    subject_token=subject_token,
+                )
+                return await client.list_resources(raise_on_error=True)
 
-            prefixed_resources: Final = self._create_prefixed_resources(resources, server, add_prefix=add_prefix)
-
-            return prefixed_resources
-
-        except Exception as e:
-            verbose_logger.warning("Failed to get resources from server %s: %s", server.name, e)
+            items: Final = await self._resource_discovery_cache.get(key, fetch)
+            return self._create_prefixed_resources(items, server, add_prefix=add_prefix)
+        except Exception as error:
+            verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
             return []
 
     async def get_resource_templates_from_server(
@@ -4479,40 +4594,36 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
     ) -> list[ResourceTemplate]:
-        """Fetch available resource templates from a single MCP server."""
-
-        verbose_logger.debug("Connecting to url: %s", server.url)
-        verbose_logger.info("get_resource_templates_from_server for %s...", server.name)
-
-        client = None
-
         try:
-            if server.static_headers:
-                if extra_headers is None:
-                    extra_headers = {}
-                extra_headers.update(server.static_headers)
-
+            headers: Final = (
+                dict(
+                    chain(
+                        extra_headers.items() if extra_headers else (),
+                        server.static_headers.items() if server.static_headers else (),
+                    )
+                )
+                or None
+            )
             stdio_env: Final = self._build_stdio_env(server, raw_headers)
             subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
-
-            client = await self._create_mcp_client(
-                server=server,
-                mcp_auth_header=mcp_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-                subject_token=subject_token,
+            key: Final = self._discovery_key(
+                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token
             )
 
-            resource_templates: Final = await client.list_resource_templates()
+            async def fetch() -> list[ResourceTemplate]:
+                client: Final = await self._create_mcp_client(
+                    server=server,
+                    mcp_auth_header=mcp_auth_header,
+                    extra_headers=headers,
+                    stdio_env=stdio_env,
+                    subject_token=subject_token,
+                )
+                return await client.list_resource_templates(raise_on_error=True)
 
-            prefixed_templates: Final = self._create_prefixed_resource_templates(
-                resource_templates, server, add_prefix=add_prefix
-            )
-
-            return prefixed_templates
-
-        except Exception as e:
-            verbose_logger.warning("Failed to get resource templates from server %s: %s", server.name, e)
+            items: Final = await self._template_discovery_cache.get(key, fetch)
+            return self._create_prefixed_resource_templates(items, server, add_prefix=add_prefix)
+        except Exception as error:
+            verbose_logger.warning("Failed to get resource_templates from server %s: %s", server.name, error)
             return []
 
     async def read_resource_from_server(
@@ -5220,7 +5331,7 @@ class MCPServerManager:
         return prefixed_tools
 
     def _create_prefixed_prompts(
-        self, prompts: list[Prompt], server: MCPServer, add_prefix: bool = True
+        self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True
     ) -> list[Prompt]:
         """
         Create prefixed prompts and update prompt mapping.
@@ -5247,7 +5358,7 @@ class MCPServerManager:
         return prefixed_prompts
 
     def _create_prefixed_resources(
-        self, resources: list[Resource], server: MCPServer, add_prefix: bool = True
+        self, resources: Sequence[Resource], server: MCPServer, add_prefix: bool = True
     ) -> list[Resource]:
         """Prefix resource names and track origin server for read requests."""
 
@@ -5264,7 +5375,7 @@ class MCPServerManager:
 
     def _create_prefixed_resource_templates(
         self,
-        resource_templates: list[ResourceTemplate],
+        resource_templates: Sequence[ResourceTemplate],
         server: MCPServer,
         add_prefix: bool = True,
     ) -> list[ResourceTemplate]:
@@ -6466,6 +6577,9 @@ class MCPServerManager:
         for registry_key in dropped_registry_keys:
             self._invalidate_oauth_discovery_state(previous_registry[registry_key].server_id)
 
+        for server_id in previous_registry.keys() | registered_registry.keys():
+            if previous_registry.get(server_id) != registered_registry.get(server_id):
+                self._invalidate_discovery_lists(server_id)
         self.registry = registered_registry
         # A discovery task may have published into ``previous_registry`` while
         # this replacement was being staged. Reconcile every published entry

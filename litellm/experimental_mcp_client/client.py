@@ -781,7 +781,7 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
-    async def list_prompts(self) -> list[Prompt]:
+    async def list_prompts(self, *, raise_on_error: bool = False) -> list[Prompt]:
         """List available prompts from the server."""
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
@@ -811,6 +811,8 @@ class MCPClient:
             verbose_logger.warning("MCP client list_prompts was cancelled")
             raise
         except Exception as e:
+            if raise_on_error:
+                raise
             error_type: Final = type(e).__name__
             verbose_logger.error(
                 "MCP client list_prompts failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
@@ -869,7 +871,7 @@ class MCPClient:
                 )
             raise
 
-    async def list_resources(self) -> list[Resource]:
+    async def list_resources(self, *, raise_on_error: bool = False) -> list[Resource]:
         """List available resources from the server."""
         verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
 
@@ -899,6 +901,8 @@ class MCPClient:
             verbose_logger.warning("MCP client list_resources was cancelled")
             raise
         except Exception as e:
+            if raise_on_error:
+                raise
             error_type: Final = type(e).__name__
             verbose_logger.error(
                 "MCP client list_resources failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
@@ -916,7 +920,7 @@ class MCPClient:
             # Return empty list instead of raising to allow graceful degradation
             return []
 
-    async def list_resource_templates(self) -> list[ResourceTemplate]:
+    async def list_resource_templates(self, *, raise_on_error: bool = False) -> list[ResourceTemplate]:
         """List available resource templates from the server."""
         verbose_logger.debug("MCP client listing resource templates from %s", self.server_url or "stdio")
 
@@ -949,6 +953,8 @@ class MCPClient:
             verbose_logger.warning("MCP client list_resource_templates was cancelled")
             raise
         except Exception as e:
+            if raise_on_error:
+                raise
             error_type: Final = type(e).__name__
             verbose_logger.error(
                 "MCP client list_resource_templates failed - Error Type: %s, Error: %s, Server: %s, Transport: %s",
