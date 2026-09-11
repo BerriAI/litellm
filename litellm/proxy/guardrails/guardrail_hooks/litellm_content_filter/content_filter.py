@@ -2144,3 +2144,6 @@ class ContentFilterGuardrail(CustomGuardrail):
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.post_mcp_call,
         ]
+
+    def supports_only_scan_new_messages(self) -> bool:
+        return True

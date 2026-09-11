@@ -509,6 +509,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def supports_scan_only_tool_results(self) -> bool:
         return self.experimental_use_latest_role_message_only is not True
 
+    def supports_only_scan_new_messages(self) -> bool:
+        return True
+
     def _prepare_guardrail_messages_for_role(
         self,
         messages: list[AllMessageValues] | None,

@@ -1084,3 +1084,92 @@ def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+class TestOnlyScanNewMessagesInitWarning:
+    """only_scan_new_messages is declared on BaseLitellmParams, so it validates on any
+    guardrail -- but only guardrails that call filter_new_texts_for_session honor it.
+    Configuring it anywhere else must say so at initialization instead of silently
+    scanning the full context forever while the config reads as tuned.
+
+    Warn rather than raise, unlike the scan_only_tool_results check above it: a
+    misconfigured scan_only_tool_results can leave nothing scanned (an open hole), while
+    an ignored only_scan_new_messages means everything is scanned, which fails safe --
+    and raising would break the boot of any deployment already carrying the flag.
+    """
+
+    WARNING_FRAGMENT = "only_scan_new_messages is set but this guardrail always scans the full request"
+
+    def _initialize_capturing_warnings(self, caplog, name: str, params: dict):
+        import logging
+
+        lists = _all_callback_lists()
+        snapshots = [list(cb_list) for cb_list in lists]
+        try:
+            with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+                result = InMemoryGuardrailHandler().initialize_guardrail(
+                    guardrail={"guardrail_name": name, "litellm_params": params},
+                )
+            return result, [record.getMessage() for record in caplog.records]
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+    def test_unsupported_guardrail_warns_and_still_boots(self, caplog):
+        result, warnings = self._initialize_capturing_warnings(
+            caplog,
+            "presidio-only-scan-new-messages",
+            {
+                "guardrail": "presidio",
+                "mode": "pre_call",
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+                "only_scan_new_messages": True,
+            },
+        )
+
+        assert result is not None, "an ignored performance flag must not fail proxy boot"
+        assert any(self.WARNING_FRAGMENT in message for message in warnings)
+
+    def test_content_filter_does_not_warn(self, caplog):
+        _, warnings = self._initialize_capturing_warnings(
+            caplog,
+            "content-filter-only-scan-new-messages",
+            {
+                "guardrail": "litellm_content_filter",
+                "mode": "pre_call",
+                "blocked_words": [{"keyword": "hunter2", "action": "BLOCK"}],
+                "only_scan_new_messages": True,
+            },
+        )
+
+        assert not any(self.WARNING_FRAGMENT in message for message in warnings)
+
+    def test_bedrock_does_not_warn(self, caplog):
+        _, warnings = self._initialize_capturing_warnings(
+            caplog,
+            "bedrock-only-scan-new-messages",
+            {
+                "guardrail": "bedrock",
+                "mode": "pre_call",
+                "guardrailIdentifier": "gr-1",
+                "guardrailVersion": "1",
+                "only_scan_new_messages": True,
+            },
+        )
+
+        assert not any(self.WARNING_FRAGMENT in message for message in warnings)
+
+    def test_flag_absent_does_not_warn(self, caplog):
+        _, warnings = self._initialize_capturing_warnings(
+            caplog,
+            "presidio-no-only-scan-new-messages",
+            {
+                "guardrail": "presidio",
+                "mode": "pre_call",
+                "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            },
+        )
+
+        assert not any(self.WARNING_FRAGMENT in message for message in warnings)

@@ -458,6 +458,15 @@ def _configure_callback_scoping(
             "skip_tool_message_in_guardrail are enabled together, which excludes every message from "
             "scanning, so no request content would ever be scanned. Remove one of the two."
         )
+    # Warn rather than raise: unlike scan_only_tool_results (which can leave nothing scanned),
+    # an ignored only_scan_new_messages means everything is scanned, which fails safe -- and
+    # raising would break the boot of deployments that already carry the flag, on upgrade.
+    if litellm_params.only_scan_new_messages and not custom_guardrail_callback.supports_only_scan_new_messages():
+        verbose_proxy_logger.warning(
+            "Guardrail %s: only_scan_new_messages is set but this guardrail always scans the full request; "
+            "the setting has no effect.",
+            guardrail_name,
+        )
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
 

@@ -964,6 +964,15 @@ class CustomGuardrail(CustomLogger):
         """
         return True
 
+    def supports_only_scan_new_messages(self) -> bool:
+        """Whether this guardrail actually scans only the per-session diff.
+
+        Guardrails that never call ``filter_new_texts_for_session`` always scan the
+        full request, so configuring them with ``only_scan_new_messages`` is reported
+        at initialization instead of silently doing nothing.
+        """
+        return False
+
     def structured_messages_cover_full_request(self) -> bool:
         """Whether returned ``structured_messages`` span the whole request.
 
