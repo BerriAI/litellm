@@ -38,9 +38,10 @@ def validate_key_duration(duration: str | None) -> None:
     try:
         duration_in_seconds(duration)
     except (ValueError, OverflowError):
+        message = f"Invalid duration '{duration}'. Use a format like '1h', '24h', '7d', or '30d'."
         raise HTTPException(
             status_code=400,
-            detail={"error": f"Invalid duration '{duration}'. Use a format like '1h', '24h', '7d', or '30d'."},
+            detail={"error": message},  # mutable-ok: single-shot error envelope
         )
 
 
