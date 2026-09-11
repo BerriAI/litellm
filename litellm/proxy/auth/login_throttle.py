@@ -207,7 +207,7 @@ class LoginThrottle:
         ``async_get_cache`` turns a failed GET into ``None``, which would pass as an empty counter.
         """
         local: Final = _as_count(await self._outcome(store.async_get_cache(key=key)))
-        shared: Final = await self._shared(lambda redis_cache: redis_cache.async_batch_get_counts([key]))
+        shared: Final = await self._shared(lambda redis_cache: redis_cache.async_batch_get_counts((key,)))
         if not isinstance(shared, tuple):
             return local
         return _as_count(shared[0]) + local
