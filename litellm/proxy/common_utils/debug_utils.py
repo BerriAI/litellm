@@ -7,8 +7,8 @@ import os
 import sys
 import tracemalloc
 from collections import Counter
-from collections.abc import Mapping, Sequence
-from types import FrameType
+from collections.abc import Iterator, Mapping, Sequence
+from types import AsyncGeneratorType, CoroutineType, FrameType, GeneratorType
 from typing import Any, Final, NamedTuple, Protocol, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -55,8 +55,40 @@ def _frame_from_stack_frame(frame: FrameType) -> _Frame:
     return result
 
 
+def _awaitable_frame(awaitable: object) -> FrameType | None:
+    if isinstance(awaitable, CoroutineType):
+        return awaitable.cr_frame
+    if isinstance(awaitable, GeneratorType):
+        return awaitable.gi_frame
+    if isinstance(awaitable, AsyncGeneratorType):
+        return awaitable.ag_frame
+    return None
+
+
+def _awaited(awaitable: object) -> object | None:
+    if isinstance(awaitable, CoroutineType):
+        return awaitable.cr_await
+    if isinstance(awaitable, GeneratorType):
+        return awaitable.gi_yieldfrom
+    if isinstance(awaitable, AsyncGeneratorType):
+        return awaitable.ag_await
+    return None
+
+
+def _awaited_chain(awaitable: object) -> Iterator[FrameType]:
+    frame: Final = _awaitable_frame(awaitable)
+    if frame is None:
+        return
+    yield frame
+    awaited: Final = _awaited(awaitable)
+    if awaited is not None:
+        yield from _awaited_chain(awaited)
+
+
 def _task_stack(task: asyncio.Task[object], max_frames: int) -> tuple[_Frame, ...]:
-    return tuple(_frame_from_stack_frame(frame) for frame in task.get_stack(limit=max_frames))
+    awaited_frames: Final = tuple(itertools.islice(_awaited_chain(task.get_coro()), max_frames))
+    frames: Final = awaited_frames or tuple(task.get_stack(limit=max_frames))
+    return tuple(_frame_from_stack_frame(frame) for frame in frames)
 
 
 def _task_stack_key(stack: tuple[_Frame, ...]) -> _TaskStackKey:

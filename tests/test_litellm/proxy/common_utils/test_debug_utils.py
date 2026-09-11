@@ -13,6 +13,14 @@ async def _park_for_test() -> None:
     await asyncio.sleep(30)
 
 
+async def _park_inner(event: asyncio.Event) -> None:
+    await event.wait()
+
+
+async def _park_outer(event: asyncio.Event) -> None:
+    await _park_inner(event)
+
+
 def _test_app(user_role: LitellmUserRoles) -> FastAPI:
     app = FastAPI()
     app.include_router(debug_router)
@@ -54,6 +62,29 @@ async def test_task_stacks_include_parked_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_task_stacks_include_nested_await_frames() -> None:
+    app = _test_app(LitellmUserRoles.PROXY_ADMIN)
+    event = asyncio.Event()
+    parked_task = asyncio.create_task(_park_outer(event), name="nested-parked-test-task")
+    await asyncio.sleep(0)
+    try:
+        async with _client(app) as client:
+            response = await client.get("/debug/asyncio-tasks/stacks")
+    finally:
+        parked_task.cancel()
+        await asyncio.gather(parked_task, return_exceptions=True)
+
+    assert response.status_code == 200
+    nested_group = next(
+        group for group in response.json()["groups"] if group["task_names"] == ["nested-parked-test-task"]
+    )
+    frames = nested_group["stack"]
+    functions = [frame["function"] for frame in frames]
+    assert functions.index("_park_outer") < functions.index("_park_inner")
+    assert any(frame["file"].endswith("asyncio/locks.py") or frame["function"] == "wait" for frame in frames)
+
+
+@pytest.mark.asyncio
 async def test_task_stacks_respect_max_frames() -> None:
     app = _test_app(LitellmUserRoles.PROXY_ADMIN)
     parked_task = asyncio.create_task(_park_for_test(), name="parked-test-task")
@@ -65,4 +96,8 @@ async def test_task_stacks_respect_max_frames() -> None:
         await asyncio.gather(parked_task, return_exceptions=True)
 
     assert response.status_code == 200
-    assert all(len(group["stack"]) <= 1 for group in response.json()["groups"])
+    groups = response.json()["groups"]
+    parked_group = next(group for group in groups if "_park_for_test" in group["coroutine"])
+    assert len(parked_group["stack"]) == 1
+    assert parked_group["stack"][0]["function"] == "_park_for_test"
+    assert all(len(group["stack"]) <= 1 for group in groups)
