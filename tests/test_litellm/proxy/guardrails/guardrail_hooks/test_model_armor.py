@@ -5255,3 +5255,30 @@ async def test_logging_only_flagged_prompt_still_scans_response():
     entries = _metadata_entries(out_kwargs)
     flagged = [e for e in entries if e["guardrail_status"] == "guardrail_flagged"]
     assert len(flagged) == 2
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_raises_on_flagged_when_not_logging_only():
+    """The /guardrails/apply_guardrail endpoint calls apply_guardrail directly; a
+    non-logging_only instance must signal the block so flagged text is not returned as clean."""
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-pre",
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    guardrail.make_model_armor_request = AsyncMock(return_value=_flagged_armor_response())
+    request_data = {"metadata": {}}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["forbidden prompt"]},
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert exc_info.value.status_code == 400
+    entries = request_data["metadata"]["standard_logging_guardrail_information"]
+    flagged = [e for e in entries if e["guardrail_status"] == "guardrail_flagged"]
+    assert len(flagged) == 1
