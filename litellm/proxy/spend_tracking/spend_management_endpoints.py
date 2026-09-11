@@ -2979,9 +2979,10 @@ async def _ui_session_grouped_spend_logs(
     by its newest non-MCP row, enriched by ``_build_ui_spend_logs_response``
     exactly like the flat listing, and the response carries
     ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
-    (capped like the flat total). A page that runs out of sessions is itself
-    the end of the list, so its ``total`` is ``offset + len(page)`` and the
-    grouped count query is skipped.
+    (capped like the flat total). A page that runs out of sessions while still
+    holding some is itself the end of the list, so its ``total`` is
+    ``offset + len(page)`` and the grouped count query is skipped; a page that
+    starts past the end says nothing about the total, so that one is counted.
     """
     where_clause: Final = " AND ".join(sql_conditions) if sql_conditions else "TRUE"
     cmp_op: Final = "<" if sort_desc else ">"
@@ -3026,7 +3027,8 @@ async def _ui_session_grouped_spend_logs(
         else None
     )
 
-    page_ends_the_list: Final = cursor is None and page_limit > 0 and not has_more
+    page_starts_inside_the_list: Final = offset == 0 or len(page_rows) > 0
+    page_ends_the_list: Final = cursor is None and page_limit > 0 and not has_more and page_starts_inside_the_list
     total_records, total_is_capped = (
         (offset + len(page_rows), False)
         if page_ends_the_list

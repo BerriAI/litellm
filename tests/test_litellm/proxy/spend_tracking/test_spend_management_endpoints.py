@@ -6840,6 +6840,41 @@ async def test_ui_view_spend_logs_group_by_session_short_page_totals_itself(clie
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_page_past_the_end_keeps_the_real_total(client, monkeypatch):
+    """An empty page past the last one says nothing about the total, so it is counted rather than inferred."""
+    sessions = tuple((f"sess-{index:02d}", f"2026-08-29 10:{59 - index:02d}:00") for index in range(100))
+    mock_prisma = _session_grouped_paginating_prisma(sessions)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "page": 4,
+                "page_size": 50,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["data"] == []
+        assert data["total"] == 100, "the empty page's offset is not a total"
+        assert data["total_pages"] == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_page_past_count_cap_is_empty(client, monkeypatch):
     """The last page inside the capped total still lists sessions; the page after it is empty and costs no query."""
     cap = spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
