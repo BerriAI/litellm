@@ -41,12 +41,6 @@ fn request_body(request: &str) -> Value {
         "options":{"enhance":{"agentic":[{"type":"table"}]}}
     })
 )]
-#[case(
-    "reducto/future-parse-model",
-    json!({}),
-    "reducto://future.pdf",
-    json!({"input":"reducto://future.pdf"})
-)]
 #[tokio::test]
 async fn request_mapping_matches_python(
     #[case] model: &str,

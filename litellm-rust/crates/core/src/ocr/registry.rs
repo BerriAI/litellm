@@ -62,7 +62,15 @@ pub(crate) fn resolve_wire_adapter(
         OcrProvider::Reducto if provider.model.eq_ignore_ascii_case("parse-legacy") => {
             OcrAdapterKind::ReductoLegacy
         }
-        OcrProvider::Reducto => OcrAdapterKind::ReductoV3,
+        OcrProvider::Reducto if provider.model.eq_ignore_ascii_case("parse-v3") => {
+            OcrAdapterKind::ReductoV3
+        }
+        OcrProvider::Reducto => {
+            return Err(Error::InvalidRequest(format!(
+                "unsupported Reducto OCR model: {}",
+                provider.model
+            )));
+        }
     };
     Ok((provider.model.to_string(), adapter))
 }
@@ -81,7 +89,6 @@ mod tests {
         let cases = [
             ("mistral/future-ocr-model", OcrAdapterKind::Mistral),
             ("azure_ai/future-ocr-model", OcrAdapterKind::AzureMistral),
-            ("reducto/future-parse-model", OcrAdapterKind::ReductoV3),
         ];
 
         for (qualified_model, expected_adapter) in cases {
@@ -90,6 +97,14 @@ mod tests {
             assert_eq!(model, expected_model);
             assert_eq!(adapter, expected_adapter);
         }
+    }
+
+    #[test]
+    fn unknown_reducto_models_are_rejected() {
+        assert!(matches!(
+            resolve_wire_adapter("reducto/future-parse-model", None),
+            Err(Error::InvalidRequest(_))
+        ));
     }
 
     #[test]

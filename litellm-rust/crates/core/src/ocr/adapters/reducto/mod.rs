@@ -2,6 +2,7 @@ mod legacy;
 mod v3;
 
 use crate::Error;
+use crate::constants::{REDUCTO_API_BASE, REDUCTO_API_KEY_ENV, REDUCTO_ID_PREFIX};
 use crate::ocr::document::InlineDocument;
 use crate::ocr::error::{OcrError, OcrRequestError, OcrResponseError};
 use crate::ocr::types::{OcrConnection, OcrDocument};
@@ -9,10 +10,6 @@ use crate::url_utils::ApiUrl;
 
 pub(crate) use legacy::ReductoLegacyAdapter;
 pub(crate) use v3::ReductoV3Adapter;
-
-const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
-const REDUCTO_API_KEY_ENV: &str = "REDUCTO_API_KEY";
-const REDUCTO_ID_PREFIX: &str = "reducto://";
 
 pub(super) fn get_complete_url(api_base: Option<&str>, path: &str) -> Result<String, OcrError> {
     let base = api_base
