@@ -338,10 +338,10 @@ class TestDeleteDeploymentKeepsPluginConfigModels:
 
         with (
             patch.object(proxy_config, "get_config", new_callable=AsyncMock, return_value=updated_config),
-            patch("litellm.proxy.proxy_server.llm_router", router),
-            patch("litellm.proxy.proxy_server.user_config_file_path", str(cfg_file)),
-            patch("litellm.proxy.proxy_server.master_key", "sk-test"),
-            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: proxy router test mock
+            patch("litellm.proxy.proxy_server.user_config_file_path", str(cfg_file)),  # test-quality-ok: proxy router test mock
+            patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: proxy router test mock
+            patch("litellm.proxy.proxy_server.premium_user", False),  # test-quality-ok: proxy router test mock
         ):
             await proxy_config._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
 
