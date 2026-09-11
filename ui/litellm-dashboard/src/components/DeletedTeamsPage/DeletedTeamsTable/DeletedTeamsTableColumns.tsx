@@ -3,8 +3,20 @@
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { DateCell, IdCell, ModelsCell, MoneyCell } from "@/components/shared/table_cells";
+import { DateCell, IdCell, IdentityCell, ModelsCell, MoneyCell } from "@/components/shared/table_cells";
 import { DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { orgDetailHref, userDetailHref } from "@/utils/entityLinks";
+
+function EntityCell({ value, href }: { value: string | null | undefined; href: string | undefined }) {
+  if (!value) {
+    return <span className="text-muted-foreground">-</span>;
+  }
+  return (
+    <span className="block max-w-60" title={value}>
+      <IdentityCell title={value} titleClassName="font-normal" href={href} />
+    </span>
+  );
+}
 
 export const getDeletedTeamsTableColumns = (): ColumnDef<DeletedTeam>[] => [
   {
@@ -78,7 +90,10 @@ export const getDeletedTeamsTableColumns = (): ColumnDef<DeletedTeam>[] => [
     header: "Organization",
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <IdCell value={row.original.organization_id} variant="plain" />,
+    cell: ({ row }) => {
+      const orgId = row.original.organization_id;
+      return <EntityCell value={orgId} href={orgId ? orgDetailHref(orgId) : undefined} />;
+    },
   },
   {
     id: "deleted_at",
@@ -97,15 +112,8 @@ export const getDeletedTeamsTableColumns = (): ColumnDef<DeletedTeam>[] => [
     size: 120,
     enableSorting: false,
     cell: ({ row }) => {
-      const value = row.original.deleted_by;
-      if (!value) {
-        return <span className="text-muted-foreground">-</span>;
-      }
-      return (
-        <span className="block max-w-60 truncate" title={value}>
-          {value}
-        </span>
-      );
+      const deletedBy = row.original.deleted_by;
+      return <EntityCell value={deletedBy} href={deletedBy ? userDetailHref(deletedBy) : undefined} />;
     },
   },
 ];
