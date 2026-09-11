@@ -8,8 +8,8 @@ Has 4 primary methods:
     - async_get_cache
 """
 
+import logging
 import time
-import traceback
 from collections.abc import Sequence
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
@@ -23,7 +23,7 @@ from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 
 from .base_cache import BaseCache
 from .in_memory_cache import InMemoryCache
-from .redis_cache import RedisCache, RedisCircuitBreakerOpenError
+from .redis_cache import RedisCache, log_redis_failure
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -177,10 +177,10 @@ class DualCache(BaseCache):
 
             print_verbose(f"get cache: cache result: {result}")
             return result
-        except RedisCircuitBreakerOpenError:
-            return None
-        except Exception:
-            verbose_logger.error(traceback.format_exc())
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in get_cache", e, with_traceback=True
+            )
 
     def batch_get_cache(
         self,
@@ -206,9 +206,6 @@ class DualCache(BaseCache):
                 redis_result: Final = self.redis_cache.batch_get_cache(
                     key_list=sublist_keys, parent_otel_span=parent_otel_span
                 )
-            except RedisCircuitBreakerOpenError:
-                self._rollback_redis_batch_key_reservations(previous_access_times)
-                return result
             except Exception:
                 # Do not throttle subsequent callers if the Redis read fails.
                 self._rollback_redis_batch_key_reservations(previous_access_times)
@@ -222,8 +219,10 @@ class DualCache(BaseCache):
             return list(  # mutable-ok: public list contract
                 redis_result.get(key) if value is None else value for key, value in zip(keys, result)
             )
-        except Exception:
-            verbose_logger.error(traceback.format_exc())
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in batch_get_cache", e, with_traceback=True
+            )
 
     async def async_get_cache(
         self,
@@ -255,10 +254,10 @@ class DualCache(BaseCache):
 
             print_verbose(f"get cache: cache result: {result}")
             return result
-        except RedisCircuitBreakerOpenError:
-            return None
-        except Exception:
-            verbose_logger.error(traceback.format_exc())
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_get_cache", e, with_traceback=True
+            )
 
     def _reserve_redis_batch_keys(
         self,
@@ -326,9 +325,6 @@ class DualCache(BaseCache):
                         redis_result: Final = await self.redis_cache.async_batch_get_cache(
                             sublist_keys, parent_otel_span=parent_otel_span
                         )
-                    except RedisCircuitBreakerOpenError:
-                        self._rollback_redis_batch_key_reservations(previous_access_times)
-                        return result
                     except Exception:
                         # Do not throttle subsequent callers if the Redis read fails.
                         self._rollback_redis_batch_key_reservations(previous_access_times)
@@ -349,8 +345,14 @@ class DualCache(BaseCache):
                             await self.in_memory_cache.async_set_cache(key, value, **self._backfill_kwargs(kwargs))
 
             return result
-        except Exception:
-            verbose_logger.error(traceback.format_exc())
+        except Exception as e:
+            log_redis_failure(
+                verbose_logger,
+                logging.ERROR,
+                "LiteLLM Cache: exception in async_batch_get_cache",
+                e,
+                with_traceback=True,
+            )
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
         print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
@@ -362,10 +364,10 @@ class DualCache(BaseCache):
 
             if self.redis_cache is not None and local_only is False:
                 await self.redis_cache.async_set_cache(key, value, **kwargs)
-        except RedisCircuitBreakerOpenError:
-            return
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
+            )
 
     # async_batch_set_cache
     async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs):
@@ -383,10 +385,10 @@ class DualCache(BaseCache):
                 await self.redis_cache.async_set_cache_pipeline(
                     cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
                 )
-        except RedisCircuitBreakerOpenError:
-            return
         except Exception as e:
-            verbose_logger.exception("LiteLLM Cache: Excepton async add_cache: %s", e)
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
+            )
 
     async def async_increment_cache(
         self,
@@ -423,11 +425,11 @@ class DualCache(BaseCache):
                 )
 
             return result
-        except RedisCircuitBreakerOpenError:
-            return result
         except Exception as e:
-            verbose_logger.warning(
-                "Redis async_increment_cache failed, falling back to in-memory result: %s",
+            log_redis_failure(
+                verbose_logger,
+                logging.WARNING,
+                "Redis async_increment_cache failed, falling back to in-memory result",
                 e,
             )
             return result
@@ -454,11 +456,11 @@ class DualCache(BaseCache):
                 )
 
             return result
-        except RedisCircuitBreakerOpenError:
-            return result
         except Exception as e:
-            verbose_logger.warning(
-                "Redis async_increment_cache_pipeline failed, falling back to in-memory result: %s",
+            log_redis_failure(
+                verbose_logger,
+                logging.WARNING,
+                "Redis async_increment_cache_pipeline failed, falling back to in-memory result",
                 e,
             )
             return result
