@@ -1203,6 +1203,83 @@ async def test_counters_are_written_with_their_expiry_and_re_armed_if_stripped(m
     assert set(redis.ttls) >= {k for k in redis.values if ":user:" in k}, "the refusal must re-arm a stripped expiry"
 
 
+class _DownRedis(_FakeRedis):
+    """Redis whose every call raises, as during an outage or an open circuit breaker."""
+
+    async def async_get_cache(self, key, **kwargs):
+        raise ConnectionError("redis is down")
+
+    async def async_increment_with_floor(self, key, value, ttl):
+        raise ConnectionError("redis is down")
+
+    async def async_get_ttl(self, key):
+        raise ConnectionError("redis is down")
+
+    async def async_delete_cache(self, key):
+        raise ConnectionError("redis is down")
+
+
+@pytest.mark.asyncio
+async def test_redis_is_the_only_counter_while_it_answers(monkeypatch):
+    """Regression: every worker must spend the same budget, and a success must clear it for all.
+
+    Counting in this worker's memory as well as in Redis let the two drift apart: a worker
+    whose Redis write failed kept its own count while the others gave the attacker fresh
+    guesses, and a stale local count outlived the shared clear after a correct password.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.login_throttle import _CACHE_KEY_PREFIX
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    redis = _FakeRedis()
+    first_worker_store = DualCache()
+    second_worker_store = DualCache()
+    first_worker = _throttle(max_attempts=2, cache=first_worker_store, redis_cache=redis)
+    second_worker = _throttle(max_attempts=2, cache=second_worker_store, redis_cache=redis)
+
+    for _ in range(2):
+        with pytest.raises(ProxyException, match="Invalid credentials"):
+            await _guess(first_worker)
+
+    assert not [k for k in first_worker_store.in_memory_cache.cache_dict if str(k).startswith(_CACHE_KEY_PREFIX)], (
+        "with Redis answering, no worker may keep a counter of its own"
+    )
+    with pytest.raises(ProxyException) as blocked:
+        await _guess(second_worker)
+    assert blocked.value.code == "429", "the second worker must see the budget the first one spent"
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
+    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(  # test-quality-ok: success mints a UI key and persists the user; faked so no DB is needed
+        "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
+    ):
+        await _guess(second_worker, password="right")
+
+    assert not [k for k in redis.values if ":user:" in k], "a success must clear the shared username counter"
+    with pytest.raises(ProxyException, match="Invalid credentials"):
+        await _guess(first_worker)
+
+
+@pytest.mark.asyncio
+async def test_a_redis_outage_falls_back_to_this_workers_own_counter(monkeypatch):
+    """With Redis raising, guesses are still counted and refused, per worker, instead of unbounded."""
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    throttle = _throttle(max_attempts=2, redis_cache=_DownRedis())
+
+    for _ in range(2):
+        with pytest.raises(ProxyException, match="Invalid credentials"):
+            await _guess(throttle)
+
+    with pytest.raises(ProxyException) as blocked:
+        await _guess(throttle)
+    assert blocked.value.code == "429"
+    assert blocked.value.headers.get("Retry-After") == "900"
+
+
 @pytest.mark.asyncio
 async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
     """Regression: throttle entries must not evict cached credentials.
