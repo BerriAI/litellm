@@ -1032,11 +1032,12 @@ def _with_capability_forecast(
     }
     if forecast.calibration_version is None:
         return enriched
-    return {
+    calibrated: Final[StandardLoggingRoutingDecision] = {
         **enriched,
         "classifier_calibrated_p_solve": forecast.p_solve,
         "classifier_calibration_version": forecast.calibration_version,
     }
+    return calibrated
 
 
 class _ClassifierCircuitBreaker:
@@ -2265,7 +2266,9 @@ class ComplexityRouter(CustomLogger):
             INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
         }
         classifier_call_params: Final = (
-            {"reasoning_effort": llm_config.reasoning_effort} if llm_config.reasoning_effort is not None else {}
+            MappingProxyType({"reasoning_effort": llm_config.reasoning_effort})
+            if llm_config.reasoning_effort is not None
+            else EMPTY_MAPPING
         )
         classifier_payload: Final = (
             self._native_classifier_payload(messages_for_call, response_format, encrypted_task)
@@ -2274,14 +2277,18 @@ class ComplexityRouter(CustomLogger):
                 {"messages": messages_for_call, "response_format": response_format, **classifier_call_params}
             )
         )
-        payload: Final = {
-            **classifier_payload,
-            **(
-                {"max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens}
-                if max_output_tokens is not None
-                else {}
-            ),
-        }
+        payload: Final = MappingProxyType(
+            {
+                **classifier_payload,
+                **(
+                    MappingProxyType(
+                        {"max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens}
+                    )
+                    if max_output_tokens is not None
+                    else EMPTY_MAPPING
+                ),
+            }
+        )
         proxy_server_request: Final = {
             "originating_request_masked": masked_originating_request(request_kwargs),
             "body": {"model": llm_config.model, **payload},
