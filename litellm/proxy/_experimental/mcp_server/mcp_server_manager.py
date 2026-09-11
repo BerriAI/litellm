@@ -2445,6 +2445,8 @@ class MCPServerManager:
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
+                token_validation=server_config.get("token_validation", None),
+                oauth_identity_binding=server_config.get("oauth_identity_binding", None),
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
@@ -5137,7 +5139,9 @@ class MCPServerManager:
         return prefixed_tools
 
     def get_listed_tool(self, server: MCPServer, name: str) -> MCPTool | None:
-        listed: Final = self._listed_tools_by_server_id.get(server.server_id, {})
+        listed: Final = self._listed_tools_by_server_id.get(server.server_id)
+        if not listed:
+            return None
         return listed.get(name) or listed.get(strip_known_server_prefix(name, server))
 
     def _create_prefixed_prompts(

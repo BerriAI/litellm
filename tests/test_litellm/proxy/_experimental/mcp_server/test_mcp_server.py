@@ -2003,6 +2003,11 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
         ),
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[MagicMock()],
+        ),
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
@@ -2488,6 +2493,11 @@ async def test_initialize_request_tracks_active_session_after_response_header():
                 new_callable=AsyncMock,
                 return_value=(owner_auth, None, None, None, None, None),
             ),
+            patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[MagicMock()],
+            ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
                 True,
@@ -2599,6 +2609,11 @@ async def test_initialize_request_with_existing_session_tracks_new_session():
                     {"Authorization": "Bearer new-oauth"},
                     {"x-new-header": "new"},
                 ),
+            ),
+            patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[MagicMock()],
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
@@ -5613,6 +5628,78 @@ class TestGatewayCreateInitializationOptions:
                 assert server.create_initialization_options().server_name == "grafana"
 
         assert server.create_initialization_options().server_name == "litellm-mcp-server"
+
+    @pytest.mark.asyncio
+    async def test_initialize_with_no_granted_servers_returns_403(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _gateway_initialize_instructions_request_scope,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch(  # test-quality-ok: grant resolution is the input under test
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                async with _gateway_initialize_instructions_request_scope(
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-no-mcp"),
+                    mcp_servers=None,
+                    client_ip=None,
+                    is_initialize=True,
+                ):
+                    pytest.fail("initialize must not proceed when the key grants no MCP servers")
+
+            assert exc_info.value.status_code == 403
+            assert "no MCP servers granted" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_initialize_with_no_granted_scoped_servers_returns_scoped_denial(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _gateway_initialize_instructions_request_scope,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch(  # test-quality-ok: grant resolution is the input under test
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                async with _gateway_initialize_instructions_request_scope(
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-no-mcp"),
+                    mcp_servers=["grafana"],
+                    client_ip=None,
+                    is_initialize=True,
+                ):
+                    pytest.fail("scoped initialize must not proceed when nothing resolves")
+
+            assert exc_info.value.status_code == 403
+            assert "grafana" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_non_initialize_request_with_no_granted_servers_is_not_rejected_here(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _gateway_initialize_instructions_request_scope,
+            _mcp_gateway_initialize_instructions,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch(  # test-quality-ok: grant resolution is the input under test
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-no-mcp"),
+                mcp_servers=None,
+                client_ip=None,
+            ):
+                assert _mcp_gateway_initialize_instructions.get() is None
 
     @pytest.mark.asyncio
     async def test_sse_handler_scopes_server_name_from_single_server_path(self):
