@@ -4266,7 +4266,7 @@ class MCPServerManager:
             raise
         except Exception as e:
             verbose_logger.warning(
-                "Failed to get tools from server %s: %s%s", server.name, e, _upstream_failure_suffix(e)
+                "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, _upstream_failure_suffix(e)
             )
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
@@ -5012,7 +5012,9 @@ class MCPServerManager:
             verbose_logger.warning("Connection error while listing tools from %s: %s", server_name, e)
             raise MCPServerListError(ServerListFault(tag="unreachable"), server_name) from e
         except Exception as e:
-            verbose_logger.warning("Error listing tools from %s: %s%s", server_name, e, _upstream_failure_suffix(e))
+            verbose_logger.warning(
+                "Error listing tools from %s: %s%s", server_name, type(e).__name__, _upstream_failure_suffix(e)
+            )
             raise_classified_list_failure(e, server_name)
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
