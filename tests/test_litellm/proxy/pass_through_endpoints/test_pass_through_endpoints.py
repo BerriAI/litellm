@@ -4903,7 +4903,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch
     websocket.send_bytes = AsyncMock()
     websocket.receive = AsyncMock(return_value={"type": "websocket.disconnect"})
     websocket.close = AsyncMock()
-    websocket.headers = {}
+    websocket.headers = {"authorization": "Bearer client"}
     websocket.client_state = WebSocketState.CONNECTED
     websocket.application_state = WebSocketState.CONNECTED
     tracer = TracerProvider().get_tracer("test")
@@ -4931,7 +4931,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(monkeypatch
             target="wss://upstream.example.test/v1/realtime",
             custom_headers={},
             user_api_key_dict=UserAPIKeyAuth(),
-            forward_headers=False,
+            forward_headers=True,
             endpoint="/realtime",
             accept_websocket=True,
         )
