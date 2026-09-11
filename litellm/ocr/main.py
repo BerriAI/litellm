@@ -296,8 +296,16 @@ def _rust_bridge_input_sources(
     body: Final = cast(  # cast-ok: runtime Mapping check loses generic key and value types
         Mapping[object, object], body_value
     )
+    credential_fields_value: Final = proxy_request_mapping.get("credential_fields", ())
+    credential_fields: Final = (
+        frozenset(name for name in credential_fields_value if isinstance(name, str))
+        if isinstance(credential_fields_value, (list, tuple, set, frozenset))
+        else frozenset()
+    )
     names: Final = frozenset(optional_params) | frozenset({"api_key", "api_base", "extra_headers"})
-    request_sources: Final = MappingProxyType({name: "request" for name in names if name in body})
+    request_sources: Final = MappingProxyType(
+        {name: "request" for name in names if name in body or name in credential_fields}
+    )
     if litellm.enable_azure_ad_token_refresh is True and "enable_azure_ad_token_refresh" in optional_params:
         return MappingProxyType({**request_sources, "enable_azure_ad_token_refresh": "deployment"})
     return request_sources

@@ -1,4 +1,3 @@
-pub mod azure;
 mod credential;
 pub mod error;
 pub use error::AuthError;

@@ -468,12 +468,12 @@ mod tests {
     };
     use crate::AuthError;
     use crate::auth::ResolvedCredential;
-    use crate::auth::azure::AzureAuthInputs;
-    use crate::auth::azure::native::ValidatedAzureRequest;
     use crate::auth::{
         CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialRef,
         CredentialResolver, CredentialResolverHandle, InputSource, SecretValue, Sourced,
     };
+    use crate::providers::azure_ai::auth::native::ValidatedAzureRequest;
+    use crate::providers::azure_ai::auth::types::AzureAuthInputs;
 
     #[derive(Debug)]
     struct FileResolver;

@@ -690,20 +690,23 @@ def test_prepare_rust_ocr_call_preserves_proxy_input_sources():
         request=build_request(
             custom_llm_provider="azure_ai",
             model="pixtral-12b-2409",
-            api_key=None,
+            api_key="request-key",
             api_base="https://azure.example.com",
             litellm_params={
                 "tenant_id": "tenant",
                 "client_id": "client",
                 "client_secret": "secret",
                 "azure_authority_host": "https://login.example.com",
-                "proxy_server_request": {"body": request_values},
+                "proxy_server_request": {"body": request_values, "credential_fields": ("api_key",)},
             },
         ),
         resolve_api_key=lambda _name: None,
     )
 
-    assert bridge.calls[0]["input_sources"] == {name: "request" for name in request_values}
+    assert bridge.calls[0]["input_sources"] == {
+        **{name: "request" for name in request_values},
+        "api_key": "request",
+    }
 
 
 def test_rust_ocr_logging_redacts_azure_credentials():

@@ -14,9 +14,7 @@ use azure_identity::{
 use sha2::{Digest, Sha256};
 
 use crate::AuthError;
-use crate::auth::secret::SecretValue;
-use crate::auth::token::ResolvedCredential;
-use crate::auth::{InputSource, Sourced};
+use crate::auth::{InputSource, ResolvedCredential, SecretValue, Sourced};
 
 use super::credential_provider_cache::{
     AzureCredentialProviderCache, AzureCredentialProviderCacheKey,

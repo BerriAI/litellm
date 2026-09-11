@@ -2,7 +2,6 @@ use std::sync::OnceLock;
 
 use super::OcrAdapter;
 use crate::Error;
-use crate::auth::azure::{AzureAuthInputs, AzureAuthService};
 use crate::auth::error::AuthConfigurationError;
 use crate::auth::{InputSource, Sourced};
 use crate::constants::AZURE_AI_OCR_PATH;
@@ -15,6 +14,7 @@ use crate::ocr::prepare::{
 };
 use crate::ocr::registry::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, LiteLLMOcrResponse, OcrConnection};
+use crate::providers::azure_ai::auth::{AzureAuthInputs, AzureAuthService};
 use crate::url_utils::ApiUrl;
 
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";

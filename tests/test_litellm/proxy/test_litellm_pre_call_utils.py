@@ -768,6 +768,7 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
     data = {
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "hello"}],
+        "api_key": "request-key",
     }
 
     user_api_key_dict = UserAPIKeyAuth(
@@ -795,6 +796,8 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_proxy_server_r
     assert "proxy_server_request" not in snapshot_body, (
         "proxy_server_request must be excluded from its own body snapshot to prevent the body from self-referencing"
     )
+    assert "api_key" not in snapshot_body
+    assert updated["proxy_server_request"]["credential_fields"] == ("api_key",)
 
 
 def test_refresh_proxy_server_request_body_snapshot_picks_up_guardrail_masking():

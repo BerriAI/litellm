@@ -28,6 +28,7 @@ impl<T> ConfigValue<T> {
 }
 
 #[derive(Clone, Copy, Debug, EnumString, PartialEq, Eq, Hash)]
+#[allow(clippy::enum_variant_names)]
 pub enum AzureCredentialType {
     ClientSecretCredential,
     ManagedIdentityCredential,
@@ -52,6 +53,7 @@ pub struct AzureAuthInputs {
 }
 
 impl AzureAuthInputs {
+    #[cfg(test)]
     pub fn from_optional_params(params: &Map<String, Value>) -> Result<Self, AuthError> {
         Self::from_sourced_optional_params(params, &BTreeMap::new())
     }
