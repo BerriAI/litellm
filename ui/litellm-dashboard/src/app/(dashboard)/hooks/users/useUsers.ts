@@ -44,7 +44,7 @@ export const useUserEmailLookup = (userIds: readonly string[]) => {
   const { accessToken, userRole } = useAuthorized();
   const distinctIds = Array.from(new Set(userIds.filter((id) => id !== ""))).sort();
   return useQuery<Record<string, string>>({
-    queryKey: userLookupKeys.list({ filters: { ids: distinctIds.join(",") } }),
+    queryKey: userLookupKeys.list({ filters: { ids: JSON.stringify(distinctIds) } }),
     queryFn: async () => {
       const ids = distinctIds.slice(0, USER_LIST_MAX_PAGE_SIZE);
       const response = await userListCall(accessToken!, ids, 1, ids.length);
