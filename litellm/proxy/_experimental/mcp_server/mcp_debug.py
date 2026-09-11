@@ -581,7 +581,7 @@ async def capture_upstream_error_response(response: httpx.Response) -> None:
             if secrets is not None
             else "(omitted: request credentials unavailable)"
         )
-    except (TimeoutError, httpx.HTTPError, httpx.StreamError):
+    except (asyncio.TimeoutError, httpx.HTTPError, httpx.StreamError):
         response._content = b""  # pyright: ignore[reportPrivateUsage]  # rebind-ok: httpx auth retries must survive diagnostic read failures
         response.extensions[_CAPTURE_EXTENSION] = (
             "(unavailable: error body read failed)"  # rebind-ok: httpx response hooks communicate through extensions

@@ -349,7 +349,8 @@ def test_failure_preview_handles_empty_scalar_control_and_long_bodies(body):
 
 
 @pytest.mark.asyncio
-async def test_error_capture_preserves_httpx_auth_retry():
+@pytest.mark.parametrize("slow_error", [False, True])
+async def test_error_capture_preserves_httpx_auth_retry(slow_error):
     from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 
     class RetryAuth(httpx.Auth):
@@ -359,16 +360,24 @@ async def test_error_capture_preserves_httpx_auth_retry():
                 request.headers["Authorization"] = "Bearer refreshed"
                 yield request
 
+    class SlowStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.sleep(10)
+            yield b'{"error":"expired_token"}'
+
     def upstream(request):
         if request.headers.get("Authorization"):
             return httpx.Response(200, json={"ok": True})
-        return httpx.Response(401, json={"error":"expired_token"})
+        return httpx.Response(401, stream=SlowStream()) if slow_error else httpx.Response(401, json={"error":"expired_token"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(upstream), auth=RetryAuth(),
             event_hooks={"response":[capture_upstream_error_response]}) as client:
         response = await client.get("https://upstream/mcp")
     assert response.status_code == 200 and response.json() == {"ok":True}
-    assert response.history[0].json() == {"error":"expired_token"}
+    if slow_error:
+        assert response.history[0].content == b""
+    else:
+        assert response.history[0].json() == {"error":"expired_token"}
 
 
 def test_failure_diagnostics_without_request_and_with_streamed_request():
