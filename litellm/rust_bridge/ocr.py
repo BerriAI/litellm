@@ -196,6 +196,12 @@ def _input_sources(request: LiteLLMOcrRequest, optional_params: Mapping[str, obj
     proxy_request: Final = cast(  # cast-ok: runtime Mapping check narrows metadata with unknown key and value types
         Mapping[object, object], proxy_request_value
     )
+    credential_fields_value: Final = proxy_request.get("credential_fields", ())
+    credential_fields: Final = (
+        frozenset(name for name in credential_fields_value if isinstance(name, str))
+        if isinstance(credential_fields_value, (list, tuple, set, frozenset))
+        else frozenset()
+    )
     request_fields_value: Final = proxy_request.get("body_fields")
     request_fields: Sequence[object]
     if isinstance(request_fields_value, Sequence) and not isinstance(request_fields_value, (str, bytes)):
@@ -210,7 +216,9 @@ def _input_sources(request: LiteLLMOcrRequest, optional_params: Mapping[str, obj
             else ()
         )
     names: Final = frozenset(optional_params) | frozenset({"api_key", "api_base", "extra_headers"})
-    request_sources: Final = MappingProxyType({name: "request" for name in names if name in request_fields})
+    request_sources: Final = MappingProxyType(
+        {name: "request" for name in names if name in request_fields or name in credential_fields}
+    )
     if litellm.enable_azure_ad_token_refresh is True and "enable_azure_ad_token_refresh" in optional_params:
         return MappingProxyType({**request_sources, "enable_azure_ad_token_refresh": "deployment"})
     return request_sources
