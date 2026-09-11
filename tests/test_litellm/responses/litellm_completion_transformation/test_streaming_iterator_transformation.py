@@ -821,3 +821,21 @@ async def test_streamed_signature_only_thinking_is_replayable(asynchronous: bool
     )
     tool_message: Final = next(message for message in messages if message.get("tool_calls"))
     assert tool_message["thinking_blocks"] == [block]
+
+
+def test_reasoning_done_without_a_response_snapshot_preserves_summary() -> None:
+    iterator: Final = _build_iterator([])
+
+    event: Final = iterator.create_reasoning_output_item_done_event(
+        reasoning_item_id="rs_pending",
+        reasoning_content="The response snapshot is not available yet.",
+        sequence_number=7,
+    )
+
+    assert event.type == "response.output_item.done"
+    assert event.sequence_number == 7
+    assert event.item.model_dump(exclude_none=True) == {
+        "id": "rs_pending",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "The response snapshot is not available yet."}],
+    }
