@@ -784,3 +784,23 @@ async def test_cancelled_flush_does_not_requeue_an_applied_batch(cancellations: 
     await limiter._push_in_memory_increments_to_redis()
     assert redis_cache.values[_SPEND_KEY] == 10.0
     assert limiter.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+async def test_every_provider_over_budget_raises_a_429(disable_budget_sync):
+    from litellm.types.router import RouterErrors, RouterNoDeploymentsAvailableError
+
+    cache = DualCache()
+    limiter = RouterBudgetLimiting(
+        dual_cache=cache,
+        provider_budget_config={"openai": BudgetConfig(budget_duration="1d", max_budget=1.0)},
+    )
+    await cache.async_set_cache(key="provider_spend:openai:1d", value=5.0)
+    deployment = {"litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "d1"}}
+
+    with pytest.raises(RouterNoDeploymentsAvailableError) as raised:
+        await limiter.async_filter_deployments(
+            model="gpt-4o-mini", healthy_deployments=[deployment], messages=None, request_kwargs={}
+        )
+    assert raised.value.status_code == 429
+    assert RouterErrors.no_deployments_with_provider_budget_routing.value in str(raised.value)
