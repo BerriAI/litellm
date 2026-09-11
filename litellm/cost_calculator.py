@@ -354,7 +354,6 @@ def cost_per_token(
     response: Any | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
-    ### DEPLOYMENT-SPECIFIC PRICING ###
     custom_model_info: OCRPricing | None = None,
 ) -> tuple[float, float]:
     """
