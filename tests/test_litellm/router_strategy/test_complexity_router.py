@@ -70,6 +70,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
+    RouterErrors,
     TaggedPreRoutingStrategy,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -13243,6 +13244,7 @@ class TestHealthFallbackDispatch:
         peer: bool = False,
         session: bool = False,
         tagged: bool = False,
+        budgeted: bool = False,
         config: Mapping[str, object] | None = None,
     ) -> Router:
         provider: Final = "anthropic/claude-sonnet-5" if surface == "messages" else "openai/gpt-5.6"
@@ -13271,6 +13273,11 @@ class TestHealthFallbackDispatch:
                             "api_key": "test-only",
                             "api_base": f"https://{name}.test{base_suffix}",
                             **({"tags": [name]} if tagged else {}),
+                            **(
+                                {"max_budget": 1.0, "budget_duration": "1d"}
+                                if budgeted and name == "primary"
+                                else {}
+                            ),
                         },
                         "model_info": {"id": f"{name}-id"},
                     }
@@ -13472,6 +13479,31 @@ class TestHealthFallbackDispatch:
                 assert metadata["routing_decision"]["cause"] == cause
                 assert await router.cache.async_get_cache(key=key) == {"model": "primary", "tier": "SIMPLE"}
             assert [c.request.url.host for c in upstream.calls] == ["primary.test", "peer.test", "fallback.test"]
+
+    @pytest.mark.asyncio
+    async def test_spent_deployment_budget_falls_back_to_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A spent budget leaves the tier with nothing that may serve the request, and the budget
+        filter reports that as a bare ValueError instead of a typed router error. Reading it as
+        capacity skips the recovery and fails the request the recovery exists for."""
+
+        async def _no_sync(*args: object, **kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(
+            "litellm.router_strategy.budget_limiter.RouterBudgetLimiting.periodic_sync_in_memory_spend_with_redis",
+            _no_sync,
+        )
+        monkeypatch.setattr(litellm, "callbacks", [])
+        router: Final = self._router(budgeted=True)
+        limiter: Final = router.router_budget_logger
+        assert limiter is not None, "a deployment max_budget must install the budget limiter"
+        await router.cache.async_set_cache(key="deployment_spend:primary-id:1d", value=2.0)
+        with respx.mock(assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+            metadata: Final[dict[str, object]] = {}
+            assert await self._request(router, "chat", False, metadata) == "fallback"
+            assert metadata["routing_decision"]["cause"] == "health_default_fallback"
+            assert [c.request.url.host for c in upstream.calls] == ["fallback.test"]
 
     @pytest.mark.asyncio
     async def test_concurrent_tag_scopes_keep_fallbacks_request_local(self) -> None:
@@ -14256,6 +14288,51 @@ class TestTierHealthFailover:
             probed_input == "summarize this document for me"
             for _, probed_input in router.litellm_router_instance.probed_prompts
         ), "the eligibility probe must forward `input` to the owner"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raised, expected",
+        [
+            (ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model=b"), {"live-c"}),
+            (
+                ValueError(f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: b over budget"),
+                {"live-c"},
+            ),
+            (ValueError("cannot unpack non-sequence"), {"exhausted-b", "live-c"}),
+        ],
+    )
+    async def test_a_marked_exhaustion_value_error_is_a_verdict_and_an_unmarked_one_is_not(
+        self, mock_router_instance, raised, expected
+    ):
+        """Budget and tag filters exhaust a group without a typed error, signalling it only by a
+        RouterErrors marker on a bare ValueError. Those are verdicts; any other ValueError is a
+        fault, and a fault must still read as capacity rather than silently rerouting."""
+        router = self._router(
+            mock_router_instance,
+            {
+                "tiers": {
+                    "SIMPLE": ["dead-a", "exhausted-b", "live-c"],
+                    "MEDIUM": "mid",
+                    "COMPLEX": "big",
+                    "REASONING": "top",
+                },
+                "session_affinity": True,
+            },
+            {"dead-a": ["id-a1"], "exhausted-b": ["id-b1"], "live-c": ["id-c1"]},
+            cooling=("id-a1",),
+            raises_for={"exhausted-b": raised},
+        )
+        key = router._get_session_affinity_cache_key("sess-exhausted", {})
+        await router.litellm_router_instance.cache.async_set_cache(
+            key=key, value={"model": "dead-a", "tier": "SIMPLE"}, ttl=600
+        )
+        results = [
+            await router.async_pre_routing_hook(
+                model="m", request_kwargs={"metadata": {"session_id": "sess-exhausted"}}, messages=self.SIMPLE_MESSAGE
+            )
+            for _ in range(20)
+        ]
+        assert {r.model for r in results} == expected
 
     @pytest.mark.asyncio
     async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(self, mock_router_instance):

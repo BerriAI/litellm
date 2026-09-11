@@ -3057,12 +3057,15 @@ class ComplexityRouter(CustomLogger):
 
         Every way the owner says "nothing here can serve this" is a negative verdict: no healthy
         deployment for the group at all (BadRequestError, which ContextWindowExceededError
-        subclasses), every deployment filtered out (RouterRateLimitError), and every deployment
-        over its RPM (RouterRateLimitErrorBasic). Anything else is unknown rather than negative,
-        so it reads as capacity: absent information must never decide the verdict.
+        subclasses), every deployment filtered out (RouterRateLimitError), every deployment over
+        its RPM (RouterRateLimitErrorBasic), and every deployment refused by a filter that reports
+        exhaustion as a bare ValueError naming a RouterErrors marker -- provider and deployment
+        budgets, and tag routing, which have no typed error of their own. Anything else is unknown
+        rather than negative, so it reads as capacity: absent information must never decide the
+        verdict.
         """
         from litellm.exceptions import BadRequestError
-        from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
+        from litellm.types.router import RouterErrors, RouterRateLimitError, RouterRateLimitErrorBasic
 
         probe_kwargs: Final = dict(request_kwargs)  # mutable-ok: the owner pops routing keys off the dict it is handed
         try:
@@ -3078,6 +3081,9 @@ class ComplexityRouter(CustomLogger):
             verbose_router_logger.debug("health probe unavailable model=%s error=%s", model_name, type(exc).__name__)
             return False
         except Exception as exc:  # noqa: BLE001  # a speculative eligibility read must fail open on unknown faults
+            if isinstance(exc, ValueError) and any(marker.value in str(exc) for marker in RouterErrors):
+                verbose_router_logger.debug("health probe exhausted model=%s error=%s", model_name, exc)
+                return False
             verbose_router_logger.debug(
                 "ComplexityRouter: eligibility probe for %s failed, treating the group as live: %s", model_name, exc
             )
