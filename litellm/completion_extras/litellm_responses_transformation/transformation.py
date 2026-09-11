@@ -677,14 +677,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             last_msg_choice.message.content = ""
         last_msg_choice.finish_reason = "tool_calls"
         needs_reasoning_content_backfill = (
-            reasoning_content is not None
-            and getattr(last_msg_choice.message, "reasoning_content", None) is None
+            reasoning_content is not None and getattr(last_msg_choice.message, "reasoning_content", None) is None
         )
         if needs_reasoning_content_backfill:
             last_msg_choice.message.reasoning_content = reasoning_content
         needs_reasoning_items_backfill = (
-            pending_reasoning_item is not None
-            and getattr(last_msg_choice.message, "reasoning_items", None) is None
+            pending_reasoning_item is not None and getattr(last_msg_choice.message, "reasoning_items", None) is None
         )
         if needs_reasoning_items_backfill:
             last_msg_choice.message.reasoning_items = cast(
