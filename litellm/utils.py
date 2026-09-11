@@ -279,7 +279,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 from litellm import utils as litellm_utils
@@ -6999,8 +6999,9 @@ class TextCompletionStreamWrapper:
             raise StopAsyncIteration
 
 
-def mock_stream_usage_chunk(model: str, prompt_tokens: int) -> ModelResponseStream:
+def mock_stream_usage_chunk(model_response: ModelResponseStream, model: str, prompt_tokens: int) -> ModelResponseStream:
     return ModelResponseStream(
+        id=model_response.id,
         choices=[],  # mutable-ok: ModelResponseStream only treats a list as explicit choices, a tuple gets a default choice
         model=model,
         usage=Usage(
@@ -7012,8 +7013,12 @@ def mock_stream_usage_chunk(model: str, prompt_tokens: int) -> ModelResponseStre
 
 
 def mock_completion_streaming_obj(
-    model_response, mock_response, model, n: int | None = None, prompt_tokens: int | None = None
-):
+    model_response: ModelResponseStream,
+    mock_response: str | MockException | ModelResponseStream,
+    model: str,
+    n: int | None = None,
+    prompt_tokens: int | None = None,
+) -> Iterator[ModelResponseStream]:
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
     if isinstance(mock_response, ModelResponseStream):
@@ -7034,16 +7039,16 @@ def mock_completion_streaming_obj(
             model_response.choices = _all_choices
         yield model_response
     if prompt_tokens is not None:
-        yield mock_stream_usage_chunk(model=model, prompt_tokens=prompt_tokens)
+        yield mock_stream_usage_chunk(model_response, model=model, prompt_tokens=prompt_tokens)
 
 
 async def async_mock_completion_streaming_obj(
-    model_response,
+    model_response: ModelResponseStream,
     mock_response: str | MockException | ModelResponseStream,
-    model,
+    model: str,
     n: int | None = None,
     prompt_tokens: int | None = None,
-):
+) -> AsyncIterator[ModelResponseStream]:
     if isinstance(mock_response, litellm.MockException):
         raise mock_response
     if isinstance(mock_response, ModelResponseStream):
@@ -7064,7 +7069,7 @@ async def async_mock_completion_streaming_obj(
             model_response.choices = _all_choices
         yield model_response
     if prompt_tokens is not None:
-        yield mock_stream_usage_chunk(model=model, prompt_tokens=prompt_tokens)
+        yield mock_stream_usage_chunk(model_response, model=model, prompt_tokens=prompt_tokens)
 
 
 ########## Reading Config File ############################

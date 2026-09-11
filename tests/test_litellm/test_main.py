@@ -2460,6 +2460,7 @@ def test_mock_completion_stream_usage_reports_admission_input_tokens_without_tok
     assert usage_chunks[0].total_tokens == _ADMISSION_INPUT_TOKENS + usage_chunks[0].completion_tokens
     assert _prompt_token_counter_calls(token_counter) == []
     assert all(chunk.choices for chunk in chunks[:-1])
+    assert {chunk.id for chunk in chunks} == {chunks[0].id}
 
 
 @pytest.mark.asyncio
@@ -2486,6 +2487,7 @@ async def test_mock_acompletion_stream_usage_reports_admission_input_tokens_with
     assert usage_chunks[0].total_tokens == _ADMISSION_INPUT_TOKENS + usage_chunks[0].completion_tokens
     assert _prompt_token_counter_calls(token_counter) == []
     assert all(chunk.choices for chunk in chunks[:-1])
+    assert {chunk.id for chunk in chunks} == {chunks[0].id}
 
 
 def test_mock_completion_stream_without_include_usage_hides_usage_chunk_but_logs_admission_count():

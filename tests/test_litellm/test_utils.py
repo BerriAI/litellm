@@ -6211,19 +6211,21 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     assert _credential_warnings(caplog) == []
 
 
-def _snapshot(chunk: ModelResponseStream) -> tuple[tuple[str | None, ...], Usage | None]:
-    return tuple(choice.delta.content for choice in chunk.choices), getattr(chunk, "usage", None)
+_MOCK_STREAM_ID: Final = "chatcmpl-mock-stream"
+_ChunkSnapshot = tuple[str, tuple[str | None, ...], Usage | None]
 
 
-def _mock_stream_snapshots(
-    mock_response: object, prompt_tokens: int | None
-) -> list[tuple[tuple[str | None, ...], Usage | None]]:
+def _snapshot(chunk: ModelResponseStream) -> _ChunkSnapshot:
+    return chunk.id, tuple(choice.delta.content for choice in chunk.choices), getattr(chunk, "usage", None)
+
+
+def _mock_stream_snapshots(mock_response: object, prompt_tokens: int | None) -> list[_ChunkSnapshot]:
     from litellm.utils import mock_completion_streaming_obj
 
     return [
         _snapshot(chunk)
         for chunk in mock_completion_streaming_obj(
-            ModelResponseStream(model="gpt-5.4-mini"),
+            ModelResponseStream(id=_MOCK_STREAM_ID, model="gpt-5.4-mini"),
             mock_response=mock_response,
             model="gpt-5.4-mini",
             prompt_tokens=prompt_tokens,
@@ -6231,15 +6233,13 @@ def _mock_stream_snapshots(
     ]
 
 
-async def _async_mock_stream_snapshots(
-    mock_response: object, prompt_tokens: int | None
-) -> list[tuple[tuple[str | None, ...], Usage | None]]:
+async def _async_mock_stream_snapshots(mock_response: object, prompt_tokens: int | None) -> list[_ChunkSnapshot]:
     from litellm.utils import async_mock_completion_streaming_obj
 
     return [
         _snapshot(chunk)
         async for chunk in async_mock_completion_streaming_obj(
-            ModelResponseStream(model="gpt-5.4-mini"),
+            ModelResponseStream(id=_MOCK_STREAM_ID, model="gpt-5.4-mini"),
             mock_response=mock_response,
             model="gpt-5.4-mini",
             prompt_tokens=prompt_tokens,
@@ -6247,14 +6247,13 @@ async def _async_mock_stream_snapshots(
     ]
 
 
-_CONTENT_SNAPSHOTS: Final = [(("hel",), None), (("lo ",), None), (("wor",), None), (("ld",), None)]
+_CONTENT_SNAPSHOTS: Final = [(_MOCK_STREAM_ID, (content,), None) for content in ("hel", "lo ", "wor", "ld")]
 
 
-def _assert_trailing_usage_chunk(
-    snapshots: list[tuple[tuple[str | None, ...], Usage | None]], prompt_tokens: int
-) -> None:
+def _assert_trailing_usage_chunk(snapshots: list[_ChunkSnapshot], prompt_tokens: int) -> None:
     assert snapshots[:-1] == _CONTENT_SNAPSHOTS
-    choices, usage = snapshots[-1]
+    chunk_id, choices, usage = snapshots[-1]
+    assert chunk_id == _MOCK_STREAM_ID
     assert choices == ()
     assert usage is not None
     assert usage.prompt_tokens == prompt_tokens
@@ -6289,7 +6288,7 @@ def test_mock_completion_streaming_obj_passes_prebuilt_stream_chunk_through_with
         model="gpt-5.4-mini", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="prebuilt"))]
     )
 
-    assert _mock_stream_snapshots(prebuilt, 51234) == [(("prebuilt",), None)]
+    assert _mock_stream_snapshots(prebuilt, 51234) == [(prebuilt.id, ("prebuilt",), None)]
 
 
 @pytest.mark.asyncio
