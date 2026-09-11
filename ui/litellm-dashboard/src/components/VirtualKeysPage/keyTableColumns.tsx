@@ -16,7 +16,7 @@ import {
   StatusBadge,
   type StatusTone,
 } from "@/components/shared/table_cells";
-import { teamDetailHref, userDetailHref } from "@/utils/entityLinks";
+import { orgDetailHref, teamDetailHref, userDetailHref } from "@/utils/entityLinks";
 import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
@@ -218,12 +218,12 @@ export const getKeyTableColumns = ({
       const orgId = info.getValue() as string | null;
       if (!orgId) return "-";
       const org = organizations.find((o) => o.organization_id === orgId);
-      const displayValue = org?.organization_alias || orgId;
-      const width = info.cell.column.getSize();
       return (
-        <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
-          {displayValue}
-        </span>
+        <IdentityCell
+          title={org?.organization_alias || orgId}
+          titleClassName={ENTITY_CELL_TITLE_CLASSES}
+          href={orgDetailHref(orgId)}
+        />
       );
     },
   },
