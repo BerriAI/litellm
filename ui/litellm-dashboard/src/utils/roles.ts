@@ -28,6 +28,12 @@ export const isAdminRole = (role: string): boolean => {
   return all_admin_roles.includes(role);
 };
 
+// /user/list admits proxy admins and org admins; the session role for the latter is the formatted
+// "Org Admin", which all_admin_roles does not carry
+const rolesAllowedToListUsers: string[] = [...all_admin_roles, "Org Admin"];
+
+export const canListUsers = (role: string | null): boolean => rolesAllowedToListUsers.includes(role ?? "");
+
 export const isProxyAdminRole = (role: string): boolean => {
   return role === "proxy_admin" || role === "Admin";
 };

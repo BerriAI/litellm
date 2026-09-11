@@ -235,7 +235,7 @@ describe("useInfiniteUsers", () => {
   });
 
   it("should execute query for each admin role", async () => {
-    const adminRoles = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"];
+    const adminRoles = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin", "Org Admin"];
 
     for (const role of adminRoles) {
       vi.clearAllMocks();
@@ -382,6 +382,16 @@ describe("useUserEmailLookup", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.fetchStatus).toBe("idle");
     expect(userListCall).not.toHaveBeenCalled();
+  });
+
+  it("queries for the formatted Org Admin session role", async () => {
+    mockUseAuthorized.mockReturnValue({ ...DEFAULT_AUTH, userRole: "Org Admin" });
+    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+
+    const { result } = renderHook(() => useUserEmailLookup(["user-1-0"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ "user-1-0": "user-1-0@example.com" });
   });
 
   it("does not query for a non-admin role", async () => {
