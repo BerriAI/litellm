@@ -54,7 +54,7 @@ function ResourceBadge({
   fallback,
 }: {
   resource: AccessGroupResource;
-  href: string;
+  href?: string;
   fallback: (id: string) => string;
 }) {
   const badge = (
