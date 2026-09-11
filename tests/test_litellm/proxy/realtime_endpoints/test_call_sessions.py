@@ -12,14 +12,74 @@ from litellm.proxy.realtime_endpoints.call_sessions import decode_call, encode_c
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("malformed", [False, True])
+async def test_mixed_case_offer_preserves_boundary_metadata_and_closes_extra_files(monkeypatch, malformed):
+    from fastapi import Request
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+    boundary = "AbCdEf123"
+    fields = {
+        "sdp": "v=0",
+        "session": "invalid" if malformed else '{"model":"voice"}',
+        "metadata": '{"policy":"keep"}',
+        "extra_policy": "keep",
+    }
+    body = (
+        "".join(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'
+            for name, value in fields.items()
+        )
+        + f'--{boundary}\r\nContent-Disposition: form-data; name="extra_file"; filename="test.txt"\r\n\r\nextra\r\n--{boundary}--\r\n'
+    ).encode()
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {"type": "http", "headers": [(b"content-type", f'Multipart/Form-Data; boundary="{boundary}"'.encode())]},
+        receive,
+    )
+    assert not await request.form()
+    if malformed:
+        with pytest.raises(HTTPException) as error:
+            await codex.create_codex_realtime_call(request)
+        assert error.value.status_code == 400
+        assert (await request.form())["extra_file"].file.closed
+        return
+    first = await codex.read_codex_offer(request)
+    second = await codex.read_codex_offer(request)
+    assert first == second
+    parsed = await _read_request_body(request)
+    assert parsed["metadata"] == {"policy": "keep"}
+    assert parsed["extra_policy"] == "keep"
+    assert not parsed["extra_file"].file.closed
+
+    async def deny_auth(**kwargs):
+        assert kwargs["request"] is request
+        auth_form = await request.form()
+        assert auth_form["extra_policy"] == "keep"
+        assert await auth_form["extra_file"].read() == b"extra"
+        assert not auth_form["extra_file"].file.closed
+        raise HTTPException(403, "policy denied")
+
+    monkeypatch.setattr(codex, "user_api_key_auth", deny_auth)
+    with pytest.raises(HTTPException, match="policy denied"):
+        await codex.create_codex_realtime_call(request)
+    assert parsed["extra_file"].file.closed
+    assert request.headers["content-type"] == f'Multipart/Form-Data; boundary="{boundary}"'
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("multipart", [False, True])
 @pytest.mark.parametrize("policy", ["budget", "personal_models"])
-async def test_offer_auth_enforces_session_model_policy_before_upstream(monkeypatch, multipart, policy):
+@pytest.mark.parametrize("mixed_case", [False, True])
+@pytest.mark.parametrize("pre_read", [False, True])
+async def test_offer_auth_enforces_session_model_policy_before_upstream(monkeypatch, multipart, policy, mixed_case, pre_read):
     import json
     from unittest.mock import AsyncMock, MagicMock
 
     import httpx
-    from fastapi import Request
+    from fastapi import Request, Response
 
     import litellm
     from litellm.exceptions import BudgetExceededError
@@ -27,6 +87,7 @@ async def test_offer_auth_enforces_session_model_policy_before_upstream(monkeypa
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.auth.auth_checks import common_checks
     from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.realtime_endpoints.endpoints import proxy_realtime_calls
 
     session = {"model": "forbidden-voice"}
     payload = (
@@ -36,8 +97,16 @@ async def test_offer_auth_enforces_session_model_policy_before_upstream(monkeypa
     )
     outbound = httpx.Request("POST", "http://localhost/v1/realtime/calls", **payload)
     body = outbound.read()
+    content_type = outbound.headers["content-type"]
+    if mixed_case:
+        content_type = content_type.replace("multipart/form-data", "Multipart/Form-Data").replace(
+            "application/json", "Application/JSON"
+        )
+    receives = []
 
     async def receive():
+        receives.append(True)
+        assert len(receives) == 1
         return {"type": "http.request", "body": body, "more_body": False}
 
     request = Request(
@@ -48,7 +117,7 @@ async def test_offer_auth_enforces_session_model_policy_before_upstream(monkeypa
             "query_string": b"model=query-decoy&policy=keep",
             "client": ("127.0.0.7", 1234),
             "headers": [
-                *((key.lower(), value) for key, value in outbound.headers.raw),
+                (b"content-type", content_type.encode()),
                 (b"x-policy-key", b"Bearer test-key"),
                 (b"x-custom-policy", b"preserved"),
                 (b"x-litellm-model", b"header-decoy"),
@@ -59,12 +128,17 @@ async def test_offer_auth_enforces_session_model_policy_before_upstream(monkeypa
     token = UserAPIKeyAuth(token="test-key", user_id="personal-user", model_max_budget={"forbidden-voice": 0})
     budget = AsyncMock(side_effect=BudgetExceededError(current_cost=1, max_budget=0))
     upstream = AsyncMock()
+    original_request = request
 
     async def custom_auth(request: Request, api_key: str):
+        assert request is original_request
+        assert request.headers["content-type"] == content_type
         assert api_key == "test-key"
         assert request.headers["x-custom-policy"] == "preserved"
         assert request.query_params["policy"] == "keep"
         assert request.client.host == "127.0.0.7"
+        if multipart:
+            assert (await request.form())["model"] == "body-decoy"
         parsed = await _read_request_body(request)
         assert parsed["model"] == "body-decoy"
         assert isinstance(parsed["session"], str) is multipart
@@ -95,8 +169,10 @@ async def test_offer_auth_enforces_session_model_policy_before_upstream(monkeypa
     monkeypatch.setattr(server, "model_max_budget_limiter", SimpleNamespace(is_key_within_model_budget=budget))
     monkeypatch.setattr(server, "route_request", upstream)
     monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    if pre_read:
+        await _read_request_body(request)
     with pytest.raises(ProxyException) as denied:
-        await codex.create_codex_realtime_call(request)
+        await proxy_realtime_calls(request, Response())
     if policy == "personal_models":
         assert "user not allowed to access model" in str(denied.value)
         assert "forbidden-voice" in str(denied.value)

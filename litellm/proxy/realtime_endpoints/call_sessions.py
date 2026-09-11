@@ -12,6 +12,7 @@ from typing import Final, Literal
 import httpx
 from fastapi import HTTPException, Request, Response, WebSocket
 from pydantic import TypeAdapter
+from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.types import Message
 
 from litellm._logging import verbose_proxy_logger
@@ -44,6 +45,9 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _normalize_media_type,  # pyright: ignore[reportPrivateUsage]  # reuse the shared HTTP media-type normalization contract
+)
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # existing built-in limiter has no public alias
 )
@@ -209,7 +213,14 @@ def decode_call(token: str, authorization: str) -> CodexRealtimeCall:
 
 
 async def read_codex_offer(request: Request) -> CodexRealtimeOffer:
-    if request.headers.get("content-type", "").startswith("multipart/form-data"):
+    content_type: Final = request.headers.get("content-type", "")
+    if _normalize_media_type(content_type) == "multipart/form-data":
+        if content_type.split(";", 1)[0] != "multipart/form-data" and not await request.form():
+            try:
+                request._form = await MultiPartParser(request.headers, request.stream()).parse()  # pyright: ignore[reportPrivateUsage]  # Starlette exposes no setter for its shared form cache
+                request.scope.pop("parsed_body", None)
+            except MultiPartException as exc:
+                raise HTTPException(400, "Invalid realtime multipart offer") from exc
         form: Final = await request.form()
         return CodexRealtimeOffer.model_validate(
             MappingProxyType({"sdp": form.get("sdp"), "session": json.loads(str(form.get("session", "{}")))})
@@ -257,8 +268,11 @@ async def process_codex_request(
 
 
 async def create_codex_realtime_call(request: Request) -> Response:
-    with isolated_request_stash():
-        return await _create_codex_realtime_call(request)
+    try:
+        with isolated_request_stash():
+            return await _create_codex_realtime_call(request)
+    finally:
+        await request.close()
 
 
 async def _create_codex_realtime_call(request: Request) -> Response:
