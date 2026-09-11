@@ -122,6 +122,29 @@ async def test_set_object_permission_persists_mcp_tool_search_enabled():
     assert created_data["mcp_tool_search_enabled"] is True
 
 
+@pytest.mark.asyncio
+async def test_set_object_permission_persists_skills():
+    mock_prisma_client = MagicMock()
+    mock_created_permission = MagicMock()
+    mock_created_permission.object_permission_id = "perm_id"
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=mock_created_permission
+    )
+
+    data_json = {
+        "object_permission": LiteLLM_ObjectPermissionBase(skills=["private-skill"]).model_dump(),
+    }
+
+    await _set_object_permission(data_json=data_json, prisma_client=mock_prisma_client)
+
+    created_data = (
+        mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs[
+            "data"
+        ]
+    )
+    assert created_data["skills"] == ["private-skill"]
+
+
 # ---- Tests for _extract_requested_mcp_server_ids ----
 
 

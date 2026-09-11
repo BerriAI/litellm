@@ -89,6 +89,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "../search_tools/SearchToolSelector";
+import SkillSelector from "../skills/SkillSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
@@ -371,6 +372,7 @@ const teamUpdateFieldsSchema = z.object({
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
   agents_and_groups: z.object({ agents: z.array(z.string()), accessGroups: z.array(z.string()) }).optional(),
   object_permission_search_tools: z.array(z.string()).optional(),
+  object_permission_skills: z.array(z.string()).optional(),
   organization_id: z.string().nullish(),
   logging_settings: z.array(z.unknown()).optional(),
   secret_manager_settings: z.string().optional(),
@@ -419,6 +421,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   mcp_tool_permissions: {},
   agents_and_groups: { agents: [], accessGroups: [] },
   object_permission_search_tools: [],
+  object_permission_skills: [],
   organization_id: null,
   logging_settings: [],
   secret_manager_settings: "",
@@ -485,6 +488,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     accessGroups: info.object_permission?.agent_access_groups || [],
   },
   object_permission_search_tools: info.object_permission?.search_tools || [],
+  object_permission_skills: info.object_permission?.skills || [],
   organization_id: info.organization_id,
   logging_settings: info.metadata?.logging || [],
   secret_manager_settings: info.metadata?.secret_manager_settings
@@ -1045,6 +1049,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       if (Array.isArray(values.object_permission_search_tools)) {
         updateData.object_permission.search_tools = values.object_permission_search_tools;
+      }
+
+      if (Array.isArray(values.object_permission_skills)) {
+        updateData.object_permission.skills = values.object_permission_skills;
       }
 
       // Pass access_group_ids to the update request
@@ -1847,6 +1855,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </FormField>
                     </CollapsibleContent>
                   </Collapsible>
+
+                  <FormField
+                    control={form.control}
+                    name="object_permission_skills"
+                    label={labelWithHint(
+                      "Skills",
+                      "Enabled skills are visible to every team. Grant disabled (private) Claude Code plugins to this team here.",
+                    )}
+                  >
+                    {({ value, onChange }) => (
+                      <SkillSelector
+                        onChange={onChange}
+                        value={value}
+                        accessToken={accessToken || ""}
+                        placeholder="Select skills (optional)"
+                      />
+                    )}
+                  </FormField>
 
                   <FormField control={form.control} name="organization_id" label="Organization">
                     {({ id, value, onChange }) => (

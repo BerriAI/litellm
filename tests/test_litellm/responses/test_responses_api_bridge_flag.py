@@ -7,16 +7,40 @@ calls so routed requests do not hit a custom api_base /v1/responses endpoint.
 """
 
 from importlib import import_module
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 
 class TestUseResponsesApiBridgeFlag:
     """Test that bridge opt-in forces the chat completions path."""
+
+    @pytest.mark.parametrize("model", ["openai/chat_completions/gpt-6-astra", "xai/test-classifier"])
+    def test_encrypted_classifier_rejection_preserves_public_error(self, model: str) -> None:
+        respond: Final = MagicMock(side_effect=AssertionError("Incompatible classifier sent an upstream request"))
+        with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            with pytest.raises(
+                litellm.APIConnectionError,
+                match="Encrypted task classification requires a compatible native Responses deployment",
+            ) as error:
+                litellm.responses(
+                    model=model,
+                    input="Delegated task",
+                    api_key="test-key",
+                    api_base="https://classifier.test/v1",
+                    client=HTTPHandler(client=client),
+                    _require_encrypted_task_support=True,
+                    num_retries=0,
+                )
+        assert error.value.status_code == 500
+        respond.assert_not_called()
 
     @patch.object(
         import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"

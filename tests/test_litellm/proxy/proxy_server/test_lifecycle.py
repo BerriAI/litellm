@@ -253,6 +253,38 @@ async def test_flush_spend_logs_queue_on_shutdown_swallows_drain_errors(monkeypa
     await ps._flush_spend_logs_queue_on_shutdown()
 
 
+@pytest.mark.asyncio
+async def test_flush_spend_counters_on_shutdown_commits_buffered_spend(monkeypatch):
+    fake_prisma = MagicMock()
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    commit = AsyncMock()
+    monkeypatch.setattr(ps.proxy_logging_obj.db_spend_update_writer, "db_update_spend_transaction_handler", commit)
+
+    await ps.flush_spend_counters_on_shutdown()
+
+    observed = {
+        "commit_calls": commit.await_count,
+        "commit_prisma": commit.await_args.kwargs["prisma_client"] is fake_prisma,
+        "commit_proxy_logging": commit.await_args.kwargs["proxy_logging_obj"] is ps.proxy_logging_obj,
+    }
+    assert observed == {"commit_calls": 1, "commit_prisma": True, "commit_proxy_logging": True}
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_counters_on_shutdown_logs_and_swallows_commit_errors(monkeypatch, caplog):
+    monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(
+        ps.proxy_logging_obj.db_spend_update_writer,
+        "db_update_spend_transaction_handler",
+        AsyncMock(side_effect=RuntimeError("db gone")),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        await ps.flush_spend_counters_on_shutdown()
+
+    assert "Error flushing spend counters on shutdown: db gone" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # _initialize_shared_aiohttp_session
 # ---------------------------------------------------------------------------
