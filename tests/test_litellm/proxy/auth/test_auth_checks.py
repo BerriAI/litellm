@@ -519,6 +519,75 @@ def test_check_model_access_helper_self_referential_alias_terminates():
     )
 
 
+def _router_with_group_alias(alias: str, target: str) -> "Router":
+    from litellm import Router
+
+    return Router(
+        model_list=[{"model_name": target, "litellm_params": {"model": "gpt-4o", "api_key": "test-api-key"}}],
+        model_group_alias={alias: {"model": target, "hidden": False}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_team_alias_name_in_key_models_is_not_enough():
+    """A key that lists the alias name but not its target is denied."""
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    for models in (["smart"], ["sm*"]):
+        valid_token: Final = _aliased_key(models=models)
+        with pytest.raises(ProxyException) as exc_info:
+            await can_key_call_model(model="smart", llm_model_list=None, valid_token=valid_token, llm_router=None)
+        assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+        assert "Tried to access smart" in exc_info.value.message
+
+
+def test_can_object_call_model_team_alias_target_expands_router_alias():
+    """A team alias whose target is a router alias is allowed when the key lists the underlying model."""
+    llm_router: Final = _router_with_group_alias(alias="router-fast", target="gpt-4o-group")
+
+    assert _can_object_call_model(
+        model="team-fast",
+        llm_router=llm_router,
+        models=["gpt-4o-group"],
+        team_model_aliases={"team-fast": "router-fast"},
+        object_type="key",
+    )
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="team-fast",
+            llm_router=llm_router,
+            models=["other"],
+            team_model_aliases={"team-fast": "router-fast"},
+            object_type="key",
+        )
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+def test_can_object_call_model_team_alias_takes_precedence_over_router_alias():
+    """A name that is both a team alias and a router alias is checked against the team alias target only."""
+    llm_router: Final = _router_with_group_alias(alias="fast", target="gpt-4o-group")
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="fast",
+            llm_router=llm_router,
+            models=["gpt-4o-group"],
+            team_model_aliases={"fast": "openai/gpt-4.1-mini"},
+            object_type="key",
+        )
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert _can_object_call_model(
+        model="fast",
+        llm_router=llm_router,
+        models=["openai/gpt-4.1-mini"],
+        team_model_aliases={"fast": "openai/gpt-4.1-mini"},
+        object_type="key",
+    )
+    assert _can_object_call_model(
+        model="fast", llm_router=llm_router, models=["gpt-4o-group"], team_model_aliases=None, object_type="key"
+    )
+
+
 def test_resolve_key_models_teamless_all_team_models_returns_empty():
     """_resolve_key_models_for_auth_check must return [] for a teamless key
     with all-team-models, making it equivalent to an unscoped key (unrestricted
