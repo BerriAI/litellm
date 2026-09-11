@@ -883,6 +883,27 @@ def _sanitized_error_text(exc: Exception) -> str:
     return re.sub(r"https?://\S+", "<url>", str(exc))[:200]
 
 
+async def _openapi_spec_health(
+    spec_path: str, *, timeout: float
+) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None]:
+    """Check specification availability, not upstream operations or user credentials."""
+    from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+
+    if not spec_path.startswith(("http://", "https://")):
+        return "unknown", "OpenAPI servers have no protocol-level health probe"
+    try:
+        await asyncio.wait_for(load_openapi_spec_async(spec_path), timeout=timeout)
+    except asyncio.TimeoutError:
+        return "unhealthy", f"OpenAPI specification check timed out after {timeout} seconds"
+    except asyncio.CancelledError:
+        return "unknown", "OpenAPI specification check was cancelled"
+    except HTTPStatusError as exc:
+        return "unhealthy", f"OpenAPI specification request failed (HTTP {exc.response.status_code})"
+    except (httpx.RequestError, ValueError, OSError) as exc:
+        return "unhealthy", f"OpenAPI specification could not be loaded ({type(exc).__name__})"
+    return "healthy", None
+
+
 def _discovery_failure_leaves_needs_unresolved(
     *,
     needs_authorization_url: bool,
@@ -6665,7 +6686,7 @@ class MCPServerManager:
         Returns:
             Dict containing health check results
         """
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         server: Final = self.get_mcp_server_by_id(server_id)
         if not server:
@@ -6677,6 +6698,18 @@ class MCPServerManager:
                 status="unknown",
                 health_check_error="Server not found",
                 last_health_check=datetime.now(),
+            )
+
+        if server.spec_path:
+            spec_status, spec_error = await _openapi_spec_health(server.spec_path, timeout=MCP_HEALTH_CHECK_TIMEOUT)
+            return self._build_mcp_server_table(server).model_copy(
+                update=MappingProxyType(
+                    {
+                        "status": spec_status,
+                        "health_check_error": spec_error,
+                        "last_health_check": datetime.now(timezone.utc),
+                    }
+                )
             )
 
         status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
