@@ -73,7 +73,10 @@ class InMemoryCache(BaseCache):
 
             # Only convert to JSON if absolutely necessary
             if not isinstance(value, (str, bytes)):
-                value = json.dumps(value, default=str)
+                try:
+                    value = json.dumps(value, default=str)
+                except (TypeError, ValueError):
+                    value = repr(value)
 
             return sys.getsizeof(value) / 1024 <= self.max_size_per_item
 
