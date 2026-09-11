@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, Literal
 
 from typing_extensions import assert_never
@@ -9,7 +10,7 @@ InsecureMasterKeyReason = Literal["example_key", "missing"]
 _ALTERNATIVE_AUTH_SETTINGS: Final = ("enable_jwt_auth", "enable_oauth2_auth", "enable_oauth2_proxy_auth")
 
 
-def alternative_auth_enabled(general_settings: dict) -> bool:
+def alternative_auth_enabled(general_settings: Mapping[str, object]) -> bool:
     return any(general_settings.get(k, False) for k in _ALTERNATIVE_AUTH_SETTINGS)
 
 
@@ -24,7 +25,8 @@ def insecure_master_key_reason(
 
 
 def insecure_master_key_warning(master_key: str | None, alternative_auth_enabled: bool) -> str | None:
-    match insecure_master_key_reason(master_key, alternative_auth_enabled):
+    reason: Final = insecure_master_key_reason(master_key, alternative_auth_enabled)
+    match reason:
         case "example_key":
             return (
                 "LITELLM_MASTER_KEY is set to the example key 'sk-1234' from the docs. "
@@ -42,5 +44,4 @@ def insecure_master_key_warning(master_key: str | None, alternative_auth_enabled
             )
         case None:
             return None
-        case _ as unreachable:
-            assert_never(unreachable)
+    assert_never(reason)
