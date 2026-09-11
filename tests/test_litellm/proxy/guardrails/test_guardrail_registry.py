@@ -1087,15 +1087,10 @@ def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
 
 
 class TestOnlyScanNewMessagesInitWarning:
-    """only_scan_new_messages is declared on BaseLitellmParams, so it validates on any
-    guardrail -- but only guardrails that call filter_new_texts_for_session honor it.
-    Configuring it anywhere else must say so at initialization instead of silently
-    scanning the full context forever while the config reads as tuned.
+    """only_scan_new_messages validates on every guardrail but only some honor it, so the rest warn at init.
 
-    Warn rather than raise, unlike the scan_only_tool_results check above it: a
-    misconfigured scan_only_tool_results can leave nothing scanned (an open hole), while
-    an ignored only_scan_new_messages means everything is scanned, which fails safe --
-    and raising would break the boot of any deployment already carrying the flag.
+    Warn rather than raise: an ignored flag still scans everything, which fails safe, and raising
+    would break the boot of any deployment already carrying it.
     """
 
     WARNING_FRAGMENT = "only_scan_new_messages is set but this guardrail always scans the full request"

@@ -965,11 +965,9 @@ class CustomGuardrail(CustomLogger):
         return True
 
     def supports_only_scan_new_messages(self) -> bool:
-        """Whether this guardrail actually scans only the per-session diff.
+        """Whether this guardrail scans only the per-session diff.
 
-        Guardrails that never call ``filter_new_texts_for_session`` always scan the
-        full request, so configuring them with ``only_scan_new_messages`` is reported
-        at initialization instead of silently doing nothing.
+        The registry warns at init when the flag is set on a guardrail that returns False.
         """
         return False
 

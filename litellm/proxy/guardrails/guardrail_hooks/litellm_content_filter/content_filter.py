@@ -280,9 +280,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         if blocked_words_file:
             self._load_blocked_words_file(blocked_words_file)
 
-        # Every rule store is fully populated by this point, so the mask gate is evaluated
-        # once here rather than per request: skipping an already-seen text under a MASK rule
-        # would forward it to the provider unmasked.
+        # Gate once after all rule stores load: a skipped text under a MASK rule would reach the provider unmasked
         if self.only_scan_new_messages and self._has_mask_action():
             verbose_proxy_logger.warning(
                 "ContentFilterGuardrail '%s': only_scan_new_messages is not supported with MASK actions "
@@ -1895,9 +1893,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         )
 
     async def _mark_request_texts_scanned(self, texts: list[str], request_data: dict) -> None:
-        await self.mark_texts_scanned(
-            texts=texts, request_data=request_data, cache=self._incremental_scan_cache()
-        )
+        await self.mark_texts_scanned(texts=texts, request_data=request_data, cache=self._incremental_scan_cache())
 
     async def apply_guardrail(
         self,
@@ -1963,9 +1959,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             if new_texts is None:
                 inputs["texts"] = processed_texts
             else:
-                # Incremental path: inputs["texts"] must keep its original length and order --
-                # the handlers write the returned texts back positionally. Masking is gated off
-                # at init when this path is live, so the scan is identity-or-raise.
+                # inputs["texts"] stays intact: handlers write it back positionally, and MASK is gated off at init
                 await self._mark_request_texts_scanned(texts=texts, request_data=request_data)
 
             self._scan_tool_call_arguments(inputs=inputs, detections=detections)
