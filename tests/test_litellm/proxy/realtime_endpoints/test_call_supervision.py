@@ -277,6 +277,86 @@ async def test_cancelled_start_hangs_up_and_drains_terminal_usage():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_count", [1, 2, 3])
+async def test_repeated_start_cancellation_keeps_lease_until_shutdown_finishes(cancel_count):
+    from litellm.proxy.hooks.realtime_call_lease import RealtimeCallLease
+
+    reading = asyncio.Event()
+    close_entered = asyncio.Event()
+    allow_close = asyncio.Event()
+    released = asyncio.Event()
+
+    class ObservedSocket(Socket):
+        async def __anext__(self):
+            reading.set()
+            return await super().__anext__()
+
+    socket = ObservedSocket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    sink = Sink(logger)
+
+    async def close_call():
+        close_entered.set()
+        await allow_close.wait()
+        await socket.messages.put({"type": "session.closed", "usage": {"audio_duration_ms": 1000}})
+
+    async def release():
+        released.set()
+
+    lease = RealtimeCallLease(renew=AsyncMock(return_value=True), release=release)
+    lease.start()
+    supervisor = CallSupervisor(
+        socket, sink, logger, UserAPIKeyAuth(), close_call, lease=lease, ready_timeout=10, termination_timeout=10
+    )
+    registry = CallSupervisors()
+
+    async def signaling():
+        transferred = False
+        try:
+            await registry.start(supervisor)
+            transferred = True
+        finally:
+            # The signaling endpoint retains lease ownership until registry startup succeeds.
+            if not transferred:
+                await lease.close()
+
+    started = asyncio.create_task(signaling())
+    shutdown = None
+    try:
+        await asyncio.wait_for(reading.wait(), timeout=1)
+        started.cancel()
+        await asyncio.wait_for(close_entered.wait(), timeout=1)
+        for _ in range(cancel_count - 1):
+            started.cancel()
+            done, _ = await asyncio.wait({started}, timeout=0.02)
+            assert not done
+            assert not released.is_set()
+        shutdown = asyncio.create_task(registry.shutdown())
+        done, _ = await asyncio.wait({started, shutdown}, timeout=0.02)
+        assert not done
+        assert not released.is_set()
+        assert not socket.closed
+        assert sink.logs == 0
+        allow_close.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(started, timeout=1)
+        await asyncio.wait_for(shutdown, timeout=1)
+        assert socket.closed
+        assert sink.logs == 1
+        assert released.is_set()
+        assert sink.events[-1]["usage"]["audio_duration_ms"] == 1000
+    finally:
+        allow_close.set()
+        await asyncio.wait_for(supervisor.wait(), timeout=1)
+        await asyncio.gather(started, return_exceptions=True)
+        if shutdown is not None:
+            await shutdown
+        await registry.shutdown()
+        await lease.close()
+
+
+@pytest.mark.asyncio
 async def test_worker_shutdown_drains_all_calls():
     registry = CallSupervisors()
     socket, sink, close_call, supervisor = fixture()

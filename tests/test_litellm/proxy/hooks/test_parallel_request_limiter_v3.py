@@ -134,50 +134,24 @@ async def test_realtime_lease_renewal_preserves_quota_past_ttl_and_does_not_resu
 
 @pytest.mark.asyncio
 async def test_realtime_lease_redis_renewal_is_atomic_and_does_not_resurrect():
-    import shutil
-    import subprocess
-    import tempfile
-    from redis.asyncio import Redis
-    from redis.exceptions import ConnectionError as RedisConnectionError
+    from fakeredis import FakeAsyncRedis
     from litellm.proxy.hooks.parallel_request_limiter_v3 import PARALLEL_RENEW_SCRIPT
 
-    executable = shutil.which("redis-server")
-    if executable is None:
-        pytest.skip("redis-server is required for the Lua regression")
-    with tempfile.TemporaryDirectory(prefix="rtc-") as temporary:
-        socket = f"{temporary}/redis.sock"
-        process = subprocess.Popen(
-            [executable, "--port", "0", "--unixsocket", socket, "--save", "", "--appendonly", "no"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        client = Redis(unix_socket_path=socket)
-        try:
-            for attempt in range(100):
-                try:
-                    await client.ping()
-                    break
-                except RedisConnectionError:
-                    await asyncio.sleep(0.01)
-            else:
-                pytest.fail("isolated Redis did not start")
-            now = (await client.time())[0]
-            await client.zadd("first", {"owner": now - 10, "other": now})
-            await client.zadd("second", {"owner": now - PARALLEL_REQUEST_SLOT_TTL_SECONDS})
-            renew = client.register_script(PARALLEL_RENEW_SCRIPT)
-            assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [0]
-            assert await client.zscore("first", "owner") == now - 10
-            await client.zadd("second", {"owner": now - 10})
-            assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [1]
-            assert await client.zscore("first", "owner") >= now
-            assert await client.ttl("first") > PARALLEL_REQUEST_SLOT_TTL_SECONDS - 10
-            await client.zrem("second", "owner")
-            assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [0]
-            assert await client.zscore("second", "owner") is None
-            assert await client.zscore("first", "other") == now
-        finally:
-            await client.aclose()
-            process.terminate()
-            process.wait(timeout=5)
+    async with FakeAsyncRedis() as client:
+        now = (await client.time())[0]
+        await client.zadd("first", {"owner": now - 10, "other": now})
+        await client.zadd("second", {"owner": now - PARALLEL_REQUEST_SLOT_TTL_SECONDS})
+        renew = client.register_script(PARALLEL_RENEW_SCRIPT)
+        assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [0]
+        assert await client.zscore("first", "owner") == now - 10
+        await client.zadd("second", {"owner": now - 10})
+        assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [1]
+        assert await client.zscore("first", "owner") >= now
+        assert await client.ttl("first") > PARALLEL_REQUEST_SLOT_TTL_SECONDS - 10
+        await client.zrem("second", "owner")
+        assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [0]
+        assert await client.zscore("second", "owner") is None
+        assert await client.zscore("first", "other") == now
 
 
 @pytest.fixture
@@ -6365,3 +6339,197 @@ async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
     )
 
     assert response == {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+
+class _ClusterParallelTransport:
+    def __init__(self, handler):
+        self.handler = handler
+        self.members = {}
+        self.now = 10000
+        self.calls = []
+        self.fail = None
+        self.lose_acquire_response = None
+        self.pause_acquire = None
+        self.entered = asyncio.Event()
+
+    def script(self, operation):
+        async def run(*, keys, args):
+            self.calls.append((operation, tuple(keys)))
+            if len({self.handler.keyslot_for_redis_cluster(key) for key in keys}) > 1:
+                raise RuntimeError("CROSSSLOT Keys in request do not hash to the same slot")
+            if self.fail is not None and (operation, keys[0]) == self.fail:
+                raise RuntimeError("Shard unavailable")
+            if operation in ("acquire", "count"):
+                for key in keys:
+                    self.members[key] = {
+                        slot: score for slot, score in self.members.get(key, {}).items()
+                        if score > self.now - PARALLEL_REQUEST_SLOT_TTL_SECONDS
+                    }
+            if operation == "acquire":
+                for index, key in enumerate(keys):
+                    if len(self.members[key]) >= args[index * 3]:
+                        return [1, index + 1, len(self.members[key])]
+                for index, key in enumerate(keys):
+                    self.members[key][args[index * 3 + 2]] = self.now
+                if keys[0] == self.pause_acquire:
+                    self.entered.set()
+                    await asyncio.Event().wait()
+                if keys[0] == self.lose_acquire_response:
+                    raise RuntimeError("Reply lost after Redis admitted slot")
+                return [0, *(len(self.members[key]) for key in keys)]
+            if operation == "count":
+                return [len(self.members.get(key, {})) for key in keys]
+            if operation == "renew":
+                if any(self.members.get(key, {}).get(args[0], 0) <= self.now - args[1] for key in keys):
+                    return [0]
+                for key in keys:
+                    self.members[key][args[0]] = self.now
+                return [1]
+            assert operation == "release"
+            for index, key in enumerate(keys):
+                self.members.get(key, {}).pop(args[index], None)
+            return [len(self.members.get(key, {})) for key in keys]
+
+        return run
+
+
+def _cluster_parallel_fixture(monkeypatch):
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(DualCache()))
+    monkeypatch.setattr(handler, "_is_redis_cluster", lambda: True)
+    transport = _ClusterParallelTransport(handler)
+    for operation in ("acquire", "count", "renew", "release"):
+        monkeypatch.setattr(handler, f"parallel_{operation}_script", transport.script(operation))
+    gauges = [
+        {"counter_key": "{api_key:owner}:max_parallel_requests", "limit": 1, "descriptor_key": "api_key"},
+        {"counter_key": "{team:group}:max_parallel_requests", "limit": 2, "descriptor_key": "team"},
+        {"counter_key": "{api_key:owner}:another-parallel-scope", "limit": 1, "descriptor_key": "extra"},
+    ]
+    return handler, transport, gauges
+
+
+@pytest.mark.asyncio
+async def test_cluster_parallel_slots_admit_count_renew_release_across_hash_slots(monkeypatch):
+    handler, transport, gauges = _cluster_parallel_fixture(monkeypatch)
+    keys = tuple(gauge["counter_key"] for gauge in gauges)
+    transport.members[keys[1]] = {"unrelated": transport.now}
+    result = await handler._check_parallel_request_gauges(gauges, "owner")
+    assert result["overall_code"] == "OK"
+    assert len([call for call in transport.calls if call[0] == "acquire"]) == 2
+    assert all("owner" in transport.members[key] for key in keys)
+    result = await handler._check_parallel_request_gauges(gauges, "reader", read_only=True)
+    assert result["overall_code"] == "OVER_LIMIT"
+    assert [status["descriptor_key"] for status in result["statuses"]] == ["api_key", "team", "extra"]
+    transport.now += PARALLEL_REQUEST_SLOT_TTL_SECONDS - 1
+    assert await handler._renew_realtime_call_slot("owner", keys)
+    transport.now += 2
+    result = await handler._check_parallel_request_gauges(gauges, "second")
+    assert result["overall_code"] == "OVER_LIMIT"
+    acquisition = ParallelSlotAcquisition(slot_id="owner", counter_keys=list(keys))
+    await handler._release_parallel_request_slots(acquisition)
+    await handler._release_parallel_request_slots(acquisition)
+    assert all("owner" not in transport.members[key] for key in keys)
+    assert not await handler._renew_realtime_call_slot("owner", keys)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["limit", "unreachable", "lost_reply", "cancel"])
+async def test_cluster_parallel_acquire_rolls_back_attempted_shards_without_releasing_others(monkeypatch, failure):
+    handler, transport, gauges = _cluster_parallel_fixture(monkeypatch)
+    keys = tuple(gauge["counter_key"] for gauge in gauges)
+    transport.members[keys[1]] = {"unrelated": transport.now}
+    if failure == "limit":
+        gauges[1]["limit"] = 1
+    elif failure == "unreachable":
+        transport.fail = ("acquire", keys[1])
+    elif failure == "lost_reply":
+        transport.lose_acquire_response = keys[1]
+    else:
+        transport.pause_acquire = keys[1]
+    task = asyncio.create_task(handler._check_parallel_request_gauges(gauges, "owner"))
+    if failure == "cancel":
+        await asyncio.wait_for(transport.entered.wait(), timeout=1)
+        task.cancel()
+    if failure == "limit":
+        assert (await task)["overall_code"] == "OVER_LIMIT"
+    else:
+        with pytest.raises(asyncio.CancelledError if failure == "cancel" else RuntimeError):
+            await task
+    assert all("owner" not in transport.members.get(key, {}) for key in keys)
+    assert transport.members[keys[1]] == {"unrelated": transport.now}
+    released_keys = {key for operation, group in transport.calls if operation == "release" for key in group}
+    assert released_keys == set(keys)
+
+
+@pytest.mark.asyncio
+async def test_cluster_parallel_release_continues_after_shard_failure_and_renewal_fails_closed(monkeypatch):
+    handler, transport, gauges = _cluster_parallel_fixture(monkeypatch)
+    keys = tuple(gauge["counter_key"] for gauge in gauges)
+    assert (await handler._check_parallel_request_gauges(gauges, "owner"))["overall_code"] == "OK"
+    transport.fail = ("renew", keys[1])
+    assert not await handler._renew_realtime_call_slot("owner", keys)
+    transport.fail = None
+    transport.members[keys[1]].pop("owner")
+    assert not await handler._renew_realtime_call_slot("owner", keys)
+    assert "owner" not in transport.members[keys[1]]
+    transport.fail = ("count", keys[1])
+    with pytest.raises(RuntimeError, match="Shard unavailable"):
+        await handler._check_parallel_request_gauges(gauges, "reader", read_only=True)
+    transport.fail = ("release", keys[0])
+    receipt = ParallelSlotAcquisition(slot_id="owner", counter_keys=list(keys))
+    with pytest.raises(RuntimeError, match="Shard unavailable"):
+        await handler._release_parallel_request_slots(receipt)
+    assert "owner" not in transport.members[keys[1]]
+    transport.fail = None
+    await handler._release_parallel_request_slots(receipt)
+    assert all("owner" not in transport.members.get(key, {}) for key in keys)
+
+
+@pytest.mark.asyncio
+async def test_cluster_parallel_duplicate_scope_keeps_strictest_limit(monkeypatch):
+    handler, transport, gauges = _cluster_parallel_fixture(monkeypatch)
+    gauges.append({**gauges[0], "limit": 100})
+    transport.members[gauges[0]["counter_key"]] = {"unrelated": transport.now}
+    assert (await handler._check_parallel_request_gauges(gauges, "owner"))["overall_code"] == "OVER_LIMIT"
+    assert transport.members[gauges[0]["counter_key"]] == {"unrelated": transport.now}
+
+
+@pytest.mark.asyncio
+async def test_cluster_rollback_waits_through_repeated_cancellation(monkeypatch):
+    handler, transport, gauges = _cluster_parallel_fixture(monkeypatch)
+    keys = tuple(gauge["counter_key"] for gauge in gauges)
+    transport.lose_acquire_response = keys[1]
+    release_entered, finish_release = asyncio.Event(), asyncio.Event()
+    release = handler.parallel_release_script
+
+    async def blocked_release(*, keys, args):
+        release_entered.set()
+        await finish_release.wait()
+        return await release(keys=keys, args=args)
+
+    monkeypatch.setattr(handler, "parallel_release_script", blocked_release)
+    task = asyncio.create_task(handler._check_parallel_request_gauges(gauges, "owner"))
+    await asyncio.wait_for(release_entered.wait(), timeout=1)
+    try:
+        for _ in range(3):
+            task.cancel()
+            await asyncio.sleep(0)
+        assert not task.done(), "admission returned while its Redis compensation was still running"
+    finally:
+        finish_release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+    assert task.cancelled()
+    assert all("owner" not in transport.members.get(key, {}) for key in keys)
+
+
+@pytest.mark.asyncio
+async def test_standalone_realtime_renewal_keeps_single_atomic_batch(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(DualCache()))
+    monkeypatch.setattr(handler, "_is_redis_cluster", lambda: False)
+    renew = AsyncMock(return_value=[1])
+    monkeypatch.setattr(handler, "parallel_renew_script", renew)
+    keys = ("{api_key:owner}:max_parallel_requests", "{team:group}:max_parallel_requests")
+    assert await handler._renew_realtime_call_slot("owner", keys)
+    renew.assert_awaited_once_with(keys=keys, args=("owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS))

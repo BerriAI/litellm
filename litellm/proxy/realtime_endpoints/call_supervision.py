@@ -93,8 +93,15 @@ class CallSupervisor:
             if not self._started or self._terminal or self._task.done():
                 raise RuntimeError("Call observer ended before session became available")
         except BaseException:
-            await self.close()
+            await self._close_after_failed_start()
             raise
+
+    async def _close_after_failed_start(self) -> None:
+        cleanup: Final = asyncio.create_task(self.close())
+        while not cleanup.done():
+            with suppress(asyncio.CancelledError):
+                await asyncio.shield(cleanup)
+        cleanup.result()
 
     async def close(self) -> None:
         self._stop.set()

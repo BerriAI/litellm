@@ -12,6 +12,102 @@ from litellm.proxy.realtime_endpoints.call_sessions import decode_call, encode_c
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("multipart", [False, True])
+@pytest.mark.parametrize("policy", ["budget", "personal_models"])
+async def test_offer_auth_enforces_session_model_policy_before_upstream(monkeypatch, multipart, policy):
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+    from fastapi import Request
+
+    import litellm
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy import proxy_server as server
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+    session = {"model": "forbidden-voice"}
+    payload = (
+        {"files": {"sdp": (None, "v=0"), "session": (None, json.dumps(session)), "model": (None, "body-decoy")}}
+        if multipart
+        else {"json": {"sdp": "v=0", "session": session, "model": "body-decoy"}}
+    )
+    outbound = httpx.Request("POST", "http://localhost/v1/realtime/calls", **payload)
+    body = outbound.read()
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/realtime/calls",
+            "query_string": b"model=query-decoy&policy=keep",
+            "client": ("127.0.0.7", 1234),
+            "headers": [
+                *((key.lower(), value) for key, value in outbound.headers.raw),
+                (b"x-policy-key", b"Bearer test-key"),
+                (b"x-custom-policy", b"preserved"),
+                (b"x-litellm-model", b"header-decoy"),
+            ],
+        },
+        receive,
+    )
+    token = UserAPIKeyAuth(token="test-key", user_id="personal-user", model_max_budget={"forbidden-voice": 0})
+    budget = AsyncMock(side_effect=BudgetExceededError(current_cost=1, max_budget=0))
+    upstream = AsyncMock()
+
+    async def custom_auth(request: Request, api_key: str):
+        assert api_key == "test-key"
+        assert request.headers["x-custom-policy"] == "preserved"
+        assert request.query_params["policy"] == "keep"
+        assert request.client.host == "127.0.0.7"
+        parsed = await _read_request_body(request)
+        assert parsed["model"] == "body-decoy"
+        assert isinstance(parsed["session"], str) is multipart
+        if policy == "personal_models":
+            await common_checks(
+                request_body=parsed,
+                team_object=None,
+                user_object=LiteLLM_UserTable(
+                    user_id="personal-user", models=["allowed-voice", "body-decoy", "query-decoy", "header-decoy"]
+                ),
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/realtime/calls",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=token,
+                request=request,
+                skip_budget_checks=True,
+            )
+        return token
+
+    custom = AsyncMock(side_effect=custom_auth)
+    monkeypatch.setattr(server, "general_settings", {"litellm_key_header_name": "x-policy-key"})
+    monkeypatch.setattr(server, "user_custom_auth", custom)
+    monkeypatch.setattr(server, "llm_router", None)
+    monkeypatch.setattr(server, "llm_model_list", [])
+    monkeypatch.setattr(server, "model_max_budget_limiter", SimpleNamespace(is_key_within_model_budget=budget))
+    monkeypatch.setattr(server, "route_request", upstream)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    with pytest.raises(ProxyException) as denied:
+        await codex.create_codex_realtime_call(request)
+    if policy == "personal_models":
+        assert "user not allowed to access model" in str(denied.value)
+        assert "forbidden-voice" in str(denied.value)
+    custom.assert_awaited_once()
+    upstream.assert_not_awaited()
+    if policy == "budget":
+        budget.assert_awaited_once()
+        assert budget.await_args.kwargs["model"] == "forbidden-voice"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("route_type", ["arealtime_calls", "_arealtime"])
 @pytest.mark.parametrize("observer", [False, True])
 async def test_codex_processing_merges_model_guardrails(monkeypatch, route_type, observer):

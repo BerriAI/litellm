@@ -3,13 +3,12 @@ Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
 import asyncio
-import shutil
-import socket
-import subprocess
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import pytest_asyncio
+from fakeredis import FakeAsyncRedis, FakeRedis, FakeServer
 
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
@@ -22,55 +21,23 @@ from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
 
 
-@pytest.fixture
-def isolated_legacy_redis(tmp_path):
-    executable = shutil.which("redis-server")
-    if executable is None:
-        pytest.skip("redis-server is required to exercise atomic Lua updates")
-    with socket.socket() as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-    process = subprocess.Popen(
-        [
-            executable,
-            "--bind",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--save",
-            "",
-            "--appendonly",
-            "no",
-            "--dir",
-            str(tmp_path),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        import redis
-
-        client = redis.Redis(host="127.0.0.1", port=port)
-        for _ in range(100):
-            try:
-                client.ping()
-                break
-            except redis.ConnectionError:
-                import time
-
-                time.sleep(0.01)
-        else:
-            pytest.fail("isolated Redis did not start")
-        yield port
-        client.close()
-    finally:
-        process.terminate()
-        process.wait(timeout=5)
+@pytest_asyncio.fixture(loop_scope="function")
+async def isolated_legacy_redis():
+    server = FakeServer()
+    client = FakeRedis(server=server)
+    async with FakeAsyncRedis(server=server) as async_client:
+        with (
+            patch("redis.Redis", autospec=True, return_value=client),
+            patch("redis.asyncio.BlockingConnectionPool", autospec=True, return_value=async_client.connection_pool),
+            patch("redis.asyncio.Redis", autospec=True, return_value=async_client),
+        ):
+            yield RedisCache(host="fake-legacy-redis", namespace="legacy-test")
+    client.close()
 
 
 @pytest.mark.asyncio
 async def test_concurrent_realtime_releases_update_redis_without_lost_decrement(isolated_legacy_redis):
-    remote = RedisCache(host="127.0.0.1", port=isolated_legacy_redis, namespace="legacy-test")
+    remote = isolated_legacy_redis
     first_cache, second_cache = DualCache(redis_cache=remote), DualCache(redis_cache=remote)
     first, second = (_PROXY_MaxParallelRequestsHandler(InternalUsageCache(c)) for c in (first_cache, second_cache))
     auth = UserAPIKeyAuth(api_key="concurrent-key", max_parallel_requests=2)
