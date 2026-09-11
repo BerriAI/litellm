@@ -7,12 +7,13 @@ from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, assert_never, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger

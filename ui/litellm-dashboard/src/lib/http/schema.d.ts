@@ -25875,6 +25875,11 @@ export interface components {
              */
             database_url?: string | null;
             /**
+             * Default End User From
+             * @description Populate the end user (request `user` and SpendLogs `end_user`) from this field of the authenticated virtual key when the request carries no end user id. Explicit `user`, customer headers and user_header_mappings always win.
+             */
+            default_end_user_from?: ("key_alias" | "team_alias" | "key_name" | "user_id") | null;
+            /**
              * Disable Auto Add Proxy Admin To Teams
              * @description By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.
              */
