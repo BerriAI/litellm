@@ -27,16 +27,19 @@ The suites run against a live proxy, so bring one up first by running the litell
 
 2. Bring up a Postgres and a Redis for the proxy to use. The repo-root `docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run. Tests that read Redis directly default to the deployed shape (TLS + cluster mode) whenever `REDIS_HOST` is set, so for a local standalone Redis also set `REDIS_CLUSTER=false` and `REDIS_SSL=false` (plus `REDIS_PASSWORD` when your Redis requires auth)
 
-3. Start the identity provider the `other/` suite authenticates against, then the litellm proxy against your config, and confirm both are live. It is a real Keycloak, running the realm in `tests/e2e/idp_realm.json`, and the proxy trusts it because `JWT_PUBLIC_KEY_URL` points at that realm's JWKS. The proxy caches the JWKS for `public_key_ttl` (600s) and does not refetch on an unknown `kid`, so restart the proxy whenever you recreate the container:
+3. Start the identity provider the JWT API tests authenticate against, then the litellm proxy against your config, and confirm both are live. It is a real Keycloak, running the realm in `tests/e2e/idp_realm.json`, and the proxy trusts it because `JWT_PUBLIC_KEY_URL` points at that realm's JWKS. The proxy caches the JWKS for `public_key_ttl` (600s) and does not refetch on an unknown `kid`, so keep its data volume across restarts; restart the proxy if you deliberately replace that volume:
 
    ```bash
-   set -a && source .env && set +a
    docker run -d --name litellm-e2e-idp -p 8480:8080 \
      -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
      -v "$PWD/tests/e2e/idp_realm.json:/opt/keycloak/data/import/realm.json:ro" \
+     -v litellm-e2e-idp-data:/opt/keycloak/data \
      quay.io/keycloak/keycloak:26.7.3 start-dev --import-realm
    curl -fs --retry 30 --retry-delay 2 --retry-all-errors http://127.0.0.1:8480/realms/litellm-e2e/.well-known/openid-configuration
-   JWT_PUBLIC_KEY_URL=http://127.0.0.1:8480/realms/litellm-e2e/protocol/openid-connect/certs litellm --config <your-e2e-config>.yml --port 4000
+   export JWT_ISSUER=http://127.0.0.1:8480/realms/litellm-e2e
+   export JWT_AUDIENCE=litellm-e2e
+   export JWT_PUBLIC_KEY_URL="$JWT_ISSUER/protocol/openid-connect/certs"
+   litellm --config <your-e2e-config>.yml --port 4000
    curl -fs http://localhost:4000/health/liveliness
    ```
 
@@ -53,9 +56,20 @@ The suites run against a live proxy, so bring one up first by running the litell
        user_id_upsert: true
    ```
 
-   Leave `JWT_AUDIENCE` and `JWT_ISSUER` unset. Keycloak's access tokens carry `aud: account`, its own audience rather than the proxy's, and their `iss` is whatever base URL the token was requested through, so pinning either one only makes sense once the deployment fixes Keycloak's hostname
+   Set `JWT_ISSUER` to the exact realm URL used by the test runner and `JWT_AUDIENCE=litellm-e2e`. The realm explicitly maps this audience, `sub`, `email`, and `groups`; the proxy fetches real signing keys from its JWKS endpoint. The rejection tests obtain signed tokens with a different audience or issuer and verify the corresponding rejection reason. The issuer test uses a different HTTP Host when requesting a token from the isolated, dynamically named test IdP.
 
-   CI runs this suite against a Keycloak deployed beside the ephemeral stack, and that deployment (the JWT config block, `JWT_PUBLIC_KEY_URL`, and the admin credential handed to the run pod) lives in the project-releaser repo, not here. A stack without it fails the JWT tests rather than skipping them
+   Keycloak's password grant is a test-only provisioning shortcut, not a production login recommendation. The `litellm-e2e-admin` client adds the proxy's admin scope; the normal client does not. Never reuse this permissive realm outside an isolated test stack.
+
+   Management tests can use the shared `idp` and `jwt_identity` fixtures. Each test gets a unique Keycloak group/user and a matching proxy user/team. Setup and fallback cleanup use the master key; the operations and read-backs being tested must explicitly use `caller_key=idp.access_token(jwt_identity, client_id=ADMIN_CLIENT_ID)` (or a member token). See `management/test_jwt_management_e2e.py` for create/read/update/clear/delete and tenant-denial examples. A group claim alone is not database team membership: permission tests explicitly add the member and prove an allowed read before asserting the denied write.
+
+   Every successful IdP create immediately registers cleanup, including partial setup failures. Cleanup failures emit warnings. Tokens are minted on demand, and the expiration test waits relative to the token's actual `exp` with a bounded clock-drift check. To check first-attempt behavior locally, run both files with `--reruns 0`:
+
+   ```bash
+   E2E_KEYCLOAK_ADMIN_USER=admin E2E_KEYCLOAK_ADMIN_PASSWORD=admin \
+     uv run pytest tests/e2e/other/test_jwt_auth_e2e.py tests/e2e/management/test_jwt_management_e2e.py --reruns 0 -v
+   ```
+
+   CI runs this suite against a Keycloak deployed beside the ephemeral stack, and that deployment (the JWT config block, `JWT_PUBLIC_KEY_URL`, and the admin credential handed to the run pod) lives in the project-releaser repo, not here. CI fetches the realm from the test-runner revision even when it reuses a gateway image from another commit. Keycloak stores its realm, keys and users in a separate schema in the build's PostgreSQL, so replacing the IdP pod preserves token validity. Its startup probe waits for the imported realm. Losing the whole ephemeral database invalidates the stack. Keycloak skips imports into an existing realm, so changes to the realm export require a fresh stack (or deliberately replacing the local data volume). A stack without it fails the JWT tests rather than skipping them
 
 4. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`):
 

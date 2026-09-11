@@ -4,10 +4,14 @@ these carry no `e2e` marker and run everywhere."""
 
 from __future__ import annotations
 
+from collections.abc import Callable, Generator
+from contextlib import ExitStack, contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from queue import SimpleQueue
+from threading import Thread
 from typing import Final
 
 import pytest
-
 from e2e_http import ExternalWrite
 from idp import (
     KEYCLOAK_ADMIN_PASSWORD_ENV,
@@ -16,8 +20,8 @@ from idp import (
     KEYCLOAK_URL_ENV,
     Keycloak,
     PasswordCredential,
-    created_id,
     UserCreateBody,
+    created_id,
     keycloak_from_env,
 )
 
@@ -42,6 +46,100 @@ def test_created_id_is_the_last_segment_of_the_location_header() -> None:
 def test_a_refused_create_fails_the_test_with_the_idps_own_words() -> None:
     with pytest.raises(BaseException, match=r"409.*already exists"):
         created_id(ExternalWrite(status_code=409, body="Group already exists"), "a group")
+
+
+@pytest.mark.parametrize("location", ["", "http://keycloak/groups/"])
+def test_create_without_a_resource_id_fails(location: str) -> None:
+    with pytest.raises(pytest.fail.Exception, match="resource id"):
+        created_id(ExternalWrite(status_code=201, location=location), "a group")
+
+
+@contextmanager
+def _idp_server(
+    *, user_status: int = 201, delete_status: int = 204, admin_status: int = 200
+) -> Generator[tuple[Keycloak, SimpleQueue[str]]]:
+    """Exercise provisioning failures through the same HTTP transport as live tests."""
+    deletions: SimpleQueue[str] = SimpleQueue()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if self.path.endswith("/token"):
+                self.send_response(admin_status)
+                self.end_headers()
+                self.wfile.write(b'{"access_token":"synthetic-harness-token"}')
+            else:
+                self.send_response(user_status if self.path.endswith("/users") else 201)
+                self.send_header("Location", f"{self.path}/resource-1")
+                self.end_headers()
+                if user_status != 201 and self.path.endswith("/users"):
+                    self.wfile.write(b"injected create failure")
+
+        def do_DELETE(self) -> None:
+            deletions.put(self.path)
+            self.send_response(delete_status)
+            self.end_headers()
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread: Final = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield (
+            Keycloak(
+                base_url=f"http://127.0.0.1:{server.server_port}",
+                realm="test",
+                admin_username="admin",
+                admin_password="pw",
+            ),
+            deletions,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_partial_provisioning_removes_the_group_when_user_creation_fails() -> None:
+    with _idp_server(user_status=500) as (idp, deletions):
+        with ExitStack() as cleanup:
+
+            def defer(callback: Callable[[], object]) -> None:
+                cleanup.callback(callback)
+
+            with pytest.raises(pytest.fail.Exception, match="injected create failure"):
+                idp.provision(marker="partial", group="team", defer=defer)
+        assert deletions.get_nowait() == "/admin/realms/test/groups/resource-1"
+        assert deletions.empty()
+
+
+def test_successful_provisioning_cleans_up_user_before_group() -> None:
+    with _idp_server() as (idp, deletions):
+        with ExitStack() as cleanup:
+
+            def defer(callback: Callable[[], object]) -> None:
+                cleanup.callback(callback)
+
+            idp.provision(marker="complete", group="team", defer=defer)
+        assert deletions.get_nowait() == "/admin/realms/test/users/resource-1"
+        assert deletions.get_nowait() == "/admin/realms/test/groups/resource-1"
+        assert deletions.empty()
+
+
+def test_cleanup_failure_is_visible() -> None:
+    with _idp_server(delete_status=500) as (idp, _):
+        with pytest.warns(RuntimeWarning, match="cleanup failed.*HTTP 500"):
+            idp.delete_group("group")
+
+
+def test_expired_admin_credentials_do_not_abort_remaining_cleanups() -> None:
+    with _idp_server(admin_status=401) as (idp, _):
+        with pytest.warns(RuntimeWarning, match="cleanup could not authenticate") as warnings:
+            idp.delete_user("user")
+            idp.delete_group("group")
+        assert len(warnings) == 2
 
 
 def test_new_users_are_born_fully_set_up() -> None:

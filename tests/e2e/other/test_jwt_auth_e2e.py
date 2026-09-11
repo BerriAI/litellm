@@ -1,50 +1,42 @@
-"""Live e2e: access tokens issued by a real Keycloak realm (idp.py) against a
-proxy running with `enable_jwt_auth: true` and the `litellm_jwtauth` block from
-CONTRIBUTING.md (sub -> user_id, email -> user_email, groups -> team ids,
-user_id_upsert).
-
-Every identity is provisioned in Keycloak for the test that uses it: a group
-named after the litellm team, and a user in that group whose password exists
-only for the length of the test. Tokens then come from Keycloak's direct-access
-grant, so no test ever holds a signing key and the claims the proxy reads are
-the ones an IdP really emits (`sub` is Keycloak's user uuid, `groups` comes off
-a protocol mapper, `aud` is Keycloak's own audience).
-
-The rejection cases stay honest about where the rejection has to come from: the
-bad-signature case corrupts a genuine signature, and the expiry case takes its
-token from the realm's one-second client and waits for it to lapse rather than
-forging a stale `exp`. Those identities get their own freshly created team, so a
-rejection can only be blamed on the token, while the unknown-team case names a
-group no litellm team was ever created for. An acceptance is proven twice, at
-the boundary (200 from a real provider) and in the spend log the proxy
-attributes to the claims. The last case keeps a plain `sk-` virtual key working
-on the same proxy, guarding against the flag turning JWT on for everyone.
-"""
+"""Real Keycloak tokens exercise verification, attribution and virtual-key coexistence."""
 
 from __future__ import annotations
 
+import base64
 import time
 from typing import Final
 
 import pytest
-
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import UnauthorizedError, UnknownApiError, unwrap
-from idp import SHORT_LIVED_CLIENT_ID, SHORT_LIVED_TOKEN_SECONDS, Identity
+from idp import SHORT_LIVED_CLIENT_ID, WRONG_AUDIENCE_CLIENT_ID, Identity
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, TeamNewBody
 from other_client import OtherClient
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
+
+
+class IssuedClaims(BaseModel):
+    """Read the IdP's signed payload only to check the test precondition."""
+
+    exp: int
+    sub: str
+    iss: str
+    aud: str | list[str]
+
+
+def _claims(token: str) -> IssuedClaims:
+    payload: Final = token.split(".")[1]
+    return IssuedClaims.model_validate_json(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
 
 
 def _provision(client: OtherClient, resources: ResourceManager, *, marker: str) -> Identity:
     """A Keycloak group and a user in it, torn down with the test. The group name
     is what the token's `groups` claim carries, which is what the proxy resolves
     as a litellm team id."""
-    identity: Final = client.idp.provision(marker=marker, group=f"e2e-jwt-team-{marker}")
-    resources.defer(lambda: client.idp.delete_user(identity.user_id))
-    resources.defer(lambda: client.idp.delete_group(identity.group_id))
+    identity: Final = client.idp.provision(marker=marker, group=f"e2e-jwt-team-{marker}", defer=resources.defer)
     resources.defer(lambda: client.proxy.delete_user(identity.user_id))
     return identity
 
@@ -81,6 +73,7 @@ class TestJwtAuth:
     ) -> None:
         token: Final = client.idp.access_token(identity)
 
+        assert _claims(token).sub == identity.user_id, "IdP must emit the provisioned user as sub"
         response: Final = unwrap(client.proxy.chat(token, _ping()))
         assert response.id is not None and response.choices, (
             f"chat under a valid JWT returned no completion: {response}"
@@ -111,13 +104,37 @@ class TestJwtAuth:
     @pytest.mark.covers("other.auth.jwt.expired_denied")
     def test_expired_token_is_rejected(self, client: OtherClient, identity: Identity) -> None:
         expiring: Final = client.idp.access_token(identity, client_id=SHORT_LIVED_CLIENT_ID)
-        time.sleep(SHORT_LIVED_TOKEN_SECONDS + 1)
+        delay: Final = _claims(expiring).exp - time.time() + 1
+        assert delay <= 5, f"short-lived client expiry or IdP clock drifted: wait would be {delay}s"
+        time.sleep(max(0, delay))
 
         result: Final = client.proxy.chat(expiring, _ping())
         assert isinstance(result, UnauthorizedError), (
             f"an expired JWT must be rejected with 401 even though its signature verifies, got {result}"
         )
         assert "expired" in result.body.lower(), f"the 401 must say the token expired, got {result.body[:300]}"
+
+    @pytest.mark.covers("other.auth.jwt.wrong_issuer_denied")
+    def test_signed_token_from_the_wrong_issuer_is_rejected(self, client: OtherClient, identity: Identity) -> None:
+        token: Final = client.idp.access_token(identity, issuer_host="unexpected-issuer.invalid")
+        claims: Final = _claims(token)
+        assert claims.iss != client.idp.issuer and "litellm-e2e" in claims.aud
+
+        result: Final = client.proxy.chat(token, _ping())
+        assert isinstance(result, UnauthorizedError), f"wrong issuer must be rejected: {result}"
+        assert "issuer" in result.body.lower(), f"expected issuer validation to reject the token: {result}"
+
+    @pytest.mark.covers("other.auth.jwt.wrong_audience_denied")
+    def test_signed_token_for_another_application_is_rejected(self, client: OtherClient, identity: Identity) -> None:
+        token: Final = client.idp.access_token(identity, client_id=WRONG_AUDIENCE_CLIENT_ID)
+        claims: Final = _claims(token)
+        assert claims.iss == client.idp.issuer and "litellm-e2e" not in (
+            [claims.aud] if isinstance(claims.aud, str) else claims.aud
+        )
+
+        result: Final = client.proxy.chat(token, _ping())
+        assert isinstance(result, UnauthorizedError), f"wrong audience must be rejected: {result}"
+        assert "audience" in result.body.lower(), f"expected audience validation to reject the token: {result}"
 
     @pytest.mark.covers("other.auth.jwt.unknown_team_denied")
     def test_token_naming_a_team_that_does_not_exist_is_rejected(

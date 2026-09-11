@@ -51,3 +51,6 @@
 - {id: other.a2a.message_send.bridge_invokes, module: other, tier: P1, area: a2a, assertions: [bridge_invokes], source: "a2a_protocol/litellm_completion_bridge/handler.py", rationale: "A2A message/send routes through the completion bridge to a real provider and logs an asend_message spend row"}
 - {id: other.a2a.version.serves_pinned_0_3, module: other, tier: P1, area: a2a, assertions: [serves_pinned_0_3], source: "agent_endpoints/a2a_endpoints.py _served_version", rationale: "An agent pinning 0.3 returns the flat 0.3 message shape (parts on the result)"}
 - {id: other.a2a.version.serves_pinned_1_0, module: other, tier: P1, area: a2a, assertions: [serves_pinned_1_0], source: "agent_endpoints/a2a_endpoints.py _served_version", rationale: "An agent pinning 1.0 returns the nested 1.0 message shape (result.message with ROLE_AGENT)"}
+
+- {id: other.auth.jwt.wrong_issuer_denied, module: other, tier: P0, area: auth, assertions: [wrong_issuer_denied], source: "auth/handle_jwt.py", rationale: "A signed token with the correct audience and an unexpected issuer is rejected"}
+- {id: other.auth.jwt.wrong_audience_denied, module: other, tier: P0, area: auth, assertions: [wrong_audience_denied], source: "auth/handle_jwt.py", rationale: "A signed token from the trusted issuer intended for another app is rejected"}
