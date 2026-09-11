@@ -7150,7 +7150,7 @@ async def test_extract_user_id_rehydrates_cross_replica_dict_cache(proxy_globals
 
     key = "sk-alice-key"
     cache = UserApiKeyCache()
-    cache.in_memory_cache.set_cache(hash_token(key), {"token": hash_token(key), "user_id": "alice"})
+    cache.set_cache(hash_token(key), {"token": hash_token(key), "user_id": "alice"})
     proxy_globals.user_api_key_cache = cache
     proxy_globals.prisma_client = object()
 

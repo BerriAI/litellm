@@ -376,7 +376,9 @@ class DualCache(BaseCache):
             )
 
     # async_batch_set_cache
-    async def async_set_cache_pipeline(self, cache_list: list, local_only: bool = False, **kwargs):
+    async def async_set_cache_pipeline(
+        self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs
+    ):
         """
         Batch write values to the cache
         """
