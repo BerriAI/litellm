@@ -235,3 +235,33 @@ async def test_async_ocr_wrapper_sends_final_failure_to_attached_completion(
 
     assert caught.value is mapped_error
     assert native_completion.failures == [mapped_error, mapped_error]
+
+
+@pytest.mark.asyncio
+async def test_async_ocr_wrapper_retains_completion_until_metadata_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native_completion: Final = RecordingCompletion()
+    response: Final = object()
+    metadata_error: Final = ValueError("metadata failure")
+
+    async def aocr(**kwargs: object) -> object:
+        completion = kwargs.get("_litellm_call_completion")
+        assert isinstance(completion, CallCompletion)
+        assert completion.attach(native_completion)
+        return response
+
+    def fail_metadata(**kwargs: object) -> None:
+        raise metadata_error
+
+    monkeypatch.setattr("litellm.utils.function_setup", MagicMock(return_value=(MagicMock(), {})))
+    monkeypatch.setattr("litellm.utils.load_credentials_from_list", MagicMock())
+    monkeypatch.setattr("litellm.utils.update_response_metadata", fail_metadata)
+    wrapped: Final = client(aocr)
+
+    with pytest.raises(ValueError, match="metadata failure") as caught:
+        await wrapped()
+
+    assert caught.value is metadata_error
+    assert native_completion.successes == [response]
+    assert native_completion.failures == [metadata_error, metadata_error]

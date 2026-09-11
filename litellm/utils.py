@@ -1658,6 +1658,7 @@ def client(original_function):
                 start_time=start_time,
                 end_time=end_time,
             )
+            completion.release()
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -1941,12 +1942,14 @@ def client(original_function):
                 and _caching_handler_response is not None
                 and _caching_handler_response.final_embedding_cached_response is not None
             ):
-                return _llm_caching_handler._combine_cached_embedding_response_with_api_result(
+                combined_response: Final = _llm_caching_handler._combine_cached_embedding_response_with_api_result(
                     _caching_handler_response=_caching_handler_response,
                     embedding_response=result,
                     start_time=start_time,
                     end_time=end_time,
                 )
+                completion.release()
+                return combined_response
 
             _update_response_metadata(
                 result=result,
@@ -1957,6 +1960,7 @@ def client(original_function):
                 end_time=end_time,
             )
 
+            completion.release()
             return result
         except Exception as e:
             traceback_exception: Final = traceback.format_exc()
