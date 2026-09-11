@@ -20,8 +20,8 @@ nothing while a leaking one adds a fixed amount per request. RSS is read through
 /debug/memory/summary on every configured replica; a burst of failing calls leaves
 a transient bulge of garbage that gc reclaims within seconds, so each checkpoint
 samples for a settle window and keeps the lowest reading per worker, and the growth
-is judged per worker (by pid) so a stack serving one address from several pods
-compares each pod with itself.
+is judged per worker (by replica address and pid, since pods in their own pid
+namespaces report the same pids) so each worker is compared with itself.
 
 RSS alone is a coarse gauge: on the release stack (spend logs storing prompts,
 json logs, prometheus and otel callbacks) the same v1.100.0 breadcrumbs grew RSS
@@ -85,6 +85,10 @@ class RssReading:
     worker_pid: int
     ram_usage_mb: float
 
+    @property
+    def worker(self) -> tuple[str, int]:
+        return (self.replica, self.worker_pid)
+
 
 @dataclass(frozen=True, slots=True)
 class WorkerGrowth:
@@ -138,24 +142,26 @@ def _read_rss_everywhere_after_pause(proxy: ProxyClient) -> tuple[RssReading, ..
     )
 
 
-def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[int, RssReading]:
+def _settled_rss_per_worker(proxy: ProxyClient) -> Mapping[tuple[str, int], RssReading]:
     readings: Final = tuple(
         reading for _ in range(MEMORY_RSS_SETTLE_SAMPLES) for reading in _read_rss_everywhere_after_pause(proxy)
     )
     assert readings, "no /debug/memory/summary read carried ram_usage_mb, so the proxy cannot report its RSS"
     return MappingProxyType(
         {
-            pid: min((reading for reading in readings if reading.worker_pid == pid), key=lambda r: r.ram_usage_mb)
-            for pid in {reading.worker_pid for reading in readings}
+            worker: min((reading for reading in readings if reading.worker == worker), key=lambda r: r.ram_usage_mb)
+            for worker in {reading.worker for reading in readings}
         }
     )
 
 
-def _heaviest_worker_growth(warm: Mapping[int, RssReading], after: Mapping[int, RssReading]) -> WorkerGrowth:
-    growths: Final = tuple(WorkerGrowth(warm[pid], after[pid]) for pid in warm.keys() & after.keys())
+def _heaviest_worker_growth(
+    warm: Mapping[tuple[str, int], RssReading], after: Mapping[tuple[str, int], RssReading]
+) -> WorkerGrowth:
+    growths: Final = tuple(WorkerGrowth(warm[worker], after[worker]) for worker in warm.keys() & after.keys())
     assert growths, (
-        f"no worker answered /debug/memory/summary at both checkpoints (warm pids {sorted(warm)}, "
-        f"after pids {sorted(after)}), so no worker can be compared with itself"
+        f"no worker answered /debug/memory/summary at both checkpoints (warm workers {sorted(warm)}, "
+        f"after workers {sorted(after)}), so no worker can be compared with itself"
     )
     return max(growths, key=lambda growth: growth.growth_mb)
 
