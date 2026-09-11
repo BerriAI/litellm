@@ -47,10 +47,10 @@ pub async fn messages_request(
         .header(CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .map_err(|error| Error::InvalidRequest(error.to_string()))?;
-    let response = routes::app(state)
-        .oneshot(request)
-        .await
-        .map_err(|error| match error {})?;
+    let response = match routes::app(state).oneshot(request).await {
+        Ok(response) => response,
+        Err(error) => match error {},
+    };
     let status: StatusCode = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await

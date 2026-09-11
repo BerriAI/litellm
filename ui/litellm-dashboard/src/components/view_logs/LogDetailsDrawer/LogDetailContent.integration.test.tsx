@@ -272,6 +272,59 @@ describe("LogDetailContent", () => {
     expect(screen.queryByRole("tab", { name: "Request" })).not.toBeInTheDocument();
   });
 
+  it.each(["object", "serialized", "messages only", "null captures"])(
+    "preserves request inspection and copying for classifier logs with %s data",
+    async (shape) => {
+      const user = userEvent.setup();
+      const messages = [{ role: "user", content: "legacy classifier prompt" }];
+      const request = {
+        messages,
+        temperature: 0.5,
+        ...(shape === "null captures" ? { classifier_input: null, originating_request_masked: null } : {}),
+      };
+      const storedRequest = shape === "serialized" ? JSON.stringify(request) : request;
+      const logEntry: Partial<LogEntry> = {
+        call_type: "acompletion",
+        messages,
+        proxy_server_request: shape === "messages only" ? undefined : storedRequest,
+        metadata: { status: "success", internal_call_origin: "autorouter_classifier" },
+      };
+      render(<LogDetailContent logEntry={createLogEntry(logEntry)} />);
+
+      expect(screen.getByText("legacy classifier prompt")).toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Classifier input" })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("tab", { name: "JSON", exact: true }));
+      await user.click(screen.getByRole("button", { name: "Copy JSON", exact: true }));
+      expect(await navigator.clipboard.readText()).toBe(
+        JSON.stringify(shape === "messages only" ? messages : request, null, 2),
+      );
+    },
+  );
+
+  it.each([
+    ["classifier_input", "acompletion"],
+    ["originating_request_masked", "acompletion"],
+    ["classifier_input", "aresponses"],
+    ["originating_request_masked", "responses"],
+  ])("shows partial classifier audits when only %s is captured for %s", (field, callType) => {
+    render(
+      <LogDetailContent
+        logEntry={createLogEntry({
+          call_type: callType,
+          proxy_server_request: JSON.stringify({
+            [field]: { messages: [{ role: "user", content: "captured prompt" }] },
+          }),
+          metadata: { status: "success", internal_call_origin: "autorouter_classifier" },
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "Classifier input" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Originating request, credentials masked" })).toBeInTheDocument();
+    expect(screen.getByText("Not captured or message logging disabled")).toBeInTheDocument();
+    expect(screen.queryByText("Request & Response")).not.toBeInTheDocument();
+  });
+
   it("should display Request and Response tabs when JSON view is selected", async () => {
     const user = userEvent.setup();
     render(<LogDetailContent logEntry={createLogEntry()} />);

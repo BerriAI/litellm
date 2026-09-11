@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.oauth_identity_binding import credential_binding_matches
 from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
 )
@@ -69,6 +71,7 @@ async def _persist_credential(
     refresh_token: str | None,
     expires_in: int | None,
     scopes: tuple[str, ...] | None,
+    identity_binding_proof: str | None = None,
 ) -> None:
     from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
         store_user_oauth_credential,
@@ -86,6 +89,7 @@ async def _persist_credential(
         expires_in=expires_in,
         scopes=list(scopes) if scopes else None,
         skip_byok_guard=True,
+        identity_binding_proof=identity_binding_proof,
     )
 
 
@@ -142,12 +146,26 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
     return backend, coordinator, True
 
 
+async def _read_bound_credential(
+    server_lookup: ServerLookup, user_id: str, server_id: str
+) -> Mapping[str, object] | None:
+    credential: Final = await _read_credential(user_id, server_id)
+    server: Final = server_lookup(server_id)
+    binding: Final = server.oauth_identity_binding if server else None
+    if credential is not None and binding is not None and binding.mode == "enforce":
+        if not await credential_binding_matches(binding, user_id, server_id, credential):
+            return None
+    return credential
+
+
 def _build_per_user_oauth_token_store(
     server_lookup: ServerLookup,
 ) -> tuple[CachedOAuthTokenStore, bool]:
     backend, coordinator, uses_redis = _runtime_backend_and_coordinator()
     refresher: Final = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
-    refreshing: Final = RefreshingTokenStore(V2PerUserTokenStore(_read_credential), refresher, coordinator=coordinator)
+    refreshing: Final = RefreshingTokenStore(
+        V2PerUserTokenStore(partial(_read_bound_credential, server_lookup)), refresher, coordinator=coordinator
+    )
     return CachedOAuthTokenStore(refreshing, default_ttl_seconds=_DEFAULT_TTL_SECONDS, backend=backend), uses_redis
 
 
@@ -182,6 +200,18 @@ class LazyPerUserOAuthTokenStore:
         self._local_fetches = 0
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+        token: Final = await self._fetch_token(user_id, server_id)
+        server: Final = self._server_lookup(server_id)
+        binding: Final = server.oauth_identity_binding if server else None
+        if token is not None and binding is not None and binding.mode == "enforce":
+            if not await credential_binding_matches(
+                binding, user_id, server_id, {"identity_binding_proof": token.identity_binding_proof}
+            ):
+                await self.invalidate(user_id, server_id)
+                return None
+        return token
+
+    async def _fetch_token(self, user_id: str, server_id: str) -> OAuthToken | None:
         if self._uses_redis:
             store = self._store
             if store is not None:

@@ -53,6 +53,7 @@ from litellm.caching.caching import (
     RedisCache,
     RedisClusterCache,
 )
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import (
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
@@ -230,6 +231,7 @@ from litellm.types.router import (
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
+    DeploymentModelListingInfo,
     DeploymentTypedDict,
     FallbackAccessCheck,
     GuardrailTypedDict,
@@ -943,6 +945,9 @@ class Router:
         # ``id()``-reuse risk after GC). See
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
+        self.cached_deployment_model_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
+            self.get_deployment_model_info
+        )
         self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
         self._init_routing_groups(None)
         self._provider_unresolved_deployments: tuple[Callable[[], Deployment | None], ...] = ()
@@ -10042,6 +10047,7 @@ class Router:
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
+        self._invalidate_model_group_info_cache()
 
     def delete_deployment(self, id: str) -> Deployment | None:
         """
@@ -10210,15 +10216,71 @@ class Router:
             return None
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
 
+    def get_model_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
+        """
+        Return what the concrete deployments behind model_name contribute to its
+        /v1/models entry: the cost-map keys for their underlying models, plus the widest
+        token limits explicitly configured in their model_info. Resolved via O(1) index
+        lookup.
+
+        Returns None for wildcard-expanded or unknown names, where the listed name is the
+        real model name and no deployment-specific information exists, and treats a
+        malformed configured limit as absent rather than failing the listing.
+
+        The whole group is read rather than just its first deployment, so a group that
+        mixes models does not advertise a window that depends on config order; the widest
+        one is reported, which is what get_model_group_info already shows the Admin UI.
+        Keys are deduplicated, so the ordinary group of interchangeable deployments of one
+        model still costs the caller a single cost-map lookup. Unlike get_model_group_info,
+        this never triggers pattern matching or deep copies, so it is safe to call per
+        listed model on the /v1/models hot path.
+        """
+        indices: Final = self.model_name_to_deployment_indices.get(model_name)
+        if not indices:
+            return None
+
+        deployments: Final = tuple(self.model_list[index] for index in indices)
+        model_infos: Final = tuple(deployment.get("model_info") or MappingProxyType({}) for deployment in deployments)
+        params: Final = tuple(deployment.get("litellm_params") or MappingProxyType({}) for deployment in deployments)
+        # base_model resolution mirrors get_router_model_info: unset or blank means the
+        # deployment's own model name is the cost-map key.
+        cost_map_keys: Final = tuple(
+            dict.fromkeys(  # deduplicates while preserving config order
+                key
+                for key in (
+                    model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
+                    for model_info, litellm_params in zip(model_infos, params)
+                )
+                if isinstance(key, str) and key
+            )
+        )
+        return DeploymentModelListingInfo(
+            cost_map_keys=cost_map_keys,
+            max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),
+            max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
+        )
+
+    @staticmethod
+    def _widest_configured_limit(model_infos: Sequence[Mapping[str, Any]], field: str) -> int | None:
+        """The largest usable value of ``field`` across a group's configured model_info blocks."""
+        limits: Final = tuple(
+            limit
+            for limit in (coerce_token_limit(model_info.get(field)) for model_info in model_infos)
+            if limit is not None
+        )
+        return max(limits) if limits else None
+
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """
         Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
         deployment's model_info for model_name, via O(1) index lookup.
 
         Returns (None, None) for wildcard-expanded or unknown names, and treats a
-        malformed configured value as absent rather than failing the listing. Unlike
-        get_model_group_info, this never triggers pattern matching or deep copies, so it
-        is safe to call per listed model on the /v1/models hot path.
+        malformed configured value as absent rather than failing the caller.
+
+        Deliberately reads one deployment rather than aggregating the group the way
+        get_model_listing_info does: its caller truncates an embedding input to this
+        value, so the widest window in a mixed group would be the wrong answer there.
         """
         deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
         if deployment is None:
@@ -11003,6 +11065,9 @@ class Router:
         """
         return self.get_model_group_info(model_group)
 
+    def cached_model_group_info(self, model_group: str) -> ModelGroupInfo | None:
+        return self._cached_get_model_group_info(model_group)
+
     async def get_remaining_model_group_usage(self, model_group: str) -> dict[str, int]:
         model_group_info: Final = self._cached_get_model_group_info(model_group)
 
@@ -11780,6 +11845,7 @@ class Router:
         result and bypass budget enforcement.
         """
         self._cached_get_model_group_info.cache_clear()
+        self.cached_deployment_model_info.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
 
@@ -13330,8 +13396,10 @@ class Router:
                 return await session_cache.async_get_cache(key=cache_key)
             return await session_cache.redis_cache.async_get_cache(key=cache_key)
         except Exception as e:  # noqa: BLE001  # an optional binding must not make routing depend on Redis
-            verbose_router_logger.warning(
-                "Failed to read Claude Code session router binding; using the requested model: %s",
+            log_redis_failure(
+                verbose_router_logger,
+                logging.WARNING,
+                "Failed to read Claude Code session router binding; using the requested model",
                 e,
             )
             return None
