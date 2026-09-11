@@ -4371,6 +4371,21 @@ class BedrockConverseMessagesProcessor:
                                     image_url=image_url, format=format
                                 )
                                 _parts.append(_part)
+                            elif element["type"] == "video_url":
+                                # see the sync path: video shares the image
+                                # processor, which keys the block type off the
+                                # mime type.
+                                video_element = element["video_url"]
+                                if isinstance(video_element, dict):
+                                    video_url = video_element["url"]
+                                    video_format = video_element.get("format")
+                                else:
+                                    video_url = video_element
+                                    video_format = None
+                                _part = await BedrockImageProcessor.process_image_async(
+                                    image_url=video_url, format=video_format
+                                )
+                                _parts.append(_part)
                             elif element["type"] == "file":
                                 _part = await BedrockConverseMessagesProcessor._async_process_file_message(
                                     message=cast(ChatCompletionFileObject, element)
@@ -4742,6 +4757,23 @@ def _bedrock_converse_messages_pt(
                             _part = BedrockImageProcessor.process_image_sync(
                                 image_url=image_url,
                                 format=format,
+                            )
+                            _parts.append(_part)
+                        elif element["type"] == "video_url":
+                            # OpenAI `video_url` parts must reach Converse as
+                            # video blocks too. `process_image_sync` picks the
+                            # block type from the mime type (video/* -> video,
+                            # image/* -> image), so a video shares this path.
+                            video_element = element["video_url"]
+                            if isinstance(video_element, dict):
+                                video_url = video_element["url"]
+                                video_format = video_element.get("format")
+                            else:
+                                video_url = video_element
+                                video_format = None
+                            _part = BedrockImageProcessor.process_image_sync(
+                                image_url=video_url,
+                                format=video_format,
                             )
                             _parts.append(_part)
                         elif element["type"] == "file":
