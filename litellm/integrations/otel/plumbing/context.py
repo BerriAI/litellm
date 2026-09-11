@@ -310,6 +310,42 @@ def extract_traceparent(headers: Mapping[str, str]) -> Context | None:
     return _PROPAGATOR.extract(carrier)
 
 
+def _outgoing_trace_context(inbound_headers: Mapping[str, str] | None = None) -> Context | None:
+    root: Final = request_root_span()
+    if root is not None:
+        return context_from_span(root)
+
+    current: Final = get_current()
+    if is_recordable_span(get_current_span(current)):
+        return current
+
+    if inbound_headers is None:
+        return None
+    inbound_context: Final = extract_traceparent(inbound_headers)
+    if inbound_context is None or not is_recordable_span(get_current_span(inbound_context)):
+        return None
+    return inbound_context
+
+
+def inject_trace_context(
+    headers: Mapping[str, str],
+    inbound_headers: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """``headers`` plus W3C ``traceparent``/``tracestate`` for the current request's span.
+
+    Parent preference: the anchored request root span, then the ambient active span,
+    then the trace context the caller sent inbound. Only trace context is injected,
+    never Baggage, so per-request identity baggage cannot leak upstream. Unchanged
+    when no valid span context exists anywhere.
+    """
+    context: Final = _outgoing_trace_context(inbound_headers)
+    if context is None:
+        return dict(headers)  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
+    carrier: Final = dict(headers)  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
+    _PROPAGATOR.inject(carrier, context=context)
+    return carrier
+
+
 # The OTLP destinations this request's key or team pointed its traces at, resolved
 # once during auth. A ``ContextVar`` for the same reason the root span above is one:
 # it rides the request task's context into the ``asyncio.create_task`` children that
