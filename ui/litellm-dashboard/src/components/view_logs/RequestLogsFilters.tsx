@@ -7,6 +7,7 @@ import { useInfiniteSpendLogUsers } from "@/app/(dashboard)/hooks/spendLogs/useS
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { DataTableFilterField } from "@/components/shared/DataTable";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
@@ -346,6 +347,8 @@ interface RequestLogsFiltersProps {
 export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsFiltersProps) {
   const valueOf = (id: string): string => asString(get(id));
   const setter = (id: string) => (next: string | undefined) => set(id, next);
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
 
   return (
     <>
@@ -355,7 +358,9 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
         teams={teams}
       />
 
-      <ProjectFilterField value={valueOf(LOG_FILTER_IDS.PROJECT_ID)} onChange={setter(LOG_FILTER_IDS.PROJECT_ID)} />
+      {enableProjectsUI && (
+        <ProjectFilterField value={valueOf(LOG_FILTER_IDS.PROJECT_ID)} onChange={setter(LOG_FILTER_IDS.PROJECT_ID)} />
+      )}
 
       <DataTableFilterField label="Status">
         <Select

@@ -10,16 +10,15 @@ import {
   type ProviderSpendRow,
 } from "./entityUsageAggregations";
 import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost, type SummaryTile } from "./entityUsageSummary";
+import { SummaryTileCard } from "./SummaryTileCard";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
-import { ChevronDown, ChevronRight, Info } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import React, { type ReactNode, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -358,29 +357,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [],
   );
 
-  const chev = "size-3 text-muted-foreground";
-  const expandIcon = showCostBreakdown ? <ChevronDown className={chev} /> : <ChevronRight className={chev} />;
-
-  const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
-    <ShadcnCard
-      key={title}
-      className={expandable ? "cursor-pointer hover:bg-accent transition-colors" : undefined}
-      onClick={expandable ? () => setShowCostBreakdown(!showCostBreakdown) : undefined}
-    >
-      <CardContent>
-        <div className="flex items-center gap-2">
-          <h3 className="text-lg font-medium text-foreground">{title}</h3>
-          {tooltip ? (
-            <Tooltip>
-              <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
-              <TooltipContent>{tooltip}</TooltipContent>
-            </Tooltip>
-          ) : null}
-          {expandable ? expandIcon : null}
-        </div>
-        <p className={`text-2xl font-bold mt-2 ${className ?? ""}`}>{value}</p>
-      </CardContent>
-    </ShadcnCard>
+  const renderSummaryTile = (tile: SummaryTile) => (
+    <SummaryTileCard
+      key={tile.title}
+      tile={tile}
+      expanded={showCostBreakdown}
+      onToggleExpand={() => setShowCostBreakdown(!showCostBreakdown)}
+    />
   );
 
   const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];

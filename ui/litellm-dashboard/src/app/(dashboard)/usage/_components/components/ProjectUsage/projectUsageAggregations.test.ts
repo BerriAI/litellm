@@ -2,12 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ProjectDailySpendRow } from "@/components/networking";
 
-import {
-  buildDailySpendSeries,
-  buildProjectSpendBreakdown,
-  humanizeBackendListMessage,
-  summarizeProjectUsage,
-} from "./projectUsageAggregations";
+import { buildDailySpendSeries, buildProjectSpendBreakdown, summarizeProjectUsage } from "./projectUsageAggregations";
 
 const row = (overrides: Partial<ProjectDailySpendRow> = {}): ProjectDailySpendRow => ({
   date: "2026-09-01",
@@ -124,25 +119,5 @@ describe("buildProjectSpendBreakdown", () => {
     const rows = [row({ project_id: "project-alpha", project_alias: "Project Alpha" })];
 
     expect(buildProjectSpendBreakdown(rows)[0].project_alias).toBe("Project Alpha");
-  });
-});
-
-describe("humanizeBackendListMessage", () => {
-  it("strips a single-quoted Python list down to plain text", () => {
-    expect(humanizeBackendListMessage("Project(s) not found: ['proj-123']")).toBe(
-      "Project(s) not found: proj-123",
-    );
-  });
-
-  it("comma-joins a multi-item Python list", () => {
-    expect(humanizeBackendListMessage("Project(s) not found: ['proj-1', 'proj-2']")).toBe(
-      "Project(s) not found: proj-1, proj-2",
-    );
-  });
-
-  it("leaves a message with no trailing list untouched", () => {
-    expect(humanizeBackendListMessage("Not authorized to view this project")).toBe(
-      "Not authorized to view this project",
-    );
   });
 });

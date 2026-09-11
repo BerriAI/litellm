@@ -73,12 +73,9 @@ describe("ProjectUsage", () => {
     await user.click(screen.getByRole("option", { name: "Project Alpha" }));
 
     await waitFor(() => expect(mockProjectDailyActivityCall).toHaveBeenCalledTimes(1));
-    expect(mockProjectDailyActivityCall).toHaveBeenCalledWith(
-      "test-token",
-      DATE_VALUE.from,
-      DATE_VALUE.to,
-      ["project-alpha"],
-    );
+    expect(mockProjectDailyActivityCall).toHaveBeenCalledWith("test-token", DATE_VALUE.from, DATE_VALUE.to, [
+      "project-alpha",
+    ]);
 
     await waitFor(() => expect(screen.getAllByText("$12.50").length).toBeGreaterThan(0));
     expect(screen.getAllByText("4").length).toBeGreaterThan(0);
@@ -99,6 +96,20 @@ describe("ProjectUsage", () => {
     expect(await screen.findByText("Could not load project usage")).toBeInTheDocument();
     expect(screen.getByText("Project management is an enterprise feature")).toBeInTheDocument();
     expect(screen.queryByText("No project usage data")).not.toBeInTheDocument();
+  });
+
+  it("renders a backend not-found message verbatim, without mangling the comma-joined list", async () => {
+    mockProjectDailyActivityCall.mockRejectedValue(new Error("Project(s) not found: also-missing, does-not-exist"));
+
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ProjectUsage accessToken="test-token" projectList={PROJECT_LIST} dateValue={DATE_VALUE} premiumUser={true} />,
+    );
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(screen.getByRole("option", { name: "Project Alpha" }));
+
+    expect(await screen.findByText("Project(s) not found: also-missing, does-not-exist")).toBeInTheDocument();
   });
 
   it("shows a loading indicator while fetching data for a newly-added project", async () => {

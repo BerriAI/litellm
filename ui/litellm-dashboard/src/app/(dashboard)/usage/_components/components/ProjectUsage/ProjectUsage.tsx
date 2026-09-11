@@ -13,15 +13,11 @@ import { projectDailyActivityCall } from "@/components/networking";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 
-import { buildSummaryTiles, type SummaryTile } from "../EntityUsage/entityUsageSummary";
+import { buildSummaryTiles } from "../EntityUsage/entityUsageSummary";
+import { SummaryTileCard } from "../EntityUsage/SummaryTileCard";
 import type { EntityList } from "../EntityUsage/EntityUsage";
 import ProjectSpendBreakdown from "./ProjectSpendBreakdown";
-import {
-  buildDailySpendSeries,
-  buildProjectSpendBreakdown,
-  humanizeBackendListMessage,
-  summarizeProjectUsage,
-} from "./projectUsageAggregations";
+import { buildDailySpendSeries, buildProjectSpendBreakdown, summarizeProjectUsage } from "./projectUsageAggregations";
 
 interface ProjectUsageProps {
   accessToken: string | null;
@@ -29,15 +25,6 @@ interface ProjectUsageProps {
   dateValue: DateRangePickerValue;
   premiumUser: boolean;
 }
-
-const renderSummaryTile = ({ title, value, className }: SummaryTile) => (
-  <ShadcnCard key={title}>
-    <CardContent>
-      <h3 className="text-lg font-medium text-foreground">{title}</h3>
-      <p className={`text-2xl font-bold mt-2 ${className ?? ""}`}>{value}</p>
-    </CardContent>
-  </ShadcnCard>
-);
 
 const ProjectUsage: React.FC<ProjectUsageProps> = ({ accessToken, projectList, dateValue, premiumUser }) => {
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
@@ -57,11 +44,17 @@ const ProjectUsage: React.FC<ProjectUsageProps> = ({ accessToken, projectList, d
 
   const queryOptions = {
     queryKey: ["project-daily-activity", selectedProjectIds, startTime?.toISOString(), endTime?.toISOString()],
-    queryFn: () => projectDailyActivityCall(accessToken as string, startTime as Date, endTime as Date, selectedProjectIds),
+    queryFn: () =>
+      projectDailyActivityCall(accessToken as string, startTime as Date, endTime as Date, selectedProjectIds),
     enabled,
     placeholderData: keepPreviousData,
   };
   const { data, isPending, isFetching, isPlaceholderData, isError, error } = useQuery(queryOptions);
+
+  const rows = useMemo(() => data?.results ?? [], [data]);
+  const summary = useMemo(() => summarizeProjectUsage(rows), [rows]);
+  const dailySpend = useMemo(() => buildDailySpendSeries(rows), [rows]);
+  const projectBreakdown = useMemo(() => buildProjectSpendBreakdown(rows), [rows]);
 
   if (!premiumUser) {
     return (
@@ -78,10 +71,6 @@ const ProjectUsage: React.FC<ProjectUsageProps> = ({ accessToken, projectList, d
     );
   }
 
-  const rows = data?.results ?? [];
-  const summary = summarizeProjectUsage(rows);
-  const dailySpend = buildDailySpendSeries(rows);
-  const projectBreakdown = buildProjectSpendBreakdown(rows);
   const isLoadingRows = isPending || (isFetching && isPlaceholderData);
 
   const renderResultsPanel = () => {
@@ -104,7 +93,7 @@ const ProjectUsage: React.FC<ProjectUsageProps> = ({ accessToken, projectList, d
         <div className="col-span-2">
           <Alert variant="error">
             <AlertTitle>Could not load project usage</AlertTitle>
-            <AlertDescription>{humanizeBackendListMessage(extractProxyErrorMessage(error))}</AlertDescription>
+            <AlertDescription>{extractProxyErrorMessage(error)}</AlertDescription>
           </Alert>
         </div>
       );
@@ -120,7 +109,9 @@ const ProjectUsage: React.FC<ProjectUsageProps> = ({ accessToken, projectList, d
                 <ChartLoader isDateChanging={false} />
               ) : (
                 <div className="grid grid-cols-5 gap-4 mt-4">
-                  {buildSummaryTiles(summary, false).map(renderSummaryTile)}
+                  {buildSummaryTiles(summary, false).map((tile) => (
+                    <SummaryTileCard key={tile.title} tile={tile} />
+                  ))}
                 </div>
               )}
             </CardContent>

@@ -21,6 +21,7 @@ export interface UsageViewSelectProps {
   userRole: string | null;
   canViewTagUsage?: boolean;
   isOrgAdmin?: boolean;
+  enableProjectsUI?: boolean;
   title?: string;
   description?: string;
   "data-id"?: string;
@@ -118,6 +119,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   userRole,
   canViewTagUsage = false,
   isOrgAdmin = false,
+  enableProjectsUI = true,
   title = "Usage View",
   description = "Select the usage data you want to view",
   "data-id": dataId,
@@ -125,6 +127,9 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
     return OPTIONS.filter((option) => {
+      if (option.value === "project" && !enableProjectsUI) {
+        return false;
+      }
       if (option.capability) {
         return hasCapability(userRole, option.capability, isOrgAdmin);
       }

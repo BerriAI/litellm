@@ -1517,11 +1517,12 @@ async def test_get_project_daily_activity_unknown_project_404(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         await get_project_daily_activity(
             user_api_key_dict=admin,
-            project_ids="does-not-exist",
+            project_ids="does-not-exist,also-missing",
             start_date="2026-09-01",
             end_date="2026-09-02",
         )
     assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == {"error": "Project(s) not found: also-missing, does-not-exist"}
     mock_prisma.db.query_raw.assert_not_called()
 
 

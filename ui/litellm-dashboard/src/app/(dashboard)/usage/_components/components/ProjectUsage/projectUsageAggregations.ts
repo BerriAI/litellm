@@ -44,20 +44,27 @@ export const summarizeProjectUsage = (rows: ProjectDailySpendRow[]): ProjectUsag
   );
 
 export const buildDailySpendSeries = (rows: ProjectDailySpendRow[]): DailyProjectSpendPoint[] => {
-  const spendByDate = rows.reduce<Record<string, number>>(
-    (totals, row) => ({ ...totals, [row.date]: (totals[row.date] ?? 0) + row.spend }),
-    {},
-  );
-  return Object.entries(spendByDate)
+  const spendByDate = new Map<string, number>();
+  for (const row of rows) {
+    spendByDate.set(row.date, (spendByDate.get(row.date) ?? 0) + row.spend);
+  }
+  return [...spendByDate.entries()]
     .map(([date, spend]) => ({ date, spend }))
     .sort((a, b) => a.date.localeCompare(b.date));
 };
 
-const groupByProjectId = (rows: ProjectDailySpendRow[]): Record<string, ProjectDailySpendRow[]> =>
-  rows.reduce<Record<string, ProjectDailySpendRow[]>>(
-    (groups, row) => ({ ...groups, [row.project_id]: [...(groups[row.project_id] ?? []), row] }),
-    {},
-  );
+const groupByProjectId = (rows: ProjectDailySpendRow[]): ProjectDailySpendRow[][] => {
+  const groups = new Map<string, ProjectDailySpendRow[]>();
+  for (const row of rows) {
+    const existing = groups.get(row.project_id);
+    if (existing) {
+      existing.push(row);
+    } else {
+      groups.set(row.project_id, [row]);
+    }
+  }
+  return [...groups.values()];
+};
 
 const summarizeProjectGroup = (rows: ProjectDailySpendRow[]): ProjectSpendRow => {
   const [{ project_id, project_alias }] = rows;
@@ -75,22 +82,18 @@ const summarizeProjectGroup = (rows: ProjectDailySpendRow[]): ProjectSpendRow =>
 };
 
 const disambiguateAliases = (rows: ProjectSpendRow[]): ProjectSpendRow[] => {
-  const aliasCounts = rows.reduce<Record<string, number>>(
-    (counts, row) => ({ ...counts, [row.project_alias]: (counts[row.project_alias] ?? 0) + 1 }),
-    {},
-  );
+  const aliasCounts = new Map<string, number>();
+  for (const row of rows) {
+    aliasCounts.set(row.project_alias, (aliasCounts.get(row.project_alias) ?? 0) + 1);
+  }
   return rows.map((row) =>
-    aliasCounts[row.project_alias] > 1 ? { ...row, project_alias: `${row.project_alias} (${row.project_id})` } : row,
+    (aliasCounts.get(row.project_alias) ?? 0) > 1
+      ? { ...row, project_alias: `${row.project_alias} (${row.project_id})` }
+      : row,
   );
 };
 
 export const buildProjectSpendBreakdown = (rows: ProjectDailySpendRow[]): ProjectSpendRow[] => {
-  const summarized = Object.values(groupByProjectId(rows)).map(summarizeProjectGroup);
+  const summarized = groupByProjectId(rows).map(summarizeProjectGroup);
   return disambiguateAliases(summarized).sort((a, b) => b.spend - a.spend);
 };
-
-export const humanizeBackendListMessage = (message: string): string =>
-  message.replace(/\[([^\]]*)]\s*$/, (_match, listContents: string) => {
-    const items = [...listContents.matchAll(/'([^']*)'|"([^"]*)"/g)].map((m) => m[1] ?? m[2]);
-    return items.length > 0 ? items.join(", ") : listContents;
-  });

@@ -28,11 +28,16 @@ vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
   useProjects: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: vi.fn(),
+}));
+
 import { useInfiniteSpendLogEndUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers";
 import { useInfiniteSpendLogUsers } from "@/app/(dashboard)/hooks/spendLogs/useSpendLogUsers";
 import { useInfiniteKeyAliases } from "@/app/(dashboard)/hooks/keys/useKeyAliases";
 import { useInfiniteModelInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
 const emptyInfiniteQuery = {
   data: { pages: [], pageParams: [] },
@@ -85,6 +90,9 @@ describe("RequestLogsFilters", () => {
     vi.mocked(useProjects).mockReturnValue({ data: [], isLoading: false } as unknown as ReturnType<
       typeof useProjects
     >);
+    vi.mocked(useUISettings).mockReturnValue({
+      data: { values: { enable_projects_ui: true } },
+    } as unknown as ReturnType<typeof useUISettings>);
   });
 
   it("renders every backend-supported filter field", async () => {
@@ -150,6 +158,17 @@ describe("RequestLogsFilters", () => {
     await chooseSelectOption(user, await screen.findByPlaceholderText("Search or select a project"), /Alpha/);
 
     expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.PROJECT_ID, "project-1");
+  });
+
+  it("hides the Project filter when the projects UI setting is disabled", async () => {
+    vi.mocked(useUISettings).mockReturnValue({
+      data: { values: { enable_projects_ui: false } },
+    } as unknown as ReturnType<typeof useUISettings>);
+
+    renderFilters();
+
+    expect(await screen.findByText("Team ID")).toBeInTheDocument();
+    expect(screen.queryByText("Project")).not.toBeInTheDocument();
   });
 
   it("pushes the User ID picker query to the paginated user lookup", async () => {

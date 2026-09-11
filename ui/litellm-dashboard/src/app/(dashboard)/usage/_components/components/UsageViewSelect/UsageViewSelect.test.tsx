@@ -100,6 +100,16 @@ describe("UsageViewSelect", () => {
     expect(offers(container, optionName)).toBe(expected);
   });
 
+  it("should hide Project Usage from an admin when enableProjectsUI is false", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" enableProjectsUI={false} />,
+    );
+
+    await openMenu(user);
+    expect(offers(container, "Project Usage")).toBe(false);
+  });
+
   it.each(["Team Usage", "Tag Usage"])("should keep %s available to an internal user", async (optionName) => {
     const user = userEvent.setup();
     const { container } = render(

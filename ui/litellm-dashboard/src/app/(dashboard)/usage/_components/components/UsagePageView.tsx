@@ -24,6 +24,7 @@ import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
@@ -111,7 +112,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const isOrgAdmin = useIsOrgAdmin();
   const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
-  const canViewProjectUsage = hasCapability(userRole, "viewProjectUsage");
+  const { data: uiSettingsData } = useUISettings();
+  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
+  const canViewProjectUsage = hasCapability(userRole, "viewProjectUsage") && enableProjectsUI;
 
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
@@ -484,6 +487,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               userRole={userRole}
               canViewTagUsage={canViewTagUsage}
               isOrgAdmin={isOrgAdmin}
+              enableProjectsUI={enableProjectsUI}
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
@@ -937,7 +941,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             />
           )}
 
-          {/* Project Usage Panel */}
           {usageView === "project" && canViewProjectUsage && (
             <ProjectUsage
               accessToken={accessToken}
