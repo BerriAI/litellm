@@ -1,0 +1,98 @@
+package litellm
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+func TestHandleAPIResponseAcceptsFullSuccessRange(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		wantErr    bool
+	}{
+		{name: "200 OK", statusCode: http.StatusOK, wantErr: false},
+		{name: "201 Created", statusCode: http.StatusCreated, wantErr: false},
+		{name: "202 Accepted", statusCode: http.StatusAccepted, wantErr: false},
+		{name: "400 Bad Request", statusCode: http.StatusBadRequest, wantErr: true},
+		{name: "404 Not Found", statusCode: http.StatusNotFound, wantErr: true},
+		{name: "500 Internal Server Error", statusCode: http.StatusInternalServerError, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			rec.WriteHeader(tt.statusCode)
+			rec.WriteString(`{"model_name":"gpt-4o"}`)
+			resp := rec.Result()
+
+			client := NewClient("http://localhost:4000", "test-key", true)
+			got, err := handleAPIResponse(resp, map[string]interface{}{"model_name": "gpt-4o"}, client)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("handleAPIResponse returned no error for status %d", tt.statusCode)
+				}
+				if !strings.Contains(err.Error(), strconv.Itoa(tt.statusCode)) {
+					t.Errorf("error %q does not mention status %d", err.Error(), tt.statusCode)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("handleAPIResponse returned unexpected error: %v", err)
+			}
+			if got.ModelName != "gpt-4o" {
+				t.Errorf("got.ModelName = %q, want gpt-4o", got.ModelName)
+			}
+		})
+	}
+}
+
+func TestHandleMCPAPIResponseAcceptsFullSuccessRange(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		wantErr    bool
+	}{
+		{name: "200 OK", statusCode: http.StatusOK, wantErr: false},
+		{name: "201 Created", statusCode: http.StatusCreated, wantErr: false},
+		{name: "202 Accepted", statusCode: http.StatusAccepted, wantErr: false},
+		{name: "400 Bad Request", statusCode: http.StatusBadRequest, wantErr: true},
+		{name: "404 Not Found", statusCode: http.StatusNotFound, wantErr: true},
+		{name: "500 Internal Server Error", statusCode: http.StatusInternalServerError, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			rec.WriteHeader(tt.statusCode)
+			rec.WriteString(`{"server_id":"srv-1","server_name":"gh"}`)
+			resp := rec.Result()
+
+			client := NewClient("http://localhost:4000", "test-key", true)
+			var mcpResp MCPServerResponse
+			err := handleMCPAPIResponse(resp, &mcpResp, client)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("handleMCPAPIResponse returned no error for status %d", tt.statusCode)
+				}
+				if !strings.Contains(err.Error(), strconv.Itoa(tt.statusCode)) {
+					t.Errorf("error %q does not mention status %d", err.Error(), tt.statusCode)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("handleMCPAPIResponse returned unexpected error: %v", err)
+			}
+			if mcpResp.ServerID != "srv-1" {
+				t.Errorf("mcpResp.ServerID = %q, want srv-1", mcpResp.ServerID)
+			}
+		})
+	}
+}
