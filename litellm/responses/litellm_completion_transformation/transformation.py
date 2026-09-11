@@ -451,11 +451,7 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _extract_system_content(message: object) -> tuple[str, ...]:
-        raw: Final = (
-            message.get("content")
-            if isinstance(message, dict)
-            else (message.content if hasattr(message, "content") else None)
-        )
+        raw: Final = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
         if isinstance(raw, str):
             return (raw,) if raw else ()
         if isinstance(raw, list):
@@ -465,7 +461,7 @@ class LiteLLMCompletionResponsesConfig:
                     if isinstance(block, str) and block:
                         yield block
                     elif isinstance(block, dict):
-                        text: Final = block.get("text")
+                        text = block.get("text")  # rebind-ok: loop variable
                         if isinstance(text, str) and text:
                             yield text
 
@@ -498,7 +494,7 @@ class LiteLLMCompletionResponsesConfig:
         def _is_system(msg: object) -> bool:
             if isinstance(msg, dict):
                 return msg.get("role") == "system"
-            return bool(hasattr(msg, "role") and msg.role == "system")
+            return bool(getattr(msg, "role", None) == "system")
 
         system_indices: Final = tuple(i for i, m in enumerate(messages) if _is_system(m))
         if not system_indices or (len(system_indices) == 1 and system_indices[0] == 0):
