@@ -76,7 +76,7 @@ def _get_realtime_http_provider_config(
     dynamic_api_base: str | None,
     dynamic_api_key: str | None,
     litellm_params: GenericLiteLLMParams,
-    use_codex_backend: bool = False,
+    is_call: bool = False,
 ) -> tuple["BaseRealtimeHTTPConfig | None", str, str]:
     """
     Return (provider_config, resolved_api_base, resolved_api_key) for the
@@ -90,23 +90,19 @@ def _get_realtime_http_provider_config(
     )
 
     provider_config: BaseRealtimeHTTPConfig | None = None
-    if custom_llm_provider == "chatgpt":
-        from litellm.llms.chatgpt.realtime import ChatGPTRealtimeHTTPConfig
-
-        provider_config = ChatGPTRealtimeHTTPConfig(litellm_params, use_codex_backend=use_codex_backend)
-    elif custom_llm_provider in LlmProviders._member_map_.values():
+    if custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_http_config(
             model="",
             provider=LlmProviders(custom_llm_provider),
+            params=litellm_params,
+            is_call=is_call,
         )
 
-    raw_api_base: Final = (
-        litellm_params.api_base if custom_llm_provider == "chatgpt" else dynamic_api_base or litellm_params.api_base
-    )
+    raw_api_base: Final = dynamic_api_base or litellm_params.api_base
     raw_api_key: Final = dynamic_api_key or litellm_params.api_key
 
     if provider_config is not None:
-        resolved_api_base = provider_config.get_api_base(api_base=raw_api_base)
+        resolved_api_base = provider_config.resolve_api_base(litellm_params.api_base, dynamic_api_base)
         resolved_api_key = provider_config.get_api_key(api_key=raw_api_key)
     else:
         # Fallback for providers without a dedicated HTTP config (treated as OpenAI-compatible).
@@ -260,8 +256,6 @@ async def arealtime_calls(
     timeout: float | None = None,
     **kwargs,
 ):
-    from litellm.llms.chatgpt.realtime import realtime_call_headers
-
     model_name = model or "gpt-4o-realtime-preview"
     litellm_logging_obj: Final[LiteLLMLogging] = kwargs.get("litellm_logging_obj")
     litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -281,12 +275,14 @@ async def arealtime_calls(
         dynamic_api_base=dynamic_api_base,
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
-        use_codex_backend=True,
+        is_call=True,
     )
     if session is not None:
         session = _with_resolved_session_model(session, model_name)
     call_headers: Final = (
-        realtime_call_headers(litellm_params) if custom_llm_provider == "chatgpt" else kwargs.get("extra_headers")
+        provider_config.get_realtime_calls_extra_headers(kwargs.get("extra_headers"))
+        if provider_config is not None
+        else kwargs.get("extra_headers")
     )
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
@@ -308,23 +304,13 @@ async def arealtime_calls(
         client=kwargs.get("client"),
         api_version=litellm_params.api_version,
     )
-    if custom_llm_provider == "chatgpt":
-        from litellm.llms.chatgpt.realtime import (
-            ChatGPTRealtime,
-            configured_realtime_headers,
-            configured_realtime_query,
+    return (
+        provider_config.transform_realtime_calls_response(
+            response, model_name, litellm_logging_obj.get_router_model_id(), call_headers
         )
-
-        response.extensions["chatgpt_realtime"] = MappingProxyType(
-            {
-                "model": model_name,
-                "model_id": litellm_logging_obj.get_router_model_id(),
-                "api_base": ChatGPTRealtime.get_api_base(litellm_params.api_base),
-                "extra_headers": configured_realtime_headers(call_headers),
-                "extra_query": configured_realtime_query(litellm_params),
-            }
-        )
-    return response
+        if provider_config is not None
+        else response
+    )
 
 
 async def vertex_access_token_resolver(
@@ -421,7 +407,26 @@ async def _arealtime(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
         )
-    if provider_config is not None:
+    provider_handler: Final = (
+        ProviderConfigManager.get_provider_realtime_handler(
+            LlmProviders(_custom_llm_provider), litellm_params, websocket.headers, headers
+        )
+        if _custom_llm_provider in LlmProviders._member_map_.values()
+        else None
+    )
+    if provider_handler is not None:
+        await provider_handler.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base or None,
+            api_key=api_key,
+            timeout=timeout,
+            query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
+    elif provider_config is not None:
         await base_llm_http_handler.async_realtime(
             model=model,
             websocket=websocket,
@@ -468,21 +473,6 @@ async def _arealtime(
             query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
-        )
-    elif _custom_llm_provider == "chatgpt":
-        from litellm.llms.chatgpt.realtime import ChatGPTRealtime, accounts_for_call_usage
-
-        await ChatGPTRealtime(litellm_params, websocket.headers, headers).async_realtime(
-            model=model,
-            websocket=websocket,
-            logging_obj=litellm_logging_obj,
-            api_base=ChatGPTRealtime.get_api_base(api_base),
-            api_key="chatgpt-oauth",
-            timeout=timeout,
-            query_params=query_params,
-            user_api_key_dict=kwargs.get("user_api_key_dict"),
-            litellm_metadata=_build_litellm_metadata(kwargs),
-            account_usage=accounts_for_call_usage(litellm_params),
         )
     elif _custom_llm_provider == "openai":
         api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or "https://api.openai.com/"

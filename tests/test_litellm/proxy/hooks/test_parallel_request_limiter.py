@@ -2,11 +2,17 @@
 Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
+import asyncio
+import shutil
+import socket
+import subprocess
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter import (
@@ -14,6 +20,105 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
+
+
+@pytest.fixture
+def isolated_legacy_redis(tmp_path):
+    executable = shutil.which("redis-server")
+    if executable is None:
+        pytest.skip("redis-server is required to exercise atomic Lua updates")
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    process = subprocess.Popen(
+        [
+            executable,
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--save",
+            "",
+            "--appendonly",
+            "no",
+            "--dir",
+            str(tmp_path),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        import redis
+
+        client = redis.Redis(host="127.0.0.1", port=port)
+        for _ in range(100):
+            try:
+                client.ping()
+                break
+            except redis.ConnectionError:
+                import time
+
+                time.sleep(0.01)
+        else:
+            pytest.fail("isolated Redis did not start")
+        yield port
+        client.close()
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_realtime_releases_update_redis_without_lost_decrement(isolated_legacy_redis):
+    remote = RedisCache(host="127.0.0.1", port=isolated_legacy_redis, namespace="legacy-test")
+    first_cache, second_cache = DualCache(redis_cache=remote), DualCache(redis_cache=remote)
+    first, second = (_PROXY_MaxParallelRequestsHandler(InternalUsageCache(c)) for c in (first_cache, second_cache))
+    auth = UserAPIKeyAuth(api_key="concurrent-key", max_parallel_requests=2)
+    first_data, second_data = {"model": "test"}, {"model": "test"}
+    first.begin_realtime_attachment(first_data)
+    second.begin_realtime_attachment(second_data)
+    await first.async_pre_call_hook(auth, first_cache, first_data, "_arealtime")
+    await second.async_pre_call_hook(auth, second_cache, second_data, "_arealtime")
+    key = f"concurrent-key::{datetime.now().strftime('%Y-%m-%d-%H-%M')}::request_count"
+    counter = {"current_requests": 2, "current_rpm": 2, "current_tpm": 17}
+    await first_cache.async_set_cache(key, counter)
+    await second_cache.async_set_cache(key, counter, local_only=True)
+    remote.redis_client.pexpire(remote.check_and_fix_namespace(key), 15000)
+    await asyncio.gather(
+        first.async_release_realtime_attachment(first_data, auth),
+        second.async_release_realtime_attachment(second_data, auth),
+    )
+    expected = {"current_requests": 0, "current_rpm": 2, "current_tpm": 17}
+    assert await remote.async_get_cache(key) == expected
+    assert 0 < remote.redis_client.pttl(remote.check_and_fix_namespace(key)) <= 15000
+    assert await first_cache.async_get_cache(key) == expected
+    assert await second_cache.async_get_cache(key) == expected
+    await first_cache.async_set_cache("missing", counter, local_only=True)
+    await first._release_realtime_counter("missing")
+    assert await remote.async_get_cache("missing") is None
+    assert await first_cache.async_get_cache("missing", local_only=True) is None
+
+
+@pytest.mark.asyncio
+async def test_realtime_release_preserves_newer_local_admission_while_redis_finishes():
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def release(**kwargs):
+        started.set()
+        await finish.wait()
+
+    remote = MagicMock(spec=RedisCache)
+    remote.async_register_script.return_value = AsyncMock(side_effect=release)
+    cache = DualCache(redis_cache=remote)
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(cache))
+    await cache.async_set_cache("key", {"current_requests": 1, "current_rpm": 1, "current_tpm": 7}, local_only=True)
+    task = asyncio.create_task(handler._release_realtime_counter("key"))
+    await started.wait()
+    next_admission = {"current_requests": 1, "current_rpm": 2, "current_tpm": 7}
+    await cache.async_set_cache("key", next_admission, local_only=True)
+    finish.set()
+    await task
+    assert await cache.async_get_cache("key", local_only=True) == next_admission
 
 
 @pytest.mark.asyncio

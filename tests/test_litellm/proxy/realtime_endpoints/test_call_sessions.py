@@ -180,6 +180,7 @@ async def test_supervised_attachments_release_real_limiter_before_reconnect(monk
         finally:
             _request_stash.reset(cleanup_token)
 
+
 def test_sideband_token_binds_owner_and_model(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-only-salt-for-codex-realtime")
     call = CodexRealtimeCall(
@@ -755,3 +756,276 @@ async def test_attachment_releases_quota_before_upstream_close_handshake(monkeyp
         "{api_key:close-order-owner}:max_parallel_requests", litellm_parent_otel_span=None, local_only=True
     )
     assert limiter._gauge_in_flight_from_cache_value(value) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "provider", "observer", "renewal", "legacy_key", "legacy_global"])
+async def test_signaling_keeps_or_releases_owned_call_lease(monkeypatch, failure):
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+    from fastapi import Request
+    from litellm.proxy.hooks.realtime_call_lease import RealtimeCallLease
+
+    from litellm.proxy import proxy_server as server
+    from litellm.proxy.hooks.parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+
+    auth = UserAPIKeyAuth(max_parallel_requests=None if failure == "legacy_global" else 1)
+    lease = MagicMock(spec=RealtimeCallLease)
+    lease.renew = AsyncMock(return_value=failure != "renewal")
+    lease.close = AsyncMock()
+    legacy = failure in ("legacy_key", "legacy_global")
+    limiter = MagicMock(spec=_PROXY_MaxParallelRequestsHandler if legacy else _PROXY_MaxParallelRequestsHandler_v3)
+    if not legacy:
+        limiter.transfer_realtime_call_slot.return_value = lease
+    proxy = MagicMock()
+    proxy.get_proxy_hook.return_value = limiter
+    monkeypatch.setattr(server, "proxy_logging_obj", proxy)
+    monkeypatch.setattr(
+        server, "general_settings", {"global_max_parallel_requests": 1} if failure == "legacy_global" else {}
+    )
+    monkeypatch.setattr(codex, "user_api_key_auth", AsyncMock(return_value=auth))
+    monkeypatch.setattr(codex, "can_key_call_resolved_model", AsyncMock())
+    process = AsyncMock(return_value=({}, None))
+    monkeypatch.setattr(codex, "process_codex_request", process)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "lease-transfer-test")
+
+    async def route(**kwargs):
+        lease.start.assert_called_once()
+        if failure == "provider":
+            raise RuntimeError("Provider unavailable")
+
+        async def respond():
+            return httpx.Response(
+                201,
+                text="v=0\r\n",
+                headers={"Location": "/v1/realtime/calls/rtc_lease"},
+                extensions={"chatgpt_realtime": {"model": "gpt-live-1-codex"}},
+            )
+
+        return respond()
+
+    async def supervise(request, call, owner, selected_lease):
+        assert owner is auth
+        assert selected_lease is lease
+        assert call.parallel_reserved
+        if failure == "observer":
+            raise RuntimeError("Observer unavailable")
+
+    monkeypatch.setattr(server, "route_request", route)
+    monkeypatch.setattr(codex, "supervise_codex_call", supervise)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/realtime/calls",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"authorization", b"Bearer owner")],
+        },
+        AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": json.dumps({"sdp": "v=0", "session": {"model": "voice"}}).encode(),
+            }
+        ),
+    )
+    if failure is None:
+        response = await codex.create_codex_realtime_call(request)
+        token = response.headers["location"].rsplit("/", 1)[-1]
+        assert codex.decode_call(token, "Bearer owner").parallel_reserved
+        lease.close.assert_not_awaited()
+    else:
+        with pytest.raises((RuntimeError, HTTPException)) as raised:
+            await codex.create_codex_realtime_call(request)
+        if legacy:
+            assert raised.value.status_code == 400
+            assert "V3 rate limiter" in raised.value.detail
+            process.assert_not_awaited()
+            lease.close.assert_not_awaited()
+        else:
+            if failure == "renewal":
+                assert raised.value.status_code == 503
+            lease.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_signaling_rejection_after_admission_refunds_parallel_slot(monkeypatch):
+    import json
+    from unittest.mock import AsyncMock
+
+    from fastapi import Request
+
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy import proxy_server as server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy = ProxyLogging(UserApiKeyCache())
+    monkeypatch.setattr(litellm, "callbacks", [])
+    proxy._add_proxy_hooks()
+    limiter = proxy.get_proxy_hook("parallel_request_limiter")
+    key = "{api_key:rejected-signaling-owner}:max_parallel_requests"
+
+    class Reject(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            current = await proxy.internal_usage_cache.async_get_cache(key, litellm_parent_otel_span=None, local_only=True)
+            assert limiter._gauge_in_flight_from_cache_value(current) == 1
+            raise RuntimeError("Policy rejected after admission")
+
+    litellm.callbacks.append(Reject())
+    monkeypatch.setattr(server, "proxy_logging_obj", proxy)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(
+        server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {"model_name": "voice", "litellm_params": {"model": "openai/gpt-realtime-1.5", "api_key": "test"}}
+            ]
+        ),
+    )
+    auth = UserAPIKeyAuth(api_key="rejected-signaling-owner", max_parallel_requests=1)
+    monkeypatch.setattr(codex, "user_api_key_auth", AsyncMock(return_value=auth))
+    monkeypatch.setattr(codex, "can_key_call_resolved_model", AsyncMock())
+    route = AsyncMock()
+    monkeypatch.setattr(server, "route_request", route)
+    for _ in range(2):
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/realtime/calls",
+                "query_string": b"",
+                "headers": [(b"content-type", b"application/json")],
+            },
+            AsyncMock(
+                return_value={
+                    "type": "http.request",
+                    "body": json.dumps({"sdp": "v=0", "session": {"model": "voice"}}).encode(),
+                }
+            ),
+        )
+        with pytest.raises(RuntimeError, match="Policy rejected after admission"):
+            await codex.create_codex_realtime_call(request)
+        current = await proxy.internal_usage_cache.async_get_cache(key, litellm_parent_otel_span=None, local_only=True)
+        assert limiter._gauge_in_flight_from_cache_value(current) == 0
+    route.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("callback_order", ["before", "after", "cancel"])
+async def test_signaling_settles_tokens_once_with_isolated_sdk_callbacks(monkeypatch, callback_order):
+    import asyncio
+    import json
+    from datetime import datetime
+    from unittest.mock import AsyncMock
+
+    import httpx
+    import litellm
+    from fastapi import Request
+    from litellm.proxy import proxy_server as server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash, isolated_request_stash
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy = ProxyLogging(UserApiKeyCache())
+    monkeypatch.setattr(litellm, "callbacks", [])
+    proxy._add_proxy_hooks()
+    limiter = proxy.get_proxy_hook("parallel_request_limiter")
+    monkeypatch.setattr(server, "proxy_logging_obj", proxy)
+    monkeypatch.setattr(server, "general_settings", {})
+    monkeypatch.setattr(
+        server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {"model_name": "voice", "litellm_params": {"model": "openai/gpt-realtime-1.5", "api_key": "test"}}
+            ]
+        ),
+    )
+    auth = UserAPIKeyAuth(api_key="signaling-settlement-owner", max_parallel_requests=1, tpm_limit=10000)
+    monkeypatch.setattr(codex, "user_api_key_auth", AsyncMock(return_value=auth))
+    monkeypatch.setattr(codex, "can_key_call_resolved_model", AsyncMock())
+    supervisor = AsyncMock()
+    monkeypatch.setattr(codex, "supervise_codex_call", supervisor)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "signaling-settlement-test")
+    ready, release_callback = asyncio.Event(), asyncio.Event()
+    callbacks = []
+
+    async def counter(kind):
+        return await proxy.internal_usage_cache.async_get_cache(
+            f"{{api_key:{auth.api_key}}}:{kind}", litellm_parent_otel_span=None, local_only=True
+        )
+
+    async def route(**kwargs):
+        assert get_request_stash() is None
+        assert await counter("tokens") > 0
+
+        async def callback():
+            await release_callback.wait()
+            assert get_request_stash() is None
+            await limiter.async_log_success_event(
+                kwargs={
+                    "litellm_call_id": kwargs["data"]["litellm_call_id"],
+                    "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+                },
+                response_obj=litellm.ModelResponse(usage=litellm.Usage()),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+
+        async def respond():
+            assert get_request_stash() is None
+            ready.set()
+            if callback_order == "cancel":
+                await asyncio.Event().wait()
+            callbacks.append(asyncio.create_task(callback()))
+            if callback_order == "before":
+                release_callback.set()
+                await callbacks[0]
+                assert await counter("tokens") > 0
+            return httpx.Response(
+                201,
+                text="v=0\r\n",
+                headers={"Location": "/v1/realtime/calls/rtc_settlement"},
+                extensions={"chatgpt_realtime": {"model": "gpt-live-1-codex"}},
+            )
+
+        return respond()
+
+    monkeypatch.setattr(server, "route_request", route)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/realtime/calls",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json"), (b"authorization", b"Bearer owner")],
+        },
+        AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": json.dumps({"sdp": "v=0", "session": {"model": "voice"}}).encode(),
+            }
+        ),
+    )
+    with isolated_request_stash():
+        signaling = asyncio.create_task(codex.create_codex_realtime_call(request))
+    await asyncio.wait_for(ready.wait(), timeout=2)
+    if callback_order == "cancel":
+        signaling.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await signaling
+        supervisor.assert_not_awaited()
+    else:
+        assert (await signaling).status_code == 201
+        assert limiter._gauge_in_flight_from_cache_value(await counter("max_parallel_requests")) == 1
+        await supervisor.call_args.args[3].close()
+    assert await counter("tokens") == 0
+    release_callback.set()
+    await asyncio.gather(*callbacks)
+    assert await counter("tokens") == 0
+    assert limiter._gauge_in_flight_from_cache_value(await counter("max_parallel_requests")) == 0

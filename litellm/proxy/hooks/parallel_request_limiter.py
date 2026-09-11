@@ -68,6 +68,16 @@ class _RealtimeAttachmentReservations(BaseModel):
         return owned
 
 
+_RELEASE_REALTIME_COUNTER_LUA: Final = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local value = cjson.decode(raw)
+value.current_requests = math.max(value.current_requests - 1, 0)
+redis.call('SET', KEYS[1], cjson.encode(value), 'KEEPTTL')
+return 1
+"""
+
+
 class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     # Class variables or attributes
     def __init__(self, internal_usage_cache: InternalUsageCache):
@@ -91,23 +101,23 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             )
         for key in keys:
-            await self._release_realtime_counter(key, user_api_key_dict)
+            await self._release_realtime_counter(key)
 
-    async def _release_realtime_counter(self, key: str, user_api_key_dict: UserAPIKeyAuth) -> None:
-        raw: Final[object] = await self.internal_usage_cache.async_get_cache(
-            key=key,
-            local_only=True,
-            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+    async def _release_realtime_counter(self, key: str) -> None:
+        local: Final = self.internal_usage_cache.dual_cache.in_memory_cache
+        remote: Final = self.internal_usage_cache.dual_cache.redis_cache
+        raw: Final[object] = local.get_cache(key)
+        current: Final = TypeAdapter(Mapping[str, int] | None).validate_python(raw)
+        updated: Final = (
+            {**current, "current_requests": max(current["current_requests"] - 1, 0)} if current is not None else None
         )
-        if raw is None:
-            return
-        current: Final = TypeAdapter(Mapping[str, int]).validate_python(raw)
-        await self.internal_usage_cache.async_set_cache(
-            key=key,
-            value={**current, "current_requests": max(current["current_requests"] - 1, 0)},
-            ttl=60,
-            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-        )
+        if updated is not None:
+            local.set_cache(key, updated, ttl=60)
+        if remote is not None:
+            release: Final = remote.async_register_script(_RELEASE_REALTIME_COUNTER_LUA)
+            await release(keys=(key,), args=())
+            if local.get_cache(key) is updated:
+                local.delete_cache(key)
 
     def print_verbose(self, print_statement):
         try:

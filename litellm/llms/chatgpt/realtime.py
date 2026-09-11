@@ -3,7 +3,7 @@ from enum import Enum, auto
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from httpx import URL, QueryParams
+from httpx import URL, QueryParams, Response
 from pydantic import TypeAdapter
 
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -156,6 +156,16 @@ class ChatGPTRealtime(OpenAIRealtime):
         self._profile_headers = realtime_headers(params, headers, extra_headers)
         self._call_id = TypeAdapter(str | None).validate_python(getattr(params, "chatgpt_realtime_call_id", None))
         self._extra_query = configured_realtime_query(params)
+        self._account_usage = accounts_for_call_usage(params)
+
+    def _get_default_api_base(self) -> str:
+        return self.get_api_base()
+
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        return "chatgpt-oauth"
+
+    def _accounts_for_call_usage(self) -> bool:
+        return self._account_usage
 
     def _get_additional_headers(
         self, api_key: str, *, openai_beta_realtime: bool = False
@@ -212,6 +222,14 @@ class ChatGPTRealtimeHTTPConfig(OpenAIRealtimeHTTPConfig):
     ) -> str:
         return api_base or (Authenticator.get_api_base() if self._use_codex_backend else ChatGPTRealtime.get_api_base())
 
+    def resolve_api_base(self, api_base: str | None, dynamic_api_base: str | None) -> str:
+        return self.get_api_base(api_base)
+
+    def get_realtime_calls_extra_headers(
+        self, headers: dict[str, object] | None
+    ) -> dict[str, object]:  # mutable-ok: shared HTTP handler accepts a mutable header dictionary
+        return {**realtime_call_headers(self._params)}  # mutable-ok: shared HTTP header contract
+
     def get_api_key(
         self,
         api_key: str | None,
@@ -222,6 +240,20 @@ class ChatGPTRealtimeHTTPConfig(OpenAIRealtimeHTTPConfig):
     def get_realtime_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
         query: Final = configured_realtime_query(self._params)
         return str(URL(f"{self.get_api_base(api_base).rstrip('/')}/realtime/calls", params=query))
+
+    def transform_realtime_calls_response(
+        self, response: Response, model: str, model_id: str | None, headers: Mapping[str, object] | None
+    ) -> Response:
+        response.extensions["chatgpt_realtime"] = MappingProxyType(
+            {
+                "model": model,
+                "model_id": model_id,
+                "api_base": ChatGPTRealtime.get_api_base(self._params.api_base),
+                "extra_headers": configured_realtime_headers(headers),
+                "extra_query": configured_realtime_query(self._params),
+            }
+        )
+        return response
 
     def get_realtime_calls_headers(
         self, ephemeral_key: str

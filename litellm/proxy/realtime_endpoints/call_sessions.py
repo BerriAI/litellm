@@ -1,9 +1,10 @@
+import asyncio
 import base64
 import hashlib
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, nullcontext
 from contextvars import Token
 from types import MappingProxyType
 from typing import Final, Literal
@@ -48,24 +49,38 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # existing built-in limiter has no public alias
+    isolated_request_stash,
 )
+from litellm.proxy.hooks.realtime_call_lease import RealtimeCallLease, realtime_call_attachment
 from litellm.proxy.spend_tracking.budget_reservation import (
     invalidate_budget_reservation_counters,
     release_or_invalidate_budget_reservation,
 )
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import GenericLiteLLMParams
 
 
-async def supervise_codex_call(request: Request, call: CodexRealtimeCall, auth: UserAPIKeyAuth) -> None:
+async def supervise_codex_call(
+    request: Request, call: CodexRealtimeCall, auth: UserAPIKeyAuth, lease: RealtimeCallLease | None = None
+) -> None:
+    with isolated_request_stash():
+        await _start_codex_supervisor(request, call, auth, lease)
+
+
+async def _start_codex_supervisor(
+    request: Request, call: CodexRealtimeCall, auth: UserAPIKeyAuth, lease: RealtimeCallLease | None
+) -> None:
     import litellm
     from litellm.proxy.realtime_endpoints.call_supervision import CALL_SUPERVISORS, CallSupervisor
 
     async def receive() -> Message:
-        return {
+        body: Final[RealtimeQueryParams] = {"model": call.alias}
+        message: Final[Message] = {
             "type": "http.request",
-            "body": json.dumps({"model": call.alias}).encode(),
+            "body": json.dumps(body).encode(),
             "more_body": False,
-        }  # mutable-ok: ASGI message
+        }
+        return message
 
     async def send(_message: Message) -> None:
         return None
@@ -143,6 +158,7 @@ async def supervise_codex_call(request: Request, call: CodexRealtimeCall, auth: 
             close_call,
             force_close_call=force_close_call,
             terminal_usage_required=realtime_endpoint(call.model) == "live",
+            lease=lease,
         )
         supervision_owned = True
         sockets.pop_all()
@@ -241,6 +257,11 @@ async def process_codex_request(
 
 
 async def create_codex_realtime_call(request: Request) -> Response:
+    with isolated_request_stash():
+        return await _create_codex_realtime_call(request)
+
+
+async def _create_codex_realtime_call(request: Request) -> Response:
     from litellm.proxy import proxy_server as server
 
     try:
@@ -275,6 +296,10 @@ async def create_codex_realtime_call(request: Request) -> Response:
         get_api_key_from_custom_header(request, custom_header) if isinstance(custom_header, str) else selected_key
     )
     supervision_started = False  # rebind-ok: transfer reservation ownership only after supervision is established
+    call_lease: RealtimeCallLease | None = None
+    lease_transferred = False  # rebind-ok: failed startup leaves the signaling task responsible for its lease
+    preprocessing_started = False  # rebind-ok: only refund reservations belonging to this signaling request
+    limiter: Final = server.proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
     try:
         await can_key_call_resolved_model(
             model=model,
@@ -286,17 +311,30 @@ async def create_codex_realtime_call(request: Request) -> Response:
         signaling_auth: Final = auth.model_copy(
             update={"budget_reservation": None}
         )  # mutable-ok: Pydantic update contract
+        if isinstance(limiter, _PROXY_MaxParallelRequestsHandler) and (
+            auth.max_parallel_requests is not None
+            or server.general_settings.get("global_max_parallel_requests") is not None
+        ):
+            raise HTTPException(400, "Realtime calls with parallel limits require the V3 rate limiter")
+        preprocessing_started = True
         processed, _ = await process_codex_request(request, data, signaling_auth, model, "arealtime_calls")
-        result: Final = await server.route_request(
-            data=processed,
-            route_type="arealtime_calls",
-            llm_router=server.llm_router,
-            user_model=server.user_model,
-        )
-        try:
-            response: Final = await result
-        except BaseLLMException as exc:
-            raise HTTPException(exc.status_code, str(exc)) from exc
+        if isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+            call_lease = limiter.transfer_realtime_call_slot(processed)
+            if call_lease is not None:
+                call_lease.start()
+                if not await call_lease.renew():
+                    raise HTTPException(503, "Realtime call quota reservation was lost")
+        with isolated_request_stash():
+            result: Final = await server.route_request(
+                data=processed,
+                route_type="arealtime_calls",
+                llm_router=server.llm_router,
+                user_model=server.user_model,
+            )
+            try:
+                response: Final = await result
+            except BaseLLMException as exc:
+                raise HTTPException(exc.status_code, str(exc)) from exc
         if not isinstance(response, httpx.Response):
             raise HTTPException(502, "Invalid realtime signaling response")
         if response.is_error:
@@ -311,11 +349,15 @@ async def create_codex_realtime_call(request: Request) -> Response:
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         supervised_call: Final = call.model_copy(
-            update={"usage_supervised": True}
+            update={"usage_supervised": True, "parallel_reserved": call_lease is not None}
         )  # mutable-ok: Pydantic update contract
         token: Final = encode_call(supervised_call)
         supervision_started = True
-        await supervise_codex_call(request, supervised_call, auth)
+        if call_lease is None:
+            await supervise_codex_call(request, supervised_call, auth)
+        else:
+            await supervise_codex_call(request, supervised_call, auth, call_lease)
+            lease_transferred = True
         return Response(
             response.content,
             status_code=response.status_code,
@@ -323,8 +365,22 @@ async def create_codex_realtime_call(request: Request) -> Response:
             headers=MappingProxyType({"Location": f"/v1/realtime/calls/{token}"}),
         )
     finally:
-        if not supervision_started:
-            await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)
+        try:
+            if call_lease is not None and not lease_transferred:
+                await call_lease.close()
+        finally:
+            try:
+                if preprocessing_started and isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+                    await asyncio.shield(
+                        limiter.async_post_call_failure_hook(
+                            request_data={},  # mutable-ok: existing failure-hook contract
+                            original_exception=Exception("Realtime signaling completed without token usage"),
+                            user_api_key_dict=auth,
+                        )
+                    )
+            finally:
+                if not supervision_started:
+                    await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)
 
 
 async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAPIKeyAuth) -> None:
@@ -385,7 +441,8 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
             if isinstance(limiter, _PROXY_MaxParallelRequestsHandler):
                 limiter.begin_realtime_attachment(data)
         try:
-            processed, logging_obj = await process_codex_request(request, data, auth, call.alias, "_arealtime")
+            with realtime_call_attachment(websocket) if call.parallel_reserved else nullcontext():
+                processed, logging_obj = await process_codex_request(request, data, auth, call.alias, "_arealtime")
         except Exception:  # noqa: BLE001  # custom hook exceptions must reject the connection
             verbose_proxy_logger.exception("Realtime sideband pre-call rejected")
             await websocket.close(code=1008, reason="Realtime pre-call rejected")

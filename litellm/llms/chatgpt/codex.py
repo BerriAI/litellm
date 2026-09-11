@@ -23,6 +23,7 @@ class CodexRealtimeCall(BaseModel):
     extra_headers: Mapping[str, str] | None = None
     extra_query: Mapping[str, str | tuple[str, ...]] | None = None
     usage_supervised: bool = False
+    parallel_reserved: bool = False
     owner: str
     expires_at: float
 

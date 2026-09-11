@@ -31,6 +31,8 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.proxy.hooks.parallel_request_limiter_v3 import isolated_request_stash
+from litellm.proxy.hooks.realtime_call_lease import realtime_call_attachment
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     EmbeddingResponse,
@@ -49,6 +51,133 @@ class TimeController:
 
     def advance(self, seconds: float) -> None:
         self._current += timedelta(seconds=seconds)
+
+
+@pytest.mark.asyncio
+async def test_realtime_lease_retains_quota_across_signaling_and_three_attachments():
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(cache))
+    auth = UserAPIKeyAuth(api_key="logical-owner", max_parallel_requests=1, rpm_limit=4, tpm_limit=100000)
+    data = {"model": "gpt-3.5-turbo", "litellm_call_id": "signaling"}
+    await handler.async_pre_call_hook(auth, cache, data, "arealtime_calls")
+    stash = get_request_stash()
+    assert stash.reserved_tokens > 0
+    assert handler.transfer_realtime_call_slot({"litellm_call_id": "other-call"}) is None
+    assert stash.parallel_slot is not None
+    lease = handler.transfer_realtime_call_slot(data)
+    assert lease is not None
+    assert stash.parallel_slot is None
+    assert stash.reserved_tokens > 0
+    assert not stash.reservation_released
+    assert handler.transfer_realtime_call_slot(data) is None
+    await handler.async_log_success_event(
+        kwargs={"litellm_call_id": "signaling", "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}}},
+        response_obj=ModelResponse(usage=Usage()), start_time=datetime.now(), end_time=datetime.now(),
+    )
+    assert await cache.async_get_cache("{api_key:logical-owner}:tokens") == 0
+    socket = object()
+    for attachment in range(3):
+        with isolated_request_stash(), realtime_call_attachment(socket):
+            attachment_data = {"model": "gpt-3.5-turbo", "litellm_call_id": f"attachment-{attachment}", "websocket": socket}
+            await handler.async_pre_call_hook(auth, cache, attachment_data, "_arealtime")
+            assert get_request_stash().parallel_slot is None
+            await handler.async_release_realtime_attachment(attachment_data, auth)
+    with isolated_request_stash(), realtime_call_attachment(socket), pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(auth, cache, {"model": "gpt-3.5-turbo", "websocket": socket}, "_arealtime")
+    assert error.value.status_code == 429
+    assert "requests" in str(error.value.detail)
+    quota_only = auth.model_copy(update={"rpm_limit": None})
+    with isolated_request_stash(), realtime_call_attachment(object()), pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            quota_only, cache, {"model": "gpt-3.5-turbo", "websocket": socket}, "_arealtime"
+        )
+    assert "max_parallel_requests" in str(error.value.detail)
+    with isolated_request_stash(), realtime_call_attachment(socket), pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            quota_only, cache, {"model": "gpt-3.5-turbo", "websocket": socket}, "acompletion"
+        )
+    assert "max_parallel_requests" in str(error.value.detail)
+    with isolated_request_stash(), pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(quota_only, cache, {"model": "gpt-3.5-turbo"}, "arealtime_calls")
+    assert "max_parallel_requests" in str(error.value.detail)
+    assert get_request_stash() is stash
+    await lease.close()
+    with isolated_request_stash():
+        await handler.async_pre_call_hook(quota_only, cache, {"model": "gpt-3.5-turbo"}, "arealtime_calls")
+
+
+@pytest.mark.asyncio
+async def test_realtime_lease_renewal_preserves_quota_past_ttl_and_does_not_resurrect_expiry():
+    cache = DualCache()
+    clock = TimeController()
+    handler = _PROXY_MaxParallelRequestsHandler(InternalUsageCache(cache), time_provider=clock.now)
+    auth = UserAPIKeyAuth(api_key="long-call", max_parallel_requests=1)
+    data = {"model": "gpt-3.5-turbo", "litellm_call_id": "long-call"}
+    await handler.async_pre_call_hook(auth, cache, data, "arealtime_calls")
+    lease = handler.transfer_realtime_call_slot(data)
+    assert lease is not None
+    clock.advance(PARALLEL_REQUEST_SLOT_TTL_SECONDS - 1)
+    assert await lease.renew()
+    clock.advance(2)
+    with isolated_request_stash(), pytest.raises(HTTPException):
+        await handler.async_pre_call_hook(auth, cache, {"model": "gpt-3.5-turbo"}, "arealtime_calls")
+
+    clock.advance(PARALLEL_REQUEST_SLOT_TTL_SECONDS)
+    assert not await lease.renew()
+    await asyncio.wait_for(lease.wait_failed(), 1)
+    with isolated_request_stash():
+        await handler.async_pre_call_hook(auth, cache, {"model": "gpt-3.5-turbo"}, "arealtime_calls")
+    await lease.close()
+    with isolated_request_stash(), pytest.raises(HTTPException):
+        await handler.async_pre_call_hook(auth, cache, {"model": "gpt-3.5-turbo"}, "arealtime_calls")
+
+
+@pytest.mark.asyncio
+async def test_realtime_lease_redis_renewal_is_atomic_and_does_not_resurrect():
+    import shutil
+    import subprocess
+    import tempfile
+    from redis.asyncio import Redis
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PARALLEL_RENEW_SCRIPT
+
+    executable = shutil.which("redis-server")
+    if executable is None:
+        pytest.skip("redis-server is required for the Lua regression")
+    with tempfile.TemporaryDirectory(prefix="rtc-") as temporary:
+        socket = f"{temporary}/redis.sock"
+        process = subprocess.Popen(
+            [executable, "--port", "0", "--unixsocket", socket, "--save", "", "--appendonly", "no"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        client = Redis(unix_socket_path=socket)
+        try:
+            for attempt in range(100):
+                try:
+                    await client.ping()
+                    break
+                except RedisConnectionError:
+                    await asyncio.sleep(0.01)
+            else:
+                pytest.fail("isolated Redis did not start")
+            now = (await client.time())[0]
+            await client.zadd("first", {"owner": now - 10, "other": now})
+            await client.zadd("second", {"owner": now - PARALLEL_REQUEST_SLOT_TTL_SECONDS})
+            renew = client.register_script(PARALLEL_RENEW_SCRIPT)
+            assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [0]
+            assert await client.zscore("first", "owner") == now - 10
+            await client.zadd("second", {"owner": now - 10})
+            assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [1]
+            assert await client.zscore("first", "owner") >= now
+            assert await client.ttl("first") > PARALLEL_REQUEST_SLOT_TTL_SECONDS - 10
+            await client.zrem("second", "owner")
+            assert await renew(keys=["first", "second"], args=["owner", PARALLEL_REQUEST_SLOT_TTL_SECONDS]) == [0]
+            assert await client.zscore("second", "owner") is None
+            assert await client.zscore("first", "other") == now
+        finally:
+            await client.aclose()
+            process.terminate()
+            process.wait(timeout=5)
 
 
 @pytest.fixture

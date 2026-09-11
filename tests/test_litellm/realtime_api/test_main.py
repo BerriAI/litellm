@@ -331,3 +331,29 @@ async def test_arealtime_azure_ai_on_a_foundry_host_connects_to_the_azure_openai
         "wss://my-project.services.ai.azure.com/openai/realtime"
         "?api-version=2024-10-01-preview&deployment=gpt-realtime-mini"
     )
+
+
+@pytest.mark.parametrize("is_call", [False, True])
+@pytest.mark.parametrize("provider", ["chatgpt", "openai", "azure"])
+def test_realtime_http_provider_controls_dynamic_base_precedence(provider, is_call, monkeypatch):
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.delenv("CHATGPT_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_CHATGPT_API_BASE", raising=False)
+    config, base, key = realtime_main._get_realtime_http_provider_config(
+        custom_llm_provider=provider,
+        dynamic_api_base="https://dynamic.example/v1",
+        dynamic_api_key="dynamic-key",
+        litellm_params=GenericLiteLLMParams(api_base="https://configured.example/v1"),
+        is_call=is_call,
+    )
+    expected_base = "https://configured.example/v1" if provider == "chatgpt" else "https://dynamic.example/v1"
+    assert base == expected_base
+    assert key == ("chatgpt-oauth" if provider == "chatgpt" else "dynamic-key")
+    assert config is not None
+    if provider == "chatgpt":
+        assert config.get_realtime_calls_url(base, "gpt-realtime-1.5") == expected_base + "/realtime/calls"
+    else:
+        assert config.get_realtime_calls_extra_headers({"x-gateway-route": "required"}) == {
+            "x-gateway-route": "required"
+        }

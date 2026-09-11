@@ -31,6 +31,42 @@ class Socket:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("lease_lost", [False, True])
+async def test_supervisor_holds_call_lease_until_terminal_accounting(lease_lost):
+    from litellm.proxy.hooks.realtime_call_lease import RealtimeCallLease
+
+    socket = Socket()
+    logger = MagicMock(spec=Logging)
+    logger.model_call_details = {}
+    sink = Sink(logger)
+    lost = asyncio.Event()
+    lease = MagicMock(spec=RealtimeCallLease)
+    lease.wait_failed = lost.wait
+
+    async def release():
+        assert socket.closed
+        assert sink.logs == 1
+
+    lease.close = AsyncMock(side_effect=release)
+
+    async def close():
+        await socket.messages.put({"type": "session.closed", "usage": {"audio_duration_ms": 1000}})
+
+    terminate = AsyncMock(side_effect=close)
+    supervisor = CallSupervisor(socket, sink, logger, UserAPIKeyAuth(), terminate, lease=lease)
+    await socket.messages.put({"type": "session.started"})
+    await supervisor.start()
+    lease.close.assert_not_awaited()
+    if lease_lost:
+        lost.set()
+    else:
+        await close()
+    await asyncio.wait_for(supervisor.wait(), 1)
+    assert terminate.await_count == int(lease_lost)
+    lease.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stalled_step", ["close", "drain"])
 async def test_live_initial_close_reserves_time_for_independent_hangup(stalled_step):
     socket = Socket()

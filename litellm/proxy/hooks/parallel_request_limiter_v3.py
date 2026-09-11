@@ -8,10 +8,12 @@ import asyncio
 import binascii
 import os
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence, Set
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence, Set
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -53,6 +55,7 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     canonical_provider_batch_id,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.hooks.realtime_call_lease import RealtimeCallLease, is_realtime_call_attachment
 from litellm.router_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
@@ -304,6 +307,23 @@ end
 return results
 """
 
+PARALLEL_RENEW_SCRIPT: Final = """
+local clock = redis.call('TIME')
+local now = tonumber(clock[1])
+local ttl = tonumber(ARGV[2])
+for i = 1, #KEYS do
+    local score = redis.call('ZSCORE', KEYS[i], ARGV[1])
+    if not score or tonumber(score) <= now - ttl then
+        return {0}
+    end
+end
+for i = 1, #KEYS do
+    redis.call('ZADD', KEYS[i], 'XX', now, ARGV[1])
+    redis.call('EXPIRE', KEYS[i], ttl)
+end
+return {1}
+"""
+
 TOKEN_INCREMENT_SCRIPT: Final = """
 local results = {}
 
@@ -414,6 +434,14 @@ class ParallelRequestGauge(TypedDict):
     counter_key: str
     limit: int
     descriptor_key: str
+
+
+def _without_parallel_limit(descriptor: RateLimitDescriptor) -> RateLimitDescriptor:
+    rate_limit: Final[RateLimitDescriptorRateLimitObject] = {
+        **(descriptor.get("rate_limit") or MappingProxyType({})),
+        "max_parallel_requests": None,
+    }
+    return RateLimitDescriptor(key=descriptor["key"], value=descriptor["value"], rate_limit=rate_limit)
 
 
 class ParallelSlotAcquisition(TypedDict):
@@ -546,6 +574,15 @@ def get_request_stash() -> RequestRateLimiterStash | None:
     return _request_stash.get()
 
 
+@contextmanager
+def isolated_request_stash() -> Generator[None]:
+    token: Final = _request_stash.set(None)
+    try:
+        yield
+    finally:
+        _request_stash.reset(token)
+
+
 def get_or_create_request_stash() -> RequestRateLimiterStash:
     stash = _request_stash.get()
     if stash is None:
@@ -595,6 +632,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     parallel_acquire_script: _AsyncLuaScript | None
     parallel_release_script: _AsyncLuaScript | None
     parallel_count_script: _AsyncLuaScript | None
+    parallel_renew_script: _AsyncLuaScript | None
 
     def __init__(
         self,
@@ -627,6 +665,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.parallel_count_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 PARALLEL_COUNT_SCRIPT
             )
+            self.parallel_renew_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                PARALLEL_RENEW_SCRIPT
+            )
         else:
             self.batch_rate_limiter_script = None
             self.token_increment_script = None
@@ -635,6 +676,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.parallel_acquire_script = None
             self.parallel_release_script = None
             self.parallel_count_script = None
+            self.parallel_renew_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
 
@@ -1597,6 +1639,66 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             statuses.append(self._gauge_status(gauge, in_flight + 1, "OK"))
         return RateLimitResponse(overall_code="OK", statuses=statuses)
+
+    def transfer_realtime_call_slot(self, request_data: Mapping[str, object]) -> RealtimeCallLease | None:
+        call_id: Final = request_data.get("litellm_call_id")
+        if not isinstance(call_id, str):
+            return None
+        stash: Final = get_request_stash_for_call(call_id)
+        if stash is None or stash.parallel_slot is None:
+            return None
+        slot_id: Final = stash.parallel_slot["slot_id"]
+        counter_keys: Final = tuple(stash.parallel_slot["counter_keys"])
+        stash.parallel_slot = None
+
+        async def renew() -> bool:
+            return await self._renew_realtime_call_slot(slot_id, counter_keys)
+
+        async def release() -> None:
+            await self._release_parallel_request_slots(
+                ParallelSlotAcquisition(slot_id=slot_id, counter_keys=list(counter_keys))
+            )
+
+        return RealtimeCallLease(renew=renew, release=release)
+
+    async def _renew_realtime_call_slot(self, slot_id: str, counter_keys: tuple[str, ...]) -> bool:
+        if self.parallel_renew_script is not None:
+            try:
+                result: Final = await self.parallel_renew_script(
+                    keys=counter_keys, args=(slot_id, PARALLEL_REQUEST_SLOT_TTL_SECONDS)
+                )
+                return tuple(result) == (1,)
+            except Exception:  # noqa: BLE001  # Redis ownership cannot be established by a local count mirror
+                return False
+        async with self._check_and_increment_lock:
+            now: Final = self._get_current_time().timestamp()
+            cutoff: Final = now - PARALLEL_REQUEST_SLOT_TTL_SECONDS
+            values: Final[tuple[ParallelGaugeCacheValue | None, ...]] = tuple(
+                [
+                    await self.internal_usage_cache.async_get_cache(
+                        key=counter_key, local_only=True, litellm_parent_otel_span=None
+                    )
+                    for counter_key in counter_keys
+                ]
+            )
+            if any(
+                not isinstance(value, dict)
+                or not isinstance(score := value.get(slot_id), (int, float))
+                or score <= cutoff
+                for value in values
+            ):
+                return False
+            for counter_key, value in zip(counter_keys, values):
+                if not isinstance(value, dict):
+                    return False
+                await self.internal_usage_cache.async_set_cache(
+                    key=counter_key,
+                    value={**value, slot_id: now},
+                    ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+                    local_only=True,
+                    litellm_parent_otel_span=None,
+                )
+            return True
 
     async def _release_parallel_request_slots(
         self,
@@ -3477,6 +3579,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Org Level Rate Limits
         descriptors.extend(self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model))
 
+        effective_descriptors: Final = (
+            tuple(_without_parallel_limit(descriptor) for descriptor in descriptors)
+            if call_type == "_arealtime" and is_realtime_call_attachment(data.get("websocket"))
+            else descriptors
+        )
+
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
             # First pass: RPM and max_parallel_requests sliding-window check.
@@ -3495,16 +3603,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # double-charge every request.
             parallel_counter_keys: Final = [
                 self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
-                for d in descriptors
+                for d in effective_descriptors
                 if (d.get("rate_limit") or {}).get("max_parallel_requests") is not None
             ]
             parallel_slot_id: Final = uuid.uuid4().hex if parallel_counter_keys else None
 
             first_pass_descriptors: Final = (
-                descriptors
+                effective_descriptors
                 if self.tpm_reservation_enabled
                 else tuple(
-                    d for d in descriptors if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+                    d
+                    for d in effective_descriptors
+                    if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 )
             )
             response: Final = await self.should_rate_limit(

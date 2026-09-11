@@ -11,6 +11,7 @@ from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.realtime_streaming import REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.hooks.realtime_call_lease import RealtimeCallLease
 from litellm.proxy.spend_tracking.budget_reservation import (
     invalidate_budget_reservation_counters,
     release_or_invalidate_budget_reservation,
@@ -57,6 +58,7 @@ class CallSupervisor:
         logging_timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
         terminal_usage_required: bool = True,
         force_close_call: Callable[[], Awaitable[None]] | None = None,
+        lease: RealtimeCallLease | None = None,
     ) -> None:
         self._upstream = upstream
         self._stream = stream
@@ -64,6 +66,7 @@ class CallSupervisor:
         self._auth = auth
         self._close_call = close_call
         self._force_close_call = force_close_call
+        self._lease = lease
         self._ready_timeout = ready_timeout
         self._lifetime = lifetime
         self._drain_timeout = drain_timeout
@@ -85,6 +88,8 @@ class CallSupervisor:
         self._task = asyncio.create_task(self._run())
         try:
             await asyncio.wait_for(self._ready.wait(), timeout=self._ready_timeout)
+            if self._lease is not None and not await self._lease.renew():
+                raise RuntimeError("Call observer lost its quota reservation during startup")
             if not self._started or self._terminal or self._task.done():
                 raise RuntimeError("Call observer ended before session became available")
         except BaseException:
@@ -129,10 +134,25 @@ class CallSupervisor:
         return self._terminal or self._close_confirmed
 
     async def _run(self) -> None:
+        try:
+            await self._observe()
+        finally:
+            try:
+                if self._lease is not None:
+                    await self._lease.close()
+            finally:
+                self._ready.set()
+
+    async def _observe(self) -> None:
         reader: Final = asyncio.create_task(self._read())
         stopped: Final = asyncio.create_task(self._stop.wait())
+        lease_failed: Final = asyncio.create_task(self._lease.wait_failed()) if self._lease is not None else None
         try:
-            await asyncio.wait((reader, stopped), timeout=self._lifetime, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(
+                (reader, stopped, lease_failed) if lease_failed is not None else (reader, stopped),
+                timeout=self._lifetime,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
         finally:
             try:
                 if not self._terminal:
@@ -161,7 +181,12 @@ class CallSupervisor:
             finally:
                 stopped.cancel()
                 reader.cancel()
-                await asyncio.gather(reader, stopped, return_exceptions=True)
+                if lease_failed is not None:
+                    lease_failed.cancel()
+                await asyncio.gather(
+                    *((reader, stopped, lease_failed) if lease_failed is not None else (reader, stopped)),
+                    return_exceptions=True,
+                )
                 with suppress(Exception):
                     await self._upstream.close()
                 if not self._usage_complete():
