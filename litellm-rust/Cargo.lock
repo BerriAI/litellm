@@ -1656,11 +1656,13 @@ dependencies = [
 name = "litellm-token-counter"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "criterion",
  "indexmap",
  "itoa",
  "rand 0.8.7",
  "rstest",
+ "rustc-hash",
  "serde",
  "serde_json",
  "thiserror 2.0.19",

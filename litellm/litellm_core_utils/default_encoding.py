@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Final
 
 import litellm
@@ -13,6 +14,14 @@ except (ImportError, AttributeError):
     import pkg_resources
 
     filename = pkg_resources.resource_filename(__name__, "litellm_core_utils/tokenizers")
+
+CL100K_BASE_RANK_FILE: Final = "9b5ad71b2ce5302211f9c61530b329a4922fc6a4"
+
+
+def cl100k_base_rank_file() -> str:
+    """The vendored tiktoken `cl100k_base` rank file (`base64(token) rank` lines)."""
+    return Path(filename, CL100K_BASE_RANK_FILE).read_text(encoding="ascii")
+
 
 # Always default TIKTOKEN_CACHE_DIR to the bundled tokenizers directory
 # unless the user explicitly overrides it via CUSTOM_TIKTOKEN_CACHE_DIR.

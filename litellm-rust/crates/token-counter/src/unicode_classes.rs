@@ -59,15 +59,45 @@ impl UnicodeClasses {
         CLASSES.as_ref()
     }
 
-    pub(super) fn is_letter(&self, character: char) -> bool {
+    fn is_letter(&self, character: char) -> bool {
         self.letters.contains(character)
     }
 
-    pub(super) fn is_number(&self, character: char) -> bool {
+    fn is_number(&self, character: char) -> bool {
         self.numbers.contains(character)
     }
 
-    pub(super) fn is_space(&self, character: char) -> bool {
+    fn is_space(&self, character: char) -> bool {
         self.spaces.contains(character)
     }
+}
+
+/// `\p{L}`, `\p{N}`, `\s` and everything else, the character classes the
+/// split regexes are written in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Class {
+    Letter,
+    Number,
+    Space,
+    Other,
+}
+
+pub(super) fn class(character: char, unicode_classes: &UnicodeClasses) -> Class {
+    match character {
+        'A'..='Z' | 'a'..='z' => Class::Letter,
+        '0'..='9' => Class::Number,
+        '\t'..='\r' | ' ' => Class::Space,
+        _ if character.is_ascii() => Class::Other,
+        _ if unicode_classes.is_letter(character) => Class::Letter,
+        _ if unicode_classes.is_number(character) => Class::Number,
+        _ if unicode_classes.is_space(character) => Class::Space,
+        _ => Class::Other,
+    }
+}
+
+/// Byte length of the leading run of `run_class` characters.
+pub(super) fn run_len(text: &str, run_class: Class, unicode_classes: &UnicodeClasses) -> usize {
+    text.char_indices()
+        .find(|(_, character)| class(*character, unicode_classes) != run_class)
+        .map_or(text.len(), |(index, _)| index)
 }
