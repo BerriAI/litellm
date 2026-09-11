@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
 if TYPE_CHECKING:
@@ -51,6 +51,7 @@ except ImportError as import_error:
 else:
 
     class ConductGuardrail(ConductGuard):  # pyright: ignore[reportUntypedBaseClass]  # optional dep, absent at type-check
+        @log_guardrail_information
         async def apply_guardrail(
             self,
             inputs: GenericGuardrailAPIInputs,
