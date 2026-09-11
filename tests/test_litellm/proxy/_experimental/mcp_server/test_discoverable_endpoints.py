@@ -3433,51 +3433,84 @@ async def test_oauth_protected_resource_gateway_managed_oauth2_advertises_gatewa
         global_mcp_server_manager.registry.clear()
 
 
+@pytest.mark.parametrize("server_count", [0, 1, 2])
+@pytest.mark.parametrize("byok_first", [True, False])
+@pytest.mark.parametrize(
+    ("base_url", "origin"),
+    [
+        ("https://gateway.example.com", "https://gateway.example.com"),
+        ("https://gateway.example.com/proxy", "https://gateway.example.com"),
+        ("http://[::1]:4000/proxy", "http://[::1]:4000"),
+    ],
+)
+def test_root_protected_resource_discovers_gateway(monkeypatch, server_count, byok_first, base_url, origin):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server import byok_oauth_endpoints, discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("PROXY_BASE_URL", base_url)
+    monkeypatch.setattr(
+        global_mcp_server_manager,
+        "registry",
+        {
+            f"oauth_{index}": MCPServer(
+                server_id=f"oauth_{index}",
+                name=f"oauth_{index}",
+                server_name=f"oauth_{index}",
+                transport=MCPTransport.http,
+                auth_type=MCPAuth.oauth2,
+                authorization_url="https://idp.example.com/authorize",
+                token_url="https://idp.example.com/token",
+            )
+            for index in range(server_count)
+        },
+    )
+    app = FastAPI()
+    routers = (byok_oauth_endpoints.router, discoverable_endpoints.router)
+    for router in routers if byok_first else reversed(routers):
+        app.include_router(router)
+    with TestClient(app) as client:
+        response = client.get("/.well-known/oauth-protected-resource", params={"mcp_server_name": "oauth_0"})
+        assert response.status_code == 200
+        assert response.json() == {
+            "resource": origin,
+            "authorization_servers": [f"{base_url}/mcp"],
+            "scopes_supported": [],
+        }
+        authorization = client.get("/.well-known/oauth-authorization-server/mcp")
+        assert authorization.status_code == 200
+        metadata = authorization.json()
+        assert metadata["issuer"] == response.json()["authorization_servers"][0]
+        assert metadata["authorization_endpoint"] == f"{base_url}/authorize"
+        assert metadata["token_endpoint"] == f"{base_url}/token"
+        assert metadata["registration_endpoint"] == f"{base_url}/register"
+        aggregate = client.get("/.well-known/oauth-protected-resource/mcp")
+        assert aggregate.status_code == 200
+        assert aggregate.json()["resource"] == f"{base_url}/mcp"
+
+
 @pytest.mark.asyncio
-async def test_oauth_protected_resource_root_resolved_single_server_keeps_relay_as():
-    """The unnamed (bare-root) legacy shape resolves the single configured oauth2 server and
-    must keep advertising the per-server relay authorization server: only an EXPLICITLY
-    named request opts into the gateway-as-AS flow (LIT-4864), so pre-existing single-server
-    deployments discovering through the root document are byte-identical."""
-    try:
-        from fastapi import Request
+async def test_unnamed_protected_resource_builder_uses_gateway_origin(monkeypatch):
+    from fastapi import Request
 
-        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            _build_oauth_protected_resource_response,
-        )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-        from litellm.proxy._types import MCPTransport
-        from litellm.types.mcp import MCPAuth
-        from litellm.types.mcp_server.mcp_server_manager import MCPServer
-    except ImportError:
-        pytest.skip("MCP discoverable endpoints not available")
-
-    only_server = MCPServer(
-        server_id="solo_mcp",
-        name="solo_mcp",
-        server_name="solo_mcp",
-        alias="solo_mcp",
-        transport=MCPTransport.http,
-        auth_type=MCPAuth.oauth2,
-        authorization_url="https://idp.example.com/authorize",
-        token_url="https://idp.example.com/oauth/token",
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
     )
 
-    mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "https://litellm.example.com/"
-    mock_request.headers = {}
-
-    global_mcp_server_manager.registry.clear()
-    try:
-        global_mcp_server_manager.registry[only_server.server_id] = only_server
-        response = await _build_oauth_protected_resource_response(
-            request=mock_request, mcp_server_name=None, use_standard_pattern=False
-        )
-        assert response["authorization_servers"] == ["https://litellm.example.com/solo_mcp"]
-    finally:
-        global_mcp_server_manager.registry.clear()
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    request = Request(
+        {"type": "http", "scheme": "https", "server": ("gateway.example.com", 443), "path": "/", "headers": []}
+    )
+    response = await _build_oauth_protected_resource_response(request, None, False)
+    assert response == {
+        "resource": "https://gateway.example.com",
+        "authorization_servers": ["https://gateway.example.com/mcp"],
+        "scopes_supported": [],
+    }
 
 
 @pytest.mark.asyncio
@@ -4137,7 +4170,8 @@ async def test_discovery_root_does_not_expose_private_server_for_external_client
         assert "/test_oauth/" not in authorization_response["authorization_endpoint"]
         assert "/test_oauth/" not in authorization_response["token_endpoint"]
         assert authorization_response["scopes_supported"] == []
-        assert resource_response["authorization_servers"] == ["https://llm.example.com"]
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/mcp"]
+        assert resource_response["resource"] == "https://llm.example.com"
         assert resource_response["scopes_supported"] == []
     finally:
         global_mcp_server_manager.registry.clear()
@@ -9077,11 +9111,7 @@ def test_well_known_root_suffix_reflects_server_root_path():
 
 
 @pytest.mark.asyncio
-async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
-    """The always-on aggregate front door must not change bare-origin discovery: with one
-    oauth2 server configured, the no-suffix /.well-known/oauth-{authorization-server,
-    protected-resource} still resolves THAT server, so an existing single-server deployment's
-    discovery is unchanged. The aggregate document lives only at the /mcp-suffixed routes."""
+async def test_root_resource_uses_gateway_without_changing_authorization_relay():
     from fastapi import Request
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
@@ -9105,10 +9135,10 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         resource_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name=None, use_standard_pattern=True
         )
-        # per-server, not aggregate: the single server's name is in the endpoints
         assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
         assert authorization_response["issuer"] == "https://llm.example.com"
-        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
+        assert resource_response["authorization_servers"] == ["https://llm.example.com/mcp"]
+        assert resource_response["resource"] == "https://llm.example.com"
     finally:
         global_mcp_server_manager.registry.clear()
 

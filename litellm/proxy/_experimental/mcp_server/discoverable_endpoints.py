@@ -2393,8 +2393,7 @@ async def _build_oauth_protected_resource_response(
     per-server URL completes the same sign-in flow the aggregate ``/mcp`` endpoint
     supports and is admitted with a gateway session bearer. The per-server relay
     authorize/token endpoints stay registered for the keyed interactive flow (which
-    is challenged with an explicit ``authorization_uri``), and the root-resolved
-    (unnamed) legacy shape keeps the relay authorization server.
+    is challenged with an explicit ``authorization_uri``).
 
     Args:
         request: FastAPI Request object
@@ -2405,15 +2404,11 @@ async def _build_oauth_protected_resource_response(
     Returns:
         OAuth protected resource metadata dict
     """
+    if mcp_server_name is None:
+        return oauth_protected_resource_root(request)
+
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-    explicitly_named: Final = mcp_server_name is not None
-
-    # When no server name provided, try to resolve the single OAuth2 server
-    if mcp_server_name is None:
-        resolved: Final = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
-        if resolved:
-            mcp_server_name = resolved.server_name or resolved.name
 
     mcp_server: MCPServer | None = None
     if mcp_server_name:
@@ -2478,7 +2473,7 @@ async def _build_oauth_protected_resource_response(
     if obo_response is not None:
         return obo_response
 
-    if explicitly_named and mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
+    if mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
             "authorization_servers": [f"{request_base_url}/mcp"],
             "resource": resource_url,
@@ -2540,6 +2535,17 @@ def _jwt_auth_issuers() -> list:
         if issuer and issuer not in issuers:
             issuers.append(issuer)
     return issuers
+
+
+@router.get("/.well-known/oauth-protected-resource")
+def oauth_protected_resource_root(request: Request) -> dict[str, str | list[str]]:
+    request_base_url: Final = get_request_base_url(request)
+    parsed: Final = urlparse(request_base_url)
+    return {
+        "resource": f"{parsed.scheme}://{parsed.netloc}",
+        "authorization_servers": [f"{request_base_url}/mcp"],
+        "scopes_supported": [],
+    }
 
 
 def _build_aggregate_protected_resource_response(request: Request) -> dict:
@@ -2645,7 +2651,6 @@ async def oauth_protected_resource_mcp_standard(request: Request, mcp_server_nam
 # LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
 # Kept for backward compatibility with existing deployments
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/{{mcp_server_name}}/mcp")
-@router.get("/.well-known/oauth-protected-resource")
 async def oauth_protected_resource_mcp(request: Request, mcp_server_name: str | None = None):
     """
     OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
