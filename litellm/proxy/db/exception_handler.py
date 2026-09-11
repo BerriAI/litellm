@@ -222,6 +222,18 @@ class PrismaDBExceptionHandler:
         )
 
     @staticmethod
+    def is_read_only_transaction_error(e: Exception) -> bool:
+        """True iff ``e`` is Postgres SQLSTATE 25006 surfaced through prisma: the
+        pooled session answers reads but rejects writes, so the connection is
+        poisoned until the client is recreated."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        error_message: Final = str(e).lower()
+        return '"25006"' in error_message or "read-only transaction" in error_message
+
+    @staticmethod
     def is_prisma_engine_internal_error(e: Exception) -> bool:
         """True iff ``e`` is a non-``PrismaError`` exception raised from inside
         prisma-client-py's query-engine layer.

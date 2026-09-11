@@ -9,12 +9,14 @@ import json
 import uuid as uuid_lib
 from typing import Final, cast
 
+import httpx
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
@@ -120,6 +122,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self._user_transcript_buffer = ""
         self._cumulative_usage = BedrockUsageEvent()
         self._reported_usage = BedrockUsageEvent()
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
         """Validate environment - no special validation needed for Bedrock."""
