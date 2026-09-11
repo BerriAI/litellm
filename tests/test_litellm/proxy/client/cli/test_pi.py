@@ -188,6 +188,7 @@ class TestProviderBlock:
         assert block == {
             "baseUrl": "http://localhost:4000/v1",
             "api": "openai-completions",
+            "compat": {"supportsStore": False, "supportsLongCacheRetention": False},
             "apiKey": "$LITELLM_PROXY_API_KEY",
             "models": [{"id": "m-1"}, {"id": "m-2"}],
         }
