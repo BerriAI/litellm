@@ -1,6 +1,6 @@
 import math
 from collections.abc import Mapping
-from typing import Annotated, Final, cast
+from typing import Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -126,6 +126,7 @@ class GuardrailProviderCostEntry(BaseModel):
 _GUARDRAIL_PROVIDER_COST_ENTRY_ADAPTER: Final[TypeAdapter[GuardrailProviderCostEntry]] = TypeAdapter(
     GuardrailProviderCostEntry
 )
+_GUARDRAIL_INFORMATION_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 def _prompt_shield_entry_cost(raw: object) -> float | None:
@@ -150,7 +151,7 @@ def prompt_shield_guardrail_cost(guardrail_information: object) -> float | None:
     if guardrail_information is None:
         return None
     entries: Final[tuple[object, ...]] = (
-        tuple(cast("list[object] | tuple[object, ...]", guardrail_information))
+        _GUARDRAIL_INFORMATION_ENTRIES_ADAPTER.validate_python(guardrail_information)
         if isinstance(guardrail_information, (list, tuple))
         else (guardrail_information,)
     )
