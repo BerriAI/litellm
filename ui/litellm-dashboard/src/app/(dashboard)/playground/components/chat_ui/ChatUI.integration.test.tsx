@@ -153,6 +153,7 @@ describe("ChatUI", () => {
   });
 
   it("should allow the user to select a model", async () => {
+    const user = userEvent.setup();
     render(
       <ChatUI
         accessToken="1234567890"
@@ -172,6 +173,22 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Model 1").length).toBeGreaterThan(0);
     });
+    await user.click(screen.getByRole("option", { name: "Model 1Mode: chat" }));
+    expect(screen.getByPlaceholderText("Select a Model")).toHaveValue("Model 1");
+
+    // The endpoint and model each have a clear button; the endpoint comes first.
+    await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
+    const input = screen.getByPlaceholderText("Describe the image you want to generate...");
+    fireEvent.change(input, { target: { value: "Contract endpoint check" } });
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+    expect(input).toHaveValue("Contract endpoint check");
+    expect(makeOpenAIChatCompletionRequest).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("endpointType")).toBeNull();
+
+    await selectComboboxOption("Select an endpoint", "/v1/chat/completions");
+    await selectComboboxOption("Select a Model", "Model 1");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
   });
 
   it("shows only endpoint-compatible models when chat endpoint is selected", async () => {

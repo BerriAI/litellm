@@ -963,8 +963,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                     <SearchSelect
                       inputId="agent-existing-key"
                       placeholder={loadingKeys ? "Loading keys…" : "Search by key name…"}
-                      value={selectedExistingKey ?? ""}
-                      onValueChange={(value) => setSelectedExistingKey(value || null)}
+                      value={selectedExistingKey}
+                      onValueChange={setSelectedExistingKey}
                       options={existingKeys.map((k) => ({
                         label: k.key_alias || k.token?.slice(0, 12) + "…",
                         value: k.token,

@@ -108,6 +108,8 @@ describe("convertToDotPrompt", () => {
     expect(result).toContain("output:");
     expect(result).toContain("format: text");
     expect(result).toContain("User: Hello world");
+    const cleared = convertToDotPrompt({ ...prompt, model: null });
+    expect(cleared).toBe(result.replace("model: gpt-4\n", ""));
   });
 
   it("should include config parameters when set", () => {

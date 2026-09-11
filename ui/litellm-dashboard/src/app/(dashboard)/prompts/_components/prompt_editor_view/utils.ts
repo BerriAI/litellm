@@ -23,7 +23,7 @@ export const extractVariables = (prompt: PromptType): string[] => {
 
 export const convertToDotPrompt = (prompt: PromptType): string => {
   const variables = extractVariables(prompt);
-  let result = `---\nmodel: ${prompt.model}\n`;
+  let result = prompt.model ? `---\nmodel: ${prompt.model}\n` : "---\n";
 
   // Add temperature if set
   if (prompt.config.temperature !== undefined) {

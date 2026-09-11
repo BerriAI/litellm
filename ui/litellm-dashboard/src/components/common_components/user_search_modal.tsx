@@ -31,8 +31,8 @@ interface Role {
 }
 
 interface FormValues {
-  user_email: string | undefined;
-  user_id: string | undefined;
+  user_email: string | null | undefined;
+  user_id: string | null | undefined;
   role: string;
 }
 
@@ -143,19 +143,29 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   const renderUserSearch = (
     fieldName: "user_email" | "user_id",
     placeholder: string,
-    controlProps: { id: string; value: string | undefined; onChange: (value: string | undefined) => void },
+    controlProps: {
+      id: string;
+      value: string | null | undefined;
+      onChange: (value: string | null | undefined) => void;
+    },
     testId?: string,
   ) => {
     const items = selectedField === fieldName ? userOptions : [];
+    const handleValueChange = (value: string | null) => {
+      if (value === null) {
+        form.setValue("user_email", null);
+        form.setValue("user_id", null);
+        return;
+      }
+      controlProps.onChange(value);
+      handleSelect(items.find((option) => option.value === value) ?? null);
+    };
     return (
       <div data-testid={testId} onKeyDown={swallowEnter}>
         <PaginatedSearchSelect
           options={items}
           value={controlProps.value}
-          onValueChange={(value: string) => {
-            controlProps.onChange(value === "" ? undefined : value);
-            handleSelect(items.find((option) => option.value === value) ?? null);
-          }}
+          onValueChange={handleValueChange}
           onSearchChange={(query: string) => handleSearch(query, fieldName)}
           autoHighlight="always"
           isLoading={loading}
