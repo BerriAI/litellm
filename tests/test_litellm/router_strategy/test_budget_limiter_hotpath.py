@@ -340,3 +340,59 @@ async def test_sync_refused_by_the_open_circuit_breaker_is_quiet_and_leaks_no_ta
     unretrieved.assert_not_called()
     assert limiter.redis_increment_operation_queue == []
     assert redis_cache.async_increment_pipeline.await_count == 1
+
+
+async def _limiter_with_redis(redis_cache: MagicMock) -> RouterBudgetLimiting:
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(redis_cache=redis_cache),
+        provider_budget_config={"openai": BudgetConfig(max_budget=1.0, budget_duration="1d")},
+    )
+    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+    limiter.redis_increment_operation_queue = [{"key": "provider_spend:openai:1d", "increment_value": 0.5, "ttl": 60}]
+    return limiter
+
+
+@pytest.mark.asyncio
+async def test_push_returns_before_redis_answers(disable_budget_sync):
+    """The push runs inside the request success callback, so it must hand the Redis round trip to a task instead of waiting on it."""
+    redis_answered = asyncio.Event()
+
+    async def wait_for_redis(**_: object) -> None:
+        await redis_answered.wait()
+
+    redis_cache = MagicMock(spec=RedisCache)
+    redis_cache.async_increment_pipeline = AsyncMock(side_effect=wait_for_redis)
+    limiter = await _limiter_with_redis(redis_cache)
+
+    await asyncio.wait_for(limiter._push_in_memory_increments_to_redis(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert not redis_answered.is_set()
+    assert redis_cache.async_increment_pipeline.await_count == 1
+    assert limiter.redis_increment_operation_queue == []
+    redis_answered.set()
+    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+
+
+@pytest.mark.asyncio
+async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sync, caplog):
+    """A real Redis failure on the background push must surface as one error line, never as an unretrieved task exception."""
+    redis_cache = MagicMock(spec=RedisCache)
+    redis_cache.async_increment_pipeline = AsyncMock(side_effect=ConnectionError("Error 61 connecting to 127.0.0.1:6379"))
+    limiter = await _limiter_with_redis(redis_cache)
+    loop = asyncio.get_running_loop()
+    unretrieved = MagicMock()
+    loop.set_exception_handler(unretrieved)
+
+    try:
+        with caplog.at_level(logging.ERROR):
+            await limiter._push_in_memory_increments_to_redis()
+            await asyncio.sleep(0)
+            gc.collect()
+    finally:
+        loop.set_exception_handler(None)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "Error syncing in-memory cache with Redis: Error 61 connecting to 127.0.0.1:6379"
+    ]
+    unretrieved.assert_not_called()
