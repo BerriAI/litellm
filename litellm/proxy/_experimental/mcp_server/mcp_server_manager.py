@@ -5139,7 +5139,9 @@ class MCPServerManager:
         return prefixed_tools
 
     def get_listed_tool(self, server: MCPServer, name: str) -> MCPTool | None:
-        listed: Final = self._listed_tools_by_server_id.get(server.server_id, {})
+        listed: Final = self._listed_tools_by_server_id.get(server.server_id)
+        if not listed:
+            return None
         return listed.get(name) or listed.get(strip_known_server_prefix(name, server))
 
     def _create_prefixed_prompts(
