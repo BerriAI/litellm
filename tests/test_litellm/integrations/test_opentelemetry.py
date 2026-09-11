@@ -347,6 +347,55 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         mock_span.set_attribute.assert_any_call("gen_ai.cost.discount_percent", 0.25)
         mock_span.set_attribute.assert_any_call("gen_ai.cost.discount_amount", 0.001)
 
+    def test_prompt_shield_cost_emitted_without_cost_breakdown_entry(self):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "guardrail_information": [
+                    {
+                        "guardrail_provider": "azure",
+                        "guardrail_cost": 0.0012,
+                        "guardrail_cost_in_spend": False,
+                    }
+                ],
+            },
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj={})
+
+        mock_span.set_attribute.assert_any_call("litellm.cost.guardrail.prompt_shield", 0.0012)
+
+    def test_prompt_shield_cost_not_emitted_for_bedrock(self):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "guardrail_information": [{"guardrail_provider": "bedrock", "guardrail_cost": 0.01}],
+            },
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj={})
+
+        assert all(
+            call.args[0] != "litellm.cost.guardrail.prompt_shield"
+            for call in mock_span.set_attribute.call_args_list
+        )
+
     def test_cost_breakdown_with_partial_fields(self):
         """
         Test that cost breakdown works correctly when only some fields are present.

@@ -48,7 +48,7 @@ from litellm.integrations.otel.model.payloads import (  # noqa: E402
     ServiceSpanData,
     SpanError,
 )
-from litellm.integrations.otel.model.semconv import GenAI, GenAIOperation
+from litellm.integrations.otel.model.semconv import GenAI, GenAIOperation, LiteLLM
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -1264,3 +1264,31 @@ def test_genai_mapper_guardrail_cost_in_spend_attr():
     billed = dict(entry)
     del billed["guardrail_cost_in_spend"]
     assert LiteLLM.GUARDRAIL_COST_IN_SPEND not in GenAIMapper().map(GuardrailSpanData.from_logging_entry(billed))
+
+
+def test_genai_mapper_prompt_shield_cost_attr():
+    payload = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "metadata": {},
+        "response": {"id": "resp_1", "choices": []},
+        "guardrail_information": [
+            {
+                "guardrail_provider": "azure",
+                "guardrail_cost": 0.0012,
+                "guardrail_cost_in_spend": False,
+            }
+        ],
+    }
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    attrs = GenAIMapper().map(data)
+
+    assert attrs[LiteLLM.GUARDRAIL_PROMPT_SHIELD_COST] == pytest.approx(0.0012)
+
+    bedrock_payload = dict(
+        payload,
+        guardrail_information=[{"guardrail_provider": "bedrock", "guardrail_cost": 0.01}],
+    )
+    bedrock_attrs = GenAIMapper().map(LLMCallSpanData.from_standard_logging_payload(bedrock_payload))
+    assert LiteLLM.GUARDRAIL_PROMPT_SHIELD_COST not in bedrock_attrs

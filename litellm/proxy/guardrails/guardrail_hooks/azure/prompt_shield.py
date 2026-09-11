@@ -16,6 +16,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+    AZURE_PROMPT_SHIELD_GUARDRAIL_PROVIDER,
     AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT,
     azure_prompt_shield_guardrail_cost,
 )
@@ -351,7 +352,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
-            guardrail_provider="azure",
+            guardrail_provider=AZURE_PROMPT_SHIELD_GUARDRAIL_PROVIDER,
             tracing_detail=self._pop_billing_tracing_detail(),
         )
         return response
@@ -379,7 +380,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
-            guardrail_provider="azure",
+            guardrail_provider=AZURE_PROMPT_SHIELD_GUARDRAIL_PROVIDER,
             tracing_detail=self._pop_billing_tracing_detail(),
         )
         raise e
