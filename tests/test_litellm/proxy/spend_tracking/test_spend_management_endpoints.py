@@ -4263,7 +4263,7 @@ async def test_ui_view_spend_logs_with_error_message(client):
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_with_project_id(client):
+async def test_ui_view_spend_logs_with_project_id(client, monkeypatch):
     """Test filtering spend logs by project_id"""
     mock_spend_logs = [
         {
@@ -4302,30 +4302,27 @@ async def test_ui_view_spend_logs_with_project_id(client):
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
     )
 
+    monkeypatch.setattr(ps, "prisma_client", make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_project_id))
+
     try:
-        with patch.object(
-            ps,
-            "prisma_client",
-            make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_by_project_id),
-        ):
-            start_date, end_date = _default_date_range()
+        start_date, end_date = _default_date_range()
 
-            response = client.get(
-                "/spend/logs/ui",
-                params={
-                    "project_id": "project-1",
-                    "start_date": start_date,
-                    "end_date": end_date,
-                },
-                headers={"Authorization": "Bearer sk-test"},
-            )
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "project_id": "project-1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
 
-            assert response.status_code == 200
-            data = response.json()
-            assert data["total"] == 1
-            assert len(data["data"]) == 1
-            assert data["data"][0]["id"] == "log1"
-            assert data["data"][0]["metadata"]["user_api_key_project_id"] == "project-1"
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log1"
+        assert data["data"][0]["metadata"]["user_api_key_project_id"] == "project-1"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

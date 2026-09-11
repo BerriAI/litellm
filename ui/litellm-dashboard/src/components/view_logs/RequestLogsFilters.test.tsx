@@ -87,9 +87,7 @@ describe("RequestLogsFilters", () => {
     vi.mocked(useInfiniteSpendLogEndUsers).mockReturnValue(
       emptyInfiniteQuery as unknown as ReturnType<typeof useInfiniteSpendLogEndUsers>,
     );
-    vi.mocked(useProjects).mockReturnValue({ data: [], isLoading: false } as unknown as ReturnType<
-      typeof useProjects
-    >);
+    vi.mocked(useProjects).mockReturnValue({ data: [], isLoading: false } as unknown as ReturnType<typeof useProjects>);
     vi.mocked(useUISettings).mockReturnValue({
       data: { values: { enable_projects_ui: true } },
     } as unknown as ReturnType<typeof useUISettings>);

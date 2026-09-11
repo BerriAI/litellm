@@ -35,7 +35,7 @@ import {
   userDailyActivityCall,
 } from "@/components/networking";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
+import { usePaginatedDailyActivity, type FetchPageFn } from "../../hooks/usePaginatedDailyActivity";
 import { EntityMetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
@@ -43,6 +43,15 @@ import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import TopModelView from "./TopModelView";
 import TeamUserSpendCard from "./TeamUserSpendCard";
+
+/** The entity metadata shape actually probed by getEntityLabel: whichever of these
+ * fields the backend populated for a given entity type (team, user, ...). */
+interface EntityBreakdownMetadata {
+  team_alias?: string;
+  user_email?: string;
+  user_alias?: string;
+  [key: string]: unknown;
+}
 
 interface EntityMetrics {
   metrics: {
@@ -56,7 +65,7 @@ interface EntityMetrics {
     failed_requests: number;
     api_requests: number;
   };
-  metadata: Record<string, any>;
+  metadata: EntityBreakdownMetadata;
 }
 
 interface EntitySpendData {
@@ -88,7 +97,7 @@ interface EntityUsageProps {
   isOrgAdmin?: boolean;
 }
 
-const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
+const ENTITY_FETCH_FNS: Record<EntityType, FetchPageFn> = {
   tag: tagDailyActivityCall,
   team: teamDailyActivityCall,
   organization: organizationDailyActivityCall,
@@ -99,7 +108,7 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
 
 // Single-shot endpoints returning the whole range in one response; entity types
 // without one fall back to page-draining the paginated endpoint.
-const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, (...args: any[]) => Promise<any>>> = {
+const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, FetchPageFn>> = {
   team: teamDailyActivityAggregatedCall,
 };
 
@@ -141,18 +150,19 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
 
+  const entityPaginatedActivityOptions = {
+    fetchFn,
+    args: [accessToken, startTime, endTime, entityFilterArg],
+    enabled,
+    aggregatedFetchFn,
+  };
   const {
     data: spendDataRaw,
     isFetchingMore,
     progress,
     cancelled,
     cancel,
-  } = usePaginatedDailyActivity({
-    fetchFn,
-    args: [accessToken, startTime, endTime, entityFilterArg],
-    enabled,
-    aggregatedFetchFn,
-  });
+  } = usePaginatedDailyActivity(entityPaginatedActivityOptions);
 
   const spendData = spendDataRaw as unknown as EntitySpendData;
 
@@ -181,7 +191,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     }
   };
 
-  const getEntityLabel = (entity: string, metadata?: Record<string, any>): string => {
+  const getEntityLabel = (entity: string, metadata?: EntityBreakdownMetadata): string => {
     if (entityList) {
       const entityItem = entityList.find((item) => item.value === entity);
       if (entityItem) {
@@ -226,7 +236,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
               cache_creation_input_tokens: 0,
             },
             metadata: {
-              alias: getEntityLabel(entity, data.metadata as any),
+              alias: getEntityLabel(entity, data.metadata as EntityBreakdownMetadata),
               id: entity,
             },
           };
