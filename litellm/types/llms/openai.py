@@ -626,6 +626,11 @@ class ChatCompletionReasoningSummaryTextBlock(TypedDict, total=False):
     text: str
 
 
+class ChatCompletionReasoningTextBlock(TypedDict, total=False):
+    type: Required[Literal["reasoning_text"]]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    text: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+
+
 class ChatCompletionReasoningItem(TypedDict, total=False):
     """Represents an OpenAI Responses API reasoning item for round-tripping in conversation history."""
 
@@ -633,6 +638,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     id: str
     encrypted_content: str | None
     summary: ReadOnly[list[ChatCompletionReasoningSummaryTextBlock]]
+    content: ReadOnly[list[ChatCompletionReasoningTextBlock]]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
