@@ -892,13 +892,9 @@ def _count_content_list(
             elif c["type"] == "thinking":
                 # Claude extended thinking content block
                 # Count the thinking text and skip signature (opaque signature blob)
-                thinking_text = str(c.get("thinking", ""))
-                if thinking_text:
-                    num_tokens += count_function(thinking_text)
+                num_tokens += count_function(str(c.get("thinking", "")))
             elif c["type"] == "reasoning":
-                num_tokens += sum(
-                    count_function(text) for summary in c.get("summary", ()) if (text := summary.get("text"))
-                )
+                num_tokens += sum(count_function(summary.get("text", "")) for summary in c.get("summary", ()))
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
                 # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
