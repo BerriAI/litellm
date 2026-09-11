@@ -2947,9 +2947,9 @@ async def _ui_session_grouped_spend_logs(
     page depth does not degrade the query plan. A request for ``page > 1``
     without a cursor (the UI jumping straight to the last page, or back to a
     page it never walked through) falls back to ``OFFSET (page - 1) *
-    page_size``; a page starting at or past ``SPEND_LOGS_PAGINATION_COUNT_CAP``
-    lies outside the capped total the client is given, so it returns no rows
-    without running the query and the sort bound stays capped. Each session is represented
+    page_size``, trimmed to the end of the ``SPEND_LOGS_PAGINATION_COUNT_CAP``
+    window the capped ``total`` promises, so a page never runs past that total
+    and one starting at or past it returns no rows without a query. Each session is represented
     by its newest non-MCP row, enriched by ``_build_ui_spend_logs_response``
     exactly like the flat listing, and the response carries
     ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
@@ -2969,8 +2969,8 @@ async def _ui_session_grouped_spend_logs(
     cursor_params: Final[tuple[object, ...]] = cursor if cursor else ()
     limit_index: Final = next_param_index + len(cursor_params)
     offset: Final = (page - 1) * page_size if cursor is None else 0
-    beyond_capped_window: Final = offset >= SPEND_LOGS_PAGINATION_COUNT_CAP
-    offset_params: Final[tuple[int, ...]] = (offset,) if offset and not beyond_capped_window else ()
+    page_limit: Final = min(page_size, SPEND_LOGS_PAGINATION_COUNT_CAP - offset)
+    offset_params: Final[tuple[int, ...]] = (offset,) if offset and page_limit > 0 else ()
     offset_clause: Final = f"OFFSET ${limit_index + 1}" if offset_params else ""
 
     page_query: Final = f"""
@@ -2986,12 +2986,12 @@ async def _ui_session_grouped_spend_logs(
     """
     page_rows: Final[Sequence[_SessionPageRow]] = (
         ()
-        if beyond_capped_window
-        else await _query_raw(prisma_client, page_query, *sql_params, *cursor_params, page_size + 1, *offset_params)
+        if page_limit <= 0
+        else await _query_raw(prisma_client, page_query, *sql_params, *cursor_params, page_limit + 1, *offset_params)
     )
 
-    has_more: Final = len(page_rows) > page_size
-    visible_rows: Final = page_rows[:page_size]
+    has_more: Final = len(page_rows) > page_limit
+    visible_rows: Final = page_rows[:page_limit]
     next_cursor: Final = (
         f"{visible_rows[-1]['last_activity']}|{visible_rows[-1]['api_key']}|{visible_rows[-1]['session_key']}"
         if has_more and visible_rows
