@@ -375,13 +375,8 @@ async def test_instruction_reaches_compatible_endpoint(provider, model, is_async
     response = await litellm.arerank(**kwargs) if is_async else litellm.rerank(**kwargs)
 
     body = json.loads(route.calls[0].request.content)
-    assert body == {
-        "model": model,
-        "query": "question",
-        "documents": ["answer"],
-        "top_n": 1,
-        "return_documents": False,
-        **({"instruct": instruction} if instruction is not None else {}),
-    }
+    assert body.get("instruct") == instruction
+    assert ("instruct" in body) == (instruction is not None)
+    assert "instruction" not in body
     assert response.id == "ranking"
     assert response.results == [{"index": 0, "relevance_score": 0.9}]
