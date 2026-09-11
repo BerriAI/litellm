@@ -381,6 +381,26 @@ def test_create_mcp_request_object_from_kwargs_full(proxy_logging, make_user_api
     assert snapshot == {"tool_name": "calc", "arguments": {"x": 1}, "server_name": "math", "auth_user_id": "u-1"}
 
 
+def test_mcp_tool_metadata_flows_from_kwargs_to_synthetic_data(proxy_logging):
+    schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+    obj = proxy_logging._create_mcp_request_object_from_kwargs(
+        kwargs={
+            "name": "calc",
+            "arguments": {"x": 1},
+            "tool_description": "Adds numbers",
+            "tool_input_schema": schema,
+        }
+    )
+    out = proxy_logging._convert_mcp_to_llm_format(request_obj=obj, kwargs={})
+    assert (out["mcp_tool_description"], out["mcp_tool_input_schema"]) == ("Adds numbers", schema)
+
+
+def test_mcp_tool_metadata_absent_when_tool_was_never_listed(proxy_logging):
+    obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs={"name": "calc", "arguments": {}})
+    out = proxy_logging._convert_mcp_to_llm_format(request_obj=obj, kwargs={})
+    assert (out["mcp_tool_description"], out["mcp_tool_input_schema"]) == (None, None)
+
+
 def test_create_mcp_request_object_from_kwargs_empty(proxy_logging):
     obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs={})
     snapshot = {

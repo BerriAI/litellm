@@ -19,8 +19,10 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 
 import httpx
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.integrations.custom_guardrail import (
@@ -33,7 +35,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.litellm_pre_call_utils import add_guardrails_from_auth_metadata
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.mcp import MCPAuth
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
@@ -48,9 +53,12 @@ if TYPE_CHECKING:
     from litellm.types.utils import GuardrailStatus
 
 TOKEN_ENDPOINT_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+ENTRA_ISSUER_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/v2.0"
 EVALUATE_PATH: Final = "/agents/tool-evaluation/evaluate"
 MCP_SESSION_ID_HEADER: Final = "mcp-session-id"
+DEFENDER_STATUS_EVALUATED: Final = "Evaluated"
 _MCP_CALL_TYPES: Final[tuple[str, ...]] = ("mcp_call", "call_mcp_tool")
+_TOOL_INPUT_SCHEMA_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBO_CACHE_MAX_ENTRIES: Final = 1000
 _DEFAULT_TOKEN_TTL_SECONDS: Final = 3599.0
 _TOKEN_EXPIRY_SLACK_SECONDS: Final = 60.0
@@ -65,6 +73,13 @@ def _parse_expires_in(raw: object) -> float:
         return _DEFAULT_TOKEN_TTL_SECONDS
 
 
+def _parse_tool_input_schema(raw: object) -> dict[str, object] | None:
+    try:
+        return _TOOL_INPUT_SCHEMA_ADAPTER.validate_python(raw)
+    except ValidationError:
+        return None
+
+
 class _DefenderResult(TypedDict, total=False):
     status: ReadOnly[str]
     verdict: ReadOnly[str | None]
@@ -77,8 +92,12 @@ class _EvaluateResponse(TypedDict, total=False):
     correlationId: ReadOnly[str]
 
 
-class _ToolReference(TypedDict):
-    name: ReadOnly[str]
+class _ToolReference(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    description: str | None = None
+    input_schema: dict[str, object] | None = Field(default=None, serialization_alias="inputSchema")
 
 
 class _UnavailableDetail(TypedDict):
@@ -316,11 +335,21 @@ class Agent365Guardrail(CustomGuardrail):
         defender: Final = raw_defender if isinstance(raw_defender, dict) else _DefenderResult()
         raw_correlation_id: Final = verdict.get("correlationId")
         correlation_id: Final = raw_correlation_id if isinstance(raw_correlation_id, str) else None
+        defender_status: Final = defender.get("status")
+        if allowed and defender_status != DEFENDER_STATUS_EVALUATED:
+            return self._handle_unavailable(
+                data=data,
+                tool_name=tool_name,
+                reason=f"Microsoft Defender did not evaluate the call (defender.status={defender_status or 'missing'})",
+                defender_status=defender_status,
+                correlation_id=correlation_id,
+                latency_ms=latency_ms,
+            )
         self._record_verdict(
             data=data,
             verdict="Allow" if allowed else "Block",
             guardrail_status="success" if allowed else "guardrail_intervened",
-            defender_status=defender.get("status"),
+            defender_status=defender_status,
             correlation_id=correlation_id,
             latency_ms=latency_ms,
         )
@@ -347,9 +376,14 @@ class Agent365Guardrail(CustomGuardrail):
         arguments: Final = data.get("mcp_arguments")
         server_name: Final = str(data.get("mcp_server_name") or "litellm")
         agent_id: Final = self.agent_id or user_api_key_dict.key_alias
-        tool_reference: Final[_ToolReference] = {"name": tool_name}
+        description: Final = data.get("mcp_tool_description")
+        tool_reference: Final = _ToolReference(
+            name=tool_name,
+            description=description if isinstance(description, str) and description else None,
+            input_schema=_parse_tool_input_schema(data.get("mcp_tool_input_schema")),
+        )
         payload: Final[dict[str, object]] = {  # mutable-ok: JSON body with optional fields added below
-            "tool": tool_reference,
+            "tool": tool_reference.model_dump(by_alias=True, exclude_none=True),
             "serverName": server_name,
             "conversationId": self._resolve_conversation_id(data),
         }
@@ -361,6 +395,18 @@ class Agent365Guardrail(CustomGuardrail):
 
     @staticmethod
     def _resolve_conversation_id(data: Mapping[str, object]) -> str:
+        raw_logging_obj: Final = data.get("litellm_logging_obj")
+        logging_obj: Final = raw_logging_obj if isinstance(raw_logging_obj, LiteLLMLoggingObj) else None
+        call_id: Final = data.get("litellm_call_id") or (logging_obj.litellm_call_id if logging_obj else None)
+        if isinstance(call_id, str) and call_id:
+            return call_id
+        if logging_obj is not None:
+            tool_call_metadata: Final = logging_obj.model_call_details.get("mcp_tool_call_metadata")
+            session_from_logging: Final = (
+                tool_call_metadata.get("mcp_session_id") if isinstance(tool_call_metadata, Mapping) else None
+            )
+            if isinstance(session_from_logging, str) and session_from_logging:
+                return session_from_logging
         metadata: Final = next(
             (m for m in (data.get("metadata"), data.get("litellm_metadata")) if isinstance(m, Mapping)),
             None,
@@ -373,18 +419,6 @@ class Agent365Guardrail(CustomGuardrail):
             )
             if isinstance(session_id, str) and session_id:
                 return session_id
-        raw_logging_obj: Final = data.get("litellm_logging_obj")
-        logging_obj: Final = raw_logging_obj if isinstance(raw_logging_obj, LiteLLMLoggingObj) else None
-        if logging_obj is not None:
-            tool_call_metadata: Final = logging_obj.model_call_details.get("mcp_tool_call_metadata")
-            session_from_logging: Final = (
-                tool_call_metadata.get("mcp_session_id") if isinstance(tool_call_metadata, Mapping) else None
-            )
-            if isinstance(session_from_logging, str) and session_from_logging:
-                return session_from_logging
-        call_id: Final = data.get("litellm_call_id") or (logging_obj.litellm_call_id if logging_obj else None)
-        if isinstance(call_id, str) and call_id:
-            return call_id
         return str(uuid.uuid4())
 
     async def _get_obo_token(self, assertion: str) -> str:
@@ -518,6 +552,9 @@ class Agent365Guardrail(CustomGuardrail):
         data: dict,  # mutable-ok: guardrail logging appends into the request metadata in place
         tool_name: str,
         reason: str,
+        defender_status: str | None = None,
+        correlation_id: str | None = None,
+        latency_ms: float | None = None,
     ) -> dict:  # mutable-ok: returns the request data dict per hook contract
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.warning(
@@ -530,9 +567,9 @@ class Agent365Guardrail(CustomGuardrail):
                 data=data,
                 verdict="Unscanned",
                 guardrail_status="guardrail_failed_to_respond",
-                defender_status=None,
-                correlation_id=None,
-                latency_ms=None,
+                defender_status=defender_status,
+                correlation_id=correlation_id,
+                latency_ms=latency_ms,
                 reason=reason,
             )
             return data
@@ -540,9 +577,9 @@ class Agent365Guardrail(CustomGuardrail):
             data=data,
             verdict="Unavailable",
             guardrail_status="guardrail_failed_to_respond",
-            defender_status=None,
-            correlation_id=None,
-            latency_ms=None,
+            defender_status=defender_status,
+            correlation_id=correlation_id,
+            latency_ms=latency_ms,
             reason=reason,
         )
         unavailable_detail: Final[_UnavailableDetail] = {
@@ -580,3 +617,33 @@ class Agent365Guardrail(CustomGuardrail):
             guardrail_provider=self.guardrail_provider,
             event_type=GuardrailEventHooks.pre_mcp_call,
         )
+
+
+def _applies_to_caller(guardrail: Agent365Guardrail, user_api_key_auth: "UserAPIKeyAuth") -> bool:
+    probe: Final[dict[str, object]] = {"metadata": {}}  # mutable-ok: filled in place by the key resolver
+    add_guardrails_from_auth_metadata(
+        user_api_key_dict=user_api_key_auth, data=probe, metadata_variable_name="metadata"
+    )
+    return guardrail.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_mcp_call)
+
+
+def agent_365_authorization_servers(server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None") -> tuple[str, ...]:
+    """Entra issuers an MCP client signs in with before calling ``server`` through an Agent 365 guardrail.
+
+    Empty unless the admin advertised the server's ``scopes`` (the audience the client requests), the gateway
+    would otherwise own sign-in for the server, and an Agent 365 guardrail applies: every registered one for the
+    anonymous discovery fetch, otherwise those the caller's key, team, or policies select.
+    """
+    if not server.scopes or server.auth_type == MCPAuth.oauth2 or not server.advertises_gateway_authorization_server:
+        return ()
+    registered: Final = tuple(
+        callback
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(Agent365Guardrail)
+        if isinstance(callback, Agent365Guardrail)
+    )
+    applicable: Final = (
+        registered
+        if user_api_key_auth is None
+        else tuple(g for g in registered if _applies_to_caller(g, user_api_key_auth))
+    )
+    return tuple(dict.fromkeys(ENTRA_ISSUER_TEMPLATE.format(tenant_id=g.tenant_id) for g in applicable))

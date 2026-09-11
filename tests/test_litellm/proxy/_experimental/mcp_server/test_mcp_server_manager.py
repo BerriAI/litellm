@@ -6403,6 +6403,136 @@ class TestMCPServerManager:
         # Verify the MCP client call was awaited exactly once
         assert mock_client.call_tool.await_count == 1
 
+    @staticmethod
+    def _manager_ready_for_call_tool(listed_tools: list[MCPTool]) -> tuple[MCPServerManager, MagicMock]:
+        from mcp.types import CallToolResult
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            url="http://test-server.com",
+        )
+        manager.registry = {"test-server": server}
+        manager.tool_name_to_mcp_server_name_mapping["test_tool"] = "test-server"
+        manager.tool_name_to_mcp_server_name_mapping["test-server-test_tool"] = "test-server"
+        manager._create_prefixed_tools(listed_tools, server)
+
+        mock_client = AsyncMock()
+        mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        return manager, proxy_logging_obj
+
+    @staticmethod
+    def _unrestricted_auth() -> MagicMock:
+        user_api_key_auth = MagicMock()
+        user_api_key_auth.object_permission = None
+        user_api_key_auth.object_permission_id = None
+        return user_api_key_auth
+
+    @pytest.mark.asyncio
+    async def test_call_tool_hands_listed_tool_description_and_schema_to_pre_call_hooks(self):
+        schema = {"type": "object", "properties": {"param": {"type": "string"}}, "required": ["param"]}
+        listed = [MCPTool(name="test_tool", description="Runs the test tool", inputSchema=schema)]
+        manager, proxy_logging_obj = self._manager_ready_for_call_tool(listed)
+
+        await manager.call_tool(
+            server_name="test-server",
+            name="test_tool",
+            arguments={"param": "value"},
+            user_api_key_auth=self._unrestricted_auth(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        hook_kwargs = proxy_logging_obj._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == ("Runs the test tool", schema)
+
+    @pytest.mark.asyncio
+    async def test_call_tool_hands_listed_tool_metadata_to_during_call_hooks_through_real_conversion(self):
+        schema = {"type": "object", "properties": {"param": {"type": "string"}}}
+        listed = [MCPTool(name="test_tool", description="Runs the test tool", inputSchema=schema)]
+        manager, _ = self._manager_ready_for_call_tool(listed)
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+
+        await manager.call_tool(
+            server_name="test-server",
+            name="test_tool",
+            arguments={"param": "value"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        during_data = proxy_logging_obj.during_call_hook.call_args.kwargs["data"]
+        assert (during_data["mcp_tool_description"], during_data["mcp_tool_input_schema"]) == (
+            "Runs the test tool",
+            schema,
+        )
+
+    @pytest.mark.asyncio
+    async def test_call_tool_passes_no_tool_metadata_when_tool_was_never_listed(self):
+        manager, proxy_logging_obj = self._manager_ready_for_call_tool(
+            [MCPTool(name="other_tool", description="Unrelated", inputSchema={"type": "object"})]
+        )
+
+        await manager.call_tool(
+            server_name="test-server",
+            name="test_tool",
+            arguments={"param": "value"},
+            user_api_key_auth=self._unrestricted_auth(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        hook_kwargs = proxy_logging_obj._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == (None, None)
+
+    def test_get_listed_tool_resolves_prefixed_name_and_latest_listing(self):
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        manager._create_prefixed_tools([MCPTool(name="echo", description="v1", inputSchema={})], server)
+        manager._create_prefixed_tools([MCPTool(name="echo", description="v2", inputSchema={})], server)
+
+        by_prefixed_name = manager.get_listed_tool(server, "srv-echo")
+        assert by_prefixed_name is not None and by_prefixed_name.description == "v2"
+        assert manager.get_listed_tool(server, "missing") is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("add_prefix", [True, False])
+    async def test_openapi_listing_records_tool_metadata_for_pre_call_hooks(self, add_prefix):
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+        from litellm.types.mcp_server.tool_registry import MCPTool as RegistryTool
+
+        server = MCPServer(
+            server_id="petstore-id",
+            name="petstore",
+            server_name="petstore",
+            transport=MCPTransport.http,
+            url=None,
+            spec_path="https://example.com/petstore.yaml",
+        )
+        schema = {"type": "object", "properties": {"petId": {"type": "integer"}}}
+        registered = RegistryTool(
+            name="petstore-get_pet", description="Fetch a pet", input_schema=schema, handler=lambda: None
+        )
+        manager = MCPServerManager()
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+
+        with patch.dict(global_mcp_tool_registry.tools, {"petstore-get_pet": registered}, clear=True):
+            listed = await manager._get_tools_from_server(server=server, add_prefix=add_prefix)
+
+        assert [t.name for t in listed] == ["petstore-get_pet" if add_prefix else "get_pet"]
+        for spelling in ("get_pet", "petstore-get_pet"):
+            tool = manager.get_listed_tool(server, spelling)
+            assert tool is not None and (tool.description, tool.inputSchema) == ("Fetch a pet", schema)
+
     @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_with_user_api_key_auth(self):
         """
