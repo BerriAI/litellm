@@ -22,6 +22,12 @@ pub enum OcrRequestError {
     DownloadTooLarge,
     #[error("OCR document download exceeded the redirect limit")]
     TooManyRedirects,
+    #[error("invalid OCR pages: {0}")]
+    Pages(String),
+    #[error("invalid OCR features")]
+    Features,
+    #[error("OCR model cannot be a dot segment")]
+    DotModel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -32,6 +38,20 @@ pub enum OcrResponseError {
     MissingRedirectLocation,
     #[error("OCR document redirect location is invalid")]
     InvalidRedirect,
+    #[error("OCR operation ended with status {0}")]
+    OperationStatus(String),
+    #[error("OCR response numeric value is out of range: {0}")]
+    NumericRange(&'static str),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum OcrPollingError {
+    #[error("OCR accepted response is missing a valid operation-location")]
+    PollLocation,
+    #[error("OCR operation-location must use the submission origin without credentials")]
+    PollOrigin,
+    #[error("OCR polling timed out")]
+    PollTimeout,
 }
 
 #[derive(Debug, Error)]
@@ -43,6 +63,8 @@ pub enum OcrError {
     #[error("{0}")]
     Transport(#[from] TransportError),
     #[error("{0}")]
+    Polling(#[from] OcrPollingError),
+    #[error("{0}")]
     Public(#[from] crate::Error),
 }
 
@@ -52,6 +74,7 @@ impl From<OcrError> for crate::Error {
             OcrError::Request(error) => error.into(),
             OcrError::Response(error) => error.into(),
             OcrError::Transport(error) => error.into(),
+            OcrError::Polling(error) => crate::Error::InvalidResponse(error.to_string()),
             OcrError::Public(error) => error,
         }
     }
