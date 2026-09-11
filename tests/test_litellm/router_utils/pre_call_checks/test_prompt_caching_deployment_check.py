@@ -477,3 +477,65 @@ async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost
 
     assert deployments[0]["litellm_params"]["model"] == "anthropic/claude-opus-4-6"
     assert _get_min_token_count_for_deployments(deployments) == 4096
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("anthropic/claude-fable-5")
+    check = PromptCachingDeploymentCheck(cache=DualCache())
+    deployments = _deployments("anthropic/claude-fable-5")
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": text * 100}])
+
+    result, took, lags = await timed_with_loop_lags(
+        lambda: check.async_filter_deployments(
+            model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=messages
+        )
+    )
+
+    assert result == deployments
+    assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("anthropic/claude-fable-5")
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    messages = cast(
+        List[AllMessageValues],
+        [{"role": "user", "content": [{"type": "text", "text": text * 100, "cache_control": {"type": "ephemeral"}}]}],
+    )
+    standard_logging_object = {
+        "call_type": "acompletion",
+        "model": "anthropic/claude-fable-5",
+        "messages": messages,
+        "model_id": "dep-1",
+    }
+
+    _, took, lags = await timed_with_loop_lags(
+        lambda: check.async_log_success_event(
+            kwargs={"standard_logging_object": standard_logging_object},
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+    )
+
+    assert await PromptCachingCache(cache=cache).async_get_model_id(messages=messages, tools=None) == {
+        "model_id": "dep-1"
+    }
+    assert_loop_stayed_free(took, lags)

@@ -9,6 +9,7 @@ import responses
 from click.testing import CliRunner
 
 from litellm.proxy.client.cli import cli
+from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
 from litellm.proxy.client.cli.commands import configure as configure_module
 from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 from litellm.proxy.client.cli.commands.configure import configure_claude, configure_group, interactive_configure
@@ -29,10 +30,12 @@ def _mock_models():
 
 @pytest.fixture
 def paths(monkeypatch, tmp_path):
+    """The default settings file, reached the way Claude Code reaches it: CLAUDE_CONFIG_DIR names its directory."""
     settings_path = tmp_path / "claude" / "settings.json"
     state_path = tmp_path / "litellm" / "claude_configure_state.json"
-    monkeypatch.setattr(configure_module, "CLAUDE_SETTINGS_PATH", settings_path)
-    monkeypatch.setattr(configure_module, "CONFIGURE_STATE_PATH", state_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(settings_path.parent))
+    monkeypatch.setattr(claude_settings_module, "CLAUDE_SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(claude_settings_module, "CONFIGURE_STATE_PATH", state_path)
     return settings_path, state_path
 
 
@@ -58,7 +61,9 @@ def lite_up_backup(monkeypatch, tmp_path):
     """A `lite up` session holding its backup, the local precondition every settings write refuses on."""
     backup = tmp_path / "claude_settings_backup.json"
     backup.write_text("{}")
-    monkeypatch.setattr(configure_module, "SETTINGS_FILE_OWNERS", (SettingsFileOwner(backup, "lite up", "lite down"),))
+    monkeypatch.setattr(
+        claude_settings_module, "SETTINGS_FILE_OWNERS", (SettingsFileOwner(backup, "lite up", "lite down"),)
+    )
     return backup
 
 
@@ -84,7 +89,7 @@ class TestConfigureClaudeWithAVirtualKey:
         assert "Starting model: claude-auto" in result.output
         assert "1 of the proxy's 2 models" in result.output
         assert "lite unconfigure claude" in result.output
-        assert len(responses.calls) == 1
+        assert [call.request.headers.get("x-gateway-client") for call in responses.calls] == ["claude-code"]
 
     @responses.activate
     def test_takes_the_key_from_the_global_option_and_keeps_claude_codes_default(self, runner, paths):
@@ -325,7 +330,102 @@ class TestUnconfigureClaude:
         result = runner.invoke(cli, ["unconfigure", "claude"])
         assert result.exit_code != 0 and "lite down" in result.output
 
+    @responses.activate
+    def test_a_config_dir_is_configured_and_undone_apart_from_the_default_file(
+        self, runner, paths, monkeypatch, tmp_path, lite_up_backup
+    ):
+        _mock_models()
+        default_settings, default_state = paths
+        work_dir = tmp_path / "claude-work"
+        work_dir.mkdir()
+        original = {"theme": "dark"}
+        (work_dir / "settings.json").write_text(json.dumps(original))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(work_dir))
+
+        configured = _configure(runner, "--api-key", VALID_KEY, "--model", "claude-auto")
+        assert configured.exit_code == 0, configured.output
+        assert f"Configured Claude Code: {work_dir / 'settings.json'}" in configured.output
+        assert json.loads((work_dir / "settings.json").read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == VALID_KEY
+        assert not default_settings.exists() and not default_state.exists()
+
+        undone = runner.invoke(cli, ["unconfigure", "claude"])
+        assert undone.exit_code == 0, undone.output
+        assert json.loads((work_dir / "settings.json").read_text()) == original
+        assert not default_settings.exists() and not default_state.exists()
+        assert runner.invoke(cli, ["unconfigure", "claude"]).exit_code != 0, "the receipt is gone with the undo"
+
     def test_without_a_receipt_it_fails_loudly(self, runner, paths):
         result = runner.invoke(cli, ["unconfigure", "claude"])
         assert result.exit_code != 0
         assert "nothing to undo" in result.output
+
+
+class TestClaudeCodeView:
+    VIEW = {"anthropic-version": "2023-06-01", "x-gateway-client": "claude-code"}
+
+    def _mock(self, rows):
+        responses.get(
+            f"{PROXY}/v1/models",
+            json={"data": rows},
+            match=[responses.matchers.header_matcher({"Authorization": f"Bearer {VALID_KEY}", **self.VIEW})],
+        )
+
+    @responses.activate
+    @pytest.mark.parametrize(
+        "model, pinned",
+        [
+            ("literal-claude-router-source", "emitted-literal"),
+            ("marked-sibling", "emitted-marked[1m]"),
+            ("emitted-collision", "emitted-source-priority"),
+            ("emitted-only", "emitted-only"),
+        ],
+    )
+    def test_pins_source_identity_before_emitted_id(self, runner, paths, model, pinned):
+        self._mock(
+            [
+                {"id": "emitted-collision", "source_model": "other-source"},
+                {"id": "emitted-source-priority", "source_model": "emitted-collision"},
+                {"id": "emitted-marked[1m]", "source_model": "marked-sibling"},
+                {"id": "emitted-literal", "source_model": "literal-claude-router-source"},
+                {"id": "emitted-only"},
+            ]
+        )
+        settings_path, _ = paths
+        result = _configure(runner, "--api-key", VALID_KEY, "--model", model)
+        assert result.exit_code == 0, result.output
+        assert json.loads(settings_path.read_text())["model"] == pinned
+        assert f"Starting model: {pinned}" in result.output
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_refuses_unknown_short_suffix(self, runner, paths):
+        self._mock([{"id": "emitted-router-source", "source_model": "literal-router-source"}])
+        settings_path, _ = paths
+        result = _configure(runner, "--api-key", VALID_KEY, "--model", "source")
+        assert result.exit_code != 0
+        assert "'source' is not served" in result.output
+        assert not settings_path.exists()
+
+    @responses.activate
+    def test_interactive_picker_uses_source_names(self, paths):
+        self._mock([{"id": "emitted", "source_model": "source"}])
+        settings_path, _ = paths
+        asked = {}
+        ctx = click.Context(
+            configure_group, obj={"base_url": PROXY, "api_key": VALID_KEY, "api_key_from_token_file": False}
+        )
+
+        def pick_model(listed):
+            asked["listed"] = tuple(listed)
+            return "source"
+
+        interactive_configure(ctx, pick_targets=lambda: ("claude",), pick_model=pick_model)
+        assert asked["listed"] == ("source",)
+        assert json.loads(settings_path.read_text())["model"] == "emitted"
+
+    @responses.activate
+    def test_counts_what_an_older_proxy_lets_the_picker_show(self, runner, paths):
+        _mock_models()
+        result = _configure(runner, "--api-key", VALID_KEY)
+        assert result.exit_code == 0, result.output
+        assert "/model will list 1 of the proxy's 2 models: Claude Code shows only ids containing" in result.output

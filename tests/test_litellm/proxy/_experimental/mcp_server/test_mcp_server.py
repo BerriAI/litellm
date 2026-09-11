@@ -3,6 +3,7 @@ import contextvars
 import os
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1866,96 +1867,85 @@ async def test_streamable_http_session_manager_is_stateless():
 
 
 @pytest.mark.asyncio
-async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
-    """
-    Test that routing correctly sends:
-    - initialize (no mcp-session-id) → stateful manager (so client gets mcp-session-id)
-    - tools/list (no mcp-session-id) → stateless manager (curl, Inspector)
-    """
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            handle_streamable_http_mcp,
-            session_manager_stateful,
-            session_manager_stateless,
+@pytest.mark.parametrize("debug", (False, True))
+@pytest.mark.parametrize(
+    ("method", "request_body", "stateful"),
+    (
+        ("POST", b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}', True),
+        ("POST", b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}', False),
+        ("GET", b"", False),
+        ("DELETE", b"", False),
+    ),
+)
+async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
+    debug: bool, method: str, request_body: bytes, stateful: bool
+) -> None:
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+    from starlette.requests import Request
+    from starlette.types import Message, Receive, Scope, Send
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._experimental.mcp_server.mcp_debug import record_auth_resolution
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
+
+    scope: Final[Scope] = {"type": "http", "method": method, "path": "/mcp", "headers": []}
+    receive: Final = AsyncMock(return_value={"type": "http.request", "body": request_body, "more_body": False})
+    send: Final = AsyncMock()
+    observe_start: Final = AsyncMock()
+    body: Final[Message] = {"type": "http.response.body", "body": b"data: pong\n\n", "more_body": True}
+
+    async def handle_request(request_scope: Scope, receive: Receive, outgoing: Send) -> None:
+        await outgoing({"type": "http.response.start", "status": 200, "headers": []})
+        await observe_start(send.await_count)
+        context: Final = RequestContext(
+            request_id=1, meta=None, session=MagicMock(), lifespan_context=None, request=Request(request_scope)
         )
-    except ImportError:
-        pytest.skip("MCP server not available")
+        token: Final = request_ctx.set(context)
+        try:
+            record_auth_resolution("s1", AuthResolution.stored_user_token)
+        finally:
+            request_ctx.reset(token)
+        await outgoing(body)
 
-    async def make_request(method_body: bytes, path: str = "/mcp/progress_test"):
-        scope = {
-            "type": "http",
-            "method": "POST",
-            "path": path,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"authorization", b"Bearer test-key"),
-            ],
-        }
-        receive = AsyncMock(
-            return_value={
-                "type": "http.request",
-                "body": method_body,
-                "more_body": False,
-            }
-        )
-        send = AsyncMock()
-
-        stateless_called = []
-        stateful_called = []
-
-        async def stateless_handle(s, r, se):
-            stateless_called.append(1)
-
-        async def stateful_handle(s, r, se):
-            stateful_called.append(1)
-
-        with (
-            patch(
-                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-                new_callable=AsyncMock,
-                return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+    stateless_handle: Final = AsyncMock(side_effect=handle_request)
+    stateful_handle: Final = AsyncMock(side_effect=handle_request)
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(
+                UserAPIKeyAuth(user_id="debug-user"),
+                None,
+                None,
+                None,
+                None,
+                {"x-litellm-mcp-debug": "true"} if debug else {},
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-            ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-                True,
-            ),
-            patch.object(
-                session_manager_stateless,
-                "handle_request",
-                side_effect=stateless_handle,
-            ),
-            patch.object(
-                session_manager_stateful,
-                "handle_request",
-                side_effect=stateful_handle,
-            ),
-            patch.object(
-                session_manager_stateless,
-                "_server_instances",
-                {},
-            ),
-            patch.object(
-                session_manager_stateful,
-                "_server_instances",
-                {},
-            ),
-        ):
-            await handle_streamable_http_mcp(scope, receive, send)
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
 
-        return bool(stateless_called), bool(stateful_called)
-
-    # initialize → stateful
-    init_body = b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
-    stateless_called, stateful_called = await make_request(init_body)
-    assert stateful_called and not stateless_called, "initialize (no session) should route to stateful, not stateless"
-
-    # tools/list → stateless
-    tools_body = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-    stateless_called, stateful_called = await make_request(tools_body)
-    assert stateless_called and not stateful_called, "tools/list (no session) should route to stateless, not stateful"
+    assert stateful_handle.await_count == (1 if stateful else 0)
+    assert stateless_handle.await_count == (0 if stateful else 1)
+    observe_start.assert_awaited_once_with(0 if debug and method == "POST" else 1)
+    assert send.await_count == 2
+    assert send.call_args_list[0].args[0]["status"] == 200
+    assert send.call_args_list[1].args[0] == body
+    headers: Final = dict(send.call_args_list[0].args[0]["headers"])
+    if debug:
+        assert headers[b"x-mcp-debug-auth-resolution"] == (b"stored-user-token" if method == "POST" else b"unresolved")
+    else:
+        assert not any(name.startswith(b"x-mcp-debug") for name in headers)
 
 
 @pytest.mark.asyncio
@@ -2012,6 +2002,11 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[MagicMock()],
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
@@ -2498,6 +2493,11 @@ async def test_initialize_request_tracks_active_session_after_response_header():
                 new_callable=AsyncMock,
                 return_value=(owner_auth, None, None, None, None, None),
             ),
+            patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[MagicMock()],
+            ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
                 True,
@@ -2609,6 +2609,11 @@ async def test_initialize_request_with_existing_session_tracks_new_session():
                     {"Authorization": "Bearer new-oauth"},
                     {"x-new-header": "new"},
                 ),
+            ),
+            patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[MagicMock()],
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
@@ -5623,6 +5628,78 @@ class TestGatewayCreateInitializationOptions:
                 assert server.create_initialization_options().server_name == "grafana"
 
         assert server.create_initialization_options().server_name == "litellm-mcp-server"
+
+    @pytest.mark.asyncio
+    async def test_initialize_with_no_granted_servers_returns_403(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _gateway_initialize_instructions_request_scope,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch(  # test-quality-ok: grant resolution is the input under test
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                async with _gateway_initialize_instructions_request_scope(
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-no-mcp"),
+                    mcp_servers=None,
+                    client_ip=None,
+                    is_initialize=True,
+                ):
+                    pytest.fail("initialize must not proceed when the key grants no MCP servers")
+
+            assert exc_info.value.status_code == 403
+            assert "no MCP servers granted" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_initialize_with_no_granted_scoped_servers_returns_scoped_denial(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _gateway_initialize_instructions_request_scope,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch(  # test-quality-ok: grant resolution is the input under test
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                async with _gateway_initialize_instructions_request_scope(
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-no-mcp"),
+                    mcp_servers=["grafana"],
+                    client_ip=None,
+                    is_initialize=True,
+                ):
+                    pytest.fail("scoped initialize must not proceed when nothing resolves")
+
+            assert exc_info.value.status_code == 403
+            assert "grafana" in exc_info.value.detail["error"]
+
+    @pytest.mark.asyncio
+    async def test_non_initialize_request_with_no_granted_servers_is_not_rejected_here(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _gateway_initialize_instructions_request_scope,
+            _mcp_gateway_initialize_instructions,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        with patch(  # test-quality-ok: grant resolution is the input under test
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-no-mcp"),
+                mcp_servers=None,
+                client_ip=None,
+            ):
+                assert _mcp_gateway_initialize_instructions.get() is None
 
     @pytest.mark.asyncio
     async def test_sse_handler_scopes_server_name_from_single_server_path(self):

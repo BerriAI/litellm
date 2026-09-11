@@ -1,0 +1,61 @@
+suite: test in-container connection pool
+templates:
+  - deployment.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: should not emit pgbouncer env vars by default
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "20"
+
+  - it: should enable the pool with the default sizing when connectionPool.enabled is set
+    template: deployment.yaml
+    set:
+      db.connectionPool.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "20"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+            value: "1000"
+
+  - it: should pass custom sizing through as strings next to the worker count
+    template: deployment.yaml
+    set:
+      numWorkers: 4
+      db.connectionPool.enabled: true
+      db.connectionPool.maxDbConnections: 8
+      db.connectionPool.maxClientConn: 400
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+            value: "400"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "4"

@@ -3,6 +3,7 @@ import os
 import shlex
 import stat
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +16,8 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     ANTHROPIC_DEFAULT_MODEL_ENV_KEYS,
     AUTOROUTE_BACKUP_PATH,
     BACKUP_PATH,
+    CLAUDE_SETTINGS_PATH,
+    CONFIGURE_STATE_PATH,
     OWNED_ENV_KEYS,
     OWNED_TOP_LEVEL_KEYS,
     SETTINGS_FILE_OWNERS,
@@ -25,7 +28,10 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     StartOn,
     StaticToken,
     UnpinModel,
+    claude_settings_path,
     configure_claude_settings,
+    configure_state_path,
+    lite_api_key_helper_configured,
     merge_claude_settings,
     resolve_api_key_helper,
     unconfigure_claude_settings,
@@ -388,6 +394,117 @@ class TestDoesNotDestroyUserOwnedStructure:
             _helper_configure("https://proxy.example.com", settings_path, _owners(backup_path))
 
         assert json.loads(settings_path.read_text())["env"] == "not-an-object"
+
+
+class TestClaudeSettingsPath:
+    def test_defaults_to_the_home_settings_file(self):
+        assert claude_settings_path({}) == CLAUDE_SETTINGS_PATH
+        assert claude_settings_path({"CLAUDE_CONFIG_DIR": ""}) == CLAUDE_SETTINGS_PATH
+
+    def test_follows_claude_config_dir_like_claude_code_does(self, tmp_path):
+        assert claude_settings_path({"CLAUDE_CONFIG_DIR": str(tmp_path)}) == tmp_path / "settings.json"
+
+    def test_expands_a_tilde_in_claude_config_dir(self):
+        assert claude_settings_path({"CLAUDE_CONFIG_DIR": "~/.claude-work"}) == (
+            Path.home() / ".claude-work" / "settings.json"
+        )
+
+
+class TestConfigureStatePath:
+    """Each settings file gets its own undo receipt: the default file keeps the long-standing path, and
+    a CLAUDE_CONFIG_DIR file gets one keyed by its resolved location, so `lite unconfigure claude`
+    under one config dir never restores the other file's history."""
+
+    @pytest.fixture
+    def default_paths(self, tmp_path):
+        default_settings = tmp_path / "home" / ".claude" / "settings.json"
+        default_state = tmp_path / "home" / ".litellm" / "claude_configure_state.json"
+        with (
+            patch(f"{CLAUDE_SETTINGS_MODULE}.CLAUDE_SETTINGS_PATH", default_settings),
+            patch(f"{CLAUDE_SETTINGS_MODULE}.CONFIGURE_STATE_PATH", default_state),
+        ):
+            yield default_settings, default_state
+
+    def test_the_default_file_keeps_the_default_receipt(self, default_paths):
+        default_settings, default_state = default_paths
+        assert configure_state_path(default_settings) == default_state
+
+    def test_a_symlink_alias_of_the_default_file_shares_its_receipt(self, default_paths):
+        default_settings, default_state = default_paths
+        default_settings.parent.mkdir(parents=True)
+        alias = default_settings.parent.parent / "claude-alias"
+        alias.symlink_to(default_settings.parent, target_is_directory=True)
+        assert configure_state_path(alias / "settings.json") == default_state
+
+    def test_another_settings_file_gets_a_receipt_of_its_own_beside_the_default_one(self, default_paths, tmp_path):
+        _default_settings, default_state = default_paths
+        work_state = configure_state_path(tmp_path / "work" / "settings.json")
+        play_state = configure_state_path(tmp_path / "play" / "settings.json")
+        assert work_state != default_state and play_state != default_state
+        assert work_state != play_state
+        assert work_state.parent == play_state.parent == default_state.parent / "claude_configure_state"
+        assert work_state == configure_state_path(tmp_path / "work" / "settings.json")
+
+    def test_configure_and_unconfigure_under_a_config_dir_leave_the_default_receipt_alone(
+        self, default_paths, tmp_path, lite_on_path
+    ):
+        _default_settings, default_state = default_paths
+        work_settings = tmp_path / "work" / "settings.json"
+        work_state = configure_state_path(work_settings)
+        configure_claude_settings(
+            "https://proxy.example.com",
+            ApiKeyHelper(resolve_api_key_helper("https://proxy.example.com")),
+            KeepModel(),
+            work_settings,
+            work_state,
+            (),
+        )
+        assert work_state.exists() and not default_state.exists()
+        outcome = unconfigure_claude_settings(work_settings, work_state, ())
+        assert outcome.file_removed and not work_settings.exists()
+        assert not work_state.exists()
+
+
+class TestLiteApiKeyHelperConfigured:
+    def _settings(self, tmp_path, payload):
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(payload)
+        return settings_path
+
+    def test_recognises_the_helper_lite_login_wrote_for_this_proxy(self, tmp_path, lite_on_path):
+        settings_path = tmp_path / "settings.json"
+        _helper_configure("https://proxy.example.com/", settings_path, (), tmp_path / "state.json")
+
+        assert lite_api_key_helper_configured("https://proxy.example.com/", settings_path) is True
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is True
+
+    def test_a_helper_for_another_proxy_does_not_count(self, tmp_path, lite_on_path):
+        settings_path = tmp_path / "settings.json"
+        _helper_configure("https://other.example.com", settings_path, (), tmp_path / "state.json")
+
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False
+
+    def test_a_hand_written_helper_does_not_count(self, tmp_path, lite_on_path):
+        settings_path = self._settings(tmp_path, json.dumps({"apiKeyHelper": "cat ~/.my-proxy-key"}))
+
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False
+
+    def test_missing_or_helperless_settings_do_not_count(self, tmp_path, lite_on_path):
+        assert lite_api_key_helper_configured("https://proxy.example.com", tmp_path / "absent.json") is False
+        helperless = json.dumps({"env": {"ANTHROPIC_BASE_URL": "https://proxy.example.com"}})
+        settings_path = self._settings(tmp_path, helperless)
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False
+
+    def test_unreadable_settings_fall_back_to_false(self, tmp_path, lite_on_path):
+        settings_path = self._settings(tmp_path, "{not json")
+
+        assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False
+
+    def test_lite_missing_from_path_falls_back_to_false(self, tmp_path):
+        helper = "/usr/local/bin/lite --base-url https://proxy.example.com auth print-token"
+        settings_path = self._settings(tmp_path, json.dumps({"apiKeyHelper": helper}))
+        with patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value=None):
+            assert lite_api_key_helper_configured("https://proxy.example.com", settings_path) is False
 
 
 class TestMergeClaudeSettings:
