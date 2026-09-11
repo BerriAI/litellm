@@ -850,7 +850,6 @@ class RouterGeneralSettings(BaseModel):
 
 class RouterNoDeploymentsAvailableError(ValueError):
     status_code: int = 429
-    cooldown_time: float | None = None
 
 
 class RouterRateLimitErrorBasic(RouterNoDeploymentsAvailableError):
@@ -868,8 +867,6 @@ class RouterRateLimitErrorBasic(RouterNoDeploymentsAvailableError):
 
 
 class RouterRateLimitError(RouterNoDeploymentsAvailableError):
-    cooldown_time: float
-
     def __init__(
         self,
         model: str,
