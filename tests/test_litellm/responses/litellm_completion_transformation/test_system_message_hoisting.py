@@ -73,3 +73,17 @@ def test_a_conversation_without_a_system_message_is_unchanged():
     roles, _ = _roles([{"role": "user", "content": "q"}], {})
 
     assert roles == ["user"]
+
+
+def test_bare_strings_in_a_part_list_survive_the_merge():
+    """Upstream normalization leaves plain strings in a content list, so filtering the
+    list down to dicts silently dropped part of the prompt."""
+    _, messages = _roles(
+        [
+            {"role": "user", "content": "q"},
+            {"role": "system", "content": ["B", {"type": "text", "text": "C"}]},
+        ],
+        {"instructions": "A"},
+    )
+
+    assert messages[0]["content"] == "A\n\nB\n\nC"

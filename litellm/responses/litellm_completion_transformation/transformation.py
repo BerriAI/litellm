@@ -468,12 +468,23 @@ class LiteLLMCompletionResponsesConfig:
         the backends that reject a trailing system message are the same ones that expect one.
         """
         texts: Final = tuple(
-            content
-            if isinstance(content, str)
-            else "\n\n".join(part.get("text", "") for part in content if isinstance(part, dict))
-            for content in contents
+            text for content in contents for text in LiteLLMCompletionResponsesConfig._system_content_texts(content)
         )
         return ChatCompletionSystemMessage(role="system", content="\n\n".join(text for text in texts if text))
+
+    @staticmethod
+    def _system_content_texts(content: object) -> tuple[str, ...]:
+        """Every text a system content field carries, as a plain string or as a part list
+        that may mix bare strings with text parts."""
+        if isinstance(content, str):
+            return (content,)
+        if not isinstance(content, (list, tuple)):
+            return ()
+        return tuple(
+            part if isinstance(part, str) else str(part.get("text", ""))
+            for part in content
+            if isinstance(part, (str, dict))
+        )
 
     @staticmethod
     async def async_responses_api_session_handler(
