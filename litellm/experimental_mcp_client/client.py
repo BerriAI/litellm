@@ -10,6 +10,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from functools import partial
 from importlib import metadata
+from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
@@ -54,18 +55,22 @@ def missing_streamable_http_client_error() -> ImportError:
     )
 
 
-from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
-from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
+    METHOD_NOT_FOUND,
     ClientResult,
     GetPromptRequestParams,
     GetPromptResult,
+    ListPromptsResult,
+    ListResourcesResult,
+    ListResourceTemplatesResult,
     Prompt,
     ResourceTemplate,
     ServerNotification,
     ServerRequest,
     TextContent,
 )
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
@@ -73,6 +78,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
     MCPAuth,
@@ -627,7 +633,9 @@ class MCPClient:
                 auth=effective_auth,
                 verify=ssl_config,
                 follow_redirects=True,
-                event_hooks={"request": [guard]} if guard else {},
+                event_hooks=MappingProxyType(
+                    {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
+                ),  # mutable-ok: httpx types require lists of hooks
             )
 
         return factory
@@ -777,8 +785,19 @@ class MCPClient:
         """List available prompts from the server."""
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
-        async def _list_prompts_operation(session: ClientSession):
-            return await session.list_prompts()
+        async def _list_prompts_operation(session: ClientSession) -> ListPromptsResult:
+            capabilities: Final = session.get_server_capabilities()
+            if capabilities is not None and capabilities.prompts is None:
+                return ListPromptsResult(prompts=[])
+            try:
+                return await session.list_prompts()
+            except McpError as error:
+                if error.error.code != METHOD_NOT_FOUND:
+                    raise
+                verbose_logger.debug(
+                    "MCP client list_prompts is unsupported by %s: %s", self.server_url or "stdio", error
+                )
+                return ListPromptsResult(prompts=[])
 
         try:
             result: Final = await self.run_with_session(_list_prompts_operation)
@@ -854,8 +873,19 @@ class MCPClient:
         """List available resources from the server."""
         verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
 
-        async def _list_resources_operation(session: ClientSession):
-            return await session.list_resources()
+        async def _list_resources_operation(session: ClientSession) -> ListResourcesResult:
+            capabilities: Final = session.get_server_capabilities()
+            if capabilities is not None and capabilities.resources is None:
+                return ListResourcesResult(resources=[])
+            try:
+                return await session.list_resources()
+            except McpError as error:
+                if error.error.code != METHOD_NOT_FOUND:
+                    raise
+                verbose_logger.debug(
+                    "MCP client list_resources is unsupported by %s: %s", self.server_url or "stdio", error
+                )
+                return ListResourcesResult(resources=[])
 
         try:
             result: Final = await self.run_with_session(_list_resources_operation)
@@ -890,8 +920,19 @@ class MCPClient:
         """List available resource templates from the server."""
         verbose_logger.debug("MCP client listing resource templates from %s", self.server_url or "stdio")
 
-        async def _list_resource_templates_operation(session: ClientSession):
-            return await session.list_resource_templates()
+        async def _list_resource_templates_operation(session: ClientSession) -> ListResourceTemplatesResult:
+            capabilities: Final = session.get_server_capabilities()
+            if capabilities is not None and capabilities.resources is None:
+                return ListResourceTemplatesResult(resourceTemplates=[])
+            try:
+                return await session.list_resource_templates()
+            except McpError as error:
+                if error.error.code != METHOD_NOT_FOUND:
+                    raise
+                verbose_logger.debug(
+                    "MCP client list_resource_templates is unsupported by %s: %s", self.server_url or "stdio", error
+                )
+                return ListResourceTemplatesResult(resourceTemplates=[])
 
         try:
             result: Final = await self.run_with_session(_list_resource_templates_operation)

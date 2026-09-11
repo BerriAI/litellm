@@ -68,6 +68,7 @@ except ImportError:
     raise ImportError("backoff is not installed. Please install it via 'pip install backoff'")
 
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -101,6 +102,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -123,7 +125,13 @@ from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
 )
+from litellm.proxy.db.health_check_latest import (
+    LatestHealthCheckRow,
+    fetch_latest_health_checks,
+    fetch_latest_health_checks_for_models,
+)
 from litellm.proxy.db.log_db_metrics import log_db_metrics
+from litellm.proxy.db.pgbouncer import database_url_is_pooled
 from litellm.proxy.db.prisma_client import (
     PrismaWrapper,
     parse_iam_endpoint_from_url,
@@ -460,7 +468,7 @@ def _pipeline_step_guardrail_names(pipelines: Sequence[tuple[str, "GuardrailPipe
     return frozenset(step.guardrail for _policy_name, pipeline in pipelines for step in pipeline.steps)
 
 
-def _pipeline_managed_guardrail_names(
+def pipeline_managed_guardrail_names(
     data: Mapping[str, object], mode: Literal["pre_call", "post_call"]
 ) -> frozenset[str]:
     return _pipeline_step_guardrail_names(
@@ -523,9 +531,17 @@ def _merge_pipeline_metadata_writes(
         _merge_pipeline_metadata_bucket(data, bucket_key, modified_data.get(bucket_key))
 
 
-def _pipeline_step_supports_unified_streaming(guardrail_name: str) -> bool:
+def _pipeline_step_supports_streaming(guardrail_name: str, translation: "BaseTranslation | None") -> bool:
     callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
-    return callback is not None and PipelineExecutor.supports_unified_execution(callback)
+    if callback is None:
+        return False
+    if PipelineExecutor.supports_unified_execution(callback):
+        return True
+    return (
+        translation is not None
+        and type(translation).assembles_streamed_response
+        and PipelineExecutor.supports_streaming_execution(callback)
+    )
 
 
 def _post_call_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
@@ -582,7 +598,7 @@ def _withdraw_deferred_claims(
     outside_by_policy: Final = MappingProxyType(
         {policy_name: _guardrails_outside_pipeline(policy_name, pipeline) for policy_name, pipeline in deferred}
     )
-    running_elsewhere: Final = _pipeline_managed_guardrail_names(data, "pre_call").union(
+    running_elsewhere: Final = pipeline_managed_guardrail_names(data, "pre_call").union(
         _guardrails_run_standalone_pre_call(data), *outside_by_policy.values()
     )
     withdrawn_policies: Final = frozenset(name for name, outside in outside_by_policy.items() if not outside)
@@ -657,37 +673,51 @@ def _body_selected_deferrals(
     return tuple(policy_name for policy_name, _pipeline in deferred if policy_name not in attributed)
 
 
-def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> bool:
-    unsupported: Final = tuple(
+def _pipeline_unsupported_streaming_guardrails(
+    pipeline: "GuardrailPipeline", translation: "BaseTranslation | None"
+) -> tuple[str, ...]:
+    return tuple(
         dict.fromkeys(
-            step.guardrail for step in pipeline.steps if not _pipeline_step_supports_unified_streaming(step.guardrail)
+            step.guardrail
+            for step in pipeline.steps
+            if not _pipeline_step_supports_streaming(step.guardrail, translation)
         )
     )
+
+
+def _pipeline_is_streamable(
+    policy_name: str, pipeline: "GuardrailPipeline", translation: "BaseTranslation | None"
+) -> bool:
+    unsupported: Final = _pipeline_unsupported_streaming_guardrails(pipeline, translation)
     if not unsupported:
         return True
     verbose_proxy_logger.warning(
-        "Policy '%s' has post_call pipeline guardrails without the unified apply_guardrail interface, "
-        "which streaming pipelines need; the stream skips the pipeline and its guardrails run on their own: %s",
+        "Policy '%s' has post_call pipeline guardrails a streaming pipeline cannot run on this route yet; they "
+        "need the unified apply_guardrail interface, or a post-call hook without a streaming iterator hook on a "
+        "route whose translation assembles the streamed response. The stream skips the pipeline and its "
+        "guardrails run on their own: %s",
         policy_name,
         ", ".join(unsupported),
     )
     return False
 
 
-def _route_supports_streaming_pipelines(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    return resolve_endpoint_translation(user_api_key_dict, None) is not None
+def _streaming_pipeline_translation(user_api_key_dict: UserAPIKeyAuth) -> "BaseTranslation | None":
+    resolved: Final = resolve_endpoint_translation(user_api_key_dict, None)
+    return None if resolved is None else resolved[1]
 
 
-def _stream_gated_guardrail_names(
+def stream_gated_guardrail_names(
     request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
 ) -> frozenset[str]:
-    if not _route_supports_streaming_pipelines(user_api_key_dict):
+    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
+    if translation is None:
         return frozenset()
     return _pipeline_step_guardrail_names(
         tuple(
             (policy_name, pipeline)
             for policy_name, pipeline in _post_call_pipelines(request_data)
-            if all(_pipeline_step_supports_unified_streaming(step.guardrail) for step in pipeline.steps)
+            if not _pipeline_unsupported_streaming_guardrails(pipeline, translation)
         )
     )
 
@@ -699,16 +729,19 @@ def _streamable_post_call_pipelines(
     The post_call pipelines a streaming response can be gated through.
 
     Streaming pipelines scan the buffered stream through the endpoint guardrail
-    translation of the request route, so every step's guardrail needs the
-    unified apply_guardrail interface and the route needs a translation. A
-    pipeline that cannot be run that way yet is left out and its guardrails
-    run on the stream on their own, the way they did before pipelines ran on
-    streams at all, with a warning naming the pipeline.
+    translation of the request route, so every step's guardrail needs either the
+    unified apply_guardrail interface or, on a route whose translation assembles
+    the streamed response, a post-call hook that is its only streaming path, and
+    the route needs a translation. A pipeline that
+    cannot be run that way yet is left out and its guardrails run on the stream
+    on their own, the way they did before pipelines ran on streams at all, with
+    a warning naming the pipeline.
     """
     post_call_pipelines: Final = _post_call_pipelines(request_data)
     if not post_call_pipelines:
         return ()
-    if not _route_supports_streaming_pipelines(user_api_key_dict):
+    translation: Final = _streaming_pipeline_translation(user_api_key_dict)
+    if translation is None:
         verbose_proxy_logger.warning(
             "Policies with post_call guardrail pipelines cannot scan streaming responses on route %s yet "
             "(no endpoint guardrail translation); the stream skips the pipelines and their guardrails run "
@@ -720,7 +753,7 @@ def _streamable_post_call_pipelines(
     return tuple(
         (policy_name, pipeline)
         for policy_name, pipeline in post_call_pipelines
-        if _pipeline_is_streamable(policy_name, pipeline)
+        if _pipeline_is_streamable(policy_name, pipeline, translation)
     )
 
 
@@ -2110,7 +2143,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "pre_call")
+            pipeline_managed: Final = pipeline_managed_guardrail_names(data, "pre_call")
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -2875,7 +2908,7 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        request_data.update(_failure_fields_to_lift(request_data))
+        request_data.update(await offload_token_count(_failure_fields_to_lift)(request_data))
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
@@ -3114,7 +3147,7 @@ class ProxyLogging:
         if pipeline_response is not None:
             response = pipeline_response  # rebind-ok: adopt the pipeline's replacement response, same contract as the callback loops below
 
-        pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "post_call")
+        pipeline_managed: Final = pipeline_managed_guardrail_names(data, "post_call")
         guardrail_callbacks, other_callbacks = _partition_post_call_callbacks()
         try:
             # Merge model-level guardrails before checking which guardrails to run
@@ -3430,7 +3463,7 @@ class ProxyLogging:
             _cached_guardrail_data: dict | None = None
             _guardrail_data_computed = False
             pipeline_gated: Final = (
-                _stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_guardrail else frozenset()
+                stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_guardrail else frozenset()
             )
 
             for callback in litellm.callbacks:
@@ -3876,6 +3909,11 @@ async def prefetch_config_params(prisma_client: "PrismaClient | None", param_nam
         )
 
 
+_WRITER_WRITABILITY_PROBE_SQL: Final = "SELECT current_setting('transaction_read_only') AS transaction_read_only"
+_WRITER_WRITABILITY_PROBE_ROWS: Final = TypeAdapter(list[dict[str, object]])
+_READ_ONLY_RECREATE_BACKOFF_CAP_SECONDS: Final = 600
+
+
 class _ForcedRecreateDeclined(Exception):
     """A forced recreate was declined by the engine-generation guard.
 
@@ -3970,6 +4008,7 @@ class PrismaClient:
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
             raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
         token_auth: Final = self.token_auth
+        writer_token_auth: Final = None if database_url_is_pooled() else token_auth
         # When read-replica routing is on, tag log lines with [writer]/[reader]
         # so the two wrappers' interleaved token refresh logs can be told apart.
         # Single-DB deployments get an empty prefix (logs unchanged).
@@ -3978,13 +4017,13 @@ class PrismaClient:
         if http_client is not None:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                token_auth=token_auth,
+                token_auth=writer_token_auth,
                 log_prefix=writer_log_prefix,
             )
         else:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                token_auth=token_auth,
+                token_auth=writer_token_auth,
                 log_prefix=writer_log_prefix,
             )
 
@@ -4053,6 +4092,8 @@ class PrismaClient:
         self._db_health_watchdog_task: asyncio.Task | None = None
         self._db_last_reconnect_attempt_ts: float = 0.0
         self._db_reconnect_cooldown_seconds: int = max(1, int(os.getenv("PRISMA_RECONNECT_COOLDOWN_SECONDS", "15")))
+        self._db_read_only_recreate_ts: float = 0.0
+        self._db_read_only_recreate_streak: int = 0
         self._db_health_watchdog_interval_seconds: int = max(
             5, int(os.getenv("PRISMA_HEALTH_WATCHDOG_INTERVAL_SECONDS", "30"))
         )
@@ -5770,15 +5811,20 @@ class PrismaClient:
                 writer: Final = self.writer_db
                 if force_recreate is False:
                     try:
-                        await writer.query_raw("SELECT 1")
-                        verbose_proxy_logger.info(
-                            "Writer healthy on probe; skipping recreate (engine "
-                            "likely already replaced by a token refresh)."
-                        )
-                        if isinstance(self.db, RoutingPrismaWrapper):
-                            self.db.mark_writer_recovered()
-                        await self._start_engine_watcher()
-                        return
+                        if await self._writer_is_read_only(writer):
+                            verbose_proxy_logger.warning(
+                                "Writer answers the probe but its session is read-only "
+                                "(writes fail with SQLSTATE 25006); recreating Prisma client."
+                            )
+                        else:
+                            verbose_proxy_logger.info(
+                                "Writer healthy on probe; skipping recreate (engine "
+                                "likely already replaced by a token refresh)."
+                            )
+                            if isinstance(self.db, RoutingPrismaWrapper):
+                                self.db.mark_writer_recovered()
+                            await self._start_engine_watcher()
+                            return
                     except Exception as probe_err:
                         verbose_proxy_logger.warning(
                             "Writer probe failed (%s); recreating Prisma client.",
@@ -6098,6 +6144,18 @@ class PrismaClient:
                         reason="db_health_watchdog_writer_unavailable",
                         timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
                     )
+                    continue
+                if await asyncio.wait_for(
+                    self._writer_is_read_only(self.writer_db),
+                    timeout=self._db_health_watchdog_probe_timeout_seconds,
+                ):
+                    await self.recreate_read_only_writer(
+                        reason="db_health_watchdog_writer_read_only",
+                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                    )
+                    continue
+                self._db_read_only_recreate_streak = 0
+                self._db_read_only_recreate_ts = 0.0
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -6108,6 +6166,39 @@ class PrismaClient:
                     )
                 else:
                     verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
+
+    async def recreate_read_only_writer(self, reason: str, timeout_seconds: float | None = None) -> bool:
+        """Force-recreate the client behind a writer session that rejects writes
+        (SQLSTATE 25006). Each recreate doubles the wait before the next one
+        until the watchdog sees a writable session again, so a database that is
+        read-only as a whole (replica, failover in progress) does not get its
+        engine killed on every watchdog cycle or failed write."""
+        backoff_seconds: Final = min(
+            self._db_reconnect_cooldown_seconds * 2 ** min(self._db_read_only_recreate_streak, 10),
+            _READ_ONLY_RECREATE_BACKOFF_CAP_SECONDS,
+        )
+        if time.time() - self._db_read_only_recreate_ts < backoff_seconds:
+            verbose_proxy_logger.debug(
+                "Writer session still read-only after %s recreate(s); backing off %ss. reason=%s",
+                self._db_read_only_recreate_streak,
+                backoff_seconds,
+                reason,
+            )
+            return False
+        verbose_proxy_logger.warning(
+            "Writer session is read-only (writes fail with SQLSTATE 25006); recreating Prisma client. reason=%s",
+            reason,
+        )
+        self._db_read_only_recreate_ts = time.time()
+        self._db_read_only_recreate_streak += 1
+        return await self.attempt_db_reconnect(reason=reason, timeout_seconds=timeout_seconds, force_recreate=True)
+
+    async def _writer_is_read_only(self, writer: PrismaWrapper) -> bool:
+        """True iff the pooled writer session answers reads but rejects writes (SQLSTATE 25006)."""
+        rows: Final = _WRITER_WRITABILITY_PROBE_ROWS.validate_python(
+            await writer.query_raw(_WRITER_WRITABILITY_PROBE_SQL)
+        )
+        return any(row.get("transaction_read_only") == "on" for row in rows)
 
     def _probe_target_wrapper(self) -> PrismaWrapper:
         """The Prisma wrapper a `SELECT 1` health probe actually reaches.
@@ -6378,48 +6469,13 @@ class PrismaClient:
             verbose_proxy_logger.error("Error getting health check history: %s", e)
             return []
 
-    async def get_all_latest_health_checks(self) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
-        """
-        Get the latest health check for each model.
+    async def get_all_latest_health_checks(self) -> tuple[LatestHealthCheckRow, ...]:
+        """Latest health check per (model_id, model_name), deduplicated in Postgres."""
+        return await fetch_latest_health_checks(self)
 
-        Uses DB-level DISTINCT ON (model_id, model_name) with ORDER BY checked_at DESC
-        (via Prisma ``distinct`` + ``order``) so we never load the full history into memory.
-        """
-        try:
-            return await HealthCheckRepository(self).table.find_many(
-                distinct=["model_id", "model_name"],
-                order=[
-                    {"model_id": "asc"},
-                    {"model_name": "asc"},
-                    {"checked_at": "desc"},
-                ],
-            )
-        except Exception as e:
-            verbose_proxy_logger.error("Error getting all latest health checks: %s", e)
-            return []
-
-    async def get_latest_health_checks_for_models(
-        self, model_names: "Sequence[str]"
-    ) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
-        """
-        Get the latest health check for each of the named models.
-
-        Same DISTINCT ON as ``get_all_latest_health_checks``, bounded to the models asked
-        about, so a paged caller reads health for its page instead of for the whole table.
-        """
-        if not model_names:
-            return ()
-        latest_first: Final = (("model_id", "asc"), ("model_name", "asc"), ("checked_at", "desc"))
-        order: Final = [{field: direction} for field, direction in latest_first]  # mutable-ok: prisma order is a list
-        try:
-            return await HealthCheckRepository(self).table.find_many(
-                where={"model_name": {"in": list(model_names)}},  # mutable-ok: prisma filters are dicts and lists
-                distinct=["model_id", "model_name"],  # mutable-ok: prisma distinct takes a list
-                order=order,
-            )
-        except Exception as e:  # noqa: BLE001  # health decorates a list; a driver error must not fail the page
-            verbose_proxy_logger.error("Error getting latest health checks for models: %s", e)
-            return ()
+    async def get_latest_health_checks_for_models(self, model_names: Sequence[str]) -> tuple[LatestHealthCheckRow, ...]:
+        """Same as ``get_all_latest_health_checks``, bounded to the named models."""
+        return await fetch_latest_health_checks_for_models(self, model_names)
 
 
 ### HELPER FUNCTIONS ###
@@ -7521,6 +7577,12 @@ def _get_openapi_url() -> str | None:
     return "/openapi.json"
 
 
+def _recreate_writer_on_read_only_transaction(prisma_client: "PrismaClient | None") -> None:
+    if prisma_client is None:
+        return
+    asyncio.create_task(prisma_client.recreate_read_only_writer(reason="postgres_read_only_transaction"))
+
+
 def handle_exception_on_proxy(e: Exception) -> ProxyException:
     """
     Returns an Exception as ProxyException, this ensures all exceptions are OpenAI API compatible
@@ -7528,6 +7590,10 @@ def handle_exception_on_proxy(e: Exception) -> ProxyException:
     from fastapi import status
 
     verbose_proxy_logger.exception("Exception: %s", e)
+    if PrismaDBExceptionHandler.is_read_only_transaction_error(e):
+        from litellm.proxy.proxy_server import prisma_client
+
+        _recreate_writer_on_read_only_transaction(prisma_client)
 
     if isinstance(e, HTTPException):
         return ProxyException(
@@ -7929,6 +7995,88 @@ async def get_available_models_for_user(
     return all_models
 
 
+def _safe_get_model_info(model: str, get_model_info: Callable[[str], ModelInfo]) -> ModelInfo | None:
+    try:
+        return get_model_info(model)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "create_model_info_response: cost map lookup failed for %s: %s",
+            model,
+            e,
+        )
+        return None
+
+
+def _resolve_listing_model_info(
+    deployment_model: str | None,
+    listed_model: str,
+    listed_info: ModelInfo | None,
+    get_model_info: Callable[[str], ModelInfo],
+) -> tuple[ModelInfo, ...]:
+    """
+    Cost-map entries describing one deployment behind a listed model, best source first.
+
+    The name a model is listed under is an arbitrary public alias, so it often misses the
+    cost map and lands on a fallback-generalization rule that answers with a conservative
+    family baseline instead of the real model's limits; the deployment's underlying model
+    is what the request actually reaches. Both names are kept because either can
+    generalize, and because a deployment's own model is registered into the cost map as a
+    stub that carries no limits of its own. Exact entries are consulted before generalized
+    ones, and each field is then taken from the first entry that has it.
+
+    ``listed_info`` is resolved once by the caller, since a group with several distinct
+    underlying models resolves the same alias for each of them.
+    """
+    # Fast path, and the only one a wildcard-expanded name takes: with a single name
+    # there is nothing to order, so skip the generalization test entirely. This keeps
+    # the per-model cost of the listing on the hot path #33721 exists to protect.
+    if deployment_model is None or deployment_model == listed_model:
+        return () if listed_info is None else (listed_info,)
+
+    deployment_info: Final = _safe_get_model_info(deployment_model, get_model_info)
+    if deployment_info is None:
+        return () if listed_info is None else (listed_info,)
+    if listed_info is None:
+        return (deployment_info,)
+
+    from litellm.utils import is_generalized_model_info
+
+    # Both names resolved: the deployment's model leads unless it only generalized
+    # while the listed name is an exact cost-map entry.
+    if is_generalized_model_info(deployment_info) and not is_generalized_model_info(listed_info):
+        return (listed_info, deployment_info)
+    return (deployment_info, listed_info)
+
+
+def _first_token_limit(candidates: tuple[ModelInfo, ...], field: str) -> int | None:
+    return next(
+        (limit for limit in (coerce_token_limit(info.get(field)) for info in candidates) if limit is not None),
+        None,
+    )
+
+
+def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> int | None:
+    """The widest limit any deployment behind the listed name declares for ``field``.
+
+    A model group is normally one model behind several interchangeable deployments, so
+    there is a single value to report and the choice of aggregate does not arise.
+
+    When a group genuinely mixes models no single number is right, and the widest is the
+    deliberate pick over the narrowest for two reasons. It is what ``/model_group/info``
+    has long reported to the Admin UI, so the two surfaces agree; disagreeing is the very
+    complaint this resolution path exists to fix. And of the two ways to be wrong,
+    under-advertising is worse: a client that trusts a narrowed window silently refuses
+    prompts the group would have served, while an over-long prompt that reaches a smaller
+    deployment comes back as a legible context-length error -- and does not reach one at
+    all when ``enable_pre_call_checks`` is set, which filters deployments the prompt does
+    not fit.
+    """
+    limits: Final = tuple(
+        limit for limit in (_first_token_limit(candidates, field) for candidates in candidate_sets) if limit is not None
+    )
+    return max(limits) if limits else None
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,
@@ -7953,31 +8101,48 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    try:
-        model_cost_info: ModelInfo | None = get_model_info(model_id)
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            "create_model_info_response: cost map lookup failed for %s: %s",
-            model_id,
-            e,
-        )
-        model_cost_info = None
+    listing_info: Final = llm_router.get_model_listing_info(model_id) if llm_router is not None else None
 
-    max_input_tokens: int | None = None
-    max_output_tokens: int | None = None
-    if model_cost_info is not None:
-        max_input_tokens = coerce_token_limit(model_cost_info.get("max_input_tokens"))
-        max_output_tokens = coerce_token_limit(model_cost_info.get("max_output_tokens"))
-        mode: Final = model_cost_info.get("mode")
-        if isinstance(mode, str):
-            base["mode"] = mode
+    # One entry per distinct model behind the listed name; (None,) when the router knows
+    # nothing about it, so the listed name is resolved on its own as before.
+    deployment_models: Final[tuple[str | None, ...]] = (
+        listing_info.cost_map_keys if listing_info is not None and listing_info.cost_map_keys else (None,)
+    )
+    listed_info: Final = _safe_get_model_info(model_id, get_model_info)
+    candidate_sets: Final = tuple(
+        _resolve_listing_model_info(
+            deployment_model=deployment_model,
+            listed_model=model_id,
+            listed_info=listed_info,
+            get_model_info=get_model_info,
+        )
+        for deployment_model in deployment_models
+    )
+
+    max_input_tokens: int | None = _group_token_limit(candidate_sets, "max_input_tokens")
+    max_output_tokens: int | None = _group_token_limit(candidate_sets, "max_output_tokens")
+    mode: Final = next(
+        (
+            m
+            for m in (
+                cast("Mapping[str, object]", info).get("mode")  # cast-ok: an entry need not carry "mode"
+                for candidates in candidate_sets
+                for info in candidates
+            )
+            if isinstance(m, str)
+        ),
+        None,
+    )
+    if mode is not None:
+        base["mode"] = mode
+
+    if listing_info is not None:
+        if listing_info.max_input_tokens is not None:
+            max_input_tokens = listing_info.max_input_tokens
+        if listing_info.max_output_tokens is not None:
+            max_output_tokens = listing_info.max_output_tokens
 
     if llm_router is not None:
-        configured_input, configured_output = llm_router.get_configured_token_limits(model_id)
-        if configured_input is not None:
-            max_input_tokens = configured_input
-        if configured_output is not None:
-            max_output_tokens = configured_output
         configured_mode: Final = llm_router.get_configured_mode(model_id)
         if isinstance(configured_mode, str):
             base["mode"] = configured_mode

@@ -1,6 +1,6 @@
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
-use crate::ocr::types::{OcrRequestData, OcrResponseData};
+use crate::ocr::types::{LiteLLMOcrResponse, OcrRequestData};
 use serde_json::{Map, Value};
 
 const SUPPORTED_OCR_PARAMS: &[&str] = &[
@@ -107,7 +107,7 @@ impl OcrProviderConfig for MistralOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> Result<OcrResponseData, Error> {
+    ) -> Result<LiteLLMOcrResponse, Error> {
         let response_object = response_json
             .as_object()
             .ok_or_else(|| Error::InvalidType {
@@ -128,7 +128,7 @@ impl OcrProviderConfig for MistralOcrConfig {
         let document_annotation = response_object.get("document_annotation").cloned();
         let usage_info = response_object.get("usage_info").cloned();
 
-        Ok(OcrResponseData {
+        Ok(LiteLLMOcrResponse {
             pages,
             model,
             document_annotation,
@@ -178,7 +178,10 @@ pub fn transform_ocr_request(
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub fn transform_ocr_response(model: &str, response_json: Value) -> Result<OcrResponseData, Error> {
+pub fn transform_ocr_response(
+    model: &str,
+    response_json: Value,
+) -> Result<LiteLLMOcrResponse, Error> {
     MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
 }
 

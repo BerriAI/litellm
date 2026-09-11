@@ -71,6 +71,14 @@ describe("IdCell", () => {
     expect(rowClick).not.toHaveBeenCalled();
   });
 
+  it("names the copy button after the field it copies", async () => {
+    const user = userEvent.setup();
+    render(<IdCell value="alice@example.com" copyable copyLabel="Copy User Email" />);
+    expect(screen.queryByRole("button", { name: "Copy ID" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Copy User Email" }));
+    expect(copyToClipboardMock).toHaveBeenCalledWith("alice@example.com");
+  });
+
   it("passes dataTestId through to the id element", () => {
     render(<IdCell value="k-1" dataTestId="key-id-cell" />);
     expect(screen.getByTestId("key-id-cell")).toHaveTextContent("k-1");

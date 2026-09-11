@@ -18,6 +18,7 @@ from litellm.cost_calculator import (
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     ModelInfo,
@@ -126,6 +127,22 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     )
 
     assert cost > 0, "Cost should be calculated using response model"
+
+
+def test_jina_rerank_bills_total_tokens_at_input_rate_only(_local_model_cost_map):
+    response: Final = RerankResponse(
+        id="rerank-1",
+        results=[{"index": 0, "relevance_score": 0.9}],
+        meta={"billed_units": {"total_tokens": 1000}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="jina_ai/jina-reranker-v2-base-multilingual",
+        call_type="rerank",
+    )
+
+    assert cost == pytest.approx(1000 * 5e-08)
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
