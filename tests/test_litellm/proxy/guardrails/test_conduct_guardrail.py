@@ -182,24 +182,28 @@ def test_initialize_applies_timeout_default_when_field_is_none(
     assert captured["timeout"] == 8.0
 
 
-def test_missing_standalone_package_raises_at_construction() -> None:
+def test_missing_standalone_package_raises_at_initialize() -> None:
     """Regression for cursor[bot] finding — the previous shim raised
     ``ImportError`` at module load, which the guardrail-hook auto-loader
-    treats as "hook unavailable" and silently drops. The subclass now
-    imports lazily and raises at ``__init__`` time when actionable."""
+    treats as "hook unavailable" and silently drops. The check is now
+    deferred to :func:`raise_if_missing_package` which
+    ``initialize_guardrail`` calls at config-load time when actionable."""
     from litellm.proxy.guardrails.guardrail_hooks.conduct import conduct as _mod
 
-    original_base = _mod._BaseConductGuard
     original_error = _mod._IMPORT_ERROR
     try:
-        _mod._BaseConductGuard = None  # type: ignore[assignment]
         _mod._IMPORT_ERROR = ImportError("simulated missing package")
-
-        # Class is still importable — no module-load side effect.
-        from litellm.proxy.guardrails.guardrail_hooks.conduct import ConductGuardrail
-
         with pytest.raises(ImportError, match="pip install"):
-            ConductGuardrail()
+            _mod.raise_if_missing_package()
     finally:
-        _mod._BaseConductGuard = original_base  # type: ignore[assignment]
         _mod._IMPORT_ERROR = original_error
+
+
+def test_raise_if_missing_package_is_noop_when_present() -> None:
+    """The check should be silent when ``conduct-litellm-guard`` is
+    importable (the normal case for anyone who ``pip install``ed it)."""
+    from litellm.proxy.guardrails.guardrail_hooks.conduct.conduct import (
+        raise_if_missing_package,
+    )
+
+    raise_if_missing_package()  # must not raise

@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
-from .conduct import ConductGuardrail
+from .conduct import ConductGuardrail, raise_if_missing_package
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
@@ -36,6 +36,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     devin-ai-integration findings).
     """
     import litellm
+
+    # Surface the missing-package error at config load, not silently at
+    # module import (cursor[bot] finding — see conduct.py header comment).
+    raise_if_missing_package()
 
     # ``getattr(..., default)`` only fires when the attribute is missing;
     # ``LitellmParams`` always defines ``timeout`` and defaults it to
