@@ -455,6 +455,13 @@ If 2+ reasoning markers are detected in the user message, the request is promote
 
 Reasoning markers in the system prompt do **not** trigger the reasoning override. This prevents system prompts like "Think step by step before answering" from forcing all requests to the reasoning tier.
 
+For requests identified by a `claude-cli/` or `claude-code/` user agent, the LLM classifier omits caller system
+text to avoid classifying environment, agent, and skill catalogs. The current ask, configured prior-turn context,
+and trajectory signal remain unchanged. The routed completion still receives the original system text. This
+also excludes genuine task constraints supplied only in Claude Code system messages. Other clients keep the
+existing system-context behavior. The browser routing preview has no client-identity field and retains that
+generic behavior; use the real client when checking Claude Code routing.
+
 ### Harness Reminder Blocks
 
 Agent harnesses inject their own context into the conversation as ordinary message text. That text is plumbing, not something a human asked for, so the router strips complete reminder blocks before classifying and picking a tier. A turn that is nothing but a reminder block strips to empty and is skipped, and the router falls back to the last real ask instead
