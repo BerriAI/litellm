@@ -123,6 +123,9 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         ("DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt > setup.log", "Zx4Kp9Lm2Qr7Ns3Vt"),
         ("docker run -e DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt --name app postgres", "Zx4Kp9Lm2Qr7Ns3Vt"),
         ("password=correcthorsebattery please", "correcthorsebattery"),
+        ("DB_PASSWORD = Zx4Kp9Lm2Qr7Ns3Vt; systemctl restart app", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("DB_PASSWORD = Zx4Kp9Lm2Qr7Ns3Vt \\", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("DB_PASSWORD = Zx4Kp9Lm2Qr7Ns3Vt DB_HOST=db.internal", "Zx4Kp9Lm2Qr7Ns3Vt"),
     ],
     ids=[
         "env-password",
@@ -159,6 +162,9 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         "redirect-after-the-value",
         "docker-flag-after-the-value",
         "prose-after-a-shell-assignment",
+        "spaced-assignment-then-a-shell-command",
+        "spaced-assignment-then-a-line-continuation",
+        "spaced-assignment-then-a-second-assignment",
     ],
 )
 def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, secret):

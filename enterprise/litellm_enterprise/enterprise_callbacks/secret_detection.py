@@ -455,6 +455,8 @@ _SHELL_ASSIGNMENT: Final = re.compile(r"(?P<key>[^\s\[#;:=](?:[^:=]*[^\s:=])?)=(
 
 _SHELL_OPERATORS: Final = ";&|"
 
+_SHELL_TRAILER: Final = re.compile(r"\\|#.*|\S+=\S*")
+
 _SCAN_SUFFIX: Final = ".py"
 
 
@@ -509,9 +511,12 @@ def _parseable_lines(text: str) -> Iterator[str]:
 
 def _lone_value(line: str) -> str | None:
     tokens: Final = line.split()
-    if not tokens or '"' in tokens[0] or (len(tokens) > 1 and not tokens[1].startswith("#")):
+    if not tokens or '"' in tokens[0]:
         return None
-    return tokens[0].rstrip(_SHELL_OPERATORS)
+    value: Final = tokens[0].rstrip(_SHELL_OPERATORS)
+    if len(tokens) == 1 or value != tokens[0] or _SHELL_TRAILER.fullmatch(tokens[1]) is not None:
+        return value
+    return None
 
 
 def _quoted_assignments(text: str) -> tuple[str, ...]:
