@@ -12669,6 +12669,7 @@ class Router:
         input: str | list | None = None,
         specific_deployment: bool | None = False,
         parent_otel_span: Span | None = None,
+        health_check_probe: bool = False,
     ) -> list[dict] | dict:
         """
         Get the healthy deployments for a model.
@@ -12718,6 +12719,7 @@ class Router:
         healthy_deployments = await self._async_filter_health_check_unhealthy_deployments(
             healthy_deployments=healthy_deployments,
             parent_otel_span=parent_otel_span,
+            health_check_probe=health_check_probe,
         )
 
         cooldown_deployments: Final = await _async_get_cooldown_deployments(
@@ -14100,6 +14102,7 @@ class Router:
         self,
         healthy_deployments: list[dict],
         parent_otel_span: Span | None = None,
+        health_check_probe: bool = False,
     ) -> list[dict]:
         """
         Filter out deployments marked unhealthy by background health checks.
@@ -14136,8 +14139,7 @@ class Router:
         ]
 
         if not filtered:
-            verbose_router_logger.warning("All deployments marked unhealthy by health checks, bypassing health filter")
-            return healthy_deployments
+            return [] if health_check_probe else healthy_deployments  # mutable-ok: empty list signals unavailable probe
 
         return filtered
 

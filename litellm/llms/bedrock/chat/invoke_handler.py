@@ -490,10 +490,10 @@ class AWSEventStreamDecoder:
         reasoning_content: str | None = None
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 
-        self.content_blocks.append(delta_obj)
         if "text" in delta_obj:
             text = delta_obj["text"]
         elif "toolUse" in delta_obj:
+            self.content_blocks.append(delta_obj)
             # When json_mode is True and this is the internal json_tool_call,
             # convert tool input to text content instead of tool call arguments
             if self.json_mode is True and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME:

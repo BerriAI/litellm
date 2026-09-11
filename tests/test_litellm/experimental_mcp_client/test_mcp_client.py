@@ -1895,3 +1895,15 @@ async def test_optional_discovery_preserves_cancellation(method: str) -> None:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(task, timeout=3)
+
+
+
+def test_client_import_before_proxy_credentials_succeeds_in_fresh_process():
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import litellm.experimental_mcp_client.client; from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager; print(MCPServerManager.__name__)"],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "MCPServerManager"

@@ -2602,6 +2602,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     global_max_parallel_requests: int | None = Field(
         None, description="global max parallel requests to allow for a proxy instance."
     )
+    user_api_key_cache_max_size: int | None = Field(
+        None,
+        gt=0,
+        description=(
+            "max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in "
+            "its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth "
+            "lookups keep hitting the DB"
+        ),
+    )
     max_request_size_mb: int | None = Field(
         None,
         description="max request size in MB, if a request is larger than this size it will be rejected",
@@ -2846,6 +2855,25 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Admin UI. An admin locked out of the UI can still administer the proxy over the "
             "API with the master key; unset this setting and restart the proxy to restore "
             "UI username/password login. Default is False."
+        ),
+    )
+    disable_responses_id_security: bool | None = Field(
+        None,
+        description=(
+            "If True, disables ownership enforcement on Responses API ids. "
+            "Keys may then retrieve, cancel, delete, and chain from any response id, "
+            "including ids belonging to another user or team and ids this proxy never issued. "
+            "WARNING: this removes tenant isolation on /v1/responses"
+        ),
+    )
+    allow_unmanaged_response_ids: bool | None = Field(
+        None,
+        description=(
+            "If True, lets keys address Responses API ids that this proxy did not issue "
+            "(raw provider ids, or ids issued before response-id encryption was configured). "
+            "Such an id carries no owner, so no ownership check can run on it; ids this proxy "
+            "did issue keep full ownership enforcement. Off by default, in which case an "
+            "unrecognized response id is rejected with 403"
         ),
     )
     disable_env_credential_login: bool | None = Field(
