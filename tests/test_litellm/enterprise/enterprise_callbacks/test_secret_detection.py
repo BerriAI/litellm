@@ -117,6 +117,9 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         ("DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt && echo done", "Zx4Kp9Lm2Qr7Ns3Vt"),
         ("password = Zx4Kp9Lm2Qr7Ns3Vt  # rotate me", "Zx4Kp9Lm2Qr7Ns3Vt"),
         ("my db password: Zx4Kp9Lm2Qr7Ns3Vt.", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("export DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt DB_HOST=db.internal", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt; systemctl restart app", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("DB_PASSWORD=Zx4Kp9Lm2Qr7Ns3Vt | tee creds.txt", "Zx4Kp9Lm2Qr7Ns3Vt"),
     ],
     ids=[
         "env-password",
@@ -147,6 +150,9 @@ def test_scan_message_preserves_quoted_benign_identifiers():
         "shell-command-after-the-value",
         "inline-comment-after-the-value",
         "sentence-ending-in-the-value",
+        "second-assignment-after-the-value",
+        "semicolon-after-the-value",
+        "pipe-after-the-value",
     ],
 )
 def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, secret):
@@ -236,6 +242,8 @@ def test_scan_message_redacts_every_credential_on_one_line():
         'api_key: "${OPENAI_API_KEY}"',
         "private_key_path: /keys/prod/server-cert.pem",
         "password_hint: your usual one followed by Ticket-LIT7049-Suffix",
+        "Translate this recipe note into French:\nsecret_sauce: Worcestershire sauce",
+        "api_key = Massachusetts (the state, not a key)",
     ],
     ids=[
         "prose-password",
@@ -290,6 +298,8 @@ def test_scan_message_redacts_every_credential_on_one_line():
         "quoted-braced-shell-variable-reference",
         "absolute-path-under-a-credential-key",
         "sentence-holding-a-later-mixed-case-token",
+        "capitalized-word-starting-a-phrase",
+        "capitalized-word-before-a-parenthetical",
     ],
 )
 def test_scan_message_keeps_benign_values(content):

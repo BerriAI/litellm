@@ -451,6 +451,10 @@ _CONFIG_SECTION: Final = "litellm-prompt"
 
 _ASSIGNMENT_LINE: Final = re.compile(r"[^\s\[#;:=][^:=]*[:=]")
 
+_SHELL_OPERATORS: Final = ";&|"
+
+_SHELL_TRAILER: Final = re.compile(rf"\\|[{_SHELL_OPERATORS}]+|#.*|\S+=\S*")
+
 _SCAN_SUFFIX: Final = ".py"
 
 
@@ -500,6 +504,17 @@ def _parseable_lines(text: str) -> Iterator[str]:
     return (line for _, line in states if line is not None)
 
 
+def _lone_value(line: str) -> str | None:
+    tokens: Final = line.split(maxsplit=2)
+    if not tokens or '"' in tokens[0]:
+        return None
+    value: Final = tokens[0].rstrip(_SHELL_OPERATORS)
+    trailer: Final = tokens[1] if len(tokens) > 1 else ""
+    if value != tokens[0] or not trailer or _SHELL_TRAILER.fullmatch(trailer) is not None:
+        return value
+    return None
+
+
 def _quoted_assignments(text: str) -> tuple[str, ...]:
     parser: Final = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str  # pyright: ignore[reportAttributeAccessIssue]  # configparser types optionxform as a method
@@ -509,8 +524,7 @@ def _quoted_assignments(text: str) -> tuple[str, ...]:
         for section in parser
         for key, values in parser.items(section)
         for line in values.splitlines()
-        for value in line.split()[:1]
-        if '"' not in value
+        if (value := _lone_value(line)) is not None
     )
 
 
