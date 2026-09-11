@@ -5155,6 +5155,13 @@ async def _execute_virtual_key_regeneration(
         prisma_client=prisma_client,
     )
 
+    await _persist_deleted_verification_tokens(
+        keys=[key_in_db],
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
+
     # If grace period set, insert deprecated key so old key remains valid
     await _insert_deprecated_key(
         prisma_client=prisma_client,
@@ -5452,17 +5459,6 @@ async def regenerate_key_fn(
         # Normalize litellm_changed_by: if it's a Header object or not a string, convert to None
         if litellm_changed_by is not None and not isinstance(litellm_changed_by, str):
             litellm_changed_by = None
-
-        # Save the old key record to deleted table before regeneration.
-        # This preserves key_alias and team_id metadata for historical spend records.
-        # If this fails, abort the regeneration to avoid permanently losing the
-        # old hash→metadata mapping.
-        await _persist_deleted_verification_tokens(
-            keys=[_key_in_db],
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
-        )
 
         return await _execute_virtual_key_regeneration(
             prisma_client=prisma_client,

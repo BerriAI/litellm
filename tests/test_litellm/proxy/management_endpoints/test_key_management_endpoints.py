@@ -11935,6 +11935,10 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
             "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
             new_callable=AsyncMock,
         ),
+        patch(  # test-quality-ok: archival path is outside upperbound rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ) as persist_deleted_verification_tokens,
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
             new_callable=AsyncMock,
@@ -11955,6 +11959,7 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monk
     assert exc_info.value.status_code == 400
     assert "duration" in str(exc_info.value.detail)
     # Rejected regenerate must not reach the DB update.
+    persist_deleted_verification_tokens.assert_not_awaited()
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
 
 
@@ -12037,6 +12042,10 @@ async def test_execute_virtual_key_regeneration_rejects_when_custom_key_update_h
             "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
             new_callable=AsyncMock,
         ) as insert_deprecated_key,
+        patch(  # test-quality-ok: archival path is outside policy rejection
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ) as persist_deleted_verification_tokens,
         patch(  # test-quality-ok: cache eviction is outside policy rejection
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
             new_callable=AsyncMock,
@@ -12063,6 +12072,7 @@ async def test_execute_virtual_key_regeneration_rejects_when_custom_key_update_h
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "duration must be <= 7d"
     insert_deprecated_key.assert_not_awaited()
+    persist_deleted_verification_tokens.assert_not_awaited()
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
     assert len(received_data) == 1
     assert received_data[0].key == "abc123"
@@ -12092,6 +12102,10 @@ async def test_execute_virtual_key_regeneration_allows_when_custom_key_update_ho
             "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
             new_callable=AsyncMock,
         ),
+        patch(  # test-quality-ok: verify archival follows policy approval
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ) as persist_deleted_verification_tokens,
         patch(  # test-quality-ok: cache eviction is outside policy approval
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
             new_callable=AsyncMock,
@@ -12115,6 +12129,8 @@ async def test_execute_virtual_key_regeneration_allows_when_custom_key_update_ho
         )
 
     assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+    persist_deleted_verification_tokens.assert_awaited_once()
+    assert persist_deleted_verification_tokens.call_args.kwargs["keys"] == [existing_key]
     assert len(received_data) == 1
 
 
@@ -13920,10 +13936,6 @@ async def test_regenerate_applies_normalized_mcp_object_permission():
         ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_vector_stores_against_team",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
             new_callable=AsyncMock,
         ),
         patch(
