@@ -6,15 +6,20 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
+import asyncio
 from unittest.mock import patch
 
 
 import httpx
 import pytest
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
 
 import litellm
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
+from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
 from litellm.types.utils import LlmProviders
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 
 @pytest.fixture
@@ -710,3 +715,26 @@ def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
     resolved_model, provider, _, _ = litellm.get_llm_provider(full_model_name)
     assert provider == "bedrock_mantle"
     assert resolved_model == model_id
+
+
+@pytest.mark.asyncio
+async def test_mantle_signing_runs_off_the_event_loop():
+    """Regression for issue #40165: Mantle signs with SigV4 through a composed BaseAWSLLM, so the
+    off-loop gate must recognise it too, or its credential refresh blocks the loop like Bedrock's did."""
+    probe = EventLoopProbe()
+
+    def sign(headers: dict[str, str]) -> dict[str, str]:
+        request = AWSRequest(
+            method="POST", url="https://bedrock-mantle.us-east-1.api.aws/v1/responses", data="{}", headers=headers
+        )
+        SigV4Auth(probe.credentials(), "bedrock", "us-east-1").add_auth(request)
+        return dict(request.headers)
+
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+    signed = await sign_request_off_loop_if_aws(
+        BedrockMantleChatConfig(), sign, headers={"Content-Type": "application/json"}
+    )
+    await release
+
+    assert "Authorization" in signed
+    assert probe.served_during_refresh is True

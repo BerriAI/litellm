@@ -246,6 +246,7 @@ class PrometheusLogger(CustomLogger):
             # logger so toggling these flags only takes effect after a
             # restart, keeping init-time and runtime label sets in sync.
             self._cached_metric_labels: dict[str, list[str]] = {}
+            self._emit_input_sequence_length_label = litellm.prometheus_emit_input_sequence_length_label is True
 
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
@@ -1522,6 +1523,11 @@ class PrometheusLogger(CustomLogger):
             # 2. Pyright does not allow us to run isinstance(standard_logging_payload, StandardLoggingPayload) <- this would be ideal
             enum_values=enum_values,
             label_context=label_context,
+            input_sequence_length=(
+                self._get_input_sequence_length(standard_logging_payload, kwargs, response_obj)
+                if self._emit_input_sequence_length_label
+                else None
+            ),
         )
 
         # set x-ratelimit headers
@@ -2192,6 +2198,36 @@ class PrometheusLogger(CustomLogger):
         )
         self.litellm_remaining_api_key_tokens_for_model.labels(**tokens_labels).set(remaining_tokens)
 
+    @staticmethod
+    def _get_input_sequence_length(
+        standard_logging_payload: StandardLoggingPayload,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+    ) -> str:
+        prompt_tokens: Final = standard_logging_payload.get("prompt_tokens")
+        if prompt_tokens:
+            return get_input_sequence_length_bucket(prompt_tokens)
+        combined_usage: Final = kwargs.get("combined_usage_object")
+        if (
+            combined_usage is not None
+            and getattr(kwargs.get("_litellm_upstream_reported_usage"), "total_tokens", None) is not None
+        ):
+            return get_input_sequence_length_bucket(None)
+        reported_usage: Final = (
+            response_obj.get("usage") if isinstance(response_obj, dict) else getattr(response_obj, "usage", None)
+        )
+        if reported_usage is None and combined_usage is None:
+            return get_input_sequence_length_bucket(None)
+        usage_metadata: Final = standard_logging_payload["metadata"].get("usage_object")
+        if isinstance(usage_metadata, Mapping):
+            return get_input_sequence_length_bucket(usage_metadata.get("prompt_tokens"))
+        if combined_usage is None and isinstance(response_obj, dict):
+            from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+            normalized_usage: Final[Mapping[str, object]] = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj)
+            return get_input_sequence_length_bucket(normalized_usage.get("prompt_tokens"))
+        return get_input_sequence_length_bucket(prompt_tokens)
+
     def _set_latency_metrics(
         self,
         kwargs: dict,
@@ -2202,7 +2238,16 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias: str | None,
         enum_values: UserAPIKeyLabelValues,
         label_context: PrometheusLabelFactoryContext | None = None,
+        input_sequence_length: str | None = None,
     ):
+        latency_enum_values: Final = (
+            replace(enum_values, input_sequence_length=input_sequence_length)
+            if input_sequence_length is not None
+            else enum_values
+        )
+        latency_label_context: Final = (
+            PrometheusLabelFactoryContext(latency_enum_values) if input_sequence_length is not None else label_context
+        )
         # latency metrics
         end_time: Final[datetime] = kwargs.get("end_time") or datetime.now()
         start_time: Final[datetime | None] = kwargs.get("start_time")
@@ -2220,8 +2265,8 @@ class PrometheusLogger(CustomLogger):
                 supported_enum_labels=self.get_labels_for_metric(
                     metric_name="litellm_llm_api_time_to_first_token_metric"
                 ),
-                enum_values=enum_values,
-                label_context=label_context,
+                enum_values=latency_enum_values,
+                label_context=latency_label_context,
             )
             self.litellm_llm_api_time_to_first_token_metric.labels(**_ttft_labels).observe(time_to_first_token_seconds)
             self._track_end_user_metric_series(
@@ -2241,8 +2286,8 @@ class PrometheusLogger(CustomLogger):
         if api_call_total_time_seconds is not None:
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_llm_api_latency_metric"),
-                enum_values=enum_values,
-                label_context=label_context,
+                enum_values=latency_enum_values,
+                label_context=latency_label_context,
             )
             self.litellm_llm_api_latency_metric.labels(**_labels).observe(api_call_total_time_seconds)
             self._track_end_user_metric_series(
@@ -2272,8 +2317,8 @@ class PrometheusLogger(CustomLogger):
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_request_total_latency_metric"),
-                enum_values=enum_values,
-                label_context=label_context,
+                enum_values=latency_enum_values,
+                label_context=latency_label_context,
             )
             self.litellm_request_total_latency_metric.labels(**_labels).observe(_observed_total_time_seconds)
             self._track_end_user_metric_series(

@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 
-
 import pytest
 from click.testing import CliRunner
 
@@ -27,7 +26,7 @@ from litellm.proxy.client.cli.commands.auth import (
     print_token,
     whoami,
 )
-from litellm.proxy.client.cli.commands import auth as auth_module
+from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
 from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 
 
@@ -85,7 +84,7 @@ class TestPollingErrorSurfacing:
         }
 
         with patch("requests.get", return_value=mock_response) as mock_get, patch("time.sleep"):
-            with pytest.raises(ValueError, match='Your litellm CLI is out of date and uses a login flow') as exc_info:
+            with pytest.raises(ValueError, match="Your litellm CLI is out of date and uses a login flow") as exc_info:
                 _poll_for_ready_data("http://test/sso/cli/poll/sk-legacy")
 
         assert mock_get.call_count == 1
@@ -152,7 +151,7 @@ class TestStartCliSsoFlowErrors:
         mock_response.status_code = 404
 
         with patch("requests.post", return_value=mock_response):
-            with pytest.raises(ValueError, match='Either --base-url is wrong, or the proxy is older than') as exc_info:
+            with pytest.raises(ValueError, match="Either --base-url is wrong, or the proxy is older than") as exc_info:
                 _start_cli_sso_flow("https://old-proxy.example.com")
 
         message = str(exc_info.value)
@@ -168,7 +167,7 @@ class TestStartCliSsoFlowErrors:
         mock_response.json.return_value = {"detail": "Too many CLI login attempts. Try again later."}
 
         with patch("requests.post", return_value=mock_response):
-            with pytest.raises(ValueError, match='Too many CLI login attempts\\. Try again later\\.') as exc_info:
+            with pytest.raises(ValueError, match="Too many CLI login attempts\\. Try again later\\.") as exc_info:
                 _start_cli_sso_flow("https://test.example.com")
 
         assert "HTTP 429" in str(exc_info.value)
@@ -184,7 +183,7 @@ class TestStartCliSsoFlowErrors:
         mock_response.text = "<html>Sign in to corporate VPN</html>"
 
         with patch("requests.post", return_value=mock_response):
-            with pytest.raises(ValueError, match='A proxy, load balancer, or auth gateway in front of') as exc_info:
+            with pytest.raises(ValueError, match="A proxy, load balancer, or auth gateway in front of") as exc_info:
                 _start_cli_sso_flow("https://test.example.com")
 
         message = str(exc_info.value)
@@ -198,7 +197,7 @@ class TestStartCliSsoFlowErrors:
         from litellm.proxy.client.cli.commands.auth import _start_cli_sso_flow
 
         with patch("requests.post", side_effect=requests.ConnectionError("Connection refused")):
-            with pytest.raises(ValueError, match='Connection refused\\. Check that the proxy is running') as exc_info:
+            with pytest.raises(ValueError, match="Connection refused\\. Check that the proxy is running") as exc_info:
                 _start_cli_sso_flow("https://unreachable.example.com")
 
         message = str(exc_info.value)
@@ -585,13 +584,9 @@ class TestLogoutCommand:
         assert "could not be checked" in result.output
         assert DISABLE_KEYRING_ENV_VAR in result.output
 
-    def test_logout_warns_when_the_keychain_refuses_to_release_the_entry(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_logout_warns_when_the_keychain_refuses_to_release_the_entry(self, isolated_home, secret_vault_factory):
         """A locked keychain leaves a live credential behind that the user believes is gone."""
-        vault = secret_vault_factory(
-            blob=_secret_blob("https://test.example.com", "sk-stored"), erasable=False
-        )
+        vault = secret_vault_factory(blob=_secret_blob("https://test.example.com", "sk-stored"), erasable=False)
         _write_token_file(isolated_home, key=None)
 
         result = self.runner.invoke(logout, obj={"secret_vault": vault})
@@ -1211,9 +1206,7 @@ class TestKeychainBackedCommands:
         assert str(token_file) in result.output
         assert json.loads(token_file.read_text())["key"] == "sk-minted"
 
-    def test_login_points_a_user_missing_the_keyring_package_at_the_install(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_login_points_a_user_missing_the_keyring_package_at_the_install(self, isolated_home, secret_vault_factory):
         """`lite` ships with every install, the keyring package only with the cli extra. Telling
         that user their machine has no keychain sends them looking for a problem they do not have."""
         result = self._login(secret_vault_factory(available=False, failure=KeyringNotInstalled()))
@@ -1224,9 +1217,7 @@ class TestKeychainBackedCommands:
         assert "No OS keychain available" not in result.output
         assert json.loads(token_file.read_text())["key"] == "sk-minted"
 
-    def test_login_keeps_the_credential_when_the_backend_keeps_nothing(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_login_keeps_the_credential_when_the_backend_keeps_nothing(self, isolated_home, secret_vault_factory):
         """A backend that accepts writes and stores nothing must not be reported as keychain
         storage, because the file is then told to drop the only remaining copy."""
         result = self._login(secret_vault_factory(discards=True))
@@ -1237,9 +1228,7 @@ class TestKeychainBackedCommands:
         assert "keyring --enable" in result.output
         assert json.loads(token_file.read_text())["key"] == "sk-minted"
 
-    def test_login_names_the_kill_switch_instead_of_blaming_the_machine(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_login_names_the_kill_switch_instead_of_blaming_the_machine(self, isolated_home, secret_vault_factory):
         result = self._login(secret_vault_factory(available=False, failure=KeyringDisabled()))
 
         assert result.exit_code == 0
@@ -1298,9 +1287,7 @@ class TestKeychainBackedCommands:
         assert "could not be read" in result.output
         assert "lite login" in result.output
 
-    def test_whoami_does_not_call_a_credential_it_cannot_read_authenticated(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_whoami_does_not_call_a_credential_it_cannot_read_authenticated(self, isolated_home, secret_vault_factory):
         """A login whose secret is stuck in an unreachable keychain authenticates nothing. Leading
         with "Authenticated" and a token age reads as a working session, and sends the user looking
         for the problem somewhere other than the keychain the notice underneath names."""
@@ -1317,9 +1304,7 @@ class TestKeychainBackedCommands:
         assert "the credential cannot be read" in result.output
         assert "could not be read" in result.output
 
-    def test_whoami_names_the_kill_switch_rather_than_a_missing_package(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_whoami_names_the_kill_switch_rather_than_a_missing_package(self, isolated_home, secret_vault_factory):
         """Every unreachable keychain used to be described as a locked one needing the keyring
         package installed. Someone who set the kill switch has the package and an unlocked keychain,
         so that advice sends them to fix two things that were never wrong."""
@@ -1331,9 +1316,7 @@ class TestKeychainBackedCommands:
         assert DISABLE_KEYRING_ENV_VAR in result.output
         assert "pip install" not in result.output
 
-    def test_print_token_points_an_install_without_keyring_at_the_package(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_print_token_points_an_install_without_keyring_at_the_package(self, isolated_home, secret_vault_factory):
         _write_token_file(isolated_home, key=None)
         vault = secret_vault_factory(available=False, failure=KeyringNotInstalled())
         obj = {"base_url": "https://test.example.com", "secret_vault": vault}
@@ -1399,11 +1382,22 @@ class TestLoginConfigClaude:
     def setup_method(self):
         self.runner = CliRunner()
 
-    def _run_login(self, tmp_path, monkeypatch, args, base_url="https://test.example.com"):
-        settings_path = tmp_path / "claude" / "settings.json"
-        monkeypatch.setattr(auth_module, "CLAUDE_SETTINGS_PATH", settings_path)
-        monkeypatch.setattr(auth_module, "CONFIGURE_STATE_PATH", tmp_path / "claude_configure_state.json")
+    def _isolate_default_settings(self, tmp_path, monkeypatch):
+        """The default file, its `lite up` backup and its configure receipt all live under tmp_path."""
         backup_path = tmp_path / "claude_settings_backup.json"
+        monkeypatch.setattr(
+            claude_settings_module, "SETTINGS_FILE_OWNERS", (SettingsFileOwner(backup_path, "lite up", "lite down"),)
+        )
+        monkeypatch.setattr(
+            claude_settings_module, "CLAUDE_SETTINGS_PATH", tmp_path / "default-home" / ".claude" / "settings.json"
+        )
+        monkeypatch.setattr(claude_settings_module, "CONFIGURE_STATE_PATH", tmp_path / "claude_configure_state.json")
+        return backup_path
+
+    def _run_login(self, tmp_path, monkeypatch, args, base_url="https://test.example.com", *, config_dir_env=None):
+        settings_path = tmp_path / "claude" / "settings.json"
+        backup_path = self._isolate_default_settings(tmp_path, monkeypatch)
+        env = {"CLAUDE_CONFIG_DIR": str(settings_path.parent)} if config_dir_env is None else config_dir_env
         poll_response = Mock()
         poll_response.status_code = 200
         poll_response.json.return_value = {
@@ -1420,15 +1414,11 @@ class TestLoginConfigClaude:
             patch("litellm.proxy.client.cli.commands.auth.save_cli_token"),
             patch("litellm.proxy.client.cli.interface.show_commands"),
             patch(
-                "litellm.proxy.client.cli.commands.auth.SETTINGS_FILE_OWNERS",
-                (SettingsFileOwner(backup_path, "lite up", "lite down"),),
-            ),
-            patch(
                 "litellm.proxy.client.cli.commands.claude_settings.shutil.which",
                 return_value="/usr/local/bin/lite",
             ),
         ):
-            result = self.runner.invoke(login, args, obj={"base_url": base_url})
+            result = self.runner.invoke(login, args, obj={"base_url": base_url}, env=env)
         return result, settings_path, backup_path
 
     def test_default_login_does_not_touch_claude_settings(self, tmp_path, monkeypatch):
@@ -1447,7 +1437,7 @@ class TestLoginConfigClaude:
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://test.example.com"
         assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://test.example.com auth print-token"
-        assert "Configured Claude Code" in result.output
+        assert f"Configured Claude Code: {settings_path} now routes through https://test.example.com." in result.output
         assert "pins a proxy model for every tier" not in result.output
         assert "the model Claude Code starts on" in result.output
 
@@ -1463,21 +1453,55 @@ class TestLoginConfigClaude:
         assert written["theme"] == "dark"
         assert written["env"]["KEEP"] == "me"
 
-    def test_refuses_before_logging_in_while_lite_up_holds_the_settings(self, tmp_path, monkeypatch):
-        # The local precondition comes first: no browser, no token stored, no "Login successful!".
-        backup_path = tmp_path / "claude_settings_backup.json"
-        backup_path.write_text("{}")
-        monkeypatch.setattr(auth_module, "CLAUDE_SETTINGS_PATH", tmp_path / "claude" / "settings.json")
-        monkeypatch.setattr(
-            auth_module, "SETTINGS_FILE_OWNERS", (SettingsFileOwner(backup_path, "lite up", "lite down"),)
-        )
+    def _run_login_refused_before_the_sso_flow(self, tmp_path, monkeypatch, config_dir):
+        self._isolate_default_settings(tmp_path, monkeypatch).write_text("{}")
         with patch("requests.post") as post, patch("webbrowser.open") as browser:
-            result = self.runner.invoke(login, ["--config-claude"], obj={"base_url": "https://test.example.com"})
+            result = self.runner.invoke(
+                login,
+                ["--config-claude"],
+                obj={"base_url": "https://test.example.com"},
+                env={"CLAUDE_CONFIG_DIR": config_dir},
+            )
         assert result.exit_code != 0
         assert "not logging in" in result.output and "lite down" in result.output
+        assert "`lite up` is currently managing" in result.output
         assert "Login successful!" not in result.output
         post.assert_not_called()
         browser.assert_not_called()
+        assert not (tmp_path / "default-home" / ".claude" / "settings.json").exists()
+
+    def test_refuses_before_logging_in_while_lite_up_holds_the_default_settings_file(self, tmp_path, monkeypatch):
+        self._run_login_refused_before_the_sso_flow(tmp_path, monkeypatch, config_dir="")
+
+    def test_refuses_before_logging_in_while_lite_up_holds_the_default_file_reached_through_a_symlink(
+        self, tmp_path, monkeypatch
+    ):
+        default_config_dir = tmp_path / "default-home" / ".claude"
+        default_config_dir.mkdir(parents=True)
+        alias = tmp_path / "claude-alias"
+        alias.symlink_to(default_config_dir, target_is_directory=True)
+
+        self._run_login_refused_before_the_sso_flow(tmp_path, monkeypatch, config_dir=str(alias))
+
+    def test_flag_writes_an_alternate_config_dir_even_while_lite_up_holds_the_default_file(self, tmp_path, monkeypatch):
+        (tmp_path / "claude_settings_backup.json").write_text("{}")
+
+        result, settings_path, _backup_path = self._run_login(tmp_path, monkeypatch, ["--config-claude"])
+
+        assert result.exit_code == 0, result.output
+        written = json.loads(settings_path.read_text())
+        assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://test.example.com auth print-token"
+        assert f"Configured Claude Code: {settings_path} now routes through https://test.example.com." in result.output
+
+    def test_flag_keeps_a_config_dir_receipt_apart_from_the_default_file_receipt(self, tmp_path, monkeypatch):
+        result, settings_path, _backup_path = self._run_login(tmp_path, monkeypatch, ["--config-claude"])
+
+        assert result.exit_code == 0, result.output
+        default_receipt = tmp_path / "claude_configure_state.json"
+        assert not default_receipt.exists()
+        receipts = list((tmp_path / "claude_configure_state").glob("*.json"))
+        assert len(receipts) == 1
+        assert json.loads(receipts[0].read_text())["file_existed"] is False
 
     def test_settings_failure_is_reported_without_claiming_login_failed(self, tmp_path, monkeypatch):
         settings_path = tmp_path / "claude" / "settings.json"
@@ -1873,7 +1897,10 @@ class TestPkcePrintToken:
         assert result.stdout == ""
         assert sum(len(session.posts) for session in _FakeSession.instances) == 1
         assert result.output.count("Could not renew the key") == 1
-        assert "Could not renew the key: token request failed with 400: the refresh token was already used" in result.output
+        assert (
+            "Could not renew the key: token request failed with 400: the refresh token was already used"
+            in result.output
+        )
         assert "Key expired. Run 'lite login --pkce' again." in result.output
         save.assert_not_called()
 

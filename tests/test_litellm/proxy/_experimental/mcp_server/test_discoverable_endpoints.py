@@ -7651,12 +7651,6 @@ async def test_token_endpoint_client_secret_basic_without_secret_returns_400():
     assert exc_info.value.status_code == 400
 
 
-# -------------------------------------------------------------------
-# Non-oauth2 (auth_type=none, access-group gated) servers must not be
-# driven through the gateway OAuth authorize/token/register/discovery
-# flow, and must not be advertised as OAuth-protected in discovery docs.
-# -------------------------------------------------------------------
-
 
 def _access_group_none_server(server_name="access_group_server"):
     """A non-oauth2, access-group gated MCP server: no client_id, no OAuth."""
@@ -7794,35 +7788,38 @@ async def test_register_client_rejects_non_oauth2_server():
 
 
 @pytest.mark.asyncio
-async def test_oauth_protected_resource_404_for_non_oauth2_server():
-    """Discovery must not advertise a none-auth server as an OAuth-protected resource."""
-    try:
-        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            _build_oauth_protected_resource_response,
-        )
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
-    except ImportError:
-        pytest.skip("MCP discoverable endpoints not available")
+@pytest.mark.parametrize(
+    "auth_type", (None, "none", "api_key", "bearer_token", "basic", "aws_sigv4", "authorization", "token")
+)
+@pytest.mark.parametrize("use_standard_pattern", (False, True))
+async def test_oauth_protected_resource_for_gateway_owned_auth(auth_type, use_standard_pattern):
+    from starlette.requests import Request
 
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _access_group_none_server().model_copy(update={"auth_type": auth_type})
+    request = Request(
+        {"type": "http", "scheme": "https", "path": "/", "headers": [(b"host", b"litellm.example.com")]}
+    )
     global_mcp_server_manager.registry.clear()
-    server = _access_group_none_server()
     global_mcp_server_manager.registry[server.server_id] = server
-
-    mock_request = MagicMock()
-    mock_request.base_url = "https://litellm.example.com/"
-    mock_request.headers = {}
-
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            await _build_oauth_protected_resource_response(
-                request=mock_request,
-                mcp_server_name="access_group_server",
-                use_standard_pattern=False,
-            )
-        assert exc_info.value.status_code == 404
-        assert "not an OAuth-protected resource" in str(exc_info.value.detail)
+        response = await _build_oauth_protected_resource_response(
+            request=request,
+            mcp_server_name="access_group_server",
+            use_standard_pattern=use_standard_pattern,
+        )
+        resource_path = "/mcp/access_group_server" if use_standard_pattern else "/access_group_server/mcp"
+        assert response == {
+            "resource": f"https://litellm.example.com{resource_path}",
+            "authorization_servers": ["https://litellm.example.com/mcp"],
+            "scopes_supported": [],
+        }
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -7914,9 +7911,7 @@ async def test_oauth_protected_resource_passthrough_none_auth_not_404():
 
 @pytest.mark.asyncio
 async def test_oauth_protected_resource_404_for_unknown_server_name():
-    """A discovery request for an unknown server name returns the same 404 as a non-oauth2
-    server (not a 200 metadata doc with broken URLs), so the well-known paths cannot be used
-    to enumerate non-OAuth server names."""
+    """Unknown server names must not produce metadata advertising nonexistent resources."""
     try:
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             _build_oauth_protected_resource_response,
@@ -8126,6 +8121,137 @@ async def test_token_exchange_pairs_client_secret_with_server_client_id():
     sent = mock_async_client.post.call_args.kwargs["data"]
     assert sent["client_id"] == "persisted-client"
     assert "client_secret" not in sent
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_refresh_passes_presented_refresh_ownership():
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._experimental.mcp_server.oauth_identity_binding import RefreshTokenPresented
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    server = MCPServer(
+        server_id="srv-1",
+        name="srv-1",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        token_url="https://provider.example/token",
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce",
+            issuer="https://provider.example",
+            audiences=["cid"],
+        ),
+    )
+    request = MagicMock(spec=Request)
+    request.base_url = "https://litellm.example.com/"
+    request.headers = {}
+    response = MagicMock()
+    response.json.return_value = {"access_token": "at"}
+    response.raise_for_status = MagicMock()
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    enforce = AsyncMock()
+
+    with (
+        patch(  # test-quality-ok: no injection seam exists for the exchange's HTTP and identity collaborators
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=client,
+        ),
+        patch(  # test-quality-ok: no injection seam exists for request identity extraction
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            new=AsyncMock(return_value="user-a"),
+        ),
+        patch(  # test-quality-ok: captures the ownership value at the exchange boundary
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.enforce_oauth_identity_binding",
+            new=enforce,
+        ),
+    ):
+        await exchange_token_with_server(
+            request=request,
+            mcp_server=server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+            refresh_token="rt-1",
+        )
+
+    ownership = enforce.await_args.kwargs["refresh_ownership"]
+    assert isinstance(ownership, RefreshTokenPresented)
+    assert ownership.refresh_token == "rt-1"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_authorization_code_passes_no_refresh_ownership(monkeypatch):
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+        seal_bridge_authorization_code,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "identity-binding-test-salt")
+    server = MCPServer(
+        server_id="srv-1",
+        name="srv-1",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        token_url="https://provider.example/token",
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce",
+            issuer="https://provider.example",
+            audiences=["cid"],
+        ),
+    )
+    request = MagicMock(spec=Request)
+    request.base_url = "https://litellm.example.com/"
+    request.headers = {}
+    response = MagicMock()
+    response.json.return_value = {"access_token": "at"}
+    response.raise_for_status = MagicMock()
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    enforce = AsyncMock()
+
+    with (
+        patch(  # test-quality-ok: no injection seam exists for the exchange's HTTP and identity collaborators
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=client,
+        ),
+        patch(  # test-quality-ok: no injection seam exists for request identity extraction
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            new=AsyncMock(return_value="user-a"),
+        ),
+        patch(  # test-quality-ok: captures the ownership value at the exchange boundary
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.enforce_oauth_identity_binding",
+            new=enforce,
+        ),
+    ):
+        result = await exchange_token_with_server(
+            request=request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code=seal_bridge_authorization_code("auth-code", "user-a", "srv-1", "login-nonce"),
+            redirect_uri="https://litellm.example.com/callback",
+            client_id="cid",
+            client_secret=None,
+            code_verifier="test-verifier",
+        )
+
+    assert result.status_code == 200
+    assert json.loads(result.body)["access_token"] == "at"
+    assert enforce.await_args.kwargs["refresh_ownership"] is None
+    assert enforce.await_args.kwargs["expected_nonce"] == "login-nonce"
 
 
 def _upstream_token_response(status_code: int, *, json_body: object = None, text_body: str = "") -> "httpx.Response":
@@ -10921,3 +11047,97 @@ def test_introspect_route_answers_for_authenticated_caller(monkeypatch):
     assert active.status_code == 200
     assert active.json()["active"] is True
     assert active.json()["sub"] == "u1"
+
+
+@pytest.mark.asyncio
+async def test_identity_bound_authorization_carries_nonce_and_caller_through_callback(monkeypatch):
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+    from fastapi import Request
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _oauth_state_cookie_name, authorize_with_server, callback, open_bridge_authorization_code,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "identity-binding-test-salt")
+    server = MCPServer(
+        server_id="srv", name="srv", transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+        client_id="client", authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce", issuer="https://idp.example.com", audiences=["client"],
+        ),
+    )
+    request = Request({"type": "http", "scheme": "https", "server": ("proxy.example.com", 443),
+                       "path": "/authorize", "query_string": b"", "headers": []})
+    with (
+        patch(  # test-quality-ok: isolate authenticated request resolution from the real encrypted OAuth round trip
+              "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+              new=AsyncMock(return_value="alice")),
+        patch(  # test-quality-ok: isolate user access lookup while testing nonce and caller preservation
+              "litellm.proxy._experimental.mcp_server.discoverable_endpoints._bridge_authorize_access_denial",
+              new=AsyncMock(return_value=None)),
+    ):
+        authorized = await authorize_with_server(
+            request, server, "client", "http://127.0.0.1:6274/callback", state="client-state",
+            code_challenge="pkce-challenge", code_challenge_method="S256",
+        )
+    query = parse_qs(urlparse(authorized.headers["location"]).query)
+    assert len(query["nonce"][0]) >= 32
+    cookies = SimpleCookie()
+    cookies.load(authorized.headers["set-cookie"])
+    name = _oauth_state_cookie_name(query["state"][0])
+    callback_request = Request({**request.scope, "path": "/callback",
+                               "headers": [(b"cookie", f"{name}={cookies[name].value}".encode())]})
+    completed = await callback(callback_request, code="upstream-code", state=query["state"][0])
+    returned = parse_qs(urlparse(completed.headers["location"]).query)
+    sealed = open_bridge_authorization_code(returned["code"][0])
+    assert sealed.litellm_user_id == "alice"
+    assert sealed.mcp_server_id == "srv"
+    assert sealed.upstream_code == "upstream-code"
+    assert sealed.oauth_nonce == query["nonce"][0]
+    assert returned["state"] == ["client-state"]
+
+
+@pytest.mark.asyncio
+async def test_enforced_login_warms_verified_token_readable_without_database_lookup(monkeypatch):
+    from types import SimpleNamespace
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db, mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import _store_per_user_token_server_side
+    from litellm.proxy._experimental.mcp_server.oauth2_token_cache import mcp_per_user_token_cache
+    from litellm.proxy._experimental.mcp_server.oauth_identity_binding import current_binding_proof
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.dual_cache_token_backend import DualCacheTokenCacheBackend
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import CachedOAuthTokenStore
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import LazyPerUserOAuthTokenStore
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.v2_token_store import V2PerUserTokenStore
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv", name="srv", transport="http", auth_type="oauth2",
+        oauth_identity_binding={"mode": "enforce", "issuer": "https://idp.example", "audiences": ["client"],
+                                "caller_field": "user_id", "principal_claim": "sub"},
+    )
+    proof = await current_binding_proof(server.oauth_identity_binding, "alice", "srv")
+    cache = DualCache()
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-cache-warm-encryption-salt")
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", SimpleNamespace(invalidate_user_oauth_token_cache=AsyncMock()))
+    monkeypatch.setattr(db, "store_user_oauth_credential", AsyncMock())
+    await _store_per_user_token_server_side(
+        server=server, user_id="alice", token_response={"access_token": "alice-token", "refresh_token": "private", "expires_in": 3600},
+        identity_binding_proof=proof,
+    )
+    read = AsyncMock(return_value=None)
+    cached = CachedOAuthTokenStore(
+        V2PerUserTokenStore(read), default_ttl_seconds=300, backend=DualCacheTokenCacheBackend(cache, mcp_per_user_token_cache._codec()),
+    )
+    store = LazyPerUserOAuthTokenStore(lambda _: server, store_builder=lambda _: (cached, True), redis_available=lambda: True)
+    token = await store.fetch("alice", "srv")
+    assert token is not None and token.access_token == "alice-token"
+    assert token.identity_binding_proof == proof
+    assert token.refresh_token is None
+    read.assert_not_awaited()
