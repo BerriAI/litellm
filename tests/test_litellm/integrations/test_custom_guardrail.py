@@ -2404,7 +2404,7 @@ def test_logging_only_requires_framework_support_or_explicit_declaration(
     event_hook: GuardrailEventHooks | str | list[GuardrailEventHooks] | list[str] | Mode,
 ) -> None:
     supported: Final = [GuardrailEventHooks.pre_call]
-    if guardrail_type is not CustomGuardrail:
+    if guardrail_type is _InheritedApplyGuardrail:
         guardrail: Final = guardrail_type(event_hook=event_hook, supported_event_hooks=supported)
         assert guardrail.event_hook == event_hook
         assert supported == [GuardrailEventHooks.pre_call]

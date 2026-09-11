@@ -1,7 +1,7 @@
 import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
 import httpx
 from fastapi import HTTPException
@@ -1232,7 +1232,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         content: Final = "\n".join(text for text in inputs.get("texts") or () if text)
         if not content:
@@ -1270,6 +1270,14 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             end_time=end_time,
             duration=end_time - start_time,
         )
+        if flagged and not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
+            raise HTTPException(
+                status_code=400,
+                detail=self._build_block_error_detail(
+                    "Response blocked by Model Armor" if input_type == "response" else "Content blocked by Model Armor",
+                    armor_response,
+                ),
+            )
         return inputs
 
     @staticmethod
