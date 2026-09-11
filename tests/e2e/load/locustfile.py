@@ -3,16 +3,22 @@ from __future__ import annotations
 import os
 import random
 import uuid
+from itertools import cycle
 from typing import Final
 
 from locust import FastHttpUser, constant, task
 
 _MODEL: Final = os.environ["LOAD_MODEL"]
 _API_KEYS: Final = tuple(os.environ["LOAD_API_KEYS"].split(","))
+_NEXT_ENDPOINT: Final = cycle(os.environ["LOAD_ENDPOINTS"].split(","))
 
 
 def _payload() -> dict[str, object]:
-    """A prompt no other request sent, so the response cache never answers for the deployment."""
+    """A prompt no other request sent, so the response cache never answers for the deployment.
+
+    Both endpoints take the same body: /v1/messages requires max_tokens, which /chat/completions
+    also accepts, so one payload serves the whole round robin.
+    """
     return {
         "model": _MODEL,
         "messages": [{"role": "user", "content": f"load test ping {uuid.uuid4().hex}"}],
@@ -20,17 +26,24 @@ def _payload() -> dict[str, object]:
     }
 
 
-class ChatUser(FastHttpUser):
+class GatewayUser(FastHttpUser):
+    """One simulated user, pinned to one endpoint for its lifetime.
+
+    Endpoints are handed out round robin as users spawn, so a run spreads evenly over them
+    while each user's traffic stays on a single route, the way a real client behaves.
+    """
+
     wait_time = constant(0)
 
     def on_start(self) -> None:
         self.headers = {"Authorization": f"Bearer {random.choice(_API_KEYS)}"}
+        self.endpoint = next(_NEXT_ENDPOINT)
 
     @task
-    def chat(self) -> None:
+    def call(self) -> None:
         self.client.post(  # pyright: ignore[reportUnknownMemberType]  # locust FastHttpSession.post types json/**kwargs as Any
-            "/chat/completions",
+            self.endpoint,
             json=_payload(),
             headers=self.headers,
-            name="/chat/completions",
+            name=self.endpoint,
         )

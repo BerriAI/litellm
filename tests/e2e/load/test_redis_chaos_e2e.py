@@ -11,6 +11,11 @@ retries on the failing pair (a 500 is retryable, so retries keep re-picking insi
 order) and the router's order-based fallback then re-targets order 2. Every request is expected
 to succeed, and each one carries retry breadcrumbs into cost tracking.
 
+Traffic is split round robin between /chat/completions and /v1/messages, one endpoint per
+simulated user: the Redis touchpoints and the cost-tracking callback are shared by both, but
+the Anthropic Messages route reaches them through its own request path, so a regression that
+only shows up there would not surface from chat completions alone.
+
 Phase A is a baseline with Redis healthy; phase B holds Redis in CLIENT PAUSE ALL for the
 length of the phase, simulating Redis being down outright rather than merely slow to write.
 Every touchpoint times out: the auth cache read falls back to Postgres, the response cache
@@ -40,7 +45,7 @@ from e2e_config import PROXY_BASE_URL, unique_marker
 from e2e_http import NoBody
 from lifecycle import ResourceManager
 from load_client import LoadClient
-from locust_load import LoadResult, run_chat_load
+from locust_load import LoadResult, run_gateway_load
 from models import KeyGenerateBody, LiteLLMParamsBody
 from phase_budget import Budget, violations
 from proxy_client import ProxyClient
@@ -55,6 +60,7 @@ SERVING_DEPLOYMENTS: Final = 1
 FAILING_ORDER: Final = 1
 SERVING_ORDER: Final = 2
 KEY_POOL_SIZE: Final = 8
+LOAD_ENDPOINTS: Final = ("/chat/completions", "/v1/messages")
 LOCUST_USERS: Final = 50
 LOCUST_SPAWN_RATE: Final = 50.0
 BASELINE_SECONDS: Final = 60.0
@@ -119,7 +125,8 @@ class Phase:
             f"{self.name}: {self.load.requests} requests, {self.load.failures} failures, "
             f"{self.load.requests_per_second:.0f} rps, {self.load.latency_summary()}; {self.usage.summary()}; "
             f"{self.cpu_seconds_per_request * 1000:.1f} ms CPU per request; "
-            f"{self.timeouts_per_request:.2f} Redis timeouts per request"
+            f"{self.timeouts_per_request:.2f} Redis timeouts per request; "
+            f"by endpoint: {self.load.endpoint_summary()}"
         )
 
 
@@ -241,10 +248,11 @@ def _generate_key_pool(proxy: ProxyClient, resources: ResourceManager) -> tuple[
 
 
 def _drive(keys: tuple[str, ...], seconds: float) -> LoadResult:
-    return run_chat_load(
+    return run_gateway_load(
         base_url=PROXY_BASE_URL,
         api_keys=keys,
         model=MODEL_GROUP,
+        endpoints=LOAD_ENDPOINTS,
         users=LOCUST_USERS,
         spawn_rate=LOCUST_SPAWN_RATE,
         duration_seconds=seconds,
@@ -310,7 +318,7 @@ def _chaos_budgets(baseline: Phase, chaos: Phase) -> tuple[Budget, ...]:
 class TestRedisChaos:
     @pytest.mark.covers(
         "reliability.circuit_breaker.redis_timeout.stays_responsive",
-        exercised_on=("chat_completions",),
+        exercised_on=("chat_completions", "messages"),
     )
     def test_load_survives_redis_being_down(
         self,
@@ -355,6 +363,11 @@ class TestRedisChaos:
         for phase in (baseline, chaos):
             assert phase.load.requests > 0, (
                 f"{phase.name} drove no traffic at all, so it proved nothing: {phase.load.diagnosis()}. {report}"
+            )
+            assert frozenset(endpoint.name for endpoint in phase.load.endpoints) == frozenset(LOAD_ENDPOINTS), (
+                f"{phase.name} drove {tuple(endpoint.name for endpoint in phase.load.endpoints)} rather than every "
+                f"endpoint in {LOAD_ENDPOINTS}; the round robin hands one endpoint to each simulated user, so a "
+                f"missing one means a route never ran and its request path was never exercised. {report}"
             )
             assert phase.load.failures == 0, (
                 f"{phase.name} had {phase.load.failures} of {phase.load.requests} requests fail. Every request "
