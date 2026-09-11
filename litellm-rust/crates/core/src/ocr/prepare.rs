@@ -163,7 +163,6 @@ impl<B: Serialize + DeserializeOwned> OcrWireBody<B> {
 pub(crate) fn credential_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
