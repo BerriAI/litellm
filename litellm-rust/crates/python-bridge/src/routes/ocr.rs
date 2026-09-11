@@ -2,6 +2,7 @@ use litellm_core::Error;
 use std::future::Future;
 
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
+use litellm_core::ocr::wire::{OcrWireRequest, decode_request, is_supported_request};
 use pyo3::prelude::*;
 use serde_json::Value;
 
@@ -31,6 +32,21 @@ fn prepare_ocr(
             extra_headers,
             timeout,
         } = options;
+        if is_supported_request(&model, custom_llm_provider.as_deref()) {
+            let request = decode_request(OcrWireRequest {
+                model,
+                document,
+                api_key,
+                api_base,
+                custom_llm_provider,
+                extra_headers,
+                optional_params,
+                timeout_seconds: timeout.map(|value| value.as_secs_f64()),
+            })?;
+            return litellm_core::ocr::ocr(request)
+                .await
+                .map(|response| response.into_json());
+        }
         run_ocr(OcrRequest {
             model: &model,
             document,
