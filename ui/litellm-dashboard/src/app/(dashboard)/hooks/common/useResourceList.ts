@@ -86,7 +86,7 @@ export function useResourceList<TRow>(options: UseResourceListOptions<TRow>): Re
     enabled,
     placeholderData: (previous) => previous,
   };
-  const { data, isLoading, isFetching, error, refetch: refetchQuery } = useQuery(queryOptions);
+  const { data, isLoading, isPlaceholderData, isFetching, error, refetch: refetchQuery } = useQuery(queryOptions);
 
   const toFirstPage = useCallback(() => setPagination((previous) => ({ ...previous, pageIndex: 0 })), []);
 
@@ -123,7 +123,7 @@ export function useResourceList<TRow>(options: UseResourceListOptions<TRow>): Re
   return {
     rows,
     rowCount: data?.meta.total_count ?? 0,
-    isLoading,
+    isLoading: isLoading || isPlaceholderData,
     isFetching,
     error,
     refetch,
