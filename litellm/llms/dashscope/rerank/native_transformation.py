@@ -32,7 +32,7 @@ class DashScopeNativeRerankConfig(DashScopeRerankConfig):
         model: str,
         optional_params: Mapping[str, object] | None = None,
     ) -> str:
-        native_base: Final = self._resolve_rerank_api_base(self._api_base or api_base)
+        native_base: Final = self._api_base or self._resolve_rerank_api_base(api_base)
         parsed: Final = urlsplit(native_base.rstrip("/"))
         if parsed.path.endswith("/services/rerank/text-rerank/text-rerank"):
             return urlunsplit(parsed)

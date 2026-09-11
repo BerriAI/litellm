@@ -57,6 +57,25 @@ export const AgentIcon = ({ size = 12 }: { size?: number }) => (
   </svg>
 );
 
+/** Stacked-layers icon for Batch API call types (Lucide Layers-style). */
+export const LayersIcon = ({ size = 12 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className="shrink-0"
+  >
+    <path d="M12 2 2 7l10 5 10-5-10-5z" />
+    <path d="m2 17 10 5 10-5" />
+    <path d="m2 12 10 5 10-5" />
+  </svg>
+);
+
 export const LlmBadge = ({ count }: { count?: number }) => (
   <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-info/10 text-info border border-info/20 rounded-full text-[11px] font-medium whitespace-nowrap">
     <SparkleIcon />
@@ -75,5 +94,12 @@ export const AgentBadge = ({ count }: { count?: number }) => (
   <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-[11px] font-medium whitespace-nowrap dark:bg-violet-950 dark:text-violet-300 dark:border-violet-800">
     <AgentIcon />
     {count != null ? count : "Agent"}
+  </span>
+);
+
+export const BatchBadge = () => (
+  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-full text-[11px] font-medium whitespace-nowrap dark:bg-teal-950 dark:text-teal-300 dark:border-teal-800">
+    <LayersIcon />
+    Batch
   </span>
 );

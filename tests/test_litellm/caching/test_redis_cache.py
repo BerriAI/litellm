@@ -525,6 +525,50 @@ def test_circuit_breaker_open_keeps_sync_batch_get_cache_as_a_miss(sync_batch_re
     assert sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"]) == {}
 
 
+def test_batch_get_counts_raises_where_batch_get_cache_reports_a_miss(sync_batch_redis_cache):
+    """A caller that must fall back when Redis is unreachable needs the failure, not zeros.
+
+    The batch read answers a dead Redis with an empty dict, which a counting caller cannot tell
+    apart from "every counter is unset". Least-busy routing read that as an idle deployment and
+    kept sending traffic to it instead of falling back to this worker's own in-flight counts.
+    """
+    assert sync_batch_redis_cache.batch_get_cache(key_list=["lit7039"]) == {}
+
+    with pytest.raises(OSError, match="redis unavailable"):
+        sync_batch_redis_cache.batch_get_counts(["lit7039"])
+
+
+@pytest.mark.asyncio
+async def test_async_batch_get_counts_raises_where_async_batch_get_cache_reports_a_miss(redis_no_ping: None):
+    """Async twin: the async batch read hides the same failure behind an empty dict."""
+    failing_client = AsyncMock()
+    failing_client.mget.side_effect = OSError("redis unavailable")
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=MagicMock()
+    ):
+        cache = RedisCache(host="127.0.0.1", port=6379)
+
+    with patch.object(cache, "init_async_client", return_value=failing_client):
+        assert await cache.async_batch_get_cache(key_list=["lit7039"]) == {}
+
+        with pytest.raises(OSError, match="redis unavailable"):
+            await cache.async_batch_get_counts(["lit7039"])
+
+
+@pytest.mark.parametrize("stored", [b"3", "3"])
+def test_batch_get_counts_reads_counters_in_order_and_keeps_unset_keys_apart(stored, redis_no_ping: None):
+    """Counters come back positionally, so an unset key has to stay a hole rather than shift the
+    rest of the row onto the wrong deployments, and a count has to survive whether the client
+    hands it back as bytes or as text."""
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=MagicMock()
+    ):
+        cache = RedisCache(host="127.0.0.1", port=6379)
+    cache.redis_client.mget.return_value = [stored, None, b"0"]
+
+    assert cache.batch_get_counts(["dep-a", "dep-b", "dep-c"]) == (3, None, 0)
+
+
 @pytest.fixture
 def sync_batch_cache_with_service_logger(redis_no_ping: None) -> Iterator[tuple[RedisCache, ServiceLogging]]:
     service_logger = ServiceLogging(mock_testing=True)
@@ -969,3 +1013,20 @@ async def test_breaker_metrics_track_state_and_failure_class():
     breaker.record_success()
     assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before
     assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before + 1
+
+
+def test_sync_guard_counts_a_timeout_as_a_timeout():
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    from litellm.caching.redis_cache import RedisCircuitBreaker, _run_under_circuit_breaker_sync
+
+    breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, timeout_min_duration=5.0)
+
+    def timing_out_call() -> str:
+        raise RedisTimeoutError("read timed out")
+
+    for _ in range(6):
+        with pytest.raises(RedisTimeoutError):
+            _run_under_circuit_breaker_sync(breaker, "op", timing_out_call)
+
+    assert breaker.is_open() is False

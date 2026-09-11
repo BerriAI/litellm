@@ -80,6 +80,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     raise_classified_list_failure,
     upstream_auth_challenge,
 )
+from litellm.proxy._experimental.mcp_server.mcp_debug import record_auth_resolution
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     MCPPerUserTokenCache,
     mcp_per_user_token_cache,
@@ -108,12 +109,14 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
 from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
     build_token_exchanger,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     DEFAULT_CREDENTIAL_HEADER,
     AuthorizationCodeConfig,
+    AuthResolution,
     ClientCredentialsConfig,
     CredError,
     IdJagConfig,
@@ -2441,6 +2444,8 @@ class MCPServerManager:
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
+                token_validation=server_config.get("token_validation", None),
+                oauth_identity_binding=server_config.get("oauth_identity_binding", None),
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
@@ -3832,13 +3837,21 @@ class MCPServerManager:
         (authorization_code's browser-OAuth 401, token_exchange's RFC 9728 challenge) or maps any
         other ``CredError`` onto its public HTTP status; it never returns an error as a value.
         """
-        match await provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
-            case Ok(auth):
+        match await resolve_credentials_with_source(provider, to_subject(user_api_key_auth, subject_token), spec):
+            case Ok(credential):
+                auth: Final = credential.auth
                 # NoOpAuth has no header_name and so never conflicts.
                 header_name: Final[str | None] = getattr(auth, "header_name", None)
                 if header_name is None or not extra_headers:
+                    source: Final = (
+                        AuthResolution.extra_headers
+                        if credential.source == AuthResolution.no_auth and extra_headers
+                        else credential.source
+                    )
+                    record_auth_resolution(server.server_id, source)
                     return auth, extra_headers
                 if not has_header(extra_headers, header_name):
+                    record_auth_resolution(server.server_id, credential.source)
                     return auth, extra_headers
                 if isinstance(
                     spec.config,
@@ -3853,11 +3866,14 @@ class MCPServerManager:
                     # one-shot 401 refetch is lost with it). Drop only the header the resolved
                     # credential is about to occupy, so a static credential the operator aimed at a
                     # DIFFERENT header still reaches upstream.
+                    record_auth_resolution(server.server_id, credential.source)
                     return auth, without_header(extra_headers, header_name)
                 # Other modes: an Authorization already supplied via extra_headers (a forwarded caller
                 # header or static_headers) is intentional and wins; v1 applies those last.
+                record_auth_resolution(server.server_id, AuthResolution.extra_headers)
                 return None, extra_headers
             case Error(err):
+                record_auth_resolution(server.server_id, AuthResolution.failed)
                 if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):
                     # authorization_code's missing per-user token -> the per-server browser-OAuth
                     # challenge, built here where the full MCPServer is in hand.
@@ -3960,6 +3976,7 @@ class MCPServerManager:
         Returns:
             Configured MCP client instance.
         """
+        record_auth_resolution(server.server_id, AuthResolution.unresolved)
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
         transport: Final = resolved_server.transport or MCPTransport.sse
         spec = None if transport == MCPTransport.stdio else _to_server_spec_fail_closed(resolved_server)
@@ -4032,6 +4049,7 @@ class MCPServerManager:
                     env=resolved_env,
                 )
 
+            record_auth_resolution(server.server_id, AuthResolution.not_applicable)
             return MCPClient(
                 server_url="",  # Not used for stdio
                 transport_type=transport,
@@ -4086,6 +4104,20 @@ class MCPServerManager:
                     aws_session_name=resolved_server.aws_session_name,
                 )
 
+            legacy_source: Final = (
+                AuthResolution.aws_sigv4
+                if aws_auth is not None
+                else AuthResolution.extra_headers
+                if extra_headers and has_header(extra_headers, auth_header_name or "Authorization")
+                else AuthResolution.per_request_header
+                if mcp_auth_header
+                else AuthResolution.static_token
+                if auth_value
+                else AuthResolution.extra_headers
+                if extra_headers
+                else AuthResolution.no_auth
+            )
+            record_auth_resolution(server.server_id, legacy_source)
             return MCPClient(
                 server_url=server_url,
                 transport_type=transport,

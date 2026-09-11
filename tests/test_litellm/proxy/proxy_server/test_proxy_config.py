@@ -20,6 +20,7 @@ import pytest
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -2428,6 +2429,111 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
     assert deployment.litellm_params.some_future_field == "resolved-custom-value"
 
 
+@pytest.mark.parametrize(
+    "stored_drop_params",
+    ["true", "os.environ/DROP_PARAMS_FLAG"],
+)
+def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(monkeypatch, stored_drop_params):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("DROP_PARAMS_FLAG", "true")
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="gpt-5-nano",
+        model_info={"id": "model-1"},
+        litellm_params={
+            "model": encrypt_value_helper(value="openai/gpt-5-nano"),
+            "drop_params": encrypt_value_helper(value=stored_drop_params),
+        },
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    assert deployment.litellm_params.drop_params is True
+
+
+def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_params(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+
+    def db_model(model_id, drop_params):
+        return SimpleNamespace(
+            model_id=model_id,
+            model_name="gpt-5-nano",
+            model_info={"id": model_id},
+            litellm_params={
+                "model": encrypt_value_helper(value="openai/gpt-5-nano"),
+                "drop_params": encrypt_value_helper(value=drop_params),
+            },
+            blocked=False,
+        )
+
+    added = pc._add_deployment(db_models=[db_model("bad-row", 2), db_model("good-after", "true")])
+    deployments = [call.kwargs["deployment"] for call in fake_router.upsert_deployment.call_args_list]
+
+    assert added == 2
+    assert [d.litellm_params.drop_params for d in deployments] == [None, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured, expected", [("true", True), ("false", False)])
+async def test_ProxyConfig_load_config_turns_litellm_settings_drop_params_string_into_bool(
+    tmp_path, monkeypatch, configured, expected
+):
+    f = tmp_path / "c.yaml"
+    f.write_text(f'model_list: []\nlitellm_settings:\n  drop_params: "{configured}"\n')
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", not expected)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.drop_params is expected
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_resolves_a_litellm_settings_drop_params_env_ref(tmp_path, monkeypatch):
+    f = tmp_path / "c.yaml"
+    f.write_text("model_list: []\nlitellm_settings:\n  drop_params: os.environ/DROP_PARAMS_FROM_ENV\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setenv("DROP_PARAMS_FROM_ENV", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.drop_params is True
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_warns_and_turns_off_a_non_flag_litellm_settings_drop_params(
+    tmp_path, monkeypatch, caplog
+):
+    f = tmp_path / "c.yaml"
+    f.write_text("model_list: []\nlitellm_settings:\n  drop_params: ture\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.drop_params is False
+    assert "litellm_settings.drop_params='ture' is not a flag value, treating it as off" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.decrypt_model_list_from_db
 # ---------------------------------------------------------------------------
@@ -2937,6 +3043,129 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
 
     fake_router.update_settings.assert_called_once_with(routing_strategy="latency-based-routing")
+
+
+def _stub_add_deployment_collaborators(
+    monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, fake_prisma: MagicMock
+) -> None:
+    from litellm.proxy import proxy_server
+
+    fake_router = MagicMock()
+    fake_router.get_model_list = MagicMock(return_value=[])
+
+    async def fake_get_config(*args: object, **kwargs: object) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    monkeypatch.setattr(pc, "get_config", fake_get_config)
+    monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", AsyncMock())
+    monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
+    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "proxy_config", pc)
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+
+
+def _encrypted_credential_row(credential_name: str, api_key: str) -> dict[str, object]:
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    return {
+        "credential_name": credential_name,
+        "credential_values": {"api_key": encrypt_value_helper(api_key, new_encryption_key="sk-master")},
+        "credential_info": {"custom_llm_provider": "openai"},
+    }
+
+
+def _fake_prisma_with_encrypted_credential(credential_name: str, api_key: str) -> MagicMock:
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[_encrypted_credential_row(credential_name, api_key)]
+    )
+    return fake_prisma
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconciling_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.proxy import proxy_server
+    from litellm.utils import load_credentials_from_list
+
+    pc = ProxyConfig()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    installed = MagicMock()
+
+    async def read_models_while_a_credential_lands(prisma_client: object) -> list[MagicMock]:
+        fake_prisma.db.litellm_credentialstable.find_many.return_value = [
+            _encrypted_credential_row("openai-cred", "sk-from-db")
+        ]
+        return [MagicMock()]
+
+    async def install_models(new_models: object, proxy_logging_obj: object) -> None:
+        installed(credential=CredentialAccessor.get_credential_values("openai-cred"))
+
+    monkeypatch.setattr(pc, "_get_models_from_db", read_models_while_a_credential_lands)
+    monkeypatch.setattr(pc, "_update_llm_router", install_models)
+
+    await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
+
+    installed.assert_called_once_with(credential={"api_key": "sk-from-db"})
+    assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-db"}
+    request_kwargs = {"litellm_credential_name": "openai-cred"}
+    load_credentials_from_list(request_kwargs)
+    assert request_kwargs == {"litellm_credential_name": "openai-cred", "api_key": "sk-from-db"}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_add_deployment_loads_db_credentials_even_when_models_are_not_db_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    fake_prisma = _fake_prisma_with_encrypted_credential("openai-cred", "sk-from-db")
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["mcp"]})
+    models_fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(pc, "_get_models_from_db", models_fetch)
+
+    await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
+
+    models_fetch.assert_not_awaited()
+    assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-db"}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_credentials_reads_from_writer_not_replica(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    pc = ProxyConfig()
+    writer_inner = MagicMock(name="writer_prisma")
+    reader_inner = MagicMock(name="reader_prisma")
+    writer_inner.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[_encrypted_credential_row("openai-cred", "sk-from-writer")]
+    )
+    reader_inner.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    fake_prisma = MagicMock()
+    fake_prisma.db = RoutingPrismaWrapper(
+        writer=PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False),
+        reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
+    )
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+
+    await pc.get_credentials(prisma_client=fake_prisma)
+
+    assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-writer"}
+    reader_inner.litellm_credentialstable.find_many.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

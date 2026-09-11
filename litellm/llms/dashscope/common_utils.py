@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import TypeAdapter
@@ -21,6 +22,27 @@ if TYPE_CHECKING:
     )
     from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
     from litellm.llms.dashscope.rerank.transformation import DashScopeRerankConfig
+
+DASHSCOPE_CHAT_COMPATIBLE_PATH: Final = "/compatible-mode/v1"
+DASHSCOPE_RERANK_PATH: Final = "/compatible-api/v1/reranks"
+
+
+def _rerank_base_for_chat_shaped_base(api_base: str | None) -> str | None:
+    if api_base is None:
+        return None
+    parsed: Final = urlparse(api_base)
+    host: Final = parsed.hostname or ""
+    on_aliyun_host: Final = host == "aliyuncs.com" or host.endswith(".aliyuncs.com")
+    if not on_aliyun_host or parsed.path.rstrip("/") != DASHSCOPE_CHAT_COMPATIBLE_PATH:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}{DASHSCOPE_RERANK_PATH}"
+
+
+def resolve_dashscope_family_rerank_api_base(api_base: str | None, env_var: str, default_rerank_base: str) -> str:
+    remapped: Final = _rerank_base_for_chat_shaped_base(api_base)
+    if api_base is not None and remapped is None:
+        return api_base
+    return get_secret_str(env_var) or remapped or default_rerank_base
 
 
 def get_dashscope_family_embedding_config(custom_llm_provider: str) -> "BaseEmbeddingConfig":
