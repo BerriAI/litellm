@@ -4827,12 +4827,43 @@ def test_live_terminal_is_not_counted_twice(monkeypatch):
     assert handle_realtime_stream_cost_calculation(
         [_live_terminal_event(), _live_terminal_event()], Usage(), "chatgpt", "live-priced-test"
     ) == pytest.approx(0.1)
-    assert (
-        handle_realtime_stream_cost_calculation(
-            [{"type": "response.done", "response": {"usage": {}}}, _live_terminal_event()],
-            Usage(),
-            "chatgpt",
-            "live-priced-test",
-        )
-        == 0
+
+
+@pytest.mark.parametrize("with_tokens", [False, True])
+@pytest.mark.parametrize("terminal_count", [1, 2])
+@pytest.mark.parametrize("duration_priced", [False, True])
+def test_live_terminal_with_response_done_preserves_configured_billing(
+    monkeypatch, with_tokens, terminal_count, duration_priced
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "realtime-deployment-test",
+        {
+            "litellm_provider": "chatgpt",
+            "mode": "realtime",
+            **(
+                {"input_cost_per_second": 0.025}
+                if duration_priced
+                else {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+            ),
+        },
     )
+    events = [
+        {
+            "type": "response.done",
+            "response": {
+                "usage": ({"input_tokens": 10, "output_tokens": 5, "total_tokens": 15} if with_tokens else {})
+            },
+        },
+        *(_live_terminal_event() for _ in range(terminal_count)),
+    ]
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(events)
+    result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(usage, events)
+    assert completion_cost(
+        completion_response=result,
+        model="gpt-live-1-codex" if duration_priced else "gpt-realtime-1.5",
+        custom_llm_provider="chatgpt",
+        call_type="_arealtime",
+        custom_pricing=True,
+        router_model_id="realtime-deployment-test",
+    ) == pytest.approx(0.1 if duration_priced else (0.02 if with_tokens else 0))

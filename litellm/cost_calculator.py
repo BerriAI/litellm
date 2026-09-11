@@ -2601,8 +2601,6 @@ def handle_live_session_duration_cost(
     custom_llm_provider: str,
     litellm_model_name: str,
 ) -> float:
-    if any(event.get("type") == "response.done" for event in results):
-        return 0.0
     terminal: Final = next((event for event in reversed(results) if event.get("type") == "session.closed"), None)
     if terminal is None:
         return 0.0

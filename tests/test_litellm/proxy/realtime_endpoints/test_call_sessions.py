@@ -12,6 +12,110 @@ from litellm.proxy.realtime_endpoints.call_sessions import decode_call, encode_c
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("multipart", [False, True])
+@pytest.mark.parametrize("content_length", [None, "1", "999999999"])
+async def test_oversized_offer_stops_before_auth_or_multipart_files(monkeypatch, multipart, content_length):
+    import json
+    from unittest.mock import AsyncMock, Mock
+
+    from fastapi import Request
+
+    monkeypatch.setattr(codex, "MAX_REALTIME_OFFER_BYTES", 1024)
+    if multipart:
+        body = (
+            b'--Boundary\r\nContent-Disposition: form-data; name="extra"; filename="large.bin"\r\n\r\n'
+            + b"x" * 2048
+            + b"\r\n--Boundary--\r\n"
+        )
+        media_type = b"Multipart/Form-Data; boundary=Boundary"
+    else:
+        body = json.dumps({"sdp": "x" * 2048, "session": {"model": "voice"}}).encode()
+        media_type = b"application/json"
+    chunks = [body[offset : offset + 256] for offset in range(0, len(body), 256)]
+    received = []
+
+    async def receive():
+        chunk = chunks.pop(0)
+        received.append(len(chunk))
+        return {"type": "http.request", "body": chunk, "more_body": bool(chunks)}
+
+    headers = [(b"content-type", media_type)]
+    if content_length is not None:
+        headers.append((b"content-length", content_length.encode()))
+    request = Request({"type": "http", "headers": headers}, receive)
+    if multipart:
+        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+        assert await _read_request_body(request) == {}
+    authenticate = AsyncMock()
+    create_file = Mock(side_effect=AssertionError("Oversized offers must not create temporary files"))
+    monkeypatch.setattr(codex, "user_api_key_auth", authenticate)
+    monkeypatch.setattr("starlette.formparsers.SpooledTemporaryFile", create_file)
+    with pytest.raises(HTTPException) as rejected:
+        await codex.create_codex_realtime_call(request)
+    assert rejected.value.status_code == 413
+    assert sum(received) <= 1280
+    assert chunks
+    authenticate.assert_not_awaited()
+    create_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_offer_at_size_limit_keeps_body_available_for_custom_auth(monkeypatch):
+    import json
+
+    from fastapi import Request
+
+    monkeypatch.setattr(codex, "MAX_REALTIME_OFFER_BYTES", 1024)
+    empty = {"sdp": "", "session": {"model": "voice"}}
+    sdp = "x" * (1024 - len(json.dumps(empty).encode()))
+    body = json.dumps({"sdp": sdp, "session": {"model": "voice"}}).encode()
+    chunks = [body[:512], body[512:]]
+
+    async def receive():
+        return {"type": "http.request", "body": chunks.pop(0), "more_body": bool(chunks)}
+
+    request = Request({"type": "http", "headers": [(b"content-type", b"application/json")]}, receive)
+    offer = await codex.read_codex_offer(request)
+    assert offer.sdp == sdp
+    assert offer.session.model == "voice"
+    assert await request.body() == body
+    assert not chunks
+
+
+@pytest.mark.asyncio
+async def test_empty_pre_read_multipart_offer_returns_invalid_offer():
+    from fastapi import Request
+
+    async def receive():
+        return {"type": "http.request", "body": b"--Boundary--\r\n", "more_body": False}
+
+    request = Request(
+        {"type": "http", "headers": [(b"content-type", b"multipart/form-data; boundary=Boundary")]}, receive
+    )
+    assert not await request.form()
+    with pytest.raises(HTTPException) as rejected:
+        await codex.create_codex_realtime_call(request)
+    assert rejected.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_oversized_pre_read_offer_is_rejected_before_decoding(monkeypatch):
+    from fastapi import Request
+
+    monkeypatch.setattr(codex, "MAX_REALTIME_OFFER_BYTES", 1024)
+
+    async def receive():
+        return {"type": "http.request", "body": b"x" * 2048, "more_body": False}
+
+    request = Request({"type": "http", "headers": [(b"content-type", b"application/json")]}, receive)
+    await request.body()
+    with pytest.raises(HTTPException) as rejected:
+        await codex.read_codex_offer(request)
+    assert rejected.value.status_code == 413
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("malformed", [False, True])
 async def test_mixed_case_offer_preserves_boundary_metadata_and_closes_extra_files(monkeypatch, malformed):
     from fastapi import Request

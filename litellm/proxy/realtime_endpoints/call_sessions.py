@@ -223,7 +223,31 @@ def decode_call(token: str, authorization: str) -> CodexRealtimeCall:
     return call
 
 
+MAX_REALTIME_OFFER_BYTES: Final = 8 * 1024 * 1024
+
+
+async def _cache_bounded_offer_body(request: Request) -> None:
+    try:
+        if int(request.headers.get("content-length", "")) > MAX_REALTIME_OFFER_BYTES:
+            raise HTTPException(413, "Realtime offer exceeds the 8 MiB limit")
+    except ValueError:
+        pass
+    if hasattr(request, "_body"):
+        if len(request._body) > MAX_REALTIME_OFFER_BYTES:  # pyright: ignore[reportPrivateUsage]  # validate Starlette's cached body without consuming it again
+            raise HTTPException(413, "Realtime offer exceeds the 8 MiB limit")
+        return
+    if request._form is not None and request._stream_consumed:  # pyright: ignore[reportPrivateUsage]  # a mixed-case empty form cache may leave the stream unread
+        return
+    body: Final = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_REALTIME_OFFER_BYTES:
+            raise HTTPException(413, "Realtime offer exceeds the 8 MiB limit")
+        body.extend(chunk)
+    request._body = bytes(body)  # pyright: ignore[reportPrivateUsage]  # Starlette has no public setter for its shared body cache
+
+
 async def read_codex_offer(request: Request) -> CodexRealtimeOffer:
+    await _cache_bounded_offer_body(request)
     content_type: Final = request.headers.get("content-type", "")
     if _normalize_media_type(content_type) == "multipart/form-data":
         if content_type.split(";", 1)[0] != "multipart/form-data" and not await request.form():
