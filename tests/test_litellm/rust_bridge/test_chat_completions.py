@@ -55,9 +55,6 @@ class _FakeNative:
 def _fake_native_bridge(monkeypatch):
     """Expose the bridge's exception classes without the compiled extension."""
     monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
-    from litellm.rust_bridge import bindings
-
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
 
 
 def _hide_native_bridge(monkeypatch):
