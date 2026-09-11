@@ -656,3 +656,73 @@ variable "billing_metrics_ca_cert_pem" {
   default     = ""
   sensitive   = true
 }
+
+# ---------- Collector sidecar ----------
+#
+# Opt-in offload of spend tracking from the gateway's uvicorn workers to a
+# `python -m litellm.proxy.collector` sidecar container in the same Cloud Run
+# instance (helm's `gateway.collector`, mirrors the AWS stack). Containers
+# in one instance share localhost, so the sidecar listens on loopback TCP.
+# Disabled (the default) adds nothing to the service.
+
+variable "collector_enabled" {
+  description = "Run the collector sidecar next to the gateway container and have the gateway ship spend events to it (sets LITELLM_COLLECTOR_ENABLED=true on both). The sidecar shares the instance's request-based CPU allocation, so pair it with a non-zero gateway_min_instances if spend must keep flowing between requests."
+  type        = bool
+  default     = false
+}
+
+variable "collector_port" {
+  description = "Loopback TCP port the sidecar listens on (LITELLM_COLLECTOR_ADDRESS=tcp://127.0.0.1:<port>)."
+  type        = number
+  default     = 4010
+
+  validation {
+    condition     = var.collector_port >= 1024 && var.collector_port <= 65535 && !contains([4000, 13133], var.collector_port)
+    error_message = "collector_port must be in 1024-65535 and not 4000 (the gateway port) or 13133 (the metrics sidecar health port)."
+  }
+}
+
+variable "collector_cpu" {
+  description = "Cloud Run CPU limit for the sidecar container, on top of gateway_cpu. Matches helm's collector.resources.limits.cpu."
+  type        = string
+  default     = "1000m"
+}
+
+variable "collector_memory" {
+  description = "Cloud Run memory limit for the sidecar container, on top of gateway_memory. Matches helm's collector.resources.limits.memory."
+  type        = string
+  default     = "2Gi"
+}
+
+variable "collector_buffer_size" {
+  description = "Per-worker in-memory queue of spend events waiting to be shipped to the sidecar (LITELLM_COLLECTOR_BUFFER_SIZE)."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.collector_buffer_size >= 1
+    error_message = "collector_buffer_size must be >= 1."
+  }
+}
+
+variable "collector_on_unavailable" {
+  description = "What the gateway does with spend events when the sidecar is unreachable or the buffer is full (LITELLM_COLLECTOR_ON_UNAVAILABLE): `fallback` runs the pipeline in-process, `drop` discards them."
+  type        = string
+  default     = "fallback"
+
+  validation {
+    condition     = contains(["fallback", "drop"], var.collector_on_unavailable)
+    error_message = "collector_on_unavailable must be one of: fallback, drop."
+  }
+}
+
+variable "collector_drain_timeout_seconds" {
+  description = "Seconds a gateway worker waits on shutdown for its buffered spend events to reach the sidecar (LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.collector_drain_timeout_seconds > 0
+    error_message = "collector_drain_timeout_seconds must be > 0."
+  }
+}
