@@ -92,8 +92,13 @@ class OpenInferenceMapper:
         return {
             **collect(self._LLM_CALL_ATTRS, data),
             **collect(self._BLOB_ATTRS, data),
-            **self._messages("llm.input_messages", "input.value", data.messages_in, indexed_in),
-            **self._messages("llm.output_messages", "output.value", outputs, indexed_out),
+            **self._messages(
+                "llm.input_messages",
+                "input.value",
+                data.messages_in,
+                self._prompt_positions(len(data.messages_in), indexed_in),
+            ),
+            **self._messages("llm.output_messages", "output.value", outputs, range(indexed_out)),
             **self._tools(data),
         }
 
@@ -109,18 +114,26 @@ class OpenInferenceMapper:
         return _MAX_INDEXED_MESSAGES - indexed_out, indexed_out
 
     @staticmethod
-    def _messages(prefix: str, value_key: str, messages: Sequence[object], indexed: int) -> AttributeMap:
-        """``{prefix}.{idx}.message.*`` keys for the leading ``indexed`` messages + the ``value_key`` blob of all."""
+    def _prompt_positions(total: int, indexed: int) -> tuple[int, ...]:
+        """Which prompt messages get per-index attributes: message 0 and the most recent turns.
+
+        A value length limit clips the ``input.value`` blob, so the system prompt and the
+        live turn each keep a short key of their own. The middle of a long prompt does not.
+        """
+        if total <= indexed:
+            return tuple(range(total))
+        return (0, *range(total - indexed + 1, total))
+
+    @staticmethod
+    def _messages(prefix: str, value_key: str, messages: Sequence[object], positions: Sequence[int]) -> AttributeMap:
+        """``{prefix}.{idx}.message.*`` keys for the messages at ``positions`` + the ``value_key`` blob of all."""
         parsed: Final = [(m.get("role") if isinstance(m, dict) else None, message_content(m)) for m in messages]
         attrs: Final = drop_none(
             {
                 key: value
-                for idx, (role, content) in enumerate(parsed[:indexed])
+                for idx, (role, content) in ((idx, parsed[idx]) for idx in positions)
                 for key, value in (
-                    (
-                        f"{prefix}.{idx}.message.role",
-                        role if isinstance(role, str) else None,
-                    ),
+                    (f"{prefix}.{idx}.message.role", role if isinstance(role, str) else None),
                     (f"{prefix}.{idx}.message.content", content),
                 )
             }
