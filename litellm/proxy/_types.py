@@ -2605,7 +2605,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     user_api_key_cache_max_size: int | None = Field(
         None,
         gt=0,
-        description="max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth lookups keep hitting the DB",
+        description=(
+            "max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in "
+            "its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth "
+            "lookups keep hitting the DB"
+        ),
     )
     max_request_size_mb: int | None = Field(
         None,
