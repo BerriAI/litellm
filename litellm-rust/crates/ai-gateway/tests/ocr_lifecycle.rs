@@ -237,6 +237,57 @@ fn base_ocr_request(model: &str) -> OcrRequest<'_> {
 }
 
 #[tokio::test]
+async fn azure_mistral_uses_prepared_authorization_through_gateway() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let api_base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let request = read_http_request(&mut socket).await;
+        let body = br#"{"pages":[]}"#;
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        socket.write_all(body).await.unwrap();
+        request
+    });
+    let request = OcrRequest {
+        model: "mistral-ocr-2505",
+        document: json!({
+            "type":"document_url",
+            "document_url":"data:application/pdf;base64,YWJj"
+        }),
+        api_key: None,
+        api_base: Some(&api_base),
+        custom_llm_provider: Some("azure_ai"),
+        extra_headers: Some(Map::from_iter([(
+            "Authorization".into(),
+            json!("Bearer python-prepared-token"),
+        )])),
+        optional_params: Map::new(),
+        timeout: None,
+        callbacks: Vec::new(),
+        guardrails: Vec::new(),
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: None,
+    };
+
+    ocr(request).await.unwrap();
+    let sent = server.await.unwrap();
+    assert!(sent.starts_with("POST /providers/mistral/azure/ocr "));
+    assert!(
+        sent.to_ascii_lowercase()
+            .contains("authorization: bearer python-prepared-token\r\n")
+    );
+}
+
+#[tokio::test]
 async fn reducto_during_call_guardrail_blocks_before_upload() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

@@ -87,3 +87,19 @@ bridge_route! {
     prepare = prepare_ocr,
     errors = ocr_error_to_pyerr,
 }
+
+#[cfg(test)]
+mod tests {
+    use litellm_core::ocr::wire::is_supported_request;
+
+    #[test]
+    fn native_activation_excludes_unmigrated_azure_document_intelligence() {
+        assert!(is_supported_request("model", Some("mistral")));
+        assert!(is_supported_request("pixtral-12b", Some("azure_ai")));
+        assert!(!is_supported_request(
+            "documentintelligence/prebuilt-read",
+            Some("azure_ai")
+        ));
+        assert!(!is_supported_request("mistral-ocr", Some("vertex_ai")));
+    }
+}

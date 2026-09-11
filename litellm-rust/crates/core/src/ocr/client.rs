@@ -10,15 +10,21 @@ use super::wire::{DecodedOcrResponse, decode_response};
 use crate::Error;
 use crate::constants::OCR_CONNECT_TIMEOUT_SECS;
 use crate::error::TransportError;
+use crate::media::MediaFetcher;
 
 #[derive(Clone)]
 pub struct OcrClient {
     provider_http: reqwest::Client,
+    document_fetcher: MediaFetcher,
 }
 
 impl OcrClient {
     pub fn new(provider_http: reqwest::Client) -> Result<Self, TransportError> {
-        Ok(Self { provider_http })
+        let document_fetcher = MediaFetcher::new().map_err(TransportError::from)?;
+        Ok(Self {
+            provider_http,
+            document_fetcher,
+        })
     }
 
     #[tracing::instrument(
@@ -35,9 +41,16 @@ impl OcrClient {
         &self.provider_http
     }
 
+    pub(crate) fn document_fetcher(&self) -> &MediaFetcher {
+        &self.document_fetcher
+    }
+
     #[cfg(test)]
-    pub(crate) fn for_test(provider_http: reqwest::Client) -> Self {
-        Self { provider_http }
+    pub(crate) fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
+        Self {
+            provider_http,
+            document_fetcher: MediaFetcher::for_test(document_http),
+        }
     }
 }
 
