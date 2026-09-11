@@ -23,6 +23,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _encode_tool_call_id_with_signature,
@@ -106,6 +107,21 @@ if TYPE_CHECKING:
 else:
     LoggingClass = Any
     StreamingChoices = Any
+
+
+SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "none", "disable")
+
+
+def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
+    return UnsupportedParamsError(
+        message=(
+            f"Invalid `reasoning_effort`: {reasoning_effort!r}. "
+            f"Must be one of: {', '.join(repr(effort) for effort in SUPPORTED_REASONING_EFFORTS)}. "
+            "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+            "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+        ),
+        status_code=400,
+    )
 
 
 class VertexAIBaseConfig:
@@ -842,7 +858,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "includeThoughts": False,
             }
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_level(
@@ -890,7 +906,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             else:
                 return {"thinkingLevel": "low", "includeThoughts": False}
         else:
-            raise ValueError(f"Invalid reasoning effort: {reasoning_effort}")
+            raise _unsupported_reasoning_effort(reasoning_effort)
 
     @staticmethod
     def _is_thinking_budget_zero(thinking_budget: int | None) -> bool:
