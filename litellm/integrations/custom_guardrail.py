@@ -1130,7 +1130,7 @@ class CustomGuardrail(CustomLogger):
 
     def add_standard_logging_guardrail_information_to_request_data(
         self,
-        guardrail_json_response: Exception | str | dict | list[dict],
+        guardrail_json_response: object,
         request_data: dict,
         guardrail_status: GuardrailStatus,
         start_time: float | None = None,
@@ -1295,22 +1295,25 @@ class CustomGuardrail(CustomLogger):
 
     def _summarize_guardrail_response(
         self,
-        response: dict | None,  # mutable-ok: matches _process_response signature
+        response: object,
         original_inputs: Mapping[str, object] | None,
-    ) -> dict | str:  # mutable-ok: returns the caller's response unchanged
+    ) -> object:
         """Reduce a hook's return value to what is safe to log as ``guardrail_response``.
 
         ``apply_guardrail`` returns the (possibly masked) inputs and ``async_pre_call_hook``
         returns the (possibly modified) request payload. Neither is a provider verdict, and
         logging them verbatim ships the user's prompt to every logging sink (OTEL spans,
         Datadog, spend logs), so both collapse to ``"allow"`` / ``"mask"`` by comparing
-        against ``original_inputs``, a copy taken before the hook ran.
+        against ``original_inputs``, a copy taken before the hook ran. A non-mapping result
+        (e.g. a rewritten prompt string) replaces the request wholesale, so it is ``"mask"``.
         """
         if response is None:
             return {}
-        if original_inputs is not None:
-            return "mask" if self._inputs_were_modified(original_inputs, response) else "allow"
-        return response
+        if original_inputs is None:
+            return response
+        if not isinstance(response, Mapping):
+            return "mask"
+        return "mask" if self._inputs_were_modified(original_inputs, response) else "allow"
 
     @staticmethod
     def _is_guardrail_intervention(e: Exception) -> bool:

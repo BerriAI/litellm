@@ -2914,3 +2914,24 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_returning_string_logs_mask_without_raising(self):
+        class RewritingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> str:
+                return "REWRITTEN_PROMPT"
+
+        data = self._request()
+        result = await RewritingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert result == "REWRITTEN_PROMPT"
+        assert self._logged_response(data) == "mask"
