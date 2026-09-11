@@ -438,16 +438,8 @@ def test_get_optional_params_image_gen_filters_empty_values():
 
 
 def test_get_optional_params_image_gen_excludes_extra_headers_from_extra_body():
-    """https://github.com/BerriAI/litellm/issues/40628
-
-    extra_headers is an openai-python SDK transport option, routed as an actual
-    HTTP header, not model input. GPTImageGenerationConfig's supported params
-    list has no notion of it, so before the fix it fell into extra_body
-    pass-through, which the SDK serializes into the JSON body, producing an
-    "Unknown parameter: 'extra_headers'" 400 from OpenAI. extra_query has no
-    working forwarding path for image generation yet, so it's left as before,
-    still inside extra_body.
-    """
+    """Fixes https://github.com/BerriAI/litellm/issues/40628: extra_headers must
+    not fold into extra_body; extra_query still does, with no path elsewhere."""
     from litellm.types.utils import LlmProviders
 
     provider_config = ProviderConfigManager.get_provider_image_generation_config(
@@ -3757,18 +3749,9 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
 
 
 class TestSdkTransportParamsExcludedFromExtraBody:
-    """
-    Fixes https://github.com/BerriAI/litellm/issues/40628.
-
-    extra_headers/timeout already reach the provider through a working path
-    outside extra_body, so a caller whose openai_params list is scoped to
-    provider content params only (image generation, audio transcription) rather
-    than the full chat-completion param set must not also fold them into
-    extra_body pass-through, which the SDK serializes into the JSON body.
-    extra_query has no such path yet, so it deliberately keeps landing in
-    extra_body: still wrong, but a caller gets the same loud failure as before
-    rather than a new silent no-op.
-    """
+    """Fixes https://github.com/BerriAI/litellm/issues/40628: extra_headers/timeout
+    must never fold into extra_body pass-through; extra_query still does, since it
+    has no other forwarding path yet."""
 
     def test_excluded_for_openai_family_while_extra_query_and_unknown_still_pass_through(self):
         from litellm.utils import add_provider_specific_params_to_optional_params
@@ -3779,8 +3762,6 @@ class TestSdkTransportParamsExcludedFromExtraBody:
             "timeout": 30,
             "unknown_param": "kept-in-extra-body",
         }
-        # mirrors GPTImageGenerationConfig.get_supported_openai_params(), which has
-        # no notion of SDK transport options
         openai_params = ["background", "moderation", "n", "size"]
 
         result = add_provider_specific_params_to_optional_params(
