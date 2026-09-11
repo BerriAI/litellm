@@ -1282,9 +1282,11 @@ class ProcessMemory(BaseModel):
 
 class MemorySummaryResponse(BaseModel):
     """GET /debug/memory/summary (master key). One worker's resident memory, keyed by
-    its pid so readings behind a load balancer can be told apart per pod."""
+    its hostname (the pod name on Kubernetes) and pid so readings behind a load
+    balancer can be told apart per worker; older proxies omit the hostname."""
 
     worker_pid: int
+    hostname: str | None = None
     status: str
     memory: ProcessMemory
 

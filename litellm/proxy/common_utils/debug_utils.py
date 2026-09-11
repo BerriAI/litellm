@@ -3,6 +3,7 @@ import asyncio
 import gc
 import json
 import os
+import socket
 import sys
 import tracemalloc
 from collections import Counter
@@ -241,6 +242,7 @@ async def get_memory_summary(
 
     Returns:
     - worker_pid: Process ID
+    - hostname: Host (the pod on Kubernetes) the worker runs on
     - status: Overall health based on memory usage
     - memory: Process memory usage and RAM info
     - caches: Cache item counts and descriptions
@@ -340,6 +342,7 @@ async def get_memory_summary(
 
     return {
         "worker_pid": os.getpid(),
+        "hostname": socket.gethostname(),
         "status": health_status,
         "memory": process_memory,
         "caches": {
