@@ -8996,9 +8996,22 @@ class TestAgent365ChallengeAtConnect:
         assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/tools"' in www_authenticate
 
     @pytest.mark.asyncio
-    async def test_bearer_present_connects(self, agent_365_guardrail):
-        bearer = {"Authorization": "Bearer entra-user-token"}
+    async def test_entra_assertion_present_connects(self, agent_365_guardrail):
+        bearer = {"Authorization": "Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1LTEifQ.c2ln"}
         assert await self._connect(self._server([self.GATEWAY_SCOPE]), bearer) is None
+
+    @pytest.mark.asyncio
+    async def test_litellm_key_in_authorization_is_still_challenged(self, agent_365_guardrail):
+        """A LiteLLM virtual key admits the caller but is no Entra assertion, so the tools/call would fail
+        401 inside JSON-RPC with the WWW-Authenticate header lost. The connect must challenge instead."""
+        challenge = await self._connect(
+            self._server([self.GATEWAY_SCOPE]), {"Authorization": "Bearer sk-litellm-virtual-key"}
+        )
+
+        assert challenge is not None and challenge.status_code == 401
+        www_authenticate = (challenge.headers or {}).get("WWW-Authenticate", "")
+        assert 'error="invalid_token"' in www_authenticate
+        assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/tools"' in www_authenticate
 
     @pytest.mark.asyncio
     async def test_scopeless_server_is_still_challenged(self, agent_365_guardrail):

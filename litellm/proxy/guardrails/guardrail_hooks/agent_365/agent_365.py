@@ -201,8 +201,8 @@ class Agent365Guardrail(CustomGuardrail):
             return data
 
         tool_name: Final = str(data.get("mcp_tool_name") or "")
-        assertion: Final = data.get("incoming_bearer_token")
-        if not isinstance(assertion, str) or assertion.count(".") != 2:
+        assertion: Final = entra_assertion(data.get("incoming_bearer_token"))
+        if assertion is None:
             self._handle_caller_fault(
                 data=data,
                 tool_name=tool_name,
@@ -656,6 +656,20 @@ def _applicable_guardrails(
     if user_api_key_auth is None:
         return registered
     return tuple(g for g in registered if _applies_to_caller(g, user_api_key_auth))
+
+
+def entra_assertion(value: object) -> str | None:
+    """``value`` when it is a compact JWS, the only bearer shape the OBO exchange accepts as its assertion.
+    A LiteLLM virtual key, session bearer, or opaque upstream token in ``Authorization`` yields ``None``."""
+    return value if isinstance(value, str) and value.count(".") == 2 else None
+
+
+def agent_365_subject_token_present(oauth2_headers: Mapping[str, str] | None) -> bool:
+    """Whether the request's ``Authorization`` carries an Entra assertion the guardrail can exchange."""
+    authorization: Final = (oauth2_headers or {}).get("Authorization", "")
+    if not authorization.lower().startswith("bearer "):
+        return False
+    return entra_assertion(authorization[len("bearer ") :].strip()) is not None
 
 
 def agent_365_authorization_servers(server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None") -> tuple[str, ...]:
