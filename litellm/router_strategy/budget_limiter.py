@@ -28,7 +28,7 @@ from typing import Any, Final
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisPipelineIncrementOperation, log_redis_failure
+from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperation, log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
@@ -91,6 +91,13 @@ class _LiteLLMParamsDictView:
 
     def model_dump(self) -> builtins.dict[str, object]:
         return dict(self._params)
+
+
+async def _push_increments_to_redis(redis_cache: RedisCache, queued: list[RedisPipelineIncrementOperation]) -> None:
+    try:
+        await redis_cache.async_increment_pipeline(increment_list=queued)
+    except Exception as e:
+        log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
 
 
 class RouterBudgetLimiting(CustomLogger):
@@ -540,7 +547,7 @@ class RouterBudgetLimiting(CustomLogger):
             queued: Final = self.redis_increment_operation_queue
             self.redis_increment_operation_queue = []
             if queued:
-                await self.dual_cache.redis_cache.async_increment_pipeline(increment_list=queued)
+                asyncio.create_task(_push_increments_to_redis(self.dual_cache.redis_cache, queued))
 
         except Exception as e:
             log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
