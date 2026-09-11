@@ -1824,6 +1824,10 @@ class TestEncryptedReasoningReplay:
         ("https://example.com/clip.mov", "video/mov"),
         ("https://example.com/clip.mkv", "video/mkv"),
         ("https://example.com/clip.3gp", "video/3gp"),
+        ("https://example.com/clip.flv", "video/flv"),
+        ("https://example.com/clip.mpeg", "video/mpeg"),
+        ("https://example.com/clip.mpg", "video/mpg"),
+        ("https://example.com/clip.wmv", "video/wmv"),
     ],
 )
 def test_infer_video_content_type_from_url_extension(url, expected):
