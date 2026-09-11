@@ -433,21 +433,49 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionResponseMessage
             | Message
         ] = []
-        if responses_api_request.get("instructions"):
-            messages.append(
-                LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(
-                    responses_api_request.get("instructions")
-                )
-            )
-
-        messages.extend(
+        input_messages: Final = tuple(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input,
                 replay_reasoning=replay_reasoning,
             )
         )
 
+        # `instructions` and the input can each carry a system message, which left a
+        # conversation reading system, user, system. Chat templates that require the
+        # system message first reject that, so gather them into one leading message.
+        instructions: Final = responses_api_request.get("instructions")
+        system_contents: Final = tuple(
+            content
+            for content in (
+                instructions,
+                *(message.get("content") for message in input_messages if message.get("role") == "system"),
+            )
+            if content
+        )
+
+        if system_contents:
+            messages.append(
+                LiteLLMCompletionResponsesConfig._merge_system_contents(system_contents)
+            )
+
+        messages.extend(message for message in input_messages if message.get("role") != "system")
+
         return messages
+
+    @staticmethod
+    def _merge_system_contents(contents: tuple[Any, ...]) -> ChatCompletionSystemMessage:
+        """Join system prompts into one leading message.
+
+        Part lists collapse to their text: system content is conventionally a string, and
+        the backends that reject a trailing system message are the same ones that expect one.
+        """
+        texts: Final = tuple(
+            content
+            if isinstance(content, str)
+            else "\n\n".join(part.get("text", "") for part in content if isinstance(part, dict))
+            for content in contents
+        )
+        return ChatCompletionSystemMessage(role="system", content="\n\n".join(text for text in texts if text))
 
     @staticmethod
     async def async_responses_api_session_handler(
