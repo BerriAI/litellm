@@ -121,8 +121,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     return <div className="p-4">Organization not found</div>;
   }
 
-  const orgMemberFor = (record: Member) =>
-    record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
+  const orgMemberById = new Map((orgData.members || []).map((m) => [m.user_id, m]));
+  const orgMemberFor = (record: Member) => (record.user_id != null ? orgMemberById.get(record.user_id) : undefined);
 
   const orgExtraColumns: MemberTableColumn[] = [
     {
@@ -252,6 +252,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         <TabsContent keepMounted={hasVisited("members")} value="members" className="pt-4">
           <div className="space-y-4">
             <MemberTable
+              key={orgData.organization_id}
               members={(orgData.members || []).map((m) => ({
                 role: m.user_role || "",
                 user_id: m.user_id,

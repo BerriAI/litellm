@@ -187,6 +187,7 @@ export default function TeamMemberTab({
 
   return (
     <MemberTable
+      key={teamData.team_id}
       members={teamData.team_info.members_with_roles}
       canEdit={canEditTeam}
       onEdit={(record) => {
